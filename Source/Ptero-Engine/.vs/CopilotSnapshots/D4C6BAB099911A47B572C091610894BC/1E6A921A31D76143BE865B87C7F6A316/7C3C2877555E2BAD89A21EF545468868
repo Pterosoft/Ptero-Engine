@@ -1,0 +1,2006 @@
+﻿// RtGlobalIllumination.cpp
+// Custom RTGI renderer with ReSTIR-style temporal and spatial reservoir resampling.
+//
+// Shader binding layout (all four passes share one root signature):
+//   param 0  -  inline CBV  b0  (RtGIConstants, 256 bytes)
+//   param 1  -  SRV table   t0  (pass-specific input A)
+//   param 2  -  SRV table   t1  (pass-specific input B)
+//   param 3  -  UAV table   u0  (pass-specific output A)
+//   param 4  -  UAV table   u1  (pass-specific output B)
+//
+// Per-frame pass sequence:
+//   Pass 0  RayGen    t0=Albedo       t1=NormalDepth   u0=Reservoir[write]  u1=Radiance
+//   Pass 1  Temporal  t0=Reservoir[w] t1=Reservoir[r]  u0=Reservoir[tmp]    u1=Radiance
+//   Pass 2  Spatial   t0=Reservoir[t] t1=NormalDepth   u0=Reservoir[write]  u1=Radiance
+//   Pass 3  Composite t0=Radiance     t1=AccumHistory  u0=AccumWrite        u1=Output
+
+#include "pch.h"
+#include "RtGlobalIllumination.h"
+#include "Components.h"
+#include "..\SDKs\DirectXTex\DirectXTex\DirectXTex.h"
+
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <stdexcept>
+#include <filesystem>
+#include <fstream>
+#include <cwctype>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+
+// Context helpers declared in DX12Context.cpp
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+namespace
+{
+    constexpr uint32_t kRtMaterialFlagAlphaCutout = 1u;
+    constexpr uint32_t kRtMaterialFlagDoubleSided = 2u;
+    constexpr uint32_t kInvalidRtTextureIndex = 0xffffffffu;
+
+    std::array<float, 3> ToRgbArray(float r, float g, float b)
+    {
+        return { r, g, b };
+    }
+
+    // RGBA16F format used for all intermediate and output textures.
+    constexpr DXGI_FORMAT kGIFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    // Thread group size for all RTGI compute passes (matches [numthreads(8,8,1)] in HLSL).
+    constexpr UINT kGroupSizeX = 8;
+    constexpr UINT kGroupSizeY = 8;
+
+    // Allocate a shader-visible SRV/UAV descriptor from the shared heap.
+    // Returns false and records an error on failure.
+    bool AllocDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE& outCpu, D3D12_GPU_DESCRIPTOR_HANDLE& outGpu, std::string& errOut)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&outCpu, &outGpu))
+        {
+            errOut = "RtGlobalIllumination: ran out of SRV descriptor heap slots.";
+            return false;
+        }
+        return true;
+    }
+
+    // Helper: create a DEFAULT-heap resource buffer for reservoir data.
+    ComPtr<ID3D12Resource> MakeStructuredBuffer(ID3D12Device* device, UINT64 byteSize, LPCWSTR name)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Alignment = 0;
+        desc.Width = byteSize;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // Buffers need both SRV and UAV access.
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> resource;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&resource)));
+        resource->SetName(name);
+        return resource;
+    }
+
+    // Helper: create a DEFAULT-heap RGBA16F Texture2D with UAV support.
+    ComPtr<ID3D12Resource> MakeTexture2D(ID3D12Device* device, UINT width, UINT height, LPCWSTR name)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = kGIFormat;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> resource;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&resource)));
+        resource->SetName(name);
+        return resource;
+    }
+
+    // Helper: create an UPLOAD constant buffer, persistently mapped.
+    ComPtr<ID3D12Resource> MakeConstantBuffer(ID3D12Device* device, UINT64 size, void** outMapped)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = size;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ComPtr<ID3D12Resource> resource;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&resource)));
+        DX12_THROW_IF_FAILED(resource->Map(0, nullptr, outMapped));
+        resource->SetName(L"RTGI_ConstantBuffer");
+        return resource;
+    }
+
+    uint32_t RegisterRtMaterialTexture(
+        TextureManager& textureManager,
+        std::unordered_map<std::string, uint32_t>& textureIndices,
+        uint32_t& textureCount,
+        const std::string& texturePath)
+    {
+        if (texturePath.empty())
+            return kInvalidRtTextureIndex;
+
+        if (const auto existing = textureIndices.find(texturePath); existing != textureIndices.end())
+            return existing->second;
+
+        if (textureCount >= RtGlobalIllumination::kMaxRtMaterialTextures)
+            return kInvalidRtTextureIndex;
+
+        if (!textureManager.LoadDDS(texturePath))
+            return kInvalidRtTextureIndex;
+
+        const uint32_t index = textureCount++;
+        textureIndices.emplace(texturePath, index);
+        return index;
+    }
+
+    // Compile a compute shader and fill outPSO.  Returns false and writes errOut on failure.
+    bool CompileAndCreatePSO(
+        ID3D12Device* device,
+        ID3D12RootSignature* rootSig,
+        const wchar_t* shaderFile,
+        const wchar_t* entryPoint,
+        ComPtr<ID3D12PipelineState>& outPSO,
+        std::string& errOut)
+    {
+        ShaderCompileRequest req{};
+        req.FilePath      = shaderFile;
+        req.EntryPoint     = entryPoint;
+        req.TargetProfile  = L"cs_6_5";
+        req.Stage          = ShaderStage::Compute;
+
+        DX12Shader shader;
+        if (!shader.Compile(req))
+        {
+            errOut = std::string("RtGlobalIllumination: failed to compile '")
+                   + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown error") + "'";
+            return false;
+        }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = rootSig;
+        psoDesc.CS = shader.GetBytecode();
+
+        if (FAILED(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPSO))))
+        {
+            errOut = "RtGlobalIllumination: CreateComputePipelineState failed.";
+            return false;
+        }
+        return true;
+    }
+
+    // Bind a descriptor table (GPU handle at slot descriptorIdx inside the given heap).
+    void SetTable(
+        ID3D12GraphicsCommandList* cmdList,
+        UINT rootParam,
+        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle)
+    {
+        cmdList->SetComputeRootDescriptorTable(rootParam, gpuHandle);
+    }
+
+    std::filesystem::path FindProjectDataDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+            return {};
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path dataDirectory = currentPath / "Data";
+            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
+                return std::filesystem::weakly_canonical(dataDirectory);
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+                break;
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    std::array<float, 3> EstimateAverageTextureColor(const std::filesystem::path& texturePath)
+    {
+        if (texturePath.empty() || !std::filesystem::exists(texturePath))
+            return ToRgbArray(1.0f, 1.0f, 1.0f);
+
+        DirectX::ScratchImage image;
+        DirectX::TexMetadata meta{};
+        const std::wstring widePath = texturePath.wstring();
+        std::wstring ext = texturePath.extension().wstring();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+
+        HRESULT hr = S_OK;
+        if (ext == L".dds")
+            hr = DirectX::LoadFromDDSFile(widePath.c_str(), DirectX::DDS_FLAGS_NONE, &meta, image);
+        else if (ext == L".tga")
+            hr = DirectX::LoadFromTGAFile(widePath.c_str(), &meta, image);
+        else if (ext == L".hdr")
+            hr = DirectX::LoadFromHDRFile(widePath.c_str(), &meta, image);
+        else
+            hr = DirectX::LoadFromWICFile(widePath.c_str(), DirectX::WIC_FLAGS_NONE, &meta, image);
+
+        if (FAILED(hr))
+            return ToRgbArray(1.0f, 1.0f, 1.0f);
+
+        if (DirectX::IsCompressed(meta.format))
+        {
+            DirectX::ScratchImage decompressed;
+            hr = DirectX::Decompress(image.GetImages(), image.GetImageCount(), meta, DXGI_FORMAT_UNKNOWN, decompressed);
+            if (FAILED(hr))
+                return ToRgbArray(1.0f, 1.0f, 1.0f);
+            image = std::move(decompressed);
+            meta = image.GetMetadata();
+        }
+
+        if (meta.format != DXGI_FORMAT_R8G8B8A8_UNORM && meta.format != DXGI_FORMAT_B8G8R8A8_UNORM)
+        {
+            DirectX::ScratchImage converted;
+            hr = DirectX::Convert(image.GetImages(), image.GetImageCount(), meta,
+                DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT,
+                DirectX::TEX_THRESHOLD_DEFAULT, converted);
+            if (FAILED(hr))
+                return ToRgbArray(1.0f, 1.0f, 1.0f);
+            image = std::move(converted);
+            meta = image.GetMetadata();
+        }
+
+        const DirectX::Image* topMip = image.GetImage(0, 0, 0);
+        if (!topMip || topMip->width == 0 || topMip->height == 0)
+            return ToRgbArray(1.0f, 1.0f, 1.0f);
+
+        double sumR = 0.0;
+        double sumG = 0.0;
+        double sumB = 0.0;
+        for (size_t y = 0; y < topMip->height; ++y)
+        {
+            const uint8_t* row = topMip->pixels + y * topMip->rowPitch;
+            for (size_t x = 0; x < topMip->width; ++x)
+            {
+                const uint8_t* texel = row + x * 4;
+                sumR += texel[0];
+                sumG += texel[1];
+                sumB += texel[2];
+            }
+        }
+
+        const double invCount = 1.0 / static_cast<double>(topMip->width * topMip->height * 255.0);
+        return ToRgbArray(
+            static_cast<float>(sumR * invCount),
+            static_cast<float>(sumG * invCount),
+            static_cast<float>(sumB * invCount));
+    }
+
+} // namespace
+
+// -----------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------
+
+bool RtGlobalIllumination::Initialize(UINT width, UINT height)
+{
+    if (width == 0 || height == 0)
+        return false;
+
+    mLastError.clear();
+    try
+    {
+        if (!mIsInitialized)
+        {
+            if (!CreateRootSignature()) return false;
+            if (!CreatePipelines())    return false;
+        }
+
+        if (!mIsInitialized || width != mWidth || height != mHeight)
+        {
+            // Set dimensions before CreateResolutionBuffers so helpers can use mWidth/mHeight.
+            mWidth  = width;
+            mHeight = height;
+            if (!CreateResolutionBuffers()) return false;
+            if (!CreateDescriptors()) return false;
+            // (Re-)initialise NRD with the new resolution and texture pointers.
+            if (!InitNrd()) return false;
+
+            // Recreated RTGI buffers start without valid temporal history.
+            mFrameIndex = 0;
+            mReservoirWriteIdx = 0;
+            mOutputBufferInSrvState = false;
+        }
+
+        mIsInitialized = true;
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        mLastError = std::string("RtGlobalIllumination::Initialize: ") + ex.what();
+        mInitFailed = true;
+        return false;
+    }
+}
+
+bool RtGlobalIllumination::EnsureSize(UINT width, UINT height)
+{
+    if (width == mWidth && height == mHeight)
+        return true;
+    return Initialize(width, height);
+}
+
+void RtGlobalIllumination::Shutdown()
+{
+    if (mMappedCb && mConstantBuffer)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mReservoirBuffer[0].Reset();
+    mReservoirBuffer[1].Reset();
+    mRadianceBuffer.Reset();
+    mAccumBuffer.Reset();
+    mOutputBuffer.Reset();
+    mSpecularBuffer.Reset();
+    // Unmap and release the persistently-mapped geometry buffers.
+    if (mVertexBuffer     && mMappedVertices)     { mVertexBuffer->Unmap(0, nullptr);     mMappedVertices     = nullptr; }
+    if (mIndexBuffer      && mMappedIndices)      { mIndexBuffer->Unmap(0, nullptr);      mMappedIndices      = nullptr; }
+    if (mInstanceInfoBuffer && mMappedInstanceInfo) { mInstanceInfoBuffer->Unmap(0, nullptr); mMappedInstanceInfo = nullptr; }
+    mVertexBuffer.Reset();
+    mIndexBuffer.Reset();
+    mInstanceInfoBuffer.Reset();
+    mCpuVertices.clear();
+    mCpuIndices.clear();
+    mCpuInstanceInfo.clear();
+    mGeometryDirty = false;
+    mCpuUavHeap.Reset();
+    mRootSignature.Reset();
+    mPSO_RayGen.Reset();
+    mPSO_Temporal.Reset();
+    mPSO_Spatial.Reset();
+    mPSO_Composite.Reset();
+    // NRD path PSOs and root signature.
+    mPSO_NrdPrepare.Reset();
+    mPSO_NrdComposite.Reset();
+    mPSO_SpecularNrdPrepare.Reset();
+    mPSO_SpecularResolve.Reset();
+    mRootSignatureNrd.Reset();
+    // Specular reflection PSO and root signature.
+    mPSO_Specular.Reset();
+    mRootSignatureSpecular.Reset();
+    // NRD input/output textures.
+    mNrdDiffRadianceHitDist.Reset();
+    mNrdMotionVectors.Reset();
+    mNrdNormalRoughness.Reset();
+    mNrdViewZ.Reset();
+    mNrdOutDiff.Reset();
+    mNrdSpecRadianceHitDist.Reset();
+    mNrdSpecMotionVectors.Reset();
+    mNrdSpecNormalRoughness.Reset();
+    mNrdSpecViewZ.Reset();
+    mNrdOutSpec.Reset();
+    // Shut down the NRD instance.
+    mNrdDenoiser.Shutdown();
+    mNrdSpecularDenoiser.Shutdown();
+    mNrdDescriptorsAllocated = false;
+    mIsInitialized = false;
+    mDescriptorsAllocated = false;
+    mTlasReady = false;
+    mOutputBufferInSrvState = false;
+    mSpecularBufferInSrvState = false;
+    mSpecularHalfBufferInSrvState = false;
+    mSpecularWidth = 0;
+    mSpecularHeight = 0;
+    mUploadRingIdx = 0;
+    mPendingUploads[0].clear();
+    mPendingUploads[1].clear();
+    mBlasCache.clear();
+    mMaterialSlotCache.clear();
+    mTextureAverageColorCache.clear();
+    mMaterialTextureIndices.clear();
+    mMaterialTextureCount = 0;
+    mTlas.Reset();
+    mTlasScratch.Reset();
+    mInstanceDescBuffer.Reset();
+}
+
+// -----------------------------------------------------------------------
+// Dispatch
+// -----------------------------------------------------------------------
+
+void RtGlobalIllumination::Dispatch(
+    ID3D12GraphicsCommandList4*  cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+    const RtGISettings&          settings,
+    const float                  viewProjInv[16],
+    const float                  currViewProj[16],
+    const float                  prevViewProj[16],
+    const float                  cameraPos[3],
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunR,    float sunG,    float sunB,
+    float skyR,    float skyG,    float skyB,
+    const float worldToViewMatrix[16],
+    const float viewToClipMatrix[16],
+    const float prevWorldToViewMatrix[16],
+    const float prevViewToClipMatrix[16],
+    const float cameraJitter[2],
+    const float prevCameraJitter[2],
+    float       timeDeltaMs)
+{
+    UploadConstants(settings, viewProjInv, currViewProj, prevViewProj, worldToViewMatrix, cameraPos,
+        sunDirX, sunDirY, sunDirZ, sunR, sunG, sunB, skyR, skyG, skyB);
+
+    // Thread group counts for the full frame.
+    const UINT gx = (mWidth  + kGroupSizeX - 1) / kGroupSizeX;
+    const UINT gy = (mHeight + kGroupSizeY - 1) / kGroupSizeY;
+    const UINT specGx = (mSpecularWidth  + kGroupSizeX - 1) / kGroupSizeX;
+    const UINT specGy = (mSpecularHeight + kGroupSizeY - 1) / kGroupSizeY;
+
+    // Current write and read reservoir indices (alternating each frame).
+    const UINT writeIdx = mReservoirWriteIdx;
+    const UINT readIdx  = 1u - writeIdx;
+
+    cmdList->SetComputeRootSignature(mRootSignature.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+    // Helpers for common barrier patterns.
+    auto UavBarrier = [&](ID3D12Resource* resource) {
+        auto b = CD3DX12_RESOURCE_BARRIER::UAV(resource);
+        cmdList->ResourceBarrier(1, &b);
+    };
+    auto ToSrv = [&](ID3D12Resource* resource) {
+        auto b = CD3DX12_RESOURCE_BARRIER::Transition(
+            resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &b);
+    };
+    auto ToUav = [&](ID3D12Resource* resource) {
+        auto b = CD3DX12_RESOURCE_BARRIER::Transition(
+            resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmdList->ResourceBarrier(1, &b);
+    };
+
+    // -----------------------------------------------------------------------
+    // Pass 0 - RayGen: fire GI rays, write initial reservoirs + raw radiance.
+    // Skipped if the TLAS has not been built yet (first frame / no geometry)
+    // to prevent a null-acceleration-structure GPU hang.
+    // -----------------------------------------------------------------------
+    if (mTlasReady)
+    {
+        // reservoirBuffer[writeIdx] and mRadianceBuffer are written as UAVs — ensure UAV state.
+        // (Already in UAV on first frame from resource creation; on later frames
+        //  we transitioned them back to UAV at the end of temporal/spatial/composite.)
+
+        cmdList->SetPipelineState(mPSO_RayGen.Get());
+        SetTable(cmdList, 1, gbufferAlbedoSrv);
+        SetTable(cmdList, 2, gbufferNormalDepthSrv);
+        SetTable(cmdList, 3, mReservoirUavGpu[writeIdx]);
+        SetTable(cmdList, 4, mRadianceUavGpu);
+        SetTable(cmdList, 5, mTlasSrvGpu);
+        SetTable(cmdList, 6, mVertexSrvGpu);
+        SetTable(cmdList, 7, mIndexSrvGpu);
+        SetTable(cmdList, 8, mInstanceInfoSrvGpu);
+        cmdList->Dispatch(gx, gy, 1);
+
+        UavBarrier(mReservoirBuffer[writeIdx].Get());
+        UavBarrier(mRadianceBuffer.Get());
+    }
+
+    // -----------------------------------------------------------------------
+    // Passes 1-3:  either NRD RELAX_DIFFUSE (recommended) or the legacy
+    // ReSTIR temporal / spatial / EMA-composite path.
+    // -----------------------------------------------------------------------
+    const bool useNrd = settings.UseNrdDenoiser
+                     && mNrdDenoiser.IsInitialized()
+                     && worldToViewMatrix  != nullptr
+                     && viewToClipMatrix   != nullptr
+                     && prevWorldToViewMatrix != nullptr
+                     && prevViewToClipMatrix  != nullptr;
+
+    if (useNrd)
+    {
+        // ── NRD path ───────────────────────────────────────────────────────
+        // The raw noisy GI in mRadianceBuffer was just written by RayGen.
+        // We feed it through four NRD input textures, run NRD RELAX_DIFFUSE,
+        // then composite the denoised result into mOutputBuffer.
+
+        // Step A – transition mRadianceBuffer UAV → SRV so NrdPrepare can read it.
+        ToSrv(mRadianceBuffer.Get());
+
+        // Step B – NRD input textures were just written by NrdPrepare as UAVs.
+        // NrdDenoiser will transition them internally as needed; no barriers required here.
+
+        // Step C – run NrdPrepare
+        // mNrdViewZ, mNrdMotionVectors.
+        {
+            cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
+            cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+            cmdList->SetPipelineState(mPSO_NrdPrepare.Get());
+            // param 1: t0 = albedo (not used but bound for root-sig completeness)
+            SetTable(cmdList, 1, gbufferAlbedoSrv);
+            // param 2: t1 = normalDepth G-buffer
+            SetTable(cmdList, 2, gbufferNormalDepthSrv);
+            // param 3: t2 = material G-buffer (roughness/metallic/AO)
+            SetTable(cmdList, 3, gbufferMaterialSrv);
+            // param 4: t3 = raw GI radiance from RayGen
+            SetTable(cmdList, 4, mRadianceSrvGpu);
+            // params 5-8: u0-u3 = NRD input textures
+            SetTable(cmdList, 5, mNrdDiffRadianceUavGpu);
+            SetTable(cmdList, 6, mNrdNormalRoughnessUavGpu);
+            SetTable(cmdList, 7, mNrdViewZUavGpu);
+            SetTable(cmdList, 8, mNrdMotionVectorsUavGpu);
+            cmdList->Dispatch(gx, gy, 1);
+
+            // UAV barriers after NrdPrepare so NRD can safely read these textures.
+            D3D12_RESOURCE_BARRIER uavBarriers[4];
+            uavBarriers[0] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdDiffRadianceHitDist.Get());
+            uavBarriers[1] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdNormalRoughness.Get());
+            uavBarriers[2] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdViewZ.Get());
+            uavBarriers[3] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdMotionVectors.Get());
+            cmdList->ResourceBarrier(4, uavBarriers);
+        }
+
+        // Step D – update NRD denoiser settings from RtGISettings.
+        mNrdDenoiser.SetMaxAccumulationTime(settings.NrdMaxAccumulationTime, 60.0f);
+        mNrdDenoiser.SetAtrousIterations(settings.NrdAtrousIterations);
+        mNrdDenoiser.SetDisocclusionThreshold(settings.NrdDisocclusionThreshold);
+
+        // Step E – run all NRD RELAX_DIFFUSE dispatches.
+        // NRD will set its own pipeline/root-signature/descriptor-heap internally.
+        const bool resetHistory = (mFrameIndex == 0);
+        mNrdDenoiser.Denoise(
+            cmdList,
+            viewToClipMatrix,
+            prevViewToClipMatrix,
+            worldToViewMatrix,
+            prevWorldToViewMatrix,
+            cameraJitter,
+            prevCameraJitter,
+            mFrameIndex,
+            resetHistory,
+            timeDeltaMs);
+
+        // After NRD, restore the engine descriptor heap so subsequent passes
+        // (NrdComposite, deferred lighting) work normally.
+        {
+            ID3D12DescriptorHeap* heap = DX12Context_GetSrvDescriptorHeap();
+            if (heap) cmdList->SetDescriptorHeaps(1, &heap);
+        }
+
+        // Step F – transition the NRD output to SRV and ensure mOutputBuffer is in UAV
+        // state for the composite pass.
+        {
+            auto outDiffToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+                mNrdOutDiff.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            cmdList->ResourceBarrier(1, &outDiffToSrv);
+
+            if (mOutputBufferInSrvState)
+            {
+                auto outToUav = CD3DX12_RESOURCE_BARRIER::Transition(
+                    mOutputBuffer.Get(),
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                cmdList->ResourceBarrier(1, &outToUav);
+                mOutputBufferInSrvState = false;
+            }
+        }
+
+        // Step G – NrdComposite: unpack denoised radiance → mOutputBuffer.
+        {
+            cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
+            cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+            cmdList->SetPipelineState(mPSO_NrdComposite.Get());
+            SetTable(cmdList, 1, mNrdOutDiffSrvGpu);
+            // param 5: u0 = final GI output
+            SetTable(cmdList, 5, mOutputUavGpu);
+            cmdList->Dispatch(gx, gy, 1);
+            UavBarrier(mOutputBuffer.Get());
+
+            auto outDiffToUav = CD3DX12_RESOURCE_BARRIER::Transition(
+                mNrdOutDiff.Get(),
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            cmdList->ResourceBarrier(1, &outDiffToUav);
+        }
+
+        // Restore mRadianceBuffer back to UAV for next frame's RayGen.
+        ToUav(mRadianceBuffer.Get());
+    }
+    else
+    {
+        // ── Legacy ReSTIR path ─────────────────────────────────────────────
+        // Restore the shared RTGI root signature that was set by RayGen.
+        cmdList->SetComputeRootSignature(mRootSignature.Get());
+        cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+        // Pass 1 - Temporal resampling
+        if (settings.TemporalReuseEnabled)
+        {
+            ToSrv(mReservoirBuffer[writeIdx].Get());
+            ToSrv(mReservoirBuffer[readIdx].Get());
+
+            cmdList->SetPipelineState(mPSO_Temporal.Get());
+            SetTable(cmdList, 1, mReservoirSrvGpu[writeIdx]);
+            SetTable(cmdList, 2, mReservoirSrvGpu[readIdx]);
+            SetTable(cmdList, 3, mReservoirUavGpu[readIdx]);
+            SetTable(cmdList, 4, mRadianceUavGpu);
+
+            ToUav(mReservoirBuffer[readIdx].Get());
+
+            cmdList->Dispatch(gx, gy, 1);
+
+            UavBarrier(mReservoirBuffer[readIdx].Get());
+            UavBarrier(mRadianceBuffer.Get());
+
+            ToUav(mReservoirBuffer[writeIdx].Get());
+        }
+
+        const UINT spatialReadIdx = settings.TemporalReuseEnabled ? readIdx : writeIdx;
+
+        // Pass 2 - Spatial resampling
+        if (settings.SpatialReuseEnabled)
+        {
+            const UINT spatialWriteIdx = 1u - spatialReadIdx;
+            ToSrv(mReservoirBuffer[spatialReadIdx].Get());
+
+            cmdList->SetPipelineState(mPSO_Spatial.Get());
+            SetTable(cmdList, 1, mReservoirSrvGpu[spatialReadIdx]);
+            SetTable(cmdList, 2, gbufferNormalDepthSrv);
+            SetTable(cmdList, 3, mReservoirUavGpu[spatialWriteIdx]);
+            SetTable(cmdList, 4, mRadianceUavGpu);
+            cmdList->Dispatch(gx, gy, 1);
+
+            UavBarrier(mReservoirBuffer[spatialWriteIdx].Get());
+            UavBarrier(mRadianceBuffer.Get());
+
+            ToUav(mReservoirBuffer[spatialReadIdx].Get());
+        }
+
+        // Pass 3 - Composite (EMA accumulation)
+        if (mOutputBufferInSrvState)
+        {
+            auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+                mOutputBuffer.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            cmdList->ResourceBarrier(1, &toUav);
+            mOutputBufferInSrvState = false;
+        }
+
+        ToSrv(mRadianceBuffer.Get());
+        ToSrv(mAccumBuffer.Get());
+
+        cmdList->SetPipelineState(mPSO_Composite.Get());
+        SetTable(cmdList, 1, mRadianceSrvGpu);
+        SetTable(cmdList, 2, mAccumSrvGpu);
+        SetTable(cmdList, 3, mAccumUavGpu);
+        SetTable(cmdList, 4, mOutputUavGpu);
+        cmdList->Dispatch(gx, gy, 1);
+
+        UavBarrier(mAccumBuffer.Get());
+        UavBarrier(mOutputBuffer.Get());
+
+        ToUav(mRadianceBuffer.Get());
+        ToUav(mAccumBuffer.Get());
+    }
+
+    // Transition the output buffer from UAV to PIXEL_SHADER_RESOURCE so the
+    // deferred lighting pass can sample it.
+    if (!mOutputBufferInSrvState)
+    {
+        auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &toSrv);
+        mOutputBufferInSrvState = true;
+    }
+
+    // ── Specular reflection pass ───────────────────────────────────────────
+    // Run only when the TLAS is ready, specular is enabled, and the PSO compiled.
+    if (mTlasReady && settings.SpecularEnabled && mPSO_Specular && mRootSignatureSpecular)
+    {
+        // Ensure specular buffer is in UAV state.
+        if (mSpecularBufferInSrvState)
+        {
+            auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSpecularBuffer.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            cmdList->ResourceBarrier(1, &toUav);
+            mSpecularBufferInSrvState = false;
+        }
+
+        cmdList->SetComputeRootSignature(mRootSignatureSpecular.Get());
+        cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+        SetTable(cmdList, 1, gbufferAlbedoSrv);
+        SetTable(cmdList, 2, gbufferNormalDepthSrv);
+        SetTable(cmdList, 3, mTlasSrvGpu);
+        SetTable(cmdList, 4, mVertexSrvGpu);
+        SetTable(cmdList, 5, mIndexSrvGpu);
+        SetTable(cmdList, 6, mInstanceInfoSrvGpu);
+        SetTable(cmdList, 7, gbufferMaterialSrv);
+        SetTable(cmdList, 8, mMaterialRangeSrvGpu);
+        SetTable(cmdList, 9, mBaseTextureTableGpu);
+        SetTable(cmdList, 10, mSpecularUavGpu);
+        SetTable(cmdList, 11, mSpecularUavGpu); // dummy u1 bound to same slot
+        cmdList->SetPipelineState(mPSO_Specular.Get());
+        cmdList->Dispatch(gx, gy, 1);
+        UavBarrier(mSpecularBuffer.Get());
+
+        // Transition specular buffer to SRV for the deferred lighting pass.
+        auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSpecularBuffer.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &toSrv);
+        mSpecularBufferInSrvState = true;
+    }
+    else if (!mSpecularBufferInSrvState)
+    {
+        // Specular disabled – ensure buffer is in a known SRV state (GPU reads zero).
+        auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSpecularBuffer.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &toSrv);
+        mSpecularBufferInSrvState = true;
+    }
+
+    // Advance ping-pong index for next frame.
+    mReservoirWriteIdx = 1u - mReservoirWriteIdx;
+    ++mFrameIndex;
+}
+
+// -----------------------------------------------------------------------
+// Private helpers
+// -----------------------------------------------------------------------
+
+bool RtGlobalIllumination::CreateRootSignature()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) { mLastError = "RtGlobalIllumination: null device."; return false; }
+
+    // Root parameters:
+    //  0  inline CBV  b0  RtGIConstants
+    //  1  SRV table   t0  input A (albedo / current reservoir / GI output)
+    //  2  SRV table   t1  input B (normal+depth / history reservoir / accum)
+    //  3  UAV table   u0  output A
+    //  4  UAV table   u1  output B
+    //  5  SRV table   t2  TLAS (RayGen only; other passes leave it unused)
+    //  6  SRV table   t3  global vertex buffer (GpuPackedVertex, RayGen only)
+    //  7  SRV table   t4  global index buffer  (uint32,          RayGen only)
+    //  8  SRV table   t5  per-instance info    (GpuInstanceInfo, RayGen only)
+    //  9  SRV table   t6  material ranges      (GpuMaterialRange, RayGen only)
+    D3D12_DESCRIPTOR_RANGE srvA{}, srvB{}, uavA{}, uavB{}, tlas{}, vb{}, ib{}, ii{}, mr{};
+    srvA.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  srvA.NumDescriptors = 1; srvA.BaseShaderRegister = 0;
+    srvB.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  srvB.NumDescriptors = 1; srvB.BaseShaderRegister = 1;
+    uavA.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;  uavA.NumDescriptors = 1; uavA.BaseShaderRegister = 0;
+    uavB.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;  uavB.NumDescriptors = 1; uavB.BaseShaderRegister = 1;
+    tlas.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  tlas.NumDescriptors = 1; tlas.BaseShaderRegister = 2;
+    vb.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  vb.NumDescriptors   = 1; vb.BaseShaderRegister   = 3;
+    ib.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  ib.NumDescriptors   = 1; ib.BaseShaderRegister   = 4;
+    ii.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  ii.NumDescriptors   = 1; ii.BaseShaderRegister   = 5;
+    mr.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  mr.NumDescriptors   = 1; mr.BaseShaderRegister   = 6;
+
+    D3D12_ROOT_PARAMETER params[10]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable = { 1, &srvA };
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable = { 1, &srvB };
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable = { 1, &uavA };
+    params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[4].DescriptorTable = { 1, &uavB };
+    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[5].DescriptorTable = { 1, &tlas };
+    params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[6].DescriptorTable = { 1, &vb };
+    params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[7].DescriptorTable = { 1, &ib };
+    params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[8].DescriptorTable = { 1, &ii };
+    params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[9].DescriptorTable = { 1, &mr };
+    params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 10;
+    rsDesc.pParameters = params;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> serialized, errors;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)))
+    {
+        mLastError = "RtGlobalIllumination: failed to serialize root signature.";
+        return false;
+    }
+    if (FAILED(device->CreateRootSignature(
+            0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
+            IID_PPV_ARGS(&mRootSignature))))
+    {
+        mLastError = "RtGlobalIllumination: failed to create root signature.";
+        return false;
+    }
+    return true;
+}
+
+bool RtGlobalIllumination::CreatePipelines()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // Compile all four compute shaders from Data/Shaders/ (resolved by DX12ShaderCompiler).
+    if (!CompileAndCreatePSO(device, mRootSignature.Get(),
+            L"RtGI_RayGen.hlsl",    L"CSMain", mPSO_RayGen,    mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignature.Get(),
+            L"RtGI_Temporal.hlsl",  L"CSMain", mPSO_Temporal,  mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignature.Get(),
+            L"RtGI_Spatial.hlsl",   L"CSMain", mPSO_Spatial,   mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignature.Get(),
+            L"RtGI_Composite.hlsl", L"CSMain", mPSO_Composite, mLastError)) return false;
+
+    // ── NRD path: build an extended root signature and compile the two NRD
+    //    helper shaders (NrdPrepare writes the 4 NRD input textures,
+    //    NrdComposite unpacks the NRD output into the final GI texture).
+    //
+    // NrdPrepare root layout:
+    //  [0] CBV  b0  – RtGIConstants
+    //  [1] SRV table t0  – albedo G-buffer
+    //  [2] SRV table t1  – normalDepth G-buffer
+    //  [3] SRV table t2  – material G-buffer (roughness/metallic/AO)
+    //  [4] SRV table t3  – raw GI radiance texture (from RayGen)
+    //  [5] UAV table u0  – NRD IN_DIFF_RADIANCE_HITDIST
+    //  [6] UAV table u1  – NRD IN_NORMAL_ROUGHNESS
+    //  [7] UAV table u2  – NRD IN_VIEWZ
+    //  [8] UAV table u3  – NRD IN_MV
+    //
+    // NrdComposite root layout (shared same root sig):
+    //  [0] CBV  b0  – RtGIConstants
+    //  [1] SRV table t0  – NRD OUT_DIFF_RADIANCE_HITDIST
+    //  [5] UAV table u0  – final GI output
+    {
+        // Descriptor range for each SRV and UAV slot.
+        D3D12_DESCRIPTOR_RANGE r[9]{};
+        // SRV t0 – albedo
+        r[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[0].NumDescriptors = 1; r[0].BaseShaderRegister = 0;
+        // SRV t1 – normalDepth
+        r[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[1].NumDescriptors = 1; r[1].BaseShaderRegister = 1;
+        // SRV t2 – material
+        r[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[2].NumDescriptors = 1; r[2].BaseShaderRegister = 2;
+        // SRV t3 – raw GI radiance
+        r[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[3].NumDescriptors = 1; r[3].BaseShaderRegister = 3;
+        // UAV u0
+        r[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[4].NumDescriptors = 1; r[4].BaseShaderRegister = 0;
+        // UAV u1
+        r[5].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[5].NumDescriptors = 1; r[5].BaseShaderRegister = 1;
+        // UAV u2
+        r[6].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[6].NumDescriptors = 1; r[6].BaseShaderRegister = 2;
+        // UAV u3
+        r[7].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[7].NumDescriptors = 1; r[7].BaseShaderRegister = 3;
+
+        D3D12_ROOT_PARAMETER p[9]{};
+        // [0] CBV
+        p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p[0].Descriptor.ShaderRegister = 0;
+        p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [1] SRV t0
+        p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[1].DescriptorTable = { 1, &r[0] }; p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [2] SRV t1
+        p[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[2].DescriptorTable = { 1, &r[1] }; p[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [3] SRV t2
+        p[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[3].DescriptorTable = { 1, &r[2] }; p[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [4] SRV t3
+        p[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[4].DescriptorTable = { 1, &r[3] }; p[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [5] UAV u0
+        p[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[5].DescriptorTable = { 1, &r[4] }; p[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [6] UAV u1
+        p[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[6].DescriptorTable = { 1, &r[5] }; p[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [7] UAV u2
+        p[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[7].DescriptorTable = { 1, &r[6] }; p[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [8] UAV u3
+        p[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[8].DescriptorTable = { 1, &r[7] }; p[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+        rsDesc.NumParameters = 9;
+        rsDesc.pParameters   = p;
+        rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> blob, err;
+        if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)))
+        {
+            mLastError = "RtGlobalIllumination: failed to serialize NRD root signature.";
+            return false;
+        }
+        if (FAILED(device->CreateRootSignature(
+                0, blob->GetBufferPointer(), blob->GetBufferSize(),
+                IID_PPV_ARGS(&mRootSignatureNrd))))
+        {
+            mLastError = "RtGlobalIllumination: failed to create NRD root signature.";
+            return false;
+        }
+    }
+
+    // Compile NRD helper shaders using the extended NRD root signature.
+    if (!CompileAndCreatePSO(device, mRootSignatureNrd.Get(),
+            L"RtGI_NrdPrepare.hlsl",   L"CSMain", mPSO_NrdPrepare,   mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignatureNrd.Get(),
+            L"RtGI_NrdComposite.hlsl", L"CSMain", mPSO_NrdComposite, mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignatureNrd.Get(),
+            L"RtGI_SpecularNrdPrepare.hlsl", L"CSMain", mPSO_SpecularNrdPrepare, mLastError)) return false;
+    if (!CompileAndCreatePSO(device, mRootSignatureNrd.Get(),
+            L"RtGI_SpecularResolve.hlsl", L"CSMain", mPSO_SpecularResolve, mLastError)) return false;
+
+    // ── Specular reflection pass ───────────────────────────────────────────
+    if (!CreateSpecularRootSignature()) return false;
+    if (!CompileAndCreatePSO(device, mRootSignatureSpecular.Get(),
+            L"RtGI_Specular.hlsl", L"CSMain", mPSO_Specular, mLastError)) return false;
+
+    return true;
+}
+
+bool RtGlobalIllumination::CreateSpecularRootSignature()
+{
+    // Specular root signature layout (matches RtGI_Specular.hlsl):
+    //  [0]  CBV  b0  – RtGIConstants
+    //  [1]  SRV  t0  – albedo G-buffer
+    //  [2]  SRV  t1  – normalDepth G-buffer
+    //  [3]  SRV  t2  – TLAS
+    //  [4]  SRV  t3  – vertex buffer
+    //  [5]  SRV  t4  – index buffer
+    //  [6]  SRV  t5  – instanceInfo buffer
+    //  [7]  SRV  t6  – material G-buffer (roughness/metallic/AO)
+    //  [8]  SRV  t7  – material ranges
+    //  [9]  SRV  t8..t263 – base-color textures table
+    // [10]  UAV  u0  – specular output
+    // [11]  UAV  u1  – dummy (u1 declared in shader; bind same slot)
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    D3D12_DESCRIPTOR_RANGE r[11]{};
+    r[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t0 albedo
+    r[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t1 normalDepth
+    r[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t2 TLAS
+    r[3] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t3 vertices
+    r[4] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 4, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t4 indices
+    r[5] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t5 instanceInfo
+    r[6] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 6, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t6 material
+    r[7] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 7, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t7 material ranges
+    r[8] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, RtGlobalIllumination::kMaxRtMaterialTextures, 8, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t8..t263 base color
+    r[9] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // u0 specular out
+    r[10] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // u1 dummy
+
+    D3D12_ROOT_PARAMETER p[12]{};
+    p[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    p[0].Descriptor.ShaderRegister = 0;
+    p[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+    for (int i = 1; i <= 11; ++i)
+    {
+        p[i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[i].DescriptorTable.NumDescriptorRanges = 1;
+        p[i].DescriptorTable.pDescriptorRanges   = &r[i - 1];
+        p[i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 12;
+    rsDesc.pParameters   = p;
+    rsDesc.NumStaticSamplers = 1;
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rsDesc.pStaticSamplers = &sampler;
+    rsDesc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> blob, errBlob;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errBlob)))
+    {
+        mLastError = "RtGlobalIllumination: failed to serialize specular root signature.";
+        return false;
+    }
+    if (FAILED(device->CreateRootSignature(
+            0, blob->GetBufferPointer(), blob->GetBufferSize(),
+            IID_PPV_ARGS(&mRootSignatureSpecular))))
+    {
+        mLastError = "RtGlobalIllumination: failed to create specular root signature.";
+        return false;
+    }
+    return true;
+}
+
+bool RtGlobalIllumination::CreateResolutionBuffers()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    mSpecularWidth = std::max<UINT>(1u, (mWidth + 1u) / 2u);
+    mSpecularHeight = std::max<UINT>(1u, (mHeight + 1u) / 2u);
+
+    const UINT64 pixelCount = static_cast<UINT64>(mWidth) * mHeight;
+    const UINT64 reservoirBytes = pixelCount * sizeof(RtGIPackedReservoir);
+
+    // Ping-pong structured buffers for reservoirs.
+    mReservoirBuffer[0] = MakeStructuredBuffer(device, reservoirBytes, L"RTGI_Reservoir0");
+    mReservoirBuffer[1] = MakeStructuredBuffer(device, reservoirBytes, L"RTGI_Reservoir1");
+
+    // Intermediate radiance (written by RayGen/Temporal/Spatial, read by Composite).
+    mRadianceBuffer = MakeTexture2D(device, mWidth, mHeight, L"RTGI_Radiance");
+
+    // Temporal accumulation history (EMA running average).
+    mAccumBuffer = MakeTexture2D(device, mWidth, mHeight, L"RTGI_AccumHistory");
+
+    // Final composited output (read as SRV by the deferred lighting pass).
+    mOutputBuffer = MakeTexture2D(device, mWidth, mHeight, L"RTGI_Output");
+
+    // Specular reflection output (RGBA16F, full-res resolve target).
+    mSpecularBuffer = MakeTexture2D(device, mWidth, mHeight, L"RTGI_Specular");
+    mSpecularHalfBuffer = MakeTexture2D(device, mSpecularWidth, mSpecularHeight, L"RTGI_SpecularHalf");
+
+    // ── NRD input / output textures ──────────────────────────────────────────
+    auto MakeNrdTex = [&](LPCWSTR name, DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource>
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width            = mWidth;
+        d.Height           = mHeight;
+        d.DepthOrArraySize = 1;
+        d.MipLevels        = 1;
+        d.Format           = fmt;
+        d.SampleDesc.Count = 1;
+        d.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        d.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &d,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+        res->SetName(name);
+        return res;
+    };
+    mNrdDiffRadianceHitDist = MakeNrdTex(L"NRD_DiffRadiance",   DXGI_FORMAT_R16G16B16A16_FLOAT);
+    mNrdMotionVectors       = MakeNrdTex(L"NRD_MotionVectors",  DXGI_FORMAT_R16G16_FLOAT);
+    // R10G10B10A2_TYPELESS: allows a R10G10B10A2_UNORM SRV (which NRD reads, matching
+    // NRD_NORMAL_ENCODING 2 in NRDConfig.hlsli) and a R10G10B10A2_UINT UAV (which our
+    // RtGI_NrdPrepare shader writes as integer components, since R10G10B10A2_UNORM has no typed UAV store).
+    mNrdNormalRoughness     = MakeNrdTex(L"NRD_NormalRoughness", DXGI_FORMAT_R10G10B10A2_TYPELESS);
+    mNrdViewZ               = MakeNrdTex(L"NRD_ViewZ",          DXGI_FORMAT_R32_FLOAT);
+    // RGBA16F: NRD stores hit distance in the alpha channel; R11G11B10F has no alpha
+        // and would cause temporal accumulation to always see zero hit distance (black output).
+        mNrdOutDiff             = MakeNrdTex(L"NRD_OutDiff",        DXGI_FORMAT_R16G16B16A16_FLOAT);
+
+    auto MakeNrdSpecTex = [&](LPCWSTR name, DXGI_FORMAT fmt) -> ComPtr<ID3D12Resource>
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width            = mSpecularWidth;
+        d.Height           = mSpecularHeight;
+        d.DepthOrArraySize = 1;
+        d.MipLevels        = 1;
+        d.Format           = fmt;
+        d.SampleDesc.Count = 1;
+        d.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        d.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &d,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+        res->SetName(name);
+        return res;
+    };
+
+    mNrdSpecRadianceHitDist = MakeNrdSpecTex(L"NRD_SpecRadiance", DXGI_FORMAT_R16G16B16A16_FLOAT);
+    mNrdSpecMotionVectors   = MakeNrdSpecTex(L"NRD_SpecMotionVectors", DXGI_FORMAT_R16G16_FLOAT);
+    mNrdSpecNormalRoughness = MakeNrdSpecTex(L"NRD_SpecNormalRoughness", DXGI_FORMAT_R10G10B10A2_TYPELESS);
+    mNrdSpecViewZ           = MakeNrdSpecTex(L"NRD_SpecViewZ", DXGI_FORMAT_R32_FLOAT);
+    mNrdOutSpec             = MakeNrdSpecTex(L"NRD_OutSpec", DXGI_FORMAT_R16G16B16A16_FLOAT);
+
+    // Constant buffer (256 bytes, persistently mapped).
+    if (!mConstantBuffer)
+    {
+        mConstantBuffer = MakeConstantBuffer(device, sizeof(RtGIConstants), &mMappedCb);
+    }
+
+    // Small non-shader-visible heap for ClearUnorderedAccessView calls if needed later.
+    if (!mCpuUavHeap)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.NumDescriptors = 8;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mCpuUavHeap)));
+    }
+
+    return true;
+}
+
+bool RtGlobalIllumination::CreateDescriptors()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    const UINT pixelCount = mWidth * mHeight;
+
+    // ---- Reservoir 0 ----
+    if (!mDescriptorsAllocated)
+    {
+        // Allocate all shader-visible handles once; they remain stable because
+        // we never free from the shared heap.
+        if (!AllocDescriptor(mReservoirSrvCpu[0], mReservoirSrvGpu[0], mLastError)) return false;
+        if (!AllocDescriptor(mReservoirUavCpu[0], mReservoirUavGpu[0], mLastError)) return false;
+        if (!AllocDescriptor(mReservoirSrvCpu[1], mReservoirSrvGpu[1], mLastError)) return false;
+        if (!AllocDescriptor(mReservoirUavCpu[1], mReservoirUavGpu[1], mLastError)) return false;
+        if (!AllocDescriptor(mRadianceSrvCpu,     mRadianceSrvGpu,     mLastError)) return false;
+        if (!AllocDescriptor(mRadianceUavCpu,     mRadianceUavGpu,     mLastError)) return false;
+        if (!AllocDescriptor(mAccumSrvCpu,        mAccumSrvGpu,        mLastError)) return false;
+        if (!AllocDescriptor(mAccumUavCpu,        mAccumUavGpu,        mLastError)) return false;
+        if (!AllocDescriptor(mOutputSrvCpu,       mOutputSrvGpu,       mLastError)) return false;
+        if (!AllocDescriptor(mOutputUavCpu,       mOutputUavGpu,       mLastError)) return false;
+        // TLAS SRV slot (filled by BuildTlas each frame, allocated once).
+        if (!AllocDescriptor(mTlasSrvCpu,         mTlasSrvGpu,         mLastError)) return false;
+        // Geometry SRV slots for vertex/index/instance-info buffers (RayGen normal interpolation).
+        if (!AllocDescriptor(mVertexSrvCpu,       mVertexSrvGpu,       mLastError)) return false;
+        if (!AllocDescriptor(mIndexSrvCpu,        mIndexSrvGpu,        mLastError)) return false;
+        if (!AllocDescriptor(mInstanceInfoSrvCpu, mInstanceInfoSrvGpu, mLastError)) return false;
+        if (!AllocDescriptor(mMaterialRangeSrvCpu, mMaterialRangeSrvGpu, mLastError)) return false;
+        // NRD texture descriptors (UAV for NrdPrepare outputs, SRV for NrdComposite inputs).
+        if (!mNrdDescriptorsAllocated)
+        {
+            if (!AllocDescriptor(mNrdDiffRadianceUavCpu,    mNrdDiffRadianceUavGpu,    mLastError)) return false;
+            if (!AllocDescriptor(mNrdDiffRadianceSrvCpu,    mNrdDiffRadianceSrvGpu,    mLastError)) return false;
+            if (!AllocDescriptor(mNrdMotionVectorsUavCpu,   mNrdMotionVectorsUavGpu,   mLastError)) return false;
+            if (!AllocDescriptor(mNrdNormalRoughnessUavCpu, mNrdNormalRoughnessUavGpu, mLastError)) return false;
+            if (!AllocDescriptor(mNrdViewZUavCpu,           mNrdViewZUavGpu,           mLastError)) return false;
+            if (!AllocDescriptor(mNrdOutDiffSrvCpu,         mNrdOutDiffSrvGpu,         mLastError)) return false;
+            if (!AllocDescriptor(mNrdSpecRadianceUavCpu,    mNrdSpecRadianceUavGpu,    mLastError)) return false;
+            if (!AllocDescriptor(mNrdSpecMotionVectorsUavCpu, mNrdSpecMotionVectorsUavGpu, mLastError)) return false;
+            if (!AllocDescriptor(mNrdSpecNormalRoughnessUavCpu, mNrdSpecNormalRoughnessUavGpu, mLastError)) return false;
+            if (!AllocDescriptor(mNrdSpecViewZUavCpu, mNrdSpecViewZUavGpu, mLastError)) return false;
+            if (!AllocDescriptor(mNrdOutSpecSrvCpu,         mNrdOutSpecSrvGpu,         mLastError)) return false;
+            mNrdDescriptorsAllocated = true;
+        }
+
+        if (!mMaterialTextureTableAllocated)
+        {
+            if (!AllocDescriptor(mBaseTextureTableCpu, mBaseTextureTableGpu, mLastError)) return false;
+            const UINT increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            for (uint32_t i = 1; i < RtGlobalIllumination::kMaxRtMaterialTextures; ++i)
+            {
+                D3D12_CPU_DESCRIPTOR_HANDLE throwawayCpu{};
+                D3D12_GPU_DESCRIPTOR_HANDLE throwawayGpu{};
+                if (!AllocDescriptor(throwawayCpu, throwawayGpu, mLastError)) return false;
+            }
+
+            mMaterialTextureTableAllocated = true;
+        }
+
+        mDescriptorsAllocated = true;
+    }
+
+    // ---- (Re-)fill descriptors with the new resources ----
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    srvDesc.Buffer.StructureByteStride = sizeof(RtGIPackedReservoir);
+    srvDesc.Buffer.NumElements = pixelCount;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.Buffer.StructureByteStride = sizeof(RtGIPackedReservoir);
+    uavDesc.Buffer.NumElements = pixelCount;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        device->CreateShaderResourceView(mReservoirBuffer[i].Get(), &srvDesc, mReservoirSrvCpu[i]);
+        device->CreateUnorderedAccessView(mReservoirBuffer[i].Get(), nullptr, &uavDesc, mReservoirUavCpu[i]);
+    }
+
+    // Radiance texture SRV/UAV.
+    D3D12_SHADER_RESOURCE_VIEW_DESC texSrv{};
+    texSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    texSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    texSrv.Format = kGIFormat;
+    texSrv.Texture2D.MipLevels = 1;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC texUav{};
+    texUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    texUav.Format = kGIFormat;
+
+    device->CreateShaderResourceView(mRadianceBuffer.Get(),  &texSrv, mRadianceSrvCpu);
+    device->CreateUnorderedAccessView(mRadianceBuffer.Get(), nullptr, &texUav, mRadianceUavCpu);
+
+    device->CreateShaderResourceView(mAccumBuffer.Get(),     &texSrv, mAccumSrvCpu);
+    device->CreateUnorderedAccessView(mAccumBuffer.Get(),    nullptr, &texUav, mAccumUavCpu);
+
+    device->CreateShaderResourceView(mOutputBuffer.Get(),    &texSrv, mOutputSrvCpu);
+    device->CreateUnorderedAccessView(mOutputBuffer.Get(),   nullptr, &texUav, mOutputUavCpu);
+
+    // Specular buffers SRV + UAV.
+    if (!mSpecularSrvCpu.ptr && !AllocDescriptor(mSpecularSrvCpu, mSpecularSrvGpu, mLastError)) return false;
+    if (!mSpecularUavCpu.ptr && !AllocDescriptor(mSpecularUavCpu, mSpecularUavGpu, mLastError)) return false;
+    if (!mSpecularHalfSrvCpu.ptr && !AllocDescriptor(mSpecularHalfSrvCpu, mSpecularHalfSrvGpu, mLastError)) return false;
+    if (!mSpecularHalfUavCpu.ptr && !AllocDescriptor(mSpecularHalfUavCpu, mSpecularHalfUavGpu, mLastError)) return false;
+    device->CreateShaderResourceView(mSpecularBuffer.Get(),   &texSrv, mSpecularSrvCpu);
+    device->CreateUnorderedAccessView(mSpecularBuffer.Get(),  nullptr, &texUav, mSpecularUavCpu);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC halfTexSrv = texSrv;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC halfTexUav = texUav;
+    device->CreateShaderResourceView(mSpecularHalfBuffer.Get(),   &halfTexSrv, mSpecularHalfSrvCpu);
+    device->CreateUnorderedAccessView(mSpecularHalfBuffer.Get(),  nullptr, &halfTexUav, mSpecularHalfUavCpu);
+
+    // ── NRD texture descriptors ───────────────────────────────────────────────
+    // UAV descriptors for NrdPrepare's four output textures.
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u2{};
+        u2.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+        u2.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateUnorderedAccessView(mNrdDiffRadianceHitDist.Get(), nullptr, &u2, mNrdDiffRadianceUavCpu);
+        device->CreateUnorderedAccessView(mNrdSpecRadianceHitDist.Get(), nullptr, &u2, mNrdSpecRadianceUavCpu);
+
+        // SRV for reading mNrdDiffRadianceHitDist in NrdComposite (as t2/input to NrdPrepare check).
+        D3D12_SHADER_RESOURCE_VIEW_DESC s2{};
+        s2.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        s2.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        s2.Texture2D.MipLevels = 1;
+        s2.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateShaderResourceView(mNrdDiffRadianceHitDist.Get(), &s2, mNrdDiffRadianceSrvCpu);
+
+        u2.Format = DXGI_FORMAT_R16G16_FLOAT;
+        device->CreateUnorderedAccessView(mNrdMotionVectors.Get(), nullptr, &u2, mNrdMotionVectorsUavCpu);
+        device->CreateUnorderedAccessView(mNrdSpecMotionVectors.Get(), nullptr, &u2, mNrdSpecMotionVectorsUavCpu);
+
+        // Write via R10G10B10A2_UINT UAV; NRD reads the same bits as R10G10B10A2_UNORM SRV.
+        u2.Format = DXGI_FORMAT_R10G10B10A2_UINT;
+        device->CreateUnorderedAccessView(mNrdNormalRoughness.Get(), nullptr, &u2, mNrdNormalRoughnessUavCpu);
+        device->CreateUnorderedAccessView(mNrdSpecNormalRoughness.Get(), nullptr, &u2, mNrdSpecNormalRoughnessUavCpu);
+
+        u2.Format = DXGI_FORMAT_R32_FLOAT;
+        device->CreateUnorderedAccessView(mNrdViewZ.Get(), nullptr, &u2, mNrdViewZUavCpu);
+        device->CreateUnorderedAccessView(mNrdSpecViewZ.Get(), nullptr, &u2, mNrdSpecViewZUavCpu);
+
+        // SRV for mNrdOutDiff (NRD denoised output read by NrdComposite).
+        s2.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        device->CreateShaderResourceView(mNrdOutDiff.Get(), &s2, mNrdOutDiffSrvCpu);
+        device->CreateShaderResourceView(mNrdOutSpec.Get(), &s2, mNrdOutSpecSrvCpu);
+    }
+
+    if (mMaterialTextureTableAllocated)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv{};
+        nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        nullSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        nullSrv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        nullSrv.Texture2D.MipLevels = 1;
+
+        const UINT increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu = mBaseTextureTableCpu;
+        for (uint32_t i = 0; i < RtGlobalIllumination::kMaxRtMaterialTextures; ++i)
+        {
+            device->CreateShaderResourceView(nullptr, &nullSrv, cpu);
+            cpu.ptr += increment;
+        }
+
+        for (const auto& entry : mMaterialTextureIndices)
+        {
+            const std::shared_ptr<GpuTexture> texture = mTextureManager.LoadDDS(entry.first);
+            if (!texture || !texture->IsValid())
+                continue;
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC sourceDesc{};
+            sourceDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            sourceDesc.Format = texture->Resource->GetDesc().Format;
+            sourceDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            sourceDesc.Texture2D.MipLevels = texture->Resource->GetDesc().MipLevels;
+
+            D3D12_CPU_DESCRIPTOR_HANDLE dstCpu = mBaseTextureTableCpu;
+            dstCpu.ptr += increment * entry.second;
+            device->CreateShaderResourceView(texture->Resource.Get(), &sourceDesc, dstCpu);
+        }
+    }
+
+    return true;
+}
+
+bool RtGlobalIllumination::InitNrd()
+{
+    // Initialise (or re-initialise) the NrdDenoiser with the current resolution
+    // and the NRD input/output textures created in CreateResolutionBuffers.
+    mNrdDenoiser.Shutdown();
+    mNrdSpecularDenoiser.Shutdown();
+
+    NrdInitTextures nrdTex{};
+    nrdTex.diffRadianceHitDist     = mNrdDiffRadianceHitDist.Get();
+    nrdTex.motionVectors           = mNrdMotionVectors.Get();
+    nrdTex.normalRoughness         = mNrdNormalRoughness.Get();
+    nrdTex.viewZ                   = mNrdViewZ.Get();
+    nrdTex.outDiffRadiance         = mNrdOutDiff.Get();
+    nrdTex.diffRadianceHitDistFmt  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    nrdTex.motionVectorsFmt        = DXGI_FORMAT_R16G16_FLOAT;
+    nrdTex.normalRoughnessFmt      = DXGI_FORMAT_R10G10B10A2_UNORM;
+    nrdTex.viewZFmt                = DXGI_FORMAT_R32_FLOAT;
+    nrdTex.outDiffRadianceFmt      = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    if (!mNrdDenoiser.Initialize(mWidth, mHeight, nrdTex))
+    {
+        mLastError = std::string("NRD init failed: ")
+                   + (mNrdDenoiser.GetLastError() ? mNrdDenoiser.GetLastError() : "unknown");
+        return false;
+    }
+
+    NrdInitTextures nrdSpecTex{};
+    nrdSpecTex.signalType             = NrdInitTextures::SignalType::Specular;
+    nrdSpecTex.specRadianceHitDist    = mNrdSpecRadianceHitDist.Get();
+    nrdSpecTex.motionVectors          = mNrdSpecMotionVectors.Get();
+    nrdSpecTex.normalRoughness        = mNrdSpecNormalRoughness.Get();
+    nrdSpecTex.viewZ                  = mNrdSpecViewZ.Get();
+    nrdSpecTex.outSpecRadiance        = mNrdOutSpec.Get();
+    nrdSpecTex.specRadianceHitDistFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    nrdSpecTex.motionVectorsFmt       = DXGI_FORMAT_R16G16_FLOAT;
+    nrdSpecTex.normalRoughnessFmt     = DXGI_FORMAT_R10G10B10A2_UNORM;
+    nrdSpecTex.viewZFmt               = DXGI_FORMAT_R32_FLOAT;
+    nrdSpecTex.outSpecRadianceFmt     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    if (!mNrdSpecularDenoiser.Initialize(mSpecularWidth, mSpecularHeight, nrdSpecTex))
+    {
+        mLastError = std::string("NRD specular init failed: ")
+                   + (mNrdSpecularDenoiser.GetLastError() ? mNrdSpecularDenoiser.GetLastError() : "unknown");
+        return false;
+    }
+
+    return true;
+}
+
+void RtGlobalIllumination::UploadConstants(
+    const RtGISettings& s,
+    const float viewProjInv[16],
+    const float currViewProj[16],
+    const float prevViewProj[16],
+    const float worldToView[16],
+    const float cameraPos[3],
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunR,    float sunG,    float sunB,
+    float skyR,    float skyG,    float skyB)
+{
+    RtGIConstants cb{};
+    cb.FrameWidth           = mWidth;
+    cb.FrameHeight          = mHeight;
+    cb.SpecularFrameWidth   = mSpecularWidth;
+    cb.SpecularFrameHeight  = mSpecularHeight;
+    cb.FrameIndex           = mFrameIndex;
+    cb.RaysPerPixel         = static_cast<uint32_t>(s.RaysPerPixel);
+    cb.MaxHistoryLength     = static_cast<uint32_t>(s.MaxHistoryLength);
+    cb.SpatialSamples       = static_cast<uint32_t>(s.SpatialSamples);
+    cb.SpatialRadius        = s.SpatialRadius;
+    cb.DepthThreshold       = s.DepthThreshold;
+    cb.NormalThreshold      = s.NormalThreshold;
+    cb.RadianceClamp        = s.RadianceClamp;
+    cb.AccumulationBlend    = s.AccumulationBlend;
+    cb.MaxBounces           = s.MaxBounces;
+    cb.DebugView            = s.DebugView;
+    cb.TemporalReuseEnabled = s.TemporalReuseEnabled ? 1 : 0;
+    cb.SpatialReuseEnabled  = s.SpatialReuseEnabled  ? 1 : 0;
+    cb.NextEventEstimation  = s.NextEventEstimation ? 1 : 0;
+    cb.NrdSharpenAmount     = s.NrdSharpenAmount;
+    cb.ColorLeakIntensity   = s.ColorLeakIntensity;
+    cb.SpecularRoughnessThreshold = s.SpecularRoughnessThreshold;
+    cb.SpecularResolveStrength = 1.0f;
+    std::memcpy(cb.ViewProjInv,  viewProjInv,  sizeof(float) * 16);
+    std::memcpy(cb.CurrViewProj, currViewProj, sizeof(float) * 16);
+    std::memcpy(cb.PrevViewProj, prevViewProj, sizeof(float) * 16);
+    if (worldToView)
+    {
+        // The engine HLSL uses row-vector multiplication, so upload a transposed copy for
+        // RtGI_NrdPrepare while NRD itself receives the original non-transposed matrix.
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                cb.WorldToView[r * 4 + c] = worldToView[c * 4 + r];
+            }
+        }
+    }
+    else
+    {
+        // Legacy path can call Dispatch without NRD matrices; keep view-space = world-space.
+        static const float kIdentity[16] =
+        {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+        };
+        std::memcpy(cb.WorldToView, kIdentity, sizeof(kIdentity));
+    }
+    std::memcpy(cb.CameraPos,    cameraPos,    sizeof(float) * 3);
+    cb.SunDirX = sunDirX; cb.SunDirY = sunDirY; cb.SunDirZ = sunDirZ;
+    cb.SunColorR = sunR;  cb.SunColorG = sunG;  cb.SunColorB = sunB;
+    cb.SkyColorR = skyR;  cb.SkyColorG = skyG;  cb.SkyColorB = skyB;
+    std::memcpy(mMappedCb, &cb, sizeof(cb));
+}
+
+// -----------------------------------------------------------------------
+// GPU buffer helpers
+// -----------------------------------------------------------------------
+
+bool RtGlobalIllumination::CreateGpuBuffer(ID3D12Device* dev, UINT64 size,
+    D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
+    ComPtr<ID3D12Resource>& out)
+{
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
+    D3D12_RESOURCE_DESC d{};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    d.Width = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
+    d.Format = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
+    d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = flags;
+    return SUCCEEDED(dev->CreateCommittedResource(
+        &hp, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
+}
+
+bool RtGlobalIllumination::CreateUploadBuf(ID3D12Device* dev, UINT64 size,
+    ComPtr<ID3D12Resource>& out)
+{
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
+    D3D12_RESOURCE_DESC d{};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    d.Width = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
+    d.Format = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
+    d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = D3D12_RESOURCE_FLAG_NONE;
+    return SUCCEEDED(dev->CreateCommittedResource(
+        &hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&out)));
+}
+
+// -----------------------------------------------------------------------
+// BuildTlas – build/update BLAS per unique mesh and assemble the TLAS.
+// Must be called once per frame before Dispatch.
+// -----------------------------------------------------------------------
+void RtGlobalIllumination::BuildTlas(
+    ID3D12GraphicsCommandList4* cmdList,
+    const std::vector<Entity>&  entities)
+{
+    ID3D12Device* deviceRaw = DX12Context_GetDevice();
+    if (!deviceRaw) return;
+
+    // Need ID3D12Device5 for acceleration-structure APIs.
+    ComPtr<ID3D12Device5> device;
+    if (FAILED(deviceRaw->QueryInterface(IID_PPV_ARGS(&device)))) return;
+
+    // Two-frame upload ring: advance the slot, then release the OLDEST uploads.
+    // Slot [ringIdx]     = uploads being queued THIS frame.
+    // Slot [ringIdx ^ 1] = uploads queued TWO frames ago — safe to release now
+    //                      because the GPU finishes frame N-1 before we submit frame N+1.
+    mUploadRingIdx ^= 1u;
+    mPendingUploads[mUploadRingIdx].clear();
+
+    // Rebuild per-instance info each frame (instance order can change).
+    mCpuInstanceInfo.clear();
+    mCpuMaterialRanges.clear();
+
+    const auto loadMaterialSlotInfo = [&](const std::string& materialPath, uint32_t materialId) -> RtMaterialSlotInfo
+    {
+        if (materialPath.empty())
+            return RtMaterialSlotInfo{};
+
+        const auto cacheIt = mMaterialSlotCache.find(materialPath);
+        if (cacheIt != mMaterialSlotCache.end())
+        {
+            if (materialId < cacheIt->second.size())
+                return cacheIt->second[materialId];
+            if (!cacheIt->second.empty())
+                return cacheIt->second.front();
+            return RtMaterialSlotInfo{};
+        }
+
+        const std::filesystem::path inputPath(materialPath);
+        std::filesystem::path resolvedPath = inputPath;
+        if (!inputPath.is_absolute())
+        {
+            const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+            if (!dataDirectory.empty())
+                resolvedPath = dataDirectory / inputPath;
+        }
+
+        std::ifstream inputStream(resolvedPath);
+        if (!inputStream)
+            return RtMaterialSlotInfo{};
+
+        try
+        {
+            nlohmann::json materialJson;
+            inputStream >> materialJson;
+
+            std::vector<RtMaterialSlotInfo> cachedSlots;
+
+            const auto resolveTexturePath = [&](const nlohmann::json& source, const char* key) -> std::string
+            {
+                const auto texturesIt = source.find("textures");
+                if (texturesIt == source.end() || !texturesIt->is_object())
+                    return {};
+
+                const auto texIt = texturesIt->find(key);
+                if (texIt == texturesIt->end() || !texIt->is_string())
+                    return {};
+
+                std::filesystem::path texPath(texIt->get<std::string>());
+                if (!texPath.is_absolute())
+                {
+                    const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+                    if (!dataDirectory.empty())
+                        texPath = dataDirectory / texPath;
+                }
+                return texPath.string();
+            };
+
+            const auto readSlot = [&](const nlohmann::json& source) -> RtMaterialSlotInfo
+            {
+                RtMaterialSlotInfo slot{};
+                const auto tintIt = source.find("baseColorTint");
+                if (tintIt != source.end() && tintIt->is_array() && tintIt->size() >= 4)
+                {
+                    slot.BaseColorTint[0] = tintIt->at(0).get<float>();
+                    slot.BaseColorTint[1] = tintIt->at(1).get<float>();
+                    slot.BaseColorTint[2] = tintIt->at(2).get<float>();
+                    slot.BaseColorTint[3] = tintIt->at(3).get<float>();
+                }
+
+                slot.BaseColorPath = resolveTexturePath(source, "baseColor");
+                slot.OpacityPath = resolveTexturePath(source, "opacity");
+                slot.OpacityFactor = source.value("opacity", 1.0f);
+                slot.AlphaCutoff = source.value("alphaCutoff", 0.5f);
+                slot.UseAlphaCutout = source.value("useAlphaCutout", false);
+                slot.DoubleSided = source.value("doubleSided", false);
+                return slot;
+            };
+
+            const auto typeIt = materialJson.find("type");
+            const bool isMultiMaterial = typeIt != materialJson.end()
+                && typeIt->is_string()
+                && typeIt->get<std::string>() == "MultiMaterial";
+
+            if (isMultiMaterial)
+            {
+                const auto subMaterialsIt = materialJson.find("subMaterials");
+                if (subMaterialsIt != materialJson.end() && subMaterialsIt->is_array())
+                {
+                    cachedSlots.reserve(subMaterialsIt->size());
+                    for (const auto& subMaterial : *subMaterialsIt)
+                        cachedSlots.push_back(readSlot(subMaterial));
+
+                    mMaterialSlotCache.emplace(materialPath, cachedSlots);
+
+                    if (materialId < subMaterialsIt->size())
+                        return cachedSlots[materialId];
+
+                    if (!cachedSlots.empty())
+                        return cachedSlots[0];
+                }
+            }
+
+            cachedSlots.push_back(readSlot(materialJson));
+            mMaterialSlotCache.emplace(materialPath, cachedSlots);
+            return cachedSlots[0];
+        }
+        catch (...)
+        {
+            return RtMaterialSlotInfo{};
+        }
+    };
+
+    const auto getAverageTextureColor = [&](const std::string& texturePath) -> std::array<float, 3>
+    {
+        if (texturePath.empty())
+            return { 1.0f, 1.0f, 1.0f };
+
+        const auto found = mTextureAverageColorCache.find(texturePath);
+        if (found != mTextureAverageColorCache.end())
+            return found->second;
+
+        const std::array<float, 3> avg = EstimateAverageTextureColor(std::filesystem::path(texturePath));
+        mTextureAverageColorCache.emplace(texturePath, avg);
+        return avg;
+    };
+
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
+
+    for (const Entity& entity : entities)
+    {
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* mesh = entity.Mesh->MeshAsset.get();
+        const BlasKey meshKey{ mesh, false };
+
+        // Build a BLAS for this mesh if not already cached.
+        if (mBlasCache.find(meshKey) == mBlasCache.end())
+        {
+            const auto& verts   = mesh->GetVertices();
+            const auto& indices = mesh->GetIndices();
+            if (verts.empty() || indices.empty()) continue;
+
+            const UINT64 vbSize = verts.size()   * sizeof(Vertex);
+            const UINT64 ibSize = indices.size()  * sizeof(uint32_t);
+
+            ComPtr<ID3D12Resource> vbUp, ibUp;
+            if (!CreateUploadBuf(device.Get(), vbSize, vbUp)) continue;
+            if (!CreateUploadBuf(device.Get(), ibSize, ibUp)) continue;
+
+            void* m = nullptr;
+            vbUp->Map(0, nullptr, &m); std::memcpy(m, verts.data(),   vbSize); vbUp->Unmap(0, nullptr);
+            ibUp->Map(0, nullptr, &m); std::memcpy(m, indices.data(), ibSize); ibUp->Unmap(0, nullptr);
+
+            D3D12_RAYTRACING_GEOMETRY_DESC geom{};
+            geom.Type  = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+            geom.Triangles.VertexBuffer.StartAddress  = vbUp->GetGPUVirtualAddress();
+            geom.Triangles.VertexBuffer.StrideInBytes = sizeof(Vertex);
+            geom.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT; // Position is first member
+            geom.Triangles.VertexCount                = static_cast<UINT>(verts.size());
+            geom.Triangles.IndexBuffer                = ibUp->GetGPUVirtualAddress();
+            geom.Triangles.IndexFormat                = DXGI_FORMAT_R32_UINT;
+            geom.Triangles.IndexCount                 = static_cast<UINT>(indices.size());
+
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inp{};
+            inp.Type           = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+            inp.Flags          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+            inp.NumDescs       = 1;
+            inp.DescsLayout    = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            inp.pGeometryDescs = &geom;
+
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO pre{};
+            device->GetRaytracingAccelerationStructurePrebuildInfo(&inp, &pre);
+
+            BlasEntry& e = mBlasCache[meshKey];
+            if (!CreateGpuBuffer(device.Get(), pre.ScratchDataSizeInBytes,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch)) continue;
+            if (!CreateGpuBuffer(device.Get(), pre.ResultDataMaxSizeInBytes,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result)) continue;
+
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bd{};
+            bd.Inputs                           = inp;
+            bd.DestAccelerationStructureData    = e.Result->GetGPUVirtualAddress();
+            bd.ScratchAccelerationStructureData = e.Scratch->GetGPUVirtualAddress();
+            cmdList->BuildRaytracingAccelerationStructure(&bd, 0, nullptr);
+
+            auto uavB = CD3DX12_RESOURCE_BARRIER::UAV(e.Result.Get());
+            cmdList->ResourceBarrier(1, &uavB);
+
+            // Record this mesh's slice in the global geometry pools so the RayGen
+            // shader can look up vertex normals by instance index.
+            e.vertexOffset = static_cast<uint32_t>(mCpuVertices.size());
+            e.indexOffset  = static_cast<uint32_t>(mCpuIndices.size());
+            e.vertexCount  = static_cast<uint32_t>(verts.size());
+            e.indexCount   = static_cast<uint32_t>(indices.size());
+
+            for (const Vertex& v : verts)
+            {
+                GpuPackedVertex pv;
+                pv.px = v.Position.x; pv.py = v.Position.y; pv.pz = v.Position.z;
+                pv.nx = v.Normal.x;   pv.ny = v.Normal.y;   pv.nz = v.Normal.z;
+                pv.u = v.TexCoord.x;  pv.v = v.TexCoord.y;
+                mCpuVertices.push_back(pv);
+            }
+            for (uint32_t idx : indices)
+                mCpuIndices.push_back(idx);
+
+            mGeometryDirty = true;
+
+            mPendingUploads[mUploadRingIdx].push_back(std::move(vbUp));
+            mPendingUploads[mUploadRingIdx].push_back(std::move(ibUp));
+        }
+
+        const auto it = mBlasCache.find(meshKey);
+        if (it == mBlasCache.end() || !it->second.Result) continue;
+
+        // Record per-instance info so the RayGen shader can look up normals by instance index.
+        GpuInstanceInfo info{};
+        info.vertexOffset = it->second.vertexOffset;
+        info.indexOffset  = it->second.indexOffset;
+        info.vertexCount  = it->second.vertexCount;
+        info.indexCount   = it->second.indexCount;
+
+        const size_t materialRangeStart = mCpuMaterialRanges.size();
+        const auto& subMeshes = mesh->GetSubMeshes();
+        if (!subMeshes.empty())
+        {
+            for (const SubMesh& subMesh : subMeshes)
+            {
+                if (subMesh.indexCount < 3)
+                    continue;
+
+                GpuMaterialRange range{};
+                range.startPrimitive = subMesh.indexStart / 3u;
+                range.primitiveCount = subMesh.indexCount / 3u;
+
+                const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(entity.Mesh->MaterialPath, subMesh.materialId);
+                const std::array<float, 3> avgBaseColor = getAverageTextureColor(slotInfo.BaseColorPath);
+                range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
+                range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
+                range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
+                range.baseColorA = slotInfo.BaseColorTint[3];
+                range.opacityFactor = slotInfo.OpacityFactor;
+                range.alphaCutoff = slotInfo.AlphaCutoff;
+                range.baseColorTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.BaseColorPath);
+                range.opacityTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.OpacityPath);
+                range.flags = 0;
+                if (slotInfo.UseAlphaCutout) range.flags |= kRtMaterialFlagAlphaCutout;
+                if (slotInfo.DoubleSided)    range.flags |= kRtMaterialFlagDoubleSided;
+                mCpuMaterialRanges.push_back(range);
+            }
+        }
+
+        if (mCpuMaterialRanges.size() == materialRangeStart)
+        {
+            GpuMaterialRange range{};
+            range.startPrimitive = 0;
+            range.primitiveCount = info.indexCount / 3u;
+
+            const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(entity.Mesh->MaterialPath, 0);
+            const std::array<float, 3> avgBaseColor = getAverageTextureColor(slotInfo.BaseColorPath);
+            range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
+            range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
+            range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
+            range.baseColorA = slotInfo.BaseColorTint[3];
+            range.opacityFactor = slotInfo.OpacityFactor;
+            range.alphaCutoff = slotInfo.AlphaCutoff;
+            range.baseColorTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.BaseColorPath);
+            range.opacityTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.OpacityPath);
+            range.flags = 0;
+            if (slotInfo.UseAlphaCutout) range.flags |= kRtMaterialFlagAlphaCutout;
+            if (slotInfo.DoubleSided)    range.flags |= kRtMaterialFlagDoubleSided;
+            mCpuMaterialRanges.push_back(range);
+        }
+
+        info.materialRangeOffset = static_cast<uint32_t>(materialRangeStart);
+        info.materialRangeCount  = static_cast<uint32_t>(mCpuMaterialRanges.size() - materialRangeStart);
+        mCpuInstanceInfo.push_back(info);
+
+        // Build instance transform (row-major 3x4).
+        using namespace DirectX;
+        XMFLOAT4X4 w4;
+        XMStoreFloat4x4(&w4, XMMatrixTranspose(entity.Transform.GetTransform()));
+
+        D3D12_RAYTRACING_INSTANCE_DESC inst{};
+        inst.Transform[0][0] = w4._11; inst.Transform[0][1] = w4._12; inst.Transform[0][2] = w4._13; inst.Transform[0][3] = w4._14;
+        inst.Transform[1][0] = w4._21; inst.Transform[1][1] = w4._22; inst.Transform[1][2] = w4._23; inst.Transform[1][3] = w4._24;
+        inst.Transform[2][0] = w4._31; inst.Transform[2][1] = w4._32; inst.Transform[2][2] = w4._33; inst.Transform[2][3] = w4._34;
+        inst.InstanceMask                    = 0xFF;
+        inst.Flags                           = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        inst.AccelerationStructure           = it->second.Result->GetGPUVirtualAddress();
+        instanceDescs.push_back(inst);
+    }
+
+    if (instanceDescs.empty()) return;
+
+    const UINT numInst    = static_cast<UINT>(instanceDescs.size());
+    const UINT64 instSize = numInst * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+
+    // Grow instance upload buffer if needed.
+    if (!mInstanceDescBuffer || mInstanceDescBuffer->GetDesc().Width < instSize)
+    {
+        mInstanceDescBuffer.Reset();
+        CreateUploadBuf(device.Get(), instSize, mInstanceDescBuffer);
+    }
+    void* mapped = nullptr;
+    if (FAILED(mInstanceDescBuffer->Map(0, nullptr, &mapped)) || !mapped) return;
+    std::memcpy(mapped, instanceDescs.data(), instSize);
+    mInstanceDescBuffer->Unmap(0, nullptr);
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInp{};
+    tlasInp.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    tlasInp.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    tlasInp.NumDescs      = numInst;
+    tlasInp.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    tlasInp.InstanceDescs = mInstanceDescBuffer->GetGPUVirtualAddress();
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasPre{};
+    device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInp, &tlasPre);
+
+    if (!mTlas || mTlas->GetDesc().Width < tlasPre.ResultDataMaxSizeInBytes)
+    {
+        mTlas.Reset();
+        CreateGpuBuffer(device.Get(), tlasPre.ResultDataMaxSizeInBytes,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, mTlas);
+    }
+    if (!mTlasScratch || mTlasScratch->GetDesc().Width < tlasPre.ScratchDataSizeInBytes)
+    {
+        mTlasScratch.Reset();
+        CreateGpuBuffer(device.Get(), tlasPre.ScratchDataSizeInBytes,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, mTlasScratch);
+    }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tlasDesc{};
+    tlasDesc.Inputs                           = tlasInp;
+    tlasDesc.DestAccelerationStructureData    = mTlas->GetGPUVirtualAddress();
+    tlasDesc.ScratchAccelerationStructureData = mTlasScratch->GetGPUVirtualAddress();
+    cmdList->BuildRaytracingAccelerationStructure(&tlasDesc, 0, nullptr);
+
+    auto uav = CD3DX12_RESOURCE_BARRIER::UAV(mTlas.Get());
+    cmdList->ResourceBarrier(1, &uav);
+
+    // Write the TLAS SRV into the allocated descriptor slot so the shader can bind it.
+    D3D12_SHADER_RESOURCE_VIEW_DESC tlasSrv{};
+    tlasSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    tlasSrv.Format                  = DXGI_FORMAT_UNKNOWN;
+    tlasSrv.ViewDimension           = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+    tlasSrv.RaytracingAccelerationStructure.Location = mTlas->GetGPUVirtualAddress();
+    device->CreateShaderResourceView(nullptr, &tlasSrv, mTlasSrvCpu);
+
+    // -----------------------------------------------------------------------
+    // Upload geometry pools (vertex, index, instance-info) to the GPU so the
+    // RayGen shader can interpolate true per-vertex normals at secondary hits.
+    //
+    // All three buffers use the UPLOAD heap with persistent CPU mapping so we
+    // can memcpy into them directly every frame without any resource-state
+    // transitions.  The vertex/index buffers are only reallocated when the
+    // CPU pool has grown.  The instance-info buffer is reallocated whenever
+    // the instance count changes (it's small, so this is cheap).
+    // -----------------------------------------------------------------------
+    ID3D12Device* rawDevice = DX12Context_GetDevice();
+
+    // Helper: (re)create an UPLOAD-heap structured buffer if it is missing or
+    // too small, write its SRV descriptor, and memcpy the data into it.
+    auto SyncUploadBuffer = [&](
+        const void*             srcData,
+        UINT64                  byteSize,
+        UINT                    stride,
+        ComPtr<ID3D12Resource>& gpuBuf,
+        void**                  mappedPtr,
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu)
+    {
+        if (byteSize == 0) return;
+
+        // Recreate if missing or undersized.
+        if (!gpuBuf || gpuBuf->GetDesc().Width < byteSize)
+        {
+            if (gpuBuf && *mappedPtr)
+                gpuBuf->Unmap(0, nullptr);
+            gpuBuf.Reset();
+            *mappedPtr = nullptr;
+
+            CreateUploadBuf(rawDevice, byteSize, gpuBuf);
+            gpuBuf->Map(0, nullptr, mappedPtr);
+
+            // Write the SRV descriptor (only needed when the buffer is recreated).
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+            srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
+            srvDesc.Buffer.StructureByteStride = stride;
+            srvDesc.Buffer.NumElements         = static_cast<UINT>(byteSize / stride);
+            rawDevice->CreateShaderResourceView(gpuBuf.Get(), &srvDesc, srvCpu);
+        }
+
+        // Copy data directly into the persistently-mapped buffer.
+        std::memcpy(*mappedPtr, srcData, byteSize);
+    };
+
+    if (mGeometryDirty && !mCpuVertices.empty())
+    {
+        SyncUploadBuffer(
+            mCpuVertices.data(),
+            mCpuVertices.size() * sizeof(GpuPackedVertex),
+            sizeof(GpuPackedVertex),
+            mVertexBuffer,
+            &mMappedVertices,
+            mVertexSrvCpu);
+
+        SyncUploadBuffer(
+            mCpuIndices.data(),
+            mCpuIndices.size() * sizeof(uint32_t),
+            sizeof(uint32_t),
+            mIndexBuffer,
+            &mMappedIndices,
+            mIndexSrvCpu);
+
+        mGeometryDirty = false;
+    }
+
+    if (!mCpuInstanceInfo.empty())
+    {
+        SyncUploadBuffer(
+            mCpuInstanceInfo.data(),
+            mCpuInstanceInfo.size() * sizeof(GpuInstanceInfo),
+            sizeof(GpuInstanceInfo),
+            mInstanceInfoBuffer,
+            &mMappedInstanceInfo,
+            mInstanceInfoSrvCpu);
+    }
+
+    if (!mCpuMaterialRanges.empty())
+    {
+        SyncUploadBuffer(
+            mCpuMaterialRanges.data(),
+            mCpuMaterialRanges.size() * sizeof(GpuMaterialRange),
+            sizeof(GpuMaterialRange),
+            mMaterialRangeBuffer,
+            &mMappedMaterialRanges,
+            mMaterialRangeSrvCpu);
+    }
+
+    // Mark the TLAS as ready so Dispatch will submit the RayGen pass this frame.
+    mTlasReady = true;
+}

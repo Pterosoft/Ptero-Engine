@@ -1,0 +1,98 @@
+﻿#pragma once
+
+#include "..\System\include\System\Mesh.h"
+#include "..\SDKs\nlohmann\json.hpp"
+
+#include <DirectXMath.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+
+struct TransformComponent
+{
+    DirectX::XMFLOAT3 Position{ 0.0f, 0.0f, 0.0f };
+    DirectX::XMFLOAT3 Rotation{ 0.0f, 0.0f, 0.0f };
+    DirectX::XMFLOAT3 Scale{ 1.0f, 1.0f, 1.0f };
+
+    DirectX::XMMATRIX GetTransform() const
+    {
+        // Compose the entity transform from the editor-facing position, Euler rotation, and scale values.
+        const DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(Scale.x, Scale.y, Scale.z);
+        const DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationRollPitchYaw(Rotation.x, Rotation.y, Rotation.z);
+        const DirectX::XMMATRIX translationMatrix = DirectX::XMMatrixTranslation(Position.x, Position.y, Position.z);
+        return scaleMatrix * rotationMatrix * translationMatrix;
+    }
+};
+
+struct MeshComponent
+{
+    std::shared_ptr<Mesh> MeshAsset;
+};
+
+struct NameComponent
+{
+    std::string Name = "Entity";
+};
+
+struct Entity
+{
+    std::string Name = "Entity";
+    TransformComponent Transform;
+    std::optional<MeshComponent> Mesh;
+
+    bool HasMeshComponent() const
+    {
+        return Mesh.has_value();
+    }
+
+    MeshComponent& AddMeshComponent()
+    {
+        if (!Mesh.has_value())
+        {
+            Mesh.emplace();
+        }
+
+        return *Mesh;
+    }
+
+    bool HasNameComponent() const
+    {
+        return !Name.empty();
+    }
+
+    NameComponent GetNameComponent() const
+    {
+        return NameComponent{ Name };
+    }
+
+    void AddNameComponent(const NameComponent& nameComponent)
+    {
+        // Mirror the serialized NameComponent back into the editor-facing entity name used by the current tools.
+        Name = nameComponent.Name;
+    }
+
+    bool HasTransformComponent() const
+    {
+        return true;
+    }
+
+    const TransformComponent& GetTransformComponent() const
+    {
+        return Transform;
+    }
+
+    TransformComponent& AddTransformComponent(const TransformComponent& transformComponent)
+    {
+        Transform = transformComponent;
+        return Transform;
+    }
+};
+
+namespace DirectX
+{
+    NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(XMFLOAT3, x, y, z)
+}
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TransformComponent, Position, Rotation, Scale)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(NameComponent, Name)

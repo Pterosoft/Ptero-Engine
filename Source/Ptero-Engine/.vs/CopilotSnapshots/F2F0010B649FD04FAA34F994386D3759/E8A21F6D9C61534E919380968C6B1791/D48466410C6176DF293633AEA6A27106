@@ -1,0 +1,439 @@
+﻿#include "pch.h"
+#include "TAARenderer.h"
+
+#include <cstring>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+bool TAARenderer::Initialize(UINT width, UINT height)
+{
+    // If we are already initialized at the same resolution, nothing to do.
+    if (mIsInitialized && mWidth == width && mHeight == height)
+    {
+        return true;
+    }
+
+    // Release any previous resources before recreating for a new resolution.
+    Shutdown();
+
+    mWidth  = width;
+    mHeight = height;
+    mLastError.clear();
+
+    if (!CreatePipeline())
+    {
+        return false;
+    }
+
+    if (!CreateTextures())
+    {
+        return false;
+    }
+
+    mIsInitialized = true;
+    return true;
+}
+
+void TAARenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedCb != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mHistoryBuffer.Reset();
+    mOutputBuffer.Reset();
+    mNonShaderVisibleUavHeap.Reset();
+    mRootSignature.Reset();
+    mPipelineState.Reset();
+
+    mHistorySrvCpu          = {};
+    mHistorySrvGpu          = {};
+    mOutputSrvCpu           = {};
+    mOutputSrvGpu           = {};
+    mOutputUavCpu           = {};
+    mOutputUavShaderVisibleCpu = {};
+    mOutputUavShaderVisibleGpu = {};
+    mOutputTextureId        = ImTextureID_Invalid;
+
+    mDescriptorsAllocated = false;
+    mIsInitialized        = false;
+}
+
+void TAARenderer::Resolve(
+    ID3D12GraphicsCommandList* commandList,
+    D3D12_CPU_DESCRIPTOR_HANDLE /*currentFrameCpuSrv*/,
+    D3D12_GPU_DESCRIPTOR_HANDLE currentFrameGpuSrv,
+    ID3D12Resource* currentFrameResource,
+    const TaaSettings& settings)
+{
+    if (!mIsInitialized || commandList == nullptr || currentFrameResource == nullptr)
+    {
+        return;
+    }
+
+    // Update the constant buffer with the current frame's TAA parameters.
+    if (mMappedCb != nullptr)
+    {
+        TaaConstantBufferData cb{};
+        cb.BlendFactor        = settings.BlendFactor;
+        cb.SharpeningStrength = settings.SharpeningStrength;
+        cb.ApplySharpening    = settings.UseSharpening ? 1 : 0;
+        cb.FrameWidth         = mWidth;
+        cb.FrameHeight        = mHeight;
+        std::memcpy(mMappedCb, &cb, sizeof(cb));
+    }
+
+    // Transition history from SRV -> SHADER_RESOURCE (already in that state, no-op barrier harmless),
+    // and transition output buffer from SRV -> UAV so the compute shader can write into it.
+    const D3D12_RESOURCE_BARRIER barriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    };
+    commandList->ResourceBarrier(static_cast<UINT>(std::size(barriers)), barriers);
+
+    // Bind compute pipeline.
+    commandList->SetComputeRootSignature(mRootSignature.Get());
+    commandList->SetPipelineState(mPipelineState.Get());
+
+    // Root signature layout (matches CreatePipeline below):
+    //   [0] CBV  b0  – TAA constants
+    //   [1] SRV  t0  – current frame
+    //   [2] SRV  t1  – history
+    //   [3] UAV  u0  – output
+    commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+    // Current frame SRV (passed in from DX12SceneRenderer).
+    commandList->SetComputeRootDescriptorTable(1, currentFrameGpuSrv);
+
+    // History SRV.
+    commandList->SetComputeRootDescriptorTable(2, mHistorySrvGpu);
+
+    // Output UAV (shader-visible slot).
+    commandList->SetComputeRootDescriptorTable(3, mOutputUavShaderVisibleGpu);
+
+    // Dispatch – the shader uses [numthreads(8,8,1)].
+    const UINT groupsX = (mWidth  + 7) / 8;
+    const UINT groupsY = (mHeight + 7) / 8;
+    commandList->Dispatch(groupsX, groupsY, 1);
+
+    // Transition output back to SRV for ImGui display, and copy output -> history so the
+    // next frame has an up-to-date reference.
+    const D3D12_RESOURCE_BARRIER postBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COPY_SOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            mHistoryBuffer.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COPY_DEST),
+    };
+    commandList->ResourceBarrier(static_cast<UINT>(std::size(postBarriers)), postBarriers);
+
+    commandList->CopyResource(mHistoryBuffer.Get(), mOutputBuffer.Get());
+
+    const D3D12_RESOURCE_BARRIER finalBarriers[] =
+    {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            mHistoryBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+    };
+    commandList->ResourceBarrier(static_cast<UINT>(std::size(finalBarriers)), finalBarriers);
+}
+
+bool TAARenderer::CreatePipeline()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        mLastError = "TAARenderer: DX12 device is null.";
+        return false;
+    }
+
+    // Compile the TAA resolve compute shader.
+    const ShaderCompileRequest csRequest
+    {
+        L"Shaders\\TAAResolve.hlsl",
+        L"CSMain",
+        L"cs_5_0",
+        ShaderStage::Compute
+    };
+
+    if (!mComputeShader.Compile(csRequest))
+    {
+        mLastError = std::string("TAARenderer: Compute shader compilation failed: ")
+            + (mComputeShader.GetLastErrorMessage() ? mComputeShader.GetLastErrorMessage() : "unknown error");
+        return false;
+    }
+
+    // Root signature:
+    //   param 0 – CBV  (b0) inline root CBV
+    //   param 1 – SRV  (t0) current frame, descriptor table size 1
+    //   param 2 – SRV  (t1) history,       descriptor table size 1
+    //   param 3 – UAV  (u0) output,        descriptor table size 1
+
+    D3D12_DESCRIPTOR_RANGE rangeSrvCurrent{};
+    rangeSrvCurrent.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rangeSrvCurrent.NumDescriptors                    = 1;
+    rangeSrvCurrent.BaseShaderRegister                = 0; // t0
+    rangeSrvCurrent.RegisterSpace                     = 0;
+    rangeSrvCurrent.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE rangeSrvHistory{};
+    rangeSrvHistory.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rangeSrvHistory.NumDescriptors                    = 1;
+    rangeSrvHistory.BaseShaderRegister                = 1; // t1
+    rangeSrvHistory.RegisterSpace                     = 0;
+    rangeSrvHistory.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE rangeUavOutput{};
+    rangeUavOutput.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    rangeUavOutput.NumDescriptors                    = 1;
+    rangeUavOutput.BaseShaderRegister                = 0; // u0
+    rangeUavOutput.RegisterSpace                     = 0;
+    rangeUavOutput.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[4]{};
+
+    // [0] CBV b0
+    params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].Descriptor.RegisterSpace  = 0;
+    params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+    // [1] SRV t0 – current frame
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &rangeSrvCurrent;
+    params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    // [2] SRV t1 – history
+    params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges   = &rangeSrvHistory;
+    params[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    // [3] UAV u0 – output
+    params[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges   = &rangeUavOutput;
+    params[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters     = 4;
+    rsDesc.pParameters       = params;
+    rsDesc.NumStaticSamplers = 0;
+    rsDesc.pStaticSamplers   = nullptr;
+    rsDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errors;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors);
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: D3D12SerializeRootSignature failed.";
+        return false;
+    }
+
+    hr = device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&mRootSignature));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: CreateRootSignature failed.";
+        return false;
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = mRootSignature.Get();
+    psoDesc.CS             = mComputeShader.GetBytecode();
+
+    hr = device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: CreateComputePipelineState failed.";
+        return false;
+    }
+
+    // Constant buffer (256-byte aligned upload heap, persistently mapped).
+    const UINT64 cbSize = (sizeof(TaaConstantBufferData) + 255ull) & ~255ull;
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeap.CreationNodeMask     = 1;
+    uploadHeap.VisibleNodeMask      = 1;
+
+    auto cbDesc = CD3DX12_RESOURCE_DESC::Buffer(cbSize);
+    hr = device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: Failed to create constant buffer.";
+        return false;
+    }
+
+    hr = mConstantBuffer->Map(0, nullptr, &mMappedCb);
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: Failed to map constant buffer.";
+        return false;
+    }
+
+    return true;
+}
+
+bool TAARenderer::CreateTextures()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        mLastError = "TAARenderer: DX12 device is null (CreateTextures).";
+        return false;
+    }
+
+    constexpr DXGI_FORMAT TexFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type                 = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeap.CreationNodeMask     = 1;
+    defaultHeap.VisibleNodeMask      = 1;
+
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Alignment        = 0;
+    texDesc.Width            = mWidth;
+    texDesc.Height           = mHeight;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels        = 1;
+    texDesc.Format           = TexFormat;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    // History buffer: SRV only.
+    texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    HRESULT hr = device->CreateCommittedResource(
+        &defaultHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        nullptr,
+        IID_PPV_ARGS(&mHistoryBuffer));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: Failed to create history buffer.";
+        return false;
+    }
+
+    // Output buffer: UAV (compute writes) + SRV (ImGui reads).
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    hr = device->CreateCommittedResource(
+        &defaultHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        nullptr,
+        IID_PPV_ARGS(&mOutputBuffer));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: Failed to create output buffer.";
+        return false;
+    }
+
+    // Allocate shader-visible descriptors from the shared context heap.
+    // We need 4 slots: history SRV, output SRV (ImGui), output UAV (compute shader-visible), current frame SRV placeholder.
+    // The current frame SRV is owned by DX12SceneRenderer; we only allocate history SRV, output SRV, output UAV.
+
+    if (!mDescriptorsAllocated)
+    {
+        // History SRV slot
+        if (!DX12Context_AllocateSrvDescriptor(&mHistorySrvCpu, &mHistorySrvGpu))
+        {
+            mLastError = "TAARenderer: Failed to allocate history SRV descriptor.";
+            return false;
+        }
+
+        // Output SRV slot (for ImGui display)
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputSrvCpu, &mOutputSrvGpu))
+        {
+            mLastError = "TAARenderer: Failed to allocate output SRV descriptor.";
+            return false;
+        }
+
+        // Output UAV slot (shader-visible, for the compute dispatch)
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputUavShaderVisibleCpu, &mOutputUavShaderVisibleGpu))
+        {
+            mLastError = "TAARenderer: Failed to allocate output UAV descriptor.";
+            return false;
+        }
+
+        mDescriptorsAllocated = true;
+    }
+
+    // Non-shader-visible UAV heap (required for ClearUnorderedAccessViewFloat calls).
+    D3D12_DESCRIPTOR_HEAP_DESC nonVisibleHeapDesc{};
+    nonVisibleHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    nonVisibleHeapDesc.NumDescriptors = 1;
+    nonVisibleHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    hr = device->CreateDescriptorHeap(&nonVisibleHeapDesc, IID_PPV_ARGS(&mNonShaderVisibleUavHeap));
+    if (FAILED(hr))
+    {
+        mLastError = "TAARenderer: Failed to create non-shader-visible UAV heap.";
+        return false;
+    }
+    mOutputUavCpu = mNonShaderVisibleUavHeap->GetCPUDescriptorHandleForHeapStart();
+
+    // Fill descriptor views.
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                        = TexFormat;
+    srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels           = 1;
+    srvDesc.Texture2D.MostDetailedMip     = 0;
+    srvDesc.Texture2D.PlaneSlice          = 0;
+    srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    // History SRV
+    device->CreateShaderResourceView(mHistoryBuffer.Get(), &srvDesc, mHistorySrvCpu);
+
+    // Output SRV (for ImGui)
+    device->CreateShaderResourceView(mOutputBuffer.Get(), &srvDesc, mOutputSrvCpu);
+
+    // Output UAV (non-shader-visible, for potential clears)
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format             = TexFormat;
+    uavDesc.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uavDesc.Texture2D.MipSlice = 0;
+    device->CreateUnorderedAccessView(mOutputBuffer.Get(), nullptr, &uavDesc, mOutputUavCpu);
+
+    // Output UAV (shader-visible, placed in the shared SRV/CBV/UAV heap)
+    device->CreateUnorderedAccessView(mOutputBuffer.Get(), nullptr, &uavDesc, mOutputUavShaderVisibleCpu);
+
+    mOutputTextureId = static_cast<ImTextureID>(mOutputSrvGpu.ptr);
+    return true;
+}

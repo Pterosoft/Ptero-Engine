@@ -1,0 +1,68 @@
+﻿#include "RtGI_Common.hlsli"
+
+#define NRD_COMPILER_DXC
+#include "NRD/NRD.hlsli"
+
+Texture2D<float4>  t_Albedo          : register(t0);
+Texture2D<float4>  t_NormalDepth     : register(t1);
+Texture2D<float4>  t_Material        : register(t2);
+Texture2D<float4>  t_SpecularHalf    : register(t3);
+
+RWTexture2D<float4> u_SpecRadianceHitDist : register(u0);
+RWTexture2D<uint4>  u_NormalRoughness     : register(u1);
+RWTexture2D<float>  u_ViewZ               : register(u2);
+RWTexture2D<float2> u_MotionVectors       : register(u3);
+
+float ComputeViewZHalf(uint2 fullPixel, float hwDepth)
+{
+    float3 worldPos = ReconstructWorldPos(fullPixel, hwDepth);
+    float3 viewPos = mul(float4(worldPos, 1.0f), g_WorldToView).xyz;
+    return max(1e-6f, abs(viewPos.z));
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    const uint2 pixel = DTid.xy;
+    if (pixel.x >= g_SpecularFrameWidth || pixel.y >= g_SpecularFrameHeight)
+        return;
+
+    const uint2 fullPixel = min(pixel * 2u, uint2(g_FrameWidth - 1, g_FrameHeight - 1));
+    const float4 normalDepthSample = t_NormalDepth.Load(int3(fullPixel, 0));
+    const float hwDepth = normalDepthSample.z;
+    const bool isSky = (hwDepth <= 0.0f || hwDepth >= 1.0f);
+
+    u_ViewZ[pixel] = isSky ? 1e6f : ComputeViewZHalf(fullPixel, hwDepth);
+
+    float2 octN = normalDepthSample.xy * 2.0f - 1.0f;
+    float octZ = 1.0f - abs(octN.x) - abs(octN.y);
+    float2 wrapped = (1.0f - abs(octN.yx)) * (float2(octN.xy >= 0.0f) * 2.0f - 1.0f);
+    float3 worldNormal = normalize(float3(octZ < 0.0f ? wrapped : octN.xy, octZ));
+    if (isSky)
+        worldNormal = float3(0, 0, 1);
+
+    float roughness = saturate(t_Material.Load(int3(fullPixel, 0)).r);
+    float4 packedNR = NRD_FrontEnd_PackNormalAndRoughness(worldNormal, roughness, 0);
+    uint r10 = (uint)(saturate(packedNR.x) * 1023.0f + 0.5f) & 0x3FFu;
+    uint g10 = (uint)(saturate(packedNR.y) * 1023.0f + 0.5f) & 0x3FFu;
+    uint b10 = (uint)(saturate(packedNR.z) * 1023.0f + 0.5f) & 0x3FFu;
+    uint a2  = (uint)(saturate(packedNR.w) * 3.0f + 0.5f) & 0x3u;
+    u_NormalRoughness[pixel] = uint4(r10, g10, b10, a2);
+
+    const float4 rawSpecular = t_SpecularHalf.Load(int3(pixel, 0));
+    const float hitDist = isSky ? 0.0f : max(rawSpecular.a, 1e-4f);
+    u_SpecRadianceHitDist[pixel] = RELAX_FrontEnd_PackRadianceAndHitDist(
+        isSky ? 0.0f.xxx : rawSpecular.rgb,
+        hitDist,
+        true);
+
+    float2 motionVec = float2(0, 0);
+    if (!isSky)
+    {
+        float3 worldPos = ReconstructWorldPos(fullPixel, hwDepth);
+        float2 prevUV = ReprojectUV(worldPos);
+        float2 currUV = ProjectCurrentUV(worldPos);
+        motionVec = prevUV - currUV;
+    }
+    u_MotionVectors[pixel] = motionVec;
+}

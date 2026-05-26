@@ -1,0 +1,1216 @@
+﻿#include "pch.h"
+#include "EntityMeshRenderer.h"
+
+#include "d3dx12.h"
+
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+
+// nlohmann/json for reading material .json files at runtime.
+#include "..\SDKs\nlohmann\json.hpp"
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+namespace
+{
+    // Vertex layout that matches System/Mesh.h :: Vertex
+    struct GpuVertex
+    {
+        DirectX::XMFLOAT3 Position;
+        DirectX::XMFLOAT3 Normal;
+        DirectX::XMFLOAT2 TexCoord;
+        DirectX::XMFLOAT4 Color;
+    };
+    static_assert(sizeof(GpuVertex) == sizeof(Vertex),
+        "GpuVertex must match the Vertex layout in Mesh.h exactly.");
+
+    bool CreateCommittedBuffer(
+        ID3D12Device* device,
+        UINT64 size,
+        D3D12_HEAP_TYPE heapType,
+        D3D12_RESOURCE_STATES initialState,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& outResource)
+    {
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type                 = heapType;
+        heapProps.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+        heapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+        heapProps.CreationNodeMask     = 1;
+        heapProps.VisibleNodeMask      = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width              = size;
+        desc.Height             = 1;
+        desc.DepthOrArraySize   = 1;
+        desc.MipLevels          = 1;
+        desc.Format             = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count   = 1;
+        desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+
+        return SUCCEEDED(device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            initialState,
+            nullptr,
+            IID_PPV_ARGS(&outResource)));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public interface
+// ---------------------------------------------------------------------------
+
+bool EntityMeshRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    mLastError.clear();
+
+    // Create the 1×1 white fallback texture so slot 1 is always bindable.
+    if (!CreateFallbackTexture(commandList))
+    {
+        // Non-fatal: we'll just skip texture binding if this failed.
+        mFallbackGpuHandle = {};
+    }
+
+    // Pipeline is created lazily on the first Render() call once we know the
+    // render-target formats.
+    return true;
+}
+
+void EntityMeshRenderer::SetEntities(std::vector<Entity>* entities)
+{
+    if (mEntities != entities)
+    {
+        mSceneContentChanged = true;
+    }
+    mEntities = entities;
+}
+
+void EntityMeshRenderer::Render(
+    ID3D12GraphicsCommandList* commandList,
+    const XMMATRIX& viewProjection,
+    DXGI_FORMAT albedoFormat,
+    DXGI_FORMAT normalFormat,
+    DXGI_FORMAT materialFormat,
+    DXGI_FORMAT depthFormat)
+{
+    if (commandList == nullptr || mEntities == nullptr || mEntities->empty())
+    {
+        return;
+    }
+
+    // (Re-)create the G-Buffer geometry pipeline if any format changed.
+    if (!mPipelineReady
+        || albedoFormat   != mAlbedoFormat
+        || normalFormat   != mNormalFormat
+        || materialFormat != mMaterialFormat
+        || depthFormat    != mDepthFormat)
+    {
+        mAlbedoFormat   = albedoFormat;
+        mNormalFormat   = normalFormat;
+        mMaterialFormat = materialFormat;
+        mDepthFormat    = depthFormat;
+        if (!CreatePipeline(albedoFormat, normalFormat, materialFormat, depthFormat))
+            return;
+    }
+
+    // Count mesh entities for CB sizing.
+    std::size_t meshEntityCount = 0;
+    for (const Entity& entity : *mEntities)
+    {
+        if (entity.HasMeshComponent() && entity.Mesh.has_value() && entity.Mesh->MeshAsset)
+            ++meshEntityCount;
+    }
+
+    if (meshEntityCount == 0)
+        return;
+
+    if (!EnsureConstantBuffer(meshEntityCount))
+        return;
+
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+        return;
+
+    std::size_t cbSlot = 0;
+    for (std::size_t i = 0; i < mEntities->size(); ++i)
+    {
+        Entity& entity = (*mEntities)[i];
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
+
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        {
+            ++cbSlot;
+            continue;
+        }
+
+        EntityGpuMesh& gpuMesh = mGpuMeshes.at(i);
+        if (gpuMesh.IndexCount == 0)
+        {
+            ++cbSlot;
+            continue;
+        }
+
+        // Write per-entity MVP + model matrix into the constant buffer.
+        const XMMATRIX model = entity.Transform.GetTransform();
+        const XMMATRIX mvp   = XMMatrixTranspose(model * viewProjection);
+        XMStoreFloat4x4(&mMappedCB[cbSlot].MVP,   mvp);
+        XMStoreFloat4x4(&mMappedCB[cbSlot].Model, XMMatrixTranspose(model));
+
+        const UINT64 cbOffset = static_cast<UINT64>(cbSlot) * sizeof(EntityConstants);
+        // Slot 0: per-entity CBV (b0).
+        commandList->SetGraphicsRootConstantBufferView(
+            0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+
+        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+        commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
+
+        const std::string& materialPath = entity.Mesh->MaterialPath;
+        const std::vector<SubMesh>& subMeshes = meshPtr->GetSubMeshes();
+
+        if (!subMeshes.empty() && !materialPath.empty())
+        {
+            // Multi-material: draw each sub-mesh with its own albedo texture.
+            const auto subMatPaths = ResolveSubMaterialDdsPaths(materialPath);
+            for (const SubMesh& subMesh : subMeshes)
+            {
+                D3D12_GPU_DESCRIPTOR_HANDLE srvHandle = mFallbackGpuHandle;
+                auto it = subMatPaths.find(subMesh.materialId);
+                if (it != subMatPaths.end() && !it->second.empty())
+                {
+                    if (auto gpuTex = mTextureManager.LoadDDS(it->second))
+                        srvHandle = gpuTex->GpuHandle;
+                }
+                if (srvHandle.ptr != 0)
+                    commandList->SetGraphicsRootDescriptorTable(1, srvHandle);
+                commandList->DrawIndexedInstanced(subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+            }
+        }
+        else
+        {
+            // Single-material: bind one texture and draw the whole mesh.
+            D3D12_GPU_DESCRIPTOR_HANDLE srvHandle = mFallbackGpuHandle;
+            if (!materialPath.empty())
+            {
+                const std::string ddsPath = ResolveBaseColorDdsPath(materialPath);
+                if (!ddsPath.empty())
+                {
+                    if (auto gpuTex = mTextureManager.LoadDDS(ddsPath))
+                        srvHandle = gpuTex->GpuHandle;
+                }
+            }
+            if (srvHandle.ptr != 0)
+                commandList->SetGraphicsRootDescriptorTable(1, srvHandle);
+            commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
+        }
+
+        ++cbSlot;
+    }
+}
+
+void EntityMeshRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedCB != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mCBCapacity = 0;
+
+    if (mDepthPassConstantBuffer && mMappedDepthPassCB != nullptr)
+    {
+        mDepthPassConstantBuffer->Unmap(0, nullptr);
+        mMappedDepthPassCB = nullptr;
+    }
+    mDepthPassConstantBuffer.Reset();
+    mDepthPassCBCapacity = 0;
+
+    mGpuMeshes.clear();
+    mRootSignature.Reset();
+    mPipelineState.Reset();
+    mVertexShader = DX12Shader{};
+    mPixelShader  = DX12Shader{};
+    mPipelineReady = false;
+
+    // Release texture resources.
+    mTextureManager.Shutdown();
+    mFallbackUploadBuffer.Reset();
+    mFallbackTextureResource.Reset();
+    mFallbackCpuHandle = {};
+    mFallbackGpuHandle = {};
+}
+
+void EntityMeshRenderer::RenderDepthOnly(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12RootSignature*       rootSignature,
+    ID3D12PipelineState*       pipelineState,
+    const DirectX::XMFLOAT4X4& lightViewProjection)
+{
+    if (!commandList || !rootSignature || !pipelineState || !mEntities) return;
+
+    std::size_t meshCount = 0;
+    for (const Entity& e : *mEntities)
+        if (e.HasMeshComponent() && e.Mesh.has_value() && e.Mesh->MeshAsset) ++meshCount;
+    if (meshCount == 0) return;
+
+    if (!EnsureDepthPassConstantBuffer(meshCount)) return;
+
+    commandList->SetGraphicsRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    const XMMATRIX lightVP = XMMatrixTranspose(XMLoadFloat4x4(&lightViewProjection));
+
+    std::size_t slot = 0;
+    for (std::size_t i = 0; i < mEntities->size(); ++i)
+    {
+        const Entity& entity = (*mEntities)[i];
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        {
+            ++slot;
+            continue;
+        }
+
+        auto it = mGpuMeshes.find(i);
+        if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
+        {
+            ++slot;
+            continue;
+        }
+
+        EntityGpuMesh& gpuMesh = it->second;
+
+        const XMMATRIX model = entity.Transform.GetTransform();
+        const XMMATRIX mvp   = XMMatrixTranspose(model * lightVP);
+        XMStoreFloat4x4(&mMappedDepthPassCB[slot].MVP, mvp);
+
+        commandList->SetGraphicsRootConstantBufferView(
+            0,
+            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(slot) * sizeof(EntityConstants));
+
+        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+        commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
+        commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
+
+        ++slot;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+    // Create the lighting constant buffer on first use.
+    if (!mLightingCB)
+    {
+        ID3D12Device* device = DX12Context_GetDevice();
+        if (!device) return;
+
+        const UINT64 cbSize = (sizeof(LightingConstants) + 255ull) & ~255ull;
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+        hp.CreationNodeMask = 1;
+        hp.VisibleNodeMask  = 1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = cbSize;
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mLightingCB))))
+        {
+            return;
+        }
+        mLightingCB->SetName(L"EntityMeshRenderer LightingCB");
+        if (FAILED(mLightingCB->Map(0, nullptr, reinterpret_cast<void**>(&mMappedLightingCB))))
+        {
+            mLightingCB.Reset();
+            return;
+        }
+    }
+
+    if (mMappedLightingCB)
+    {
+        // Preserve any point lights already written into the CB; only overwrite sun/sky terms.
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.SunDirection = sunDirection;
+        lc.SunColor     = sunColor;
+        lc.SkyAmbient   = skyAmbient;
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
+void EntityMeshRenderer::SetPointLights(const PointLightGpu* lights, int count)
+{
+    if (!mMappedLightingCB || !lights || count < 0)
+        return;
+
+    // Clamp to the constant buffer capacity.
+    const int n = count < kMaxPointLights ? count : kMaxPointLights;
+
+    // Read the current CB, patch only the point light fields, then write back.
+    LightingConstants lc{};
+    std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+    lc.NumPointLights = n;
+    for (int i = 0; i < n; ++i)
+        lc.PointLights[i] = lights[i];
+    std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+}
+
+void EntityMeshRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedCB != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mCBCapacity = 0;
+
+    if (mLightingCB && mMappedLightingCB != nullptr)
+    {
+        mLightingCB->Unmap(0, nullptr);
+        mMappedLightingCB = nullptr;
+    }
+    mLightingCB.Reset();
+
+    if (mShadowCB && mMappedShadowCB != nullptr)
+    {
+        mShadowCB->Unmap(0, nullptr);
+        mMappedShadowCB = nullptr;
+    }
+    mShadowCB.Reset();
+    mShadowSrvHandle = {};
+
+    if (mDepthPassConstantBuffer && mMappedDepthPassCB != nullptr)
+    {
+        mDepthPassConstantBuffer->Unmap(0, nullptr);
+        mMappedDepthPassCB = nullptr;
+    }
+    mDepthPassConstantBuffer.Reset();
+    mDepthPassCBCapacity = 0;
+
+    mGpuMeshes.clear();
+    mRootSignature.Reset();
+    mPipelineState.Reset();
+    mVertexShader = DX12Shader{};
+    mPixelShader  = DX12Shader{};
+    mPipelineReady = false;
+
+    // Release texture resources.
+    mTextureManager.Shutdown();
+    mFallbackUploadBuffer.Reset();
+    mFallbackTextureResource.Reset();
+    mFallbackCpuHandle = {};
+    mFallbackGpuHandle = {};
+}
+
+void EntityMeshRenderer::SetShadowData(
+    const DirectX::XMFLOAT4X4& lightViewProjection,
+    float                       shadowMapSize,
+    D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvHandle)
+{
+    // Cache the SRV handle so Render() can bind it.
+    mShadowSrvHandle = shadowSrvHandle;
+
+    // Create the shadow constant buffer on first use.
+    if (!mShadowCB)
+    {
+        ID3D12Device* device = DX12Context_GetDevice();
+        if (!device) return;
+
+        const UINT64 cbSize = sizeof(ShadowConstants);
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+        hp.CreationNodeMask = 1;
+        hp.VisibleNodeMask  = 1;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = cbSize;
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mShadowCB))))
+        {
+            return;
+        }
+        mShadowCB->SetName(L"EntityMeshRenderer ShadowCB");
+        if (FAILED(mShadowCB->Map(0, nullptr, reinterpret_cast<void**>(&mMappedShadowCB))))
+        {
+            mShadowCB.Reset();
+            return;
+        }
+    }
+
+    if (mMappedShadowCB)
+    {
+        ShadowConstants sc{};
+        sc.LightViewProj  = lightViewProjection;
+        sc.ShadowMapSize  = shadowMapSize;
+        sc.ShadowBias     = 0.001f;
+        std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
+    }
+}
+
+void EntityMeshRenderer::RenderDepthOnly(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12RootSignature*       rootSignature,
+    ID3D12PipelineState*       pipelineState,
+    const DirectX::XMFLOAT4X4& lightViewProjection)
+{
+    if (!commandList || !rootSignature || !pipelineState || !mEntities) return;
+
+    // We need a per-entity CB for the shadow pass.  Reuse mConstantBuffer but
+    // write light-space MVPs.  Ensure we have at least as many slots as entities.
+    std::size_t meshCount = 0;
+    for (const Entity& e : *mEntities)
+        if (e.HasMeshComponent() && e.Mesh.has_value() && e.Mesh->MeshAsset) ++meshCount;
+    if (meshCount == 0) return;
+
+    if (!EnsureDepthPassConstantBuffer(meshCount)) return;
+
+    commandList->SetGraphicsRootSignature(rootSignature);
+    commandList->SetPipelineState(pipelineState);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Build the light-space view-projection (column-major, pre-transposed).
+    const XMMATRIX lightVP = XMMatrixTranspose(XMLoadFloat4x4(&lightViewProjection));
+
+    std::size_t slot = 0;
+    for (std::size_t i = 0; i < mEntities->size(); ++i)
+    {
+        const Entity& entity = (*mEntities)[i];
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        {
+            ++slot;
+            continue;
+        }
+
+        auto it = mGpuMeshes.find(i);
+        if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
+        {
+            ++slot;
+            continue;
+        }
+
+        EntityGpuMesh& gpuMesh = it->second;
+
+        // Write the light-space MVP into the shared constant buffer.
+        const XMMATRIX model = entity.Transform.GetTransform();
+        const XMMATRIX mvp   = XMMatrixTranspose(model * lightVP);
+        XMStoreFloat4x4(&mMappedDepthPassCB[slot].MVP, mvp);
+
+        commandList->SetGraphicsRootConstantBufferView(
+            0,
+            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(slot) * sizeof(EntityConstants));
+
+        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+        commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
+
+        // Draw the full mesh (shadow pass does not need per-sub-mesh material).
+        commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
+
+        ++slot;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+bool EntityMeshRenderer::CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+{
+    mPipelineReady = false;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        mLastError = "EntityMeshRenderer: DX12 device is null.";
+        return false;
+    }
+
+    // Compile the dedicated mesh entity shader.
+    const ShaderCompileRequest vsRequest
+    {
+        L"Shaders\\MeshEntity.hlsl",
+        L"VSMain",
+        L"vs_5_0",
+        ShaderStage::Vertex
+    };
+    const ShaderCompileRequest psRequest
+    {
+        L"Shaders\\MeshEntity.hlsl",
+        L"PSMain",
+        L"ps_5_0",
+        ShaderStage::Pixel
+    };
+
+    if (!mVertexShader.Compile(vsRequest))
+    {
+        mLastError = std::string("EntityMeshRenderer VS compile failed: ")
+            + (mVertexShader.GetLastErrorMessage() ? mVertexShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+    if (!mPixelShader.Compile(psRequest))
+    {
+        mLastError = std::string("EntityMeshRenderer PS compile failed: ")
+            + (mPixelShader.GetLastErrorMessage() ? mPixelShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+
+    // Root signature:
+    //   slot 0 – root CBV  (b0, vertex visibility) for the per-entity MVP matrix
+    //   slot 1 – descriptor table with one SRV range (t0, pixel visibility) for the base-color texture
+    //   slot 2 – root CBV  (b1, all visibility) for the per-frame scene lighting
+    //   slot 3 – descriptor table with one SRV range (t1, pixel visibility) for the shadow map
+    //   slot 4 – root CBV  (b2, pixel visibility) for shadow constants
+    D3D12_ROOT_PARAMETER rootParams[5]{};
+
+    // Slot 0: per-entity CBV
+    rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[0].Descriptor.ShaderRegister = 0;
+    rootParams[0].Descriptor.RegisterSpace  = 0;
+    rootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    // Slot 1: base-color texture SRV table
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors                    = 1;
+    srvRange.BaseShaderRegister                = 0; // t0
+    srvRange.RegisterSpace                     = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = 0;
+
+    rootParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges   = &srvRange;
+    rootParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Slot 2: per-frame scene lighting CBV (b1, pixel visibility)
+    rootParams[2].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[2].Descriptor.ShaderRegister = 1; // b1
+    rootParams[2].Descriptor.RegisterSpace  = 0;
+    rootParams[2].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Slot 3: shadow map SRV table (t1, pixel visibility)
+    D3D12_DESCRIPTOR_RANGE shadowSrvRange{};
+    shadowSrvRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadowSrvRange.NumDescriptors                    = 1;
+    shadowSrvRange.BaseShaderRegister                = 1; // t1
+    shadowSrvRange.RegisterSpace                     = 0;
+    shadowSrvRange.OffsetInDescriptorsFromTableStart = 0;
+
+    rootParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[3].DescriptorTable.pDescriptorRanges   = &shadowSrvRange;
+    rootParams[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Slot 4: shadow constants CBV (b2, pixel visibility)
+    rootParams[4].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[4].Descriptor.ShaderRegister = 2; // b2
+    rootParams[4].Descriptor.RegisterSpace  = 0;
+    rootParams[4].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Static sampler s0: bilinear wrap for base-colour texture
+    D3D12_STATIC_SAMPLER_DESC staticSampler{};
+    staticSampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    staticSampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSampler.MaxAnisotropy    = 1;
+    staticSampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
+    staticSampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    staticSampler.ShaderRegister   = 0; // s0
+    staticSampler.RegisterSpace    = 0;
+    staticSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Static sampler s1: comparison (PCF) sampler for the shadow map
+    D3D12_STATIC_SAMPLER_DESC shadowSampler{};
+    shadowSampler.Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    shadowSampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    shadowSampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    shadowSampler.MaxAnisotropy    = 1;
+    shadowSampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    shadowSampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    shadowSampler.ShaderRegister   = 1; // s1
+    shadowSampler.RegisterSpace    = 0;
+    shadowSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    const D3D12_STATIC_SAMPLER_DESC samplers[] = { staticSampler, shadowSampler };
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters     = static_cast<UINT>(std::size(rootParams));
+    rsDesc.pParameters       = rootParams;
+    rsDesc.NumStaticSamplers = static_cast<UINT>(std::size(samplers));
+    rsDesc.pStaticSamplers   = samplers;
+    rsDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serialized, errors;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)))
+    {
+        mLastError = "EntityMeshRenderer: D3D12SerializeRootSignature failed.";
+        return false;
+    }
+    if (FAILED(device->CreateRootSignature(
+        0,
+        serialized->GetBufferPointer(),
+        serialized->GetBufferSize(),
+        IID_PPV_ARGS(&mRootSignature))))
+    {
+        mLastError = "EntityMeshRenderer: CreateRootSignature failed.";
+        return false;
+    }
+
+    // Input layout matches System/Mesh.h :: Vertex
+    const D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = mRootSignature.Get();
+    psoDesc.VS                    = mVertexShader.GetBytecode();
+    psoDesc.PS                    = mPixelShader.GetBytecode();
+    psoDesc.SampleMask            = UINT_MAX;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = colorFormat;
+    psoDesc.DSVFormat             = depthFormat;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    // Blend: opaque
+    D3D12_RENDER_TARGET_BLEND_DESC rtBlend{};
+    rtBlend.BlendEnable           = FALSE;
+    rtBlend.LogicOpEnable         = FALSE;
+    rtBlend.SrcBlend              = D3D12_BLEND_ONE;
+    rtBlend.DestBlend             = D3D12_BLEND_ZERO;
+    rtBlend.BlendOp               = D3D12_BLEND_OP_ADD;
+    rtBlend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
+    rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.BlendState.RenderTarget[0] = rtBlend;
+
+    // Rasterizer: solid, back-face cull
+    psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthClipEnable       = TRUE;
+
+    // Depth: standard less-than write
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
+
+    psoDesc.InputLayout = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
+
+    if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState))))
+    {
+        mLastError = "EntityMeshRenderer: CreateGraphicsPipelineState failed.";
+        return false;
+    }
+
+    mPipelineReady = true;
+    mLastError.clear();
+    return true;
+}
+
+bool EntityMeshRenderer::EnsureEntityGpuMesh(
+    ID3D12GraphicsCommandList* commandList,
+    std::size_t entityIndex,
+    const Mesh* mesh)
+{
+    auto it = mGpuMeshes.find(entityIndex);
+    if (it != mGpuMeshes.end() && it->second.SourceMesh == mesh)
+    {
+        // Buffers are already up to date for this mesh.
+        return true;
+    }
+
+    // Remove stale entry if the mesh pointer changed.
+    if (it != mGpuMeshes.end())
+    {
+        mGpuMeshes.erase(it);
+    }
+
+    if (mesh == nullptr || mesh->GetVertices().empty() || mesh->GetIndices().empty())
+    {
+        return false;
+    }
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    EntityGpuMesh gpuMesh;
+    gpuMesh.SourceMesh = mesh;
+    mSceneContentChanged = true;
+
+    const UINT64 vbSize = mesh->GetVertices().size() * sizeof(Vertex);
+    const UINT64 ibSize = mesh->GetIndices().size()  * sizeof(std::uint32_t);
+
+    // Vertex buffer: upload heap → default heap via CopyBufferRegion.
+    if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.VertexBuffer))
+    {
+        return false;
+    }
+    if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_STATE_GENERIC_READ, gpuMesh.VertexUpload))
+    {
+        return false;
+    }
+
+    void* mappedVB = nullptr;
+    if (FAILED(gpuMesh.VertexUpload->Map(0, nullptr, &mappedVB)))
+    {
+        return false;
+    }
+    std::memcpy(mappedVB, mesh->GetVertices().data(), static_cast<std::size_t>(vbSize));
+    gpuMesh.VertexUpload->Unmap(0, nullptr);
+
+    commandList->CopyBufferRegion(gpuMesh.VertexBuffer.Get(), 0, gpuMesh.VertexUpload.Get(), 0, vbSize);
+    auto vbBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        gpuMesh.VertexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    commandList->ResourceBarrier(1, &vbBarrier);
+
+    gpuMesh.VertexBufferView.BufferLocation = gpuMesh.VertexBuffer->GetGPUVirtualAddress();
+    gpuMesh.VertexBufferView.StrideInBytes  = sizeof(Vertex);
+    gpuMesh.VertexBufferView.SizeInBytes    = static_cast<UINT>(vbSize);
+
+    // Index buffer
+    if (!CreateCommittedBuffer(device, ibSize, D3D12_HEAP_TYPE_DEFAULT,
+        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.IndexBuffer))
+    {
+        return false;
+    }
+    if (!CreateCommittedBuffer(device, ibSize, D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_STATE_GENERIC_READ, gpuMesh.IndexUpload))
+    {
+        return false;
+    }
+
+    void* mappedIB = nullptr;
+    if (FAILED(gpuMesh.IndexUpload->Map(0, nullptr, &mappedIB)))
+    {
+        return false;
+    }
+    std::memcpy(mappedIB, mesh->GetIndices().data(), static_cast<std::size_t>(ibSize));
+    gpuMesh.IndexUpload->Unmap(0, nullptr);
+
+    commandList->CopyBufferRegion(gpuMesh.IndexBuffer.Get(), 0, gpuMesh.IndexUpload.Get(), 0, ibSize);
+    auto ibBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        gpuMesh.IndexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    commandList->ResourceBarrier(1, &ibBarrier);
+
+    gpuMesh.IndexBufferView.BufferLocation = gpuMesh.IndexBuffer->GetGPUVirtualAddress();
+    gpuMesh.IndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
+    gpuMesh.IndexBufferView.SizeInBytes    = static_cast<UINT>(ibSize);
+    gpuMesh.IndexCount = static_cast<UINT>(mesh->GetIndices().size());
+
+    mGpuMeshes.emplace(entityIndex, std::move(gpuMesh));
+    return true;
+}
+
+bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
+{
+    if (requiredEntityCount <= mCBCapacity)
+    {
+        return true;
+    }
+
+    // Unmap old buffer before releasing it.
+    if (mConstantBuffer && mMappedCB != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mCBCapacity = 0;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    // Allocate with some headroom so frequent entity additions don't cause re-allocs.
+    const std::size_t newCapacity = requiredEntityCount + 16;
+    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * sizeof(EntityConstants);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeap.CreationNodeMask     = 1;
+    uploadHeap.VisibleNodeMask      = 1;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = cbSize;
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to create constant buffer.";
+        return false;
+    }
+
+    if (FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedCB))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to map constant buffer.";
+        return false;
+    }
+
+    mCBCapacity = newCapacity;
+    return true;
+}
+
+bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntityCount)
+{
+    if (requiredEntityCount <= mDepthPassCBCapacity)
+    {
+        return true;
+    }
+
+    if (mDepthPassConstantBuffer && mMappedDepthPassCB != nullptr)
+    {
+        mDepthPassConstantBuffer->Unmap(0, nullptr);
+        mMappedDepthPassCB = nullptr;
+    }
+    mDepthPassConstantBuffer.Reset();
+    mDepthPassCBCapacity = 0;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const std::size_t newCapacity = requiredEntityCount + 16;
+    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * sizeof(EntityConstants);
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeap.CreationNodeMask     = 1;
+    uploadHeap.VisibleNodeMask      = 1;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = cbSize;
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mDepthPassConstantBuffer))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to create shadow-pass constant buffer.";
+        return false;
+    }
+
+    if (FAILED(mDepthPassConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedDepthPassCB))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to map shadow-pass constant buffer.";
+        return false;
+    }
+
+    mDepthPassCBCapacity = newCapacity;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// CreateFallbackTexture
+// Uploads a single 1×1 opaque-white RGBA8 pixel as a committed GPU texture so
+// entities without a material always have something valid bound at t0.
+// ---------------------------------------------------------------------------
+bool EntityMeshRenderer::CreateFallbackTexture(ID3D12GraphicsCommandList* commandList)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // Allocate an SRV descriptor slot for the fallback.
+    if (!DX12Context_AllocateSrvDescriptor(&mFallbackCpuHandle, &mFallbackGpuHandle))
+    {
+        mLastError = "EntityMeshRenderer: SRV heap full, cannot allocate fallback texture slot.";
+        return false;
+    }
+
+    // Describe a 1×1 R8G8B8A8_UNORM texture.
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension          = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width              = 1;
+    texDesc.Height             = 1;
+    texDesc.DepthOrArraySize   = 1;
+    texDesc.MipLevels          = 1;
+    texDesc.Format             = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count   = 1;
+    texDesc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    if (FAILED(device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE,
+        &texDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr, IID_PPV_ARGS(&mFallbackTextureResource))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to create fallback texture resource.";
+        return false;
+    }
+
+    // Upload heap buffer for the single white pixel.
+    const UINT64 uploadSize = GetRequiredIntermediateSize(mFallbackTextureResource.Get(), 0, 1);
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    CD3DX12_RESOURCE_DESC uploadBufDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE,
+        &uploadBufDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&mFallbackUploadBuffer))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to create fallback upload buffer.";
+        return false;
+    }
+
+    // White pixel: R=255 G=255 B=255 A=255
+    const uint32_t whitePixel = 0xFFFFFFFFu;
+    D3D12_SUBRESOURCE_DATA subData{};
+    subData.pData      = &whitePixel;
+    subData.RowPitch   = 4;
+    subData.SlicePitch = 4;
+
+    UpdateSubresources(commandList, mFallbackTextureResource.Get(), mFallbackUploadBuffer.Get(),
+        0, 0, 1, &subData);
+
+    D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        mFallbackTextureResource.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &barrier);
+
+    // mFallbackUploadBuffer is kept as a member and released after the first Render()
+    // GPU flush so the GPU has finished reading from it.
+
+    // Create the SRV.
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels     = 1;
+    device->CreateShaderResourceView(mFallbackTextureResource.Get(), &srvDesc, mFallbackCpuHandle);
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ResolveBaseColorDdsPath
+// Reads a material .json file (path is absolute or relative-to-Data) and
+// returns the absolute path of the base-color DDS, or "" on failure.
+// ---------------------------------------------------------------------------
+std::string EntityMeshRenderer::ResolveBaseColorDdsPath(const std::string& materialPath) const
+{
+    if (materialPath.empty()) return {};
+
+    // Try the path as-is first (already absolute), then try relative to Data/.
+    auto tryLoad = [](const std::filesystem::path& p) -> std::string
+    {
+        if (!std::filesystem::exists(p)) return {};
+        try
+        {
+            std::ifstream f(p);
+            if (!f.is_open()) return {};
+            nlohmann::json j;
+            f >> j;
+            auto textures = j.find("textures");
+            if (textures == j.end()) return {};
+            auto bc = textures->find("baseColor");
+            if (bc == textures->end()) return {};
+            return bc->get<std::string>();
+        }
+        catch (...) { return {}; }
+    };
+
+    std::string relPath = tryLoad(std::filesystem::path(materialPath));
+
+    if (relPath.empty()) return {};
+
+    // relPath is relative to Data/ — resolve to an absolute path.
+    // Walk up from the material file to find the Data directory.
+    std::filesystem::path matDir = std::filesystem::path(materialPath).parent_path();
+    std::filesystem::path current = matDir;
+    while (!current.empty())
+    {
+        // Check if this directory contains a "Data" sibling that holds our relPath.
+        std::filesystem::path candidate = current.parent_path() / "Data" / relPath;
+        if (std::filesystem::exists(candidate))
+            return candidate.string();
+
+        // Also check if current itself is Data/.
+        candidate = current / relPath;
+        if (current.filename() == "Data" && std::filesystem::exists(candidate))
+            return candidate.string();
+
+        const auto parent = current.parent_path();
+        if (parent == current) break;
+        current = parent;
+    }
+
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+// ResolveSubMaterialDdsPaths
+// Reads a material JSON file (single or multi-material) and returns a map of
+// materialId -> absolute DDS path for the base-color texture of each sub-material.
+// For a single-material file the map will have one entry at key 0.
+// ---------------------------------------------------------------------------
+std::unordered_map<uint32_t, std::string>
+EntityMeshRenderer::ResolveSubMaterialDdsPaths(const std::string& materialPath) const
+{
+    std::unordered_map<uint32_t, std::string> result;
+
+    if (materialPath.empty()) return result;
+
+    // Helper: resolve a Data-relative DDS path string to an absolute path by
+    // walking up from the given base directory to find the Data folder.
+    auto resolveDataRelativePath = [](const std::string& relPath,
+                                      const std::filesystem::path& nearPath) -> std::string
+    {
+        if (relPath.empty()) return {};
+        std::filesystem::path current = std::filesystem::is_directory(nearPath) ? nearPath : nearPath.parent_path();
+        while (!current.empty())
+        {
+            std::filesystem::path candidate = current.parent_path() / "Data" / relPath;
+            if (std::filesystem::exists(candidate)) return candidate.string();
+            candidate = current / relPath;
+            if (current.filename() == "Data" && std::filesystem::exists(candidate))
+                return candidate.string();
+            const auto parent = current.parent_path();
+            if (parent == current) break;
+            current = parent;
+        }
+        return {};
+    };
+
+    // Helper: extract baseColor DDS path from a single-material JSON node.
+    auto baseColorFromNode = [](const nlohmann::json& node) -> std::string
+    {
+        auto texIt = node.find("textures");
+        if (texIt == node.end()) return {};
+        auto bcIt = texIt->find("baseColor");
+        if (bcIt == texIt->end()) return {};
+        return bcIt->get<std::string>();
+    };
+
+    try
+    {
+        std::filesystem::path matFilePath{ materialPath };
+        std::ifstream matFile{ matFilePath };
+        if (!matFile.is_open()) return result;
+        nlohmann::json j;
+        matFile >> j;
+
+        const std::string type = j.value("type", std::string{});
+        if (type == "MultiMaterial")
+        {
+            // Sub-materials array: index == materialId.
+            auto subMatsIt = j.find("subMaterials");
+            if (subMatsIt != j.end() && subMatsIt->is_array())
+            {
+                uint32_t id = 0;
+                for (const auto& subMat : *subMatsIt)
+                {
+                    const std::string relPath = baseColorFromNode(subMat);
+                    if (!relPath.empty())
+                    {
+                        const std::string abs = resolveDataRelativePath(relPath, materialPath);
+                        if (!abs.empty()) result[id] = abs;
+                    }
+                    ++id;
+                }
+            }
+        }
+        else
+        {
+            // Single material — treat it as materialId 0.
+            const std::string relPath = baseColorFromNode(j);
+            if (!relPath.empty())
+            {
+                const std::string abs = resolveDataRelativePath(relPath, materialPath);
+                if (!abs.empty()) result[0] = abs;
+            }
+        }
+    }
+    catch (...) {}
+
+    return result;
+}
+

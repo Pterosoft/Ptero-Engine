@@ -1,0 +1,182 @@
+#pragma once
+
+#include <DirectXMath.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace
+{
+    constexpr float EditorCameraPitchLimit = DirectX::XM_PIDIV2 - 0.01f;
+
+    inline DirectX::XMVECTOR GetEditorCameraForwardVector(float pitch, float yaw)
+    {
+        const float cosPitch = std::cos(pitch);
+        return DirectX::XMVector3Normalize(DirectX::XMVectorSet(
+            std::sin(yaw) * cosPitch,
+            std::cos(yaw) * cosPitch,
+            std::sin(pitch),
+            0.0f));
+    }
+
+    inline DirectX::XMVECTOR GetEditorCameraRightVector(float pitch, float yaw)
+    {
+        const DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        // Keep the strafe vector aligned with the camera's visual right direction so A/D movement is not inverted.
+        return DirectX::XMVector3Normalize(DirectX::XMVector3Cross(up, GetEditorCameraForwardVector(pitch, yaw)));
+    }
+}
+
+class EditorCamera
+{
+public:
+    EditorCamera()
+    {
+        SetLens(DirectX::XM_PIDIV4, 16.0f / 9.0f, 0.1f, 100.0f);
+    }
+
+    void Update(
+        float deltaTime,
+        bool moveForward,
+        bool moveBackward,
+        bool moveLeft,
+        bool moveRight,
+        bool rightMouseButtonDown,
+        float mouseX,
+        float mouseY)
+    {
+        if (rightMouseButtonDown)
+        {
+            // Only rotate after capturing a stable starting mouse position.
+            if (mHasLastMousePosition)
+            {
+                const float mouseDeltaX = mouseX - mLastMouseX;
+                const float mouseDeltaY = mouseY - mLastMouseY;
+                // Keep horizontal look non-inverted so dragging the mouse left looks left and dragging right looks right.
+                mYaw -= mouseDeltaX * mMouseSensitivity;
+                mPitch = std::clamp(mPitch - (mouseDeltaY * mMouseSensitivity), -EditorCameraPitchLimit, EditorCameraPitchLimit);
+            }
+
+            mLastMouseX = mouseX;
+            mLastMouseY = mouseY;
+            mHasLastMousePosition = true;
+        }
+        else
+        {
+            mHasLastMousePosition = false;
+        }
+
+        const float moveDistance = mMovementSpeed * deltaTime;
+        const DirectX::XMVECTOR forward = GetEditorCameraForwardVector(mPitch, mYaw);
+        const DirectX::XMVECTOR right = GetEditorCameraRightVector(mPitch, mYaw);
+        const DirectX::XMVECTOR moveScale = DirectX::XMVectorReplicate(moveDistance);
+
+        DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&mPosition);
+        if (moveForward)
+        {
+            position = DirectX::XMVectorAdd(position, DirectX::XMVectorMultiply(forward, moveScale));
+        }
+        if (moveBackward)
+        {
+            position = DirectX::XMVectorSubtract(position, DirectX::XMVectorMultiply(forward, moveScale));
+        }
+        if (moveLeft)
+        {
+            position = DirectX::XMVectorSubtract(position, DirectX::XMVectorMultiply(right, moveScale));
+        }
+        if (moveRight)
+        {
+            position = DirectX::XMVectorAdd(position, DirectX::XMVectorMultiply(right, moveScale));
+        }
+
+        DirectX::XMStoreFloat3(&mPosition, position);
+    }
+
+    void SetPosition(float x, float y, float z)
+    {
+        mPosition = DirectX::XMFLOAT3(x, y, z);
+    }
+
+    void LookAt(float targetX, float targetY, float targetZ)
+    {
+        const DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&mPosition);
+        const DirectX::XMVECTOR target = DirectX::XMVectorSet(targetX, targetY, targetZ, 1.0f);
+        const DirectX::XMVECTOR direction = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, position));
+
+        const float directionX = DirectX::XMVectorGetX(direction);
+        const float directionY = DirectX::XMVectorGetY(direction);
+        const float directionZ = DirectX::XMVectorGetZ(direction);
+
+        mYaw = std::atan2(directionX, directionY);
+        mPitch = std::clamp(std::asin(directionZ), -EditorCameraPitchLimit, EditorCameraPitchLimit);
+    }
+
+    void SetLens(float fovYRadians, float aspectRatio, float nearPlane, float farPlane)
+    {
+        mFovYRadians = fovYRadians;
+        mAspectRatio = aspectRatio;
+        mNearPlane = nearPlane;
+        mFarPlane = farPlane;
+    }
+
+    void SetMovementSpeed(float movementSpeed)
+    {
+        mMovementSpeed = (std::max)(0.0f, movementSpeed);
+    }
+
+    float GetMovementSpeed() const
+    {
+        return mMovementSpeed;
+    }
+
+    const DirectX::XMFLOAT3& GetPosition() const
+    {
+        return mPosition;
+    }
+
+    DirectX::XMFLOAT3 GetForwardVector() const
+    {
+        DirectX::XMFLOAT3 forward{};
+        DirectX::XMStoreFloat3(&forward, GetEditorCameraForwardVector(mPitch, mYaw));
+        return forward;
+    }
+
+    DirectX::XMFLOAT3 GetUpVector() const
+    {
+        return DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f);
+    }
+
+    DirectX::XMMATRIX GetViewMatrix() const
+    {
+        const DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&mPosition);
+        const DirectX::XMVECTOR forward = GetEditorCameraForwardVector(mPitch, mYaw);
+        const DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+
+        // Keep the editor camera left-handed and Z-up so viewport placement and gizmo interaction share the same basis.
+        return DirectX::XMMatrixLookAtLH(position, DirectX::XMVectorAdd(position, forward), up);
+    }
+
+    DirectX::XMMATRIX GetViewMatrixZUp() const
+    {
+        return GetViewMatrix();
+    }
+
+    DirectX::XMMATRIX GetProjectionMatrix() const
+    {
+        return DirectX::XMMatrixPerspectiveFovLH(mFovYRadians, mAspectRatio, mNearPlane, mFarPlane);
+    }
+
+private:
+    DirectX::XMFLOAT3 mPosition = DirectX::XMFLOAT3(0.0f, -5.0f, 2.0f);
+    float mPitch = 0.0f;
+    float mYaw = 0.0f;
+    float mMovementSpeed = 5.0f;
+    float mMouseSensitivity = 0.005f;
+    float mFovYRadians = DirectX::XM_PIDIV4;
+    float mAspectRatio = 16.0f / 9.0f;
+    float mNearPlane = 0.1f;
+    float mFarPlane = 100.0f;
+    float mLastMouseX = 0.0f;
+    float mLastMouseY = 0.0f;
+    bool mHasLastMousePosition = false;
+};

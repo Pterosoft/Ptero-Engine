@@ -1,0 +1,53 @@
+﻿#pragma once
+
+#include "Components.h"
+#include "TimeOfDaySettings.h"
+#include "TaaSettings.h"
+#include "RtGISettings.h"
+#include "RtAOSettings.h"
+#include "GtaoSettings.h"
+#include "AgxTonemapSettings.h"
+#include "VolumetricFogSettings.h"
+#include "BloomSettings.h"
+
+#include <string>
+#include <vector>
+
+struct Scene
+{
+    std::vector<Entity>* Entities = nullptr;
+    TimeOfDaySettings* TimeOfDay = nullptr;
+    TaaSettings* Taa = nullptr;
+    RtGISettings* Rtgi = nullptr;
+    RtAOSettings* Rtao = nullptr;
+    GtaoSettings* Gtao = nullptr;
+    AgxTonemapSettings* Agx = nullptr;
+    VolumetricFogSettings* VolumetricFog = nullptr;
+    BloomSettings* Bloom = nullptr;
+
+    Entity& CreateEntity()
+    {
+        if (Entities == nullptr)
+        {
+            throw std::runtime_error("Scene::CreateEntity requires a valid entity container.");
+        }
+
+        Entities->emplace_back();
+        return Entities->back();
+    }
+};
+
+class SceneSerializer
+{
+public:
+    explicit SceneSerializer(Scene* scene)
+        : mScene(scene)
+    {
+    }
+
+    void Serialize(const std::string& filepath);
+    bool Deserialize(const std::string& filepath);
+
+private:
+    Scene* mScene = nullptr;
+};

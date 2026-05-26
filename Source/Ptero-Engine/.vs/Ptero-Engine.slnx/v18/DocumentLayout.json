@@ -1,0 +1,256 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "K:\\Ptero-Engine\\Source\\Ptero-Engine\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeSettings.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGISettings.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12SceneRenderer.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Data\\Shaders\\DeferredLighting.hlsl||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\EditorMainMenu.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Update.hlsl||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Debug.hlsl||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Common.hlsli||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 286,
+          "SelectedChildIndex": 3,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{d78612c7-9962-4b83-95d9-268046dad23a}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{40ea2e6b-2121-4bb8-a43e-c83c04b51041}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{34e76e81-ee4a-11d0-ae2e-00a0c90fffc3}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "RadianceProbeSettings.h",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeSettings.h",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RadianceProbeSettings.h",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeSettings.h",
+              "RelativeToolTip": "..\\Renderer_DX12\\RadianceProbeSettings.h",
+              "ViewState": "AgIAAAwAAAAAAAAAAAAAABEAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-05-26T18:00:34.88Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "RtGISettings.h",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGISettings.h",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RtGISettings.h",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGISettings.h",
+              "RelativeToolTip": "..\\Renderer_DX12\\RtGISettings.h",
+              "ViewState": "AgIAAFoAAAAAAAAAAAAAAE0AAAAdAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-05-26T17:59:19.935Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 7,
+              "Title": "EditorMainMenu.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\EditorMainMenu.cpp",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\EditorMainMenu.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\EditorMainMenu.cpp",
+              "RelativeToolTip": "..\\Renderer_DX12\\EditorMainMenu.cpp",
+              "ViewState": "AgIAADgFAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-26T16:28:51.74Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "DeferredLighting.hlsl",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Data\\Shaders\\DeferredLighting.hlsl",
+              "RelativeDocumentMoniker": "..\\..\\Data\\Shaders\\DeferredLighting.hlsl",
+              "ToolTip": "K:\\Ptero-Engine\\Data\\Shaders\\DeferredLighting.hlsl",
+              "RelativeToolTip": "..\\..\\Data\\Shaders\\DeferredLighting.hlsl",
+              "ViewState": "AgIAADsCAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-05-26T16:21:34.491Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "DeferredLightingPass.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.cpp",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\DeferredLightingPass.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.cpp",
+              "RelativeToolTip": "..\\Renderer_DX12\\DeferredLightingPass.cpp",
+              "ViewState": "AgIAAIwBAAAAAAAAAAAswJQBAABRAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-26T16:21:17.212Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 8,
+              "Title": "RadianceProbeRenderer.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.cpp",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RadianceProbeRenderer.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.cpp",
+              "RelativeToolTip": "..\\Renderer_DX12\\RadianceProbeRenderer.cpp",
+              "ViewState": "AgIAABEBAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-26T16:29:05.612Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 13,
+              "Title": "RtGlobalIllumination.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.cpp",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RtGlobalIllumination.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.cpp",
+              "RelativeToolTip": "..\\Renderer_DX12\\RtGlobalIllumination.cpp",
+              "ViewState": "AgIAAI0HAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-26T17:44:02.278Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "RtGlobalIllumination.h",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.h",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RtGlobalIllumination.h",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RtGlobalIllumination.h",
+              "RelativeToolTip": "..\\Renderer_DX12\\RtGlobalIllumination.h",
+              "ViewState": "AgIAAN4AAAAAAAAAAAAcwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-05-26T17:39:05.949Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 12,
+              "Title": "RadianceProbes_Common.hlsli",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Common.hlsli",
+              "RelativeDocumentMoniker": "..\\..\\Data\\Shaders\\RadianceProbes_Common.hlsli",
+              "ToolTip": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Common.hlsli",
+              "RelativeToolTip": "..\\..\\Data\\Shaders\\RadianceProbes_Common.hlsli",
+              "ViewState": "AgIAADAAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-05-26T17:15:08.213Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 11,
+              "Title": "RadianceProbes_Debug.hlsl",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Debug.hlsl",
+              "RelativeDocumentMoniker": "..\\..\\Data\\Shaders\\RadianceProbes_Debug.hlsl",
+              "ToolTip": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Debug.hlsl",
+              "RelativeToolTip": "..\\..\\Data\\Shaders\\RadianceProbes_Debug.hlsl",
+              "ViewState": "AgIAADoAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-05-26T17:07:41.738Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 10,
+              "Title": "RadianceProbeRenderer.h",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.h",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\RadianceProbeRenderer.h",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\RadianceProbeRenderer.h",
+              "RelativeToolTip": "..\\Renderer_DX12\\RadianceProbeRenderer.h",
+              "ViewState": "AgIAAGAAAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-05-26T16:41:53.588Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 9,
+              "Title": "RadianceProbes_Update.hlsl",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Update.hlsl",
+              "RelativeDocumentMoniker": "..\\..\\Data\\Shaders\\RadianceProbes_Update.hlsl",
+              "ToolTip": "K:\\Ptero-Engine\\Data\\Shaders\\RadianceProbes_Update.hlsl",
+              "RelativeToolTip": "..\\..\\Data\\Shaders\\RadianceProbes_Update.hlsl",
+              "ViewState": "AgIAAEoAAAAAAAAAAABRwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2026-05-26T16:37:00.208Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "DeferredLightingPass.h",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.h",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\DeferredLightingPass.h",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DeferredLightingPass.h",
+              "RelativeToolTip": "..\\Renderer_DX12\\DeferredLightingPass.h",
+              "ViewState": "AgIAABEAAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-05-26T16:20:34.612Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "DX12SceneRenderer.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12SceneRenderer.cpp",
+              "RelativeDocumentMoniker": "..\\Renderer_DX12\\DX12SceneRenderer.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12SceneRenderer.cpp",
+              "RelativeToolTip": "..\\Renderer_DX12\\DX12SceneRenderer.cpp",
+              "ViewState": "AgIAAFwCAAAAAAAAAAAvwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-26T16:16:48.799Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

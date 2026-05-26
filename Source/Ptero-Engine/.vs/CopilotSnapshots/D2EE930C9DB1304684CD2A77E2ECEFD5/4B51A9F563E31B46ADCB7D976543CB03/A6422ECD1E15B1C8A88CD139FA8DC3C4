@@ -1,0 +1,112 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "SeaSettings.h"
+
+#include <DirectXMath.h>
+#include <wrl/client.h>
+#include <d3d12.h>
+
+class SeaRenderer
+{
+public:
+    SeaRenderer() = default;
+    ~SeaRenderer() = default;
+
+    bool Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* commandList);
+    bool UpdateSceneColorCopy(ID3D12GraphicsCommandList* commandList, ID3D12Resource* sourceSceneColor, UINT width, UINT height);
+    void Render(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMMATRIX& viewMatrix,
+        const DirectX::XMMATRIX& projectionMatrix,
+        const SeaSettings& settings,
+        const DirectX::XMFLOAT3& sunDirection,
+        const DirectX::XMFLOAT3& sunColor,
+        const DirectX::XMFLOAT3& skyColor,
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneColorSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE depthSrv,
+        float deltaTime);
+    void Shutdown();
+
+    bool IsInitialized() const { return mIsInitialized; }
+
+private:
+    struct SeaConstants
+    {
+        DirectX::XMFLOAT4X4 ViewProjection;
+        DirectX::XMFLOAT4X4 InverseViewProjection;
+        DirectX::XMFLOAT3   CameraPosition;
+        float               Time;
+
+        DirectX::XMFLOAT3   SeaColor;
+        float               SeaLevel;
+
+        float               WaveHeight;
+        float               WaveFrequency;
+        float               WaveSpeed;
+        float               WaveChoppiness;
+
+        float               WindSpeed;
+        float               WindDirectionAngle;
+        float               TileSize;
+        float               Roughness;
+
+        float               Metallic;
+        float               FoamAmount;
+        float               FoamThreshold;
+        float               ReflectionStrength;
+
+        float               RefractionStrength;
+        float               FresnelPower;
+        float               NormalStrength;
+        float               CascadeScale;
+
+        int                 DebugView;
+        int                 FoamEnabled;
+        int                 CascadeCount;
+        float               _Padding0;
+
+        DirectX::XMFLOAT3   SunDirection;
+        float               _Padding1;
+        DirectX::XMFLOAT3   SunColor;
+        float               _Padding2;
+        DirectX::XMFLOAT3   SkyColor;
+        float               _Padding3;
+    };
+
+    bool CreatePipelineState(ID3D12Device* device);
+    bool CreateSeaMesh(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, int tessellationFactor);
+    bool EnsureSceneColorCopy(UINT width, UINT height);
+    void UpdateConstants(
+        const DirectX::XMMATRIX& viewMatrix,
+        const DirectX::XMMATRIX& projectionMatrix,
+        const SeaSettings& settings,
+        const DirectX::XMFLOAT3& sunDirection,
+        const DirectX::XMFLOAT3& sunColor,
+        const DirectX::XMFLOAT3& skyColor,
+        float deltaTime);
+
+    bool mIsInitialized = false;
+    float mAccumulatedTime = 0.0f;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBufferUpload;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBufferUpload;
+    D3D12_VERTEX_BUFFER_VIEW mVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW mIndexBufferView = {};
+    UINT mIndexCount = 0;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    void* mConstantBufferMappedData = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSceneColorCopy;
+    D3D12_CPU_DESCRIPTOR_HANDLE mSceneColorCopySrvCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mSceneColorCopySrvGpuHandle{};
+    UINT mSceneColorCopyWidth = 0;
+    UINT mSceneColorCopyHeight = 0;
+    D3D12_RESOURCE_STATES mSceneColorCopyState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+};

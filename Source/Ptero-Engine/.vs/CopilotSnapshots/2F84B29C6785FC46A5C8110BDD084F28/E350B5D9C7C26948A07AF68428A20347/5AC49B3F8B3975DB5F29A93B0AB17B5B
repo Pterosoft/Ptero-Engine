@@ -1,0 +1,94 @@
+﻿#pragma once
+
+// ShadowMapRenderer
+// Renders the scene depth from the sun's point of view into a 2K×2K depth
+// texture.  The resulting SRV is passed to the main geometry pass so
+// MeshEntity.hlsl can sample it for PCF shadow testing.
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "HosekWilkieSky.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+
+struct Entity;
+
+// Resolution of the shadow map texture (power-of-two for clean filtering).
+static constexpr UINT kShadowMapSize = 2048;
+// Format used for the shadow depth buffer.
+static constexpr DXGI_FORMAT kShadowDepthFormat = DXGI_FORMAT_D32_FLOAT;
+// Matching typeless resource format so we can also create an SRV.
+static constexpr DXGI_FORMAT kShadowResourceFormat = DXGI_FORMAT_R32_FLOAT;
+static constexpr DXGI_FORMAT kShadowTypelessFormat  = DXGI_FORMAT_R32_TYPELESS;
+
+class ShadowMapRenderer
+{
+public:
+    // Call once after the DX12 device is ready.
+    bool Initialize();
+
+    // Render the shadow depth pass for all entities that have a mesh.
+    // sunDir  – world-space unit vector FROM scene TOWARD sun (Z-up).
+    // sceneBoundRadius – half-size of the orthographic shadow frustum in world units.
+    // commandList must already have a descriptor heap set.
+    void RenderShadowPass(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMFLOAT3&   sunDir,
+        float                       sceneBoundRadius,
+        std::vector<Entity>*        entities);
+
+    // GPU handle of the shadow depth SRV — bind this at t1 in the main pass.
+    D3D12_GPU_DESCRIPTOR_HANDLE GetShadowSrvGpuHandle() const { return mShadowSrvGpu; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetShadowSrvCpuHandle() const { return mShadowSrvCpu; }
+
+    // Returns the light-space view-projection used in the last RenderShadowPass().
+    // Multiply world-space positions by this in the main vertex shader.
+    const DirectX::XMFLOAT4X4& GetLightViewProjection() const { return mLightViewProjection; }
+
+    bool IsInitialized() const { return mIsInitialized; }
+
+    void Shutdown();
+
+    const char* GetLastError() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    bool CreateResources();
+    bool CreatePipeline();
+
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mShadowDepthTexture;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDsvHeap;           // 1 slot, CPU only
+    D3D12_CPU_DESCRIPTOR_HANDLE                  mDsvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE                  mShadowSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE                  mShadowSrvGpu{};
+
+    // Per-entity MVP constant buffer (shadow pass only needs MVP, not lighting).
+    // Shared with EntityMeshRenderer's layout but independent allocation.
+    struct alignas(256) ShadowEntityCB
+    {
+        DirectX::XMFLOAT4X4 MVP;
+        std::byte            Padding[192]{};
+    };
+    static_assert(sizeof(ShadowEntityCB) == 256);
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShadowCB;
+    ShadowEntityCB*                        mMappedShadowCB = nullptr;
+    std::size_t                            mShadowCBCapacity = 0;
+
+    bool EnsureShadowCB(std::size_t requiredSlots);
+
+    // Simple depth-only pipeline (no pixel shader).
+    DX12Shader                                  mVertexShader;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    // Light-space view-projection matrix written each frame.
+    DirectX::XMFLOAT4X4 mLightViewProjection{};
+
+    bool        mIsInitialized = false;
+    std::string mLastError;
+};

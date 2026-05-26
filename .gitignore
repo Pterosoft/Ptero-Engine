@@ -1,0 +1,10 @@
+*.fbx
+*.db
+*.ipch
+*.lib
+Data/Geometry
+Source/SDKs
+Source/System/x64
+Source/Renderer_DX12/x64
+Source/Audio/x64
+Source/Ptero-Engine/x64

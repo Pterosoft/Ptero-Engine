@@ -1,0 +1,299 @@
+﻿// Sea Surface Shader
+// Adapted from Crest ocean system for DX12
+
+cbuffer SeaConstants : register(b0)
+{
+    float4x4 ViewProjection;
+    float4x4 InverseViewProjection;
+    float3   CameraPosition;
+    float    Time;
+
+    float3   SeaColor;
+    float    SeaLevel;
+
+    float    WaveHeight;
+    float    WaveFrequency;
+    float    WaveSpeed;
+    float    WaveChoppiness;
+
+    float    WindSpeed;
+    float    WindDirectionAngle;
+    float    TileSize;
+    float    Roughness;
+
+    float    Metallic;
+    float    FoamAmount;
+    float    FoamThreshold;
+    float    ReflectionStrength;
+
+    float    RefractionStrength;
+    float    FresnelPower;
+    float    NormalStrength;
+    float    CascadeScale;
+
+    int      DebugView;
+    int      FoamEnabled;
+    int      CascadeCount;
+    float    _Padding0;
+
+    float3   SunDirection;
+    float    _Padding1;
+    float3   SunColor;
+    float    _Padding2;
+    float3   SkyColor;
+    float    _Padding3;
+};
+
+Texture2D SceneColorTexture : register(t0);
+Texture2D SceneDepthTexture : register(t1);
+SamplerState LinearClampSampler : register(s0);
+SamplerState PointClampSampler : register(s1);
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float2 UV : TEXCOORD0;
+};
+
+struct PSInput
+{
+    float4 Position : SV_POSITION;
+    float3 WorldPos : POSITION0;
+    float2 UV : TEXCOORD0;
+    float3 Normal : NORMAL;
+    float3 BaseWorldPos : POSITION1;
+};
+
+float3 ReconstructWorldPosition(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 worldPos = mul(ndc, InverseViewProjection);
+    return worldPos.xyz / max(worldPos.w, 0.0001f);
+}
+
+float WaveComponent(float2 position, float2 direction, float wavelength, float amplitude, float speedMultiplier)
+{
+    float2 dir = normalize(direction);
+    float k = 2.0 * 3.14159265 / max(wavelength, 0.001);
+    float phase = (dot(dir, position) * k) + (Time * WaveSpeed * speedMultiplier);
+    return amplitude * sin(phase);
+}
+
+float SampleWaveHeight(float2 position, float2 windDir)
+{
+    float2 crossDir = normalize(float2(-windDir.y, windDir.x));
+
+    float height = 0.0;
+    height += WaveComponent(position, windDir,                 28.0, WaveHeight * 0.45, 0.60);
+    height += WaveComponent(position, normalize(windDir + crossDir * 0.35), 14.0, WaveHeight * 0.30, 0.95);
+    height += WaveComponent(position, normalize(windDir - crossDir * 0.25),  7.0, WaveHeight * 0.15, 1.35);
+    height += WaveComponent(position, crossDir,                11.0, WaveHeight * 0.10, 1.10);
+
+    float distanceFactor = saturate(length(position - CameraPosition.xy) / 220.0);
+    height += SampleCascadeWaveHeight(position, windDir, distanceFactor);
+    return height * WaveFrequency;
+}
+
+float SampleRipple(float2 position, float2 direction, float frequency, float amplitude, float speedMultiplier)
+{
+    float2 dir = normalize(direction);
+    float phase = dot(position, dir) * frequency + Time * WaveSpeed * speedMultiplier;
+    return sin(phase) * amplitude;
+}
+
+float3 CalculateWaveNormal(float3 worldPos, float2 windDir)
+{
+    const float delta = 0.15;
+
+    float h = SampleWaveHeight(worldPos.xy, windDir);
+    float hx = SampleWaveHeight(worldPos.xy + float2(delta, 0.0), windDir);
+    float hy = SampleWaveHeight(worldPos.xy + float2(0.0, delta), windDir);
+
+    float dhdx = (hx - h) / delta;
+    float dhdy = (hy - h) / delta;
+
+    float3 normal = normalize(float3(-dhdx * NormalStrength, -dhdy * NormalStrength, 1.0));
+    return normal;
+}
+
+float3 ApplyDetailNormal(float3 baseNormal, float2 position, float2 windDir)
+{
+    float2 crossDir = normalize(float2(-windDir.y, windDir.x));
+
+    float rippleX = 0.0;
+    rippleX += SampleRipple(position, windDir, 1.6, 0.10, 1.8);
+    rippleX += SampleRipple(position, crossDir, 2.7, 0.06, 2.4);
+
+    float rippleY = 0.0;
+    rippleY += SampleRipple(position.yx, crossDir.yx, 1.9, 0.10, 1.6);
+    rippleY += SampleRipple(position.yx, windDir.yx, 3.1, 0.05, 2.2);
+
+    float3 detailNormal = normalize(float3(baseNormal.xy + float2(rippleX, rippleY) * 0.22, baseNormal.z));
+    return detailNormal;
+}
+
+float ComputeShorelineFoam(float2 uv, float3 worldPos, float3 baseWorldPos)
+{
+    float sceneDepth = SceneDepthTexture.Sample(PointClampSampler, uv).r;
+    if (sceneDepth >= 0.9999)
+    {
+        return 0.0;
+    }
+
+    float3 sceneWorldPos = ReconstructWorldPosition(uv, sceneDepth);
+    float depthDelta = max(worldPos.z - sceneWorldPos.z, 0.0);
+    float shoreline = 1.0 - saturate(depthDelta / 0.8);
+    shoreline *= saturate((worldPos.z - baseWorldPos.z) / max(WaveHeight * 0.5, 0.001) + 0.35);
+    shoreline *= Noise(baseWorldPos.xy * 1.8 + Time * 0.15) * 0.6 + 0.4;
+    return shoreline;
+}
+
+float3 SampleScreenSpaceReflection(float2 uv, float3 normal, float3 viewDir)
+{
+    float3 reflectDir = reflect(-viewDir, normal);
+    float2 reflectionUv = uv + reflectDir.xy * (0.12 + (1.0 - saturate(dot(normal, viewDir))) * 0.08);
+    reflectionUv = saturate(reflectionUv);
+    return SceneColorTexture.SampleLevel(LinearClampSampler, reflectionUv, 0).rgb;
+}
+
+// Hash function for noise
+float Hash(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+// Simple noise function
+float Noise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = Hash(i);
+    float b = Hash(i + float2(1.0, 0.0));
+    float c = Hash(i + float2(0.0, 1.0));
+    float d = Hash(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// Calculate foam
+float CalculateFoam(float3 worldPos, float3 normal)
+{
+    if (FoamEnabled == 0)
+        return 0.0;
+
+    float slopeFactor = 1.0 - saturate(dot(normal, float3(0, 0, 1)));
+    float crestFactor = saturate((worldPos.z - SeaLevel) / max(WaveHeight, 0.001));
+
+    // Add noise for foam pattern
+    float foamNoise = Noise(worldPos.xy * 0.5 + Time * 0.1);
+    foamNoise = foamNoise * 0.5 + 0.5;
+
+    // Combine factors
+    float foam = smoothstep(FoamThreshold, 1.0, saturate(crestFactor * 0.65 + slopeFactor * 0.45)) * foamNoise * FoamAmount;
+
+    return foam;
+}
+
+// Fresnel calculation
+float FresnelSchlick(float3 viewDir, float3 normal)
+{
+    float cosTheta = saturate(dot(viewDir, normal));
+    return pow(1.0 - cosTheta, FresnelPower);
+}
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+
+    // Calculate world position with camera following
+    float3 worldPos = input.Position;
+    output.BaseWorldPos = worldPos;
+    worldPos.xy += CameraPosition.xy;
+    worldPos.z += SeaLevel;
+
+    // Calculate wind direction
+    float windAngleRadians = radians(WindDirectionAngle);
+    float2 windDir = float2(cos(windAngleRadians), sin(windAngleRadians));
+
+    worldPos.z += SampleWaveHeight(worldPos.xy, windDir);
+
+    // Calculate normal
+    float3 normal = CalculateWaveNormal(worldPos, windDir);
+
+    output.WorldPos = worldPos;
+    output.Position = mul(float4(worldPos, 1.0), ViewProjection);
+    output.UV = input.UV;
+    output.Normal = normal;
+
+    return output;
+}
+
+float4 PSMain(PSInput input) : SV_TARGET
+{
+    float windAngleRadians = radians(WindDirectionAngle);
+    float2 windDir = float2(cos(windAngleRadians), sin(windAngleRadians));
+
+    float3 normal = normalize(input.Normal);
+    normal = ApplyDetailNormal(normal, input.WorldPos.xy, windDir);
+
+    float3 viewDir = normalize(CameraPosition - input.WorldPos);
+    float3 lightDir = normalize(-SunDirection);
+    float foam = CalculateFoam(input.WorldPos, normal);
+    float shorelineFoam = ComputeShorelineFoam(input.Position.xy / float2(max(input.Position.w, 1.0), max(input.Position.w, 1.0)), input.WorldPos, input.BaseWorldPos);
+    foam = saturate(foam + shorelineFoam * 0.85);
+
+    float NdotV = saturate(dot(normal, viewDir));
+    float ndotl = saturate(dot(normal, lightDir));
+
+    float fresnel = saturate(0.02 + (1.0 - 0.02) * FresnelSchlick(viewDir, normal));
+    fresnel = saturate(fresnel * lerp(0.75, 1.25, ReflectionStrength));
+
+    float3 halfVector = normalize(lightDir + viewDir);
+    float NdotH = saturate(dot(normal, halfVector));
+    float specularPower = lerp(48.0, 320.0, saturate(1.0 - Roughness));
+    float specular = pow(NdotH, specularPower) * ndotl;
+
+    float horizon = 1.0 - NdotV;
+    float3 deepWaterColor = SeaColor;
+    float sceneDepth = SceneDepthTexture.Sample(PointClampSampler, input.Position.xy / float2(0.0 + input.Position.w, 0.0 + input.Position.w)).r;
+    float shallowFactor = 0.0;
+    if (sceneDepth < 0.9999)
+    {
+        float3 sceneWorldPos = ReconstructWorldPosition(input.Position.xy / float2(input.Position.w, input.Position.w), sceneDepth);
+        float waterDepth = max(input.WorldPos.z - sceneWorldPos.z, 0.0);
+        shallowFactor = saturate(1.0 - waterDepth / 2.5);
+    }
+
+    float3 shallowWaterColor = SeaColor * float3(0.30, 0.58, 0.72) + SkyColor * 0.14;
+    float3 transmittedColor = lerp(deepWaterColor, shallowWaterColor, max(saturate(1.0 - NdotV * 0.85), shallowFactor));
+    transmittedColor *= lerp(0.25, 1.0, ndotl * 0.65 + 0.35);
+
+    float2 screenUv = input.Position.xy / float2(input.Position.w, input.Position.w);
+    screenUv = screenUv * float2(0.5, -0.5) + 0.5;
+    float3 ssrColor = SampleScreenSpaceReflection(screenUv, normal, viewDir);
+
+    float3 reflectionColor = lerp(SkyColor, ssrColor, 0.45);
+    reflectionColor += SunColor * specular * 1.35;
+
+    float3 subsurface = SeaColor * SunColor * pow(saturate(1.0 - ndotl), 2.0) * 0.08;
+
+    float3 color = lerp(transmittedColor + subsurface, reflectionColor, fresnel);
+    color += SunColor * specular * 0.25;
+    color = lerp(color, float3(1.0, 1.0, 1.0), foam * 0.75);
+    color *= lerp(1.0, 1.08, horizon * 0.35);
+
+    if (DebugView == 1) // Normals
+    {
+        color = normal * 0.5 + 0.5;
+    }
+    else if (DebugView == 2) // Foam
+    {
+        color = foam.xxx;
+    }
+
+    return float4(color, 1.0);
+}

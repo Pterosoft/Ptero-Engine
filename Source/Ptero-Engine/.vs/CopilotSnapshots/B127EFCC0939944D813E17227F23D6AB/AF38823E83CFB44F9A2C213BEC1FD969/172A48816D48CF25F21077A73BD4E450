@@ -1,0 +1,76 @@
+﻿// SharcResolve.hlsl
+// Compute shader that resolves and ages all SHARC hash-grid entries.
+// Dispatched once per frame AFTER the SharcGI DXR pass.
+// Each thread processes one hash-grid slot.
+
+#pragma pack_matrix(row_major)
+
+#define SHARC_RADIANCE_SCALE 1e3f
+#include "SharcCommon.h"
+
+cbuffer SharcResolveConstants : register(b0)
+{
+    int    gSharcAccumFrameNum;    // target accumulation frames per voxel
+    int    gSharcStaleFrameNum;    // max frames before stale eviction
+    float3 gCameraPositionPrev;   float _pad0;
+    float3 gCameraPositionCur;    float _pad1;
+    uint   gFrameIndex;
+    uint   gSharcCapacity;
+    float2 _pad2;
+};
+
+RWStructuredBuffer<uint64_t>               u_SharcHashEntries    : register(u0);
+RWStructuredBuffer<SharcAccumulationData>  u_SharcAccumBuffer    : register(u1);
+RWStructuredBuffer<SharcPackedData>        u_SharcResolvedBuffer : register(u2);
+
+[numthreads(256, 1, 1)]
+void SharcResolveCS(uint3 did : SV_DispatchThreadID)
+{
+    uint slotIdx = did.x;
+    if (slotIdx >= gSharcCapacity)
+        return;
+
+    uint64_t key = u_SharcHashEntries[slotIdx];
+    if (key == 0ULL)
+        return; // empty slot
+
+    SharcAccumulationData acc = u_SharcAccumBuffer[slotIdx];
+
+    if (acc.SampleCount == 0u)
+    {
+        // No new samples this frame.  The resolved buffer keeps the previous value.
+        // Stale slots will be cleaned up on the next non-zero sample frame.
+        return;
+    }
+
+    // Compute this-frame average.
+    float invScale = 1.0f / SHARC_RADIANCE_SCALE;
+    float invCount = 1.0f / (float)acc.SampleCount;
+    float3 currentRadiance = float3(
+        (float)acc.RadianceR * invScale * invCount,
+        (float)acc.RadianceG * invScale * invCount,
+        (float)acc.RadianceB * invScale * invCount
+    );
+
+    // Temporal blend with previous resolved value.
+    SharcPackedData prevPacked = u_SharcResolvedBuffer[slotIdx];
+    float2 prevRG = SharcUnpackRG(prevPacked.RadiancePacked);
+    float  prevB  = SharcUnpackRG(prevPacked.Pad).x;
+    float3 prev   = float3(prevRG.x, prevRG.y, prevB);
+
+    // alpha = 1 / accumFrameNum gives a smooth EMA convergence.
+    float alpha   = 1.0f / (float)max(gSharcAccumFrameNum, 1);
+    float3 result = lerp(prev, currentRadiance, alpha);
+
+    // Write back resolved output.
+    SharcPackedData out;
+    out.RadiancePacked = SharcPackRadianceFull(result.rg);
+    out.Pad            = SharcPackRadianceFull(float2(result.b, 0.0f));
+    u_SharcResolvedBuffer[slotIdx] = out;
+
+    // Reset accumulator for next frame.
+    u_SharcAccumBuffer[slotIdx].RadianceR    = 0;
+    u_SharcAccumBuffer[slotIdx].RadianceG    = 0;
+    u_SharcAccumBuffer[slotIdx].RadianceB    = 0;
+    u_SharcAccumBuffer[slotIdx].SampleCount  = 0u;
+}

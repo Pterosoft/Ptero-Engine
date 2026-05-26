@@ -1,0 +1,44 @@
+﻿#pragma once
+
+// RtAOSettings.h
+// Tunable parameters for the Ray Traced Ambient Occlusion (RTAO) pass.
+// Exposed through the Graphics Settings window in the editor and passed to
+// RtAmbientOcclusion::Dispatch() each frame.
+
+struct RtAOSettings
+{
+    // Master toggle – when false the RTAO pass is skipped entirely.
+    bool Enabled = true;
+
+    // Number of occlusion rays fired per pixel each frame.
+    // Higher values reduce noise but cost more GPU time. Range [1..16].
+    int RaysPerPixel = 16;
+
+    // Maximum length (world units) of each occlusion ray.
+    // Shorter = tighter contact AO; longer = larger-scale shadowing. Range [0.01..10.0].
+    float MaxRayLength = 1.0f;
+
+    // Normal-direction offset applied to ray origins to avoid self-intersection.
+    // Increase if you see black acne artefacts on flat surfaces. Range [0.0001..0.05].
+    float RayBias = 0.005f;
+
+    // Gamma exponent applied to the raw AO value to control falloff curve.
+    // Values > 1 darken occlusion; < 1 brighten it. Range [0.5..4.0].
+    float AOPower = 1.5f;
+
+    // Blend weight for the current frame in the exponential moving average.
+    // 0.0 = use only history (very smooth, slow response);
+    // 1.0 = use only the current frame (noisy but instant response). Range [0.0..1.0].
+    float AccumulationBlend = 0.05f;
+
+    // Controls edge preservation in the bilateral spatial filter.
+    // 0 = very smooth (ignores geometry edges); 1 = sharp edges. Range [0.0..1.0].
+    float DenoiseSharpness = 0.5f;
+
+    // Multiplier blended into the final AO before it is applied to lighting.
+    // 1.0 = full occlusion; 0.0 = AO disabled in composite. Range [0.0..1.0].
+    float Intensity = 1.0f;
+
+    // 0 = final resolved AO, 1 = raw noisy AO, 2 = accumulated AO pre-blur
+    int DebugView = 0;
+};

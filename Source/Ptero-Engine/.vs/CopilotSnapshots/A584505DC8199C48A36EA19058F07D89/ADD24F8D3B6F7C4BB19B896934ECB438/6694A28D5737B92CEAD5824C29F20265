@@ -1,0 +1,97 @@
+﻿// RtAO_Temporal.hlsl  –  cs_6_5
+// RTAO Pass 1: exponential moving average temporal accumulation.
+//
+// Blends the current raw AO frame with the accumulated history using
+// g_AccumulationBlend as the weight for the current frame.
+// The result is an AO signal with greatly reduced per-frame noise.
+
+#include "RtAO_Common.hlsli"
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+Texture2D<float>  t_RawAO       : register(t0);  // current frame raw AO
+Texture2D<float>  t_Accum       : register(t1);  // previous frame accumulation
+Texture2D<float4> t_NormalDepth : register(t2);  // current frame normal+depth
+
+// ─── Output ───────────────────────────────────────────────────────────────────
+RWTexture2D<float> u_AccumOut : register(u0);  // updated accumulation buffer
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchId : SV_DispatchThreadID)
+{
+    const uint2 pixel = dispatchId.xy;
+    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+        return;
+
+    float current = t_RawAO[pixel];
+
+    float localMean = 0.0f;
+    float localVariance = 0.0f;
+    float localMin = 1.0f;
+    float localMax = 0.0f;
+
+    [unroll]
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const int2 samplePixel = clamp((int2)pixel + int2(dx, dy), int2(0, 0), int2(g_FrameWidth - 1, g_FrameHeight - 1));
+            const float sampleAo = t_RawAO[samplePixel];
+            localMean += sampleAo;
+            localMin = min(localMin, sampleAo);
+            localMax = max(localMax, sampleAo);
+        }
+    }
+    localMean *= (1.0f / 9.0f);
+
+    [unroll]
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const int2 samplePixel = clamp((int2)pixel + int2(dx, dy), int2(0, 0), int2(g_FrameWidth - 1, g_FrameHeight - 1));
+            const float sampleAo = t_RawAO[samplePixel];
+            const float delta = sampleAo - localMean;
+            localVariance += delta * delta;
+        }
+    }
+    localVariance *= (1.0f / 9.0f);
+    const float localStdDev = sqrt(max(localVariance, 0.0f));
+
+    if (g_FrameIndex == 0u)
+    {
+        u_AccumOut[pixel] = localMean;
+        return;
+    }
+
+    const float depth = t_NormalDepth[pixel].b;
+    if (depth >= 1.0f)
+    {
+        u_AccumOut[pixel] = localMean;
+        return;
+    }
+
+    const float3 worldPos = ReconstructWorldPos(pixel, depth);
+
+    uint2 historyPixel;
+    if (!ReprojectToPrevFrame(worldPos, historyPixel))
+    {
+        u_AccumOut[pixel] = localMean;
+        return;
+    }
+
+    float history = t_Accum[historyPixel];
+
+    const float clampExtent = max(localStdDev * 1.25f, 0.02f);
+    const float neighborhoodMin = max(localMin, localMean - clampExtent);
+    const float neighborhoodMax = min(localMax, localMean + clampExtent);
+    history = clamp(history, neighborhoodMin, neighborhoodMax);
+
+    current = lerp(current, localMean, 0.5f);
+
+    // Exponential moving average: blend = 0 → use only history, 1 → use only current.
+    float blended = lerp(history, current, clamp(g_AccumulationBlend, 0.0f, 1.0f));
+
+    u_AccumOut[pixel] = blended;
+}

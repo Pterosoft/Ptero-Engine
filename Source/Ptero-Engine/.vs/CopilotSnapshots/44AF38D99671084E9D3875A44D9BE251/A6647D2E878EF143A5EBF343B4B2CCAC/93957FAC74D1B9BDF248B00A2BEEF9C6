@@ -1,0 +1,84 @@
+﻿#pragma once
+
+#include <array>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include <windows.h>
+
+enum class MaterialTextureSlot
+{
+    BaseColor,
+    Normal,
+    Metallic,
+    Roughness,
+    MetallicRoughness,
+    AmbientOcclusion,
+    Emissive,
+    Height,
+    Opacity
+};
+
+struct MaterialTextureSet
+{
+    std::string BaseColorTexturePath;
+    std::string NormalTexturePath;
+    std::string MetallicTexturePath;
+    std::string RoughnessTexturePath;
+    std::string MetallicRoughnessTexturePath;
+    std::string AmbientOcclusionTexturePath;
+    std::string EmissiveTexturePath;
+    std::string HeightTexturePath;
+    std::string OpacityTexturePath;
+
+    std::string& GetTexturePath(MaterialTextureSlot textureSlot);
+    const std::string& GetTexturePath(MaterialTextureSlot textureSlot) const;
+};
+
+struct MaterialDefinition
+{
+    std::string Name = "NewMaterial";
+    std::array<float, 4> BaseColorTint{ 1.0f, 1.0f, 1.0f, 1.0f };
+    std::array<float, 3> EmissiveColor{ 0.0f, 0.0f, 0.0f };
+    float MetallicFactor = 1.0f;
+    float RoughnessFactor = 1.0f;
+    float NormalScale = 1.0f;
+    float AmbientOcclusionStrength = 1.0f;
+    float HeightScale = 0.05f;
+    float Opacity = 1.0f;
+    float AlphaCutoff = 0.5f;
+    bool IsDoubleSided = false;
+    bool UseAlphaCutout = false;
+    bool UseTransparentBlend = false;
+    MaterialTextureSet Textures;
+};
+
+class MaterialEditor final
+{
+public:
+    MaterialEditor();
+
+    void NewMaterial(const std::string& materialName = "NewMaterial");
+    bool LoadMaterialFromFile(const std::filesystem::path& materialFilePath);
+    bool SaveMaterialToFile(const std::filesystem::path& materialFilePath);
+    bool SaveCurrentMaterial();
+    bool OpenMaterialWithDialog(HWND ownerWindowHandle);
+    bool SaveMaterialWithDialog(HWND ownerWindowHandle);
+    bool BrowseForTexture(HWND ownerWindowHandle, MaterialTextureSlot textureSlot);
+
+    const MaterialDefinition& GetCurrentMaterial() const;
+    MaterialDefinition& GetCurrentMaterial();
+    const std::filesystem::path& GetCurrentMaterialPath() const;
+    const std::string& GetLastErrorMessage() const;
+
+    std::filesystem::path GetMaterialLibraryDirectory() const;
+    std::vector<std::filesystem::path> FindAvailableMaterials() const;
+
+private:
+    std::filesystem::path BuildDefaultMaterialPath() const;
+
+    MaterialDefinition mCurrentMaterial;
+    std::filesystem::path mCurrentMaterialPath;
+    std::string mLastErrorMessage;
+};

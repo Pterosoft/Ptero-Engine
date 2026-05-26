@@ -1,0 +1,30 @@
+{
+    "Entities": [
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Materials\\TraficCone.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\traffic_cone_vhvpabi\\Traffic_Cone_vhvpabi_High.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 1"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.6494076251983643,
+                    "y": -1.97157621383667,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.535889744758606,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        }
+    ]
+}

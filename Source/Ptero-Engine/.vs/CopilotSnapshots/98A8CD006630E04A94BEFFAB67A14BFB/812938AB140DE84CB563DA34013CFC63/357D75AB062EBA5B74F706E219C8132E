@@ -1,0 +1,238 @@
+﻿#include "AudioManager.h"
+
+#include <windows.h>
+#include "fmod_studio.hpp"
+#include "fmod_errors.h"
+
+#include <algorithm>
+#include <string>
+#include <vector>
+#include <filesystem>
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+namespace
+{
+    bool FmodOk(FMOD_RESULT result, std::string& outError, const char* context)
+    {
+        if (result != FMOD_OK)
+        {
+            outError = std::string(context) + ": " + FMOD_ErrorString(result);
+            return false;
+        }
+        return true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+AudioManager::AudioManager() = default;
+AudioManager::~AudioManager()
+{
+    Shutdown();
+}
+
+// ---------------------------------------------------------------------------
+std::filesystem::path AudioManager::ResolveAudioDataPath()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
+        return {};
+
+    std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+    while (!current.empty())
+    {
+        const std::filesystem::path candidate = current / L"Data" / L"Audio";
+        std::error_code ec;
+        if (std::filesystem::is_directory(candidate, ec))
+            return std::filesystem::weakly_canonical(candidate);
+
+        const std::filesystem::path parent = current.parent_path();
+        if (parent == current)
+            break;
+        current = parent;
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::Initialize(std::string& outError)
+{
+    if (m_initialized)
+        return true;
+
+    FMOD_RESULT result;
+
+    // Create the Studio System.
+    result = FMOD::Studio::System::create(&m_studioSystem);
+    if (!FmodOk(result, outError, "FMOD::Studio::System::create"))
+        return false;
+
+    // Initialise with sensible defaults (512 channels, live update in debug).
+    FMOD_STUDIO_INITFLAGS studioFlags = FMOD_STUDIO_INIT_NORMAL;
+#ifdef _DEBUG
+    studioFlags |= FMOD_STUDIO_INIT_LIVEUPDATE;
+#endif
+
+    result = m_studioSystem->initialize(512, studioFlags, FMOD_INIT_NORMAL, nullptr);
+    if (!FmodOk(result, outError, "FMOD::Studio::System::initialize"))
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+        return false;
+    }
+
+    // Load banks from Data/Audio.
+    const std::filesystem::path audioPath = ResolveAudioDataPath();
+    if (!audioPath.empty())
+    {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(audioPath, ec))
+        {
+            if (ec) break;
+            if (!entry.is_regular_file()) continue;
+            const auto& p = entry.path();
+            if (_wcsicmp(p.extension().c_str(), L".bank") != 0) continue;
+
+            FMOD::Studio::Bank* bank = nullptr;
+            const std::string pathUtf8 = p.string();
+            FMOD_RESULT loadResult = m_studioSystem->loadBankFile(
+                pathUtf8.c_str(), FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+            if (loadResult == FMOD_OK && bank != nullptr)
+                m_banks.push_back(bank);
+        }
+    }
+
+    m_initialized = true;
+    RefreshEventList();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::Update()
+{
+    if (m_initialized && m_studioSystem)
+        m_studioSystem->update();
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::Shutdown()
+{
+    if (!m_initialized)
+        return;
+
+    StopAll();
+
+    for (FMOD::Studio::EventInstance* inst : m_instances)
+    {
+        if (inst)
+            inst->release();
+    }
+    m_instances.clear();
+
+    for (FMOD::Studio::Bank* bank : m_banks)
+        bank->unload();
+    m_banks.clear();
+
+    if (m_studioSystem)
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+    }
+
+    m_events.clear();
+    m_initialized = false;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::RefreshEventList()
+{
+    m_events.clear();
+
+    if (!m_studioSystem)
+        return;
+
+    for (FMOD::Studio::Bank* bank : m_banks)
+    {
+        int count = 0;
+        if (bank->getEventCount(&count) != FMOD_OK || count <= 0)
+            continue;
+
+        std::vector<FMOD::Studio::EventDescription*> descs(static_cast<size_t>(count));
+        int fetched = 0;
+        if (bank->getEventList(descs.data(), count, &fetched) != FMOD_OK)
+            continue;
+
+        for (int i = 0; i < fetched; ++i)
+        {
+            if (!descs[i]) continue;
+            char path[512] = {};
+            int retrieved = 0;
+            if (descs[i]->getPath(path, static_cast<int>(std::size(path)), &retrieved) == FMOD_OK)
+            {
+                AudioEvent ev;
+                ev.Path = path;
+                ev.IsPlaying = false;
+                m_events.push_back(std::move(ev));
+            }
+        }
+    }
+
+    // Resize instance slots to match.
+    m_instances.resize(m_events.size(), nullptr);
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::PlayEvent(int index)
+{
+    if (!m_initialized || index < 0 || index >= static_cast<int>(m_events.size()))
+        return false;
+
+    // Stop any previous instance for this event.
+    StopEvent(index);
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    FMOD_RESULT result = m_studioSystem->getEvent(m_events[static_cast<size_t>(index)].Path.c_str(), &desc);
+    if (result != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* inst = nullptr;
+    result = desc->createInstance(&inst);
+    if (result != FMOD_OK || !inst)
+        return false;
+
+    result = inst->start();
+    if (result != FMOD_OK)
+    {
+        inst->release();
+        return false;
+    }
+
+    m_instances[static_cast<size_t>(index)] = inst;
+    m_events[static_cast<size_t>(index)].IsPlaying = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::StopEvent(int index)
+{
+    if (!m_initialized || index < 0 || index >= static_cast<int>(m_events.size()))
+        return false;
+
+    FMOD::Studio::EventInstance* inst = m_instances[static_cast<size_t>(index)];
+    if (inst)
+    {
+        inst->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+        inst->release();
+        m_instances[static_cast<size_t>(index)] = nullptr;
+    }
+    m_events[static_cast<size_t>(index)].IsPlaying = false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::StopAll()
+{
+    for (int i = 0; i < static_cast<int>(m_events.size()); ++i)
+        StopEvent(i);
+}

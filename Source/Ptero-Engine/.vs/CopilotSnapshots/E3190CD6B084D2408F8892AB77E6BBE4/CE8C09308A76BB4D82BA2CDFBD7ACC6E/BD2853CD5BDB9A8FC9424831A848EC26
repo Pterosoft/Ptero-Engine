@@ -1,0 +1,52 @@
+﻿#pragma once
+
+#if __has_include("../SDKs/ImGuizmo/ImGuizmo.h")
+#define PT_EDITOR_HAS_IMGUIZMO 1
+#include "../SDKs/ImGuizmo/ImGuizmo.h"
+#elif __has_include(<ImGuizmo.h>)
+#define PT_EDITOR_HAS_IMGUIZMO 1
+#include <ImGuizmo.h>
+#else
+#define PT_EDITOR_HAS_IMGUIZMO 0
+namespace ImGuizmo
+{
+    enum OPERATION
+    {
+        TRANSLATE,
+        ROTATE,
+        SCALE
+    };
+
+    enum MODE
+    {
+        LOCAL,
+        WORLD
+    };
+
+    inline void BeginFrame()
+    {
+    }
+
+    inline void SetOrthographic(bool)
+    {
+    }
+
+    inline void SetDrawlist()
+    {
+    }
+
+    inline void SetRect(float, float, float, float)
+    {
+    }
+
+    inline bool Manipulate(const float*, const float*, OPERATION, MODE, float*, float* = nullptr, const float* = nullptr)
+    {
+        return false;
+    }
+
+    inline bool IsUsing()
+    {
+        return false;
+    }
+}
+#endif

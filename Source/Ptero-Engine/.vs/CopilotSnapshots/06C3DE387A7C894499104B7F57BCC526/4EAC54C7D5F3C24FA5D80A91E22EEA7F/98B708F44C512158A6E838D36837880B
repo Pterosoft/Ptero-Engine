@@ -1,0 +1,25 @@
+﻿#pragma once
+
+// EditorMainMenu.h
+// Declares the graphics-settings window and other editor UI panels.
+// The window exposes all RtGISettings fields through Dear ImGui controls.
+
+#include "RtGlobalIllumination.h"  // for RtGISettings
+
+class EditorMainMenu
+{
+public:
+    // Draw the main-menu bar and any open child windows.
+    // Call once per frame inside an active ImGui frame.
+    void Draw();
+
+    // Access the current GI settings (read by the renderer each frame).
+    const RtGISettings& GetRtGISettings() const { return mRtGISettings; }
+    RtGISettings&       GetRtGISettings()       { return mRtGISettings; }
+
+private:
+    void DrawGraphicsSettingsWindow();
+
+    bool         mShowGraphicsSettings = false;
+    RtGISettings mRtGISettings         = {};
+};

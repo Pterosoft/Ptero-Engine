@@ -1,0 +1,1119 @@
+﻿#include "pch.h"
+#include "Editor.h"
+
+#include "ImGuizmoCompat.h"
+#include "SceneSerializer.h"
+
+#include <commdlg.h>
+#include <wincodec.h>
+#include <shlobj.h>
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <cstring>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+    {
+        return static_cast<ImTextureID>(handle.ptr);
+    }
+}
+
+ImTextureID Editor::TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+{
+    return static_cast<ImTextureID>(handle.ptr);
+}
+
+// ---------------------------------------------------------------------------
+// Constructor / Initialize / Shutdown
+// ---------------------------------------------------------------------------
+
+Editor::Editor() = default;
+
+bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    LoadGeometryIcon(commandList);
+    return true;
+}
+
+void Editor::Shutdown()
+{
+    ReleaseIconTexture(mGeometryIcon);
+    ReleaseIconTexture(mSelectIcon);
+    ReleaseIconTexture(mMoveIcon);
+    ReleaseIconTexture(mRotateIcon);
+    ReleaseIconTexture(mScaleIcon);
+}
+
+// ---------------------------------------------------------------------------
+// Icon loading helpers (stubs - textures loaded externally via DX12RendererAPI)
+// ---------------------------------------------------------------------------
+
+bool Editor::LoadGeometryIcon(ID3D12GraphicsCommandList* commandList)
+{
+    return true; // Icons are loaded by the renderer
+}
+
+bool Editor::LoadIconTexture(const wchar_t* /*fileName*/, IconTexture& /*iconTexture*/,
+                              std::string* /*statusMessage*/, ID3D12GraphicsCommandList* /*commandList*/)
+{
+    return false;
+}
+
+void Editor::ReleaseIconTexture(IconTexture& iconTexture)
+{
+    iconTexture = IconTexture{};
+}
+
+// ---------------------------------------------------------------------------
+// Entity accessors
+// ---------------------------------------------------------------------------
+
+Entity* Editor::GetSelectedEntity()
+{
+    if (mSelectedEntityIndex < 0 || mSelectedEntityIndex >= static_cast<int>(mEntities.size()))
+        return nullptr;
+    return &mEntities[mSelectedEntityIndex];
+}
+
+// ---------------------------------------------------------------------------
+// Copy / Paste / Delete
+// ---------------------------------------------------------------------------
+
+bool Editor::CanCopySelectedEntity() const
+{
+    return mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size());
+}
+
+bool Editor::CanPasteEntity() const
+{
+    return mCopiedEntity.has_value();
+}
+
+bool Editor::CanDeleteSelectedEntity() const
+{
+    return mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size());
+}
+
+bool Editor::CopySelectedEntity()
+{
+    if (!CanCopySelectedEntity()) return false;
+    mCopiedEntity = mEntities[mSelectedEntityIndex];
+    return true;
+}
+
+bool Editor::PasteCopiedEntity()
+{
+    if (!CanPasteEntity()) return false;
+    mEntities.push_back(*mCopiedEntity);
+    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+    return true;
+}
+
+bool Editor::DeleteSelectedEntity()
+{
+    if (!CanDeleteSelectedEntity()) return false;
+    mEntities.erase(mEntities.begin() + mSelectedEntityIndex);
+    mSelectedEntityIndex = -1;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Scene save / load
+// ---------------------------------------------------------------------------
+
+bool Editor::SaveSceneToFile(const std::string& filepath)
+{
+    Scene scene;
+    scene.Entities          = &mEntities;
+    scene.TimeOfDay         = mTimeOfDaySettings;
+    scene.Taa               = mTaaSettings;
+    scene.Rtgi              = mRtgiSettings;
+    scene.Rtao              = mRtaoSettings;
+    scene.Gtao              = mGtaoSettings;
+    scene.Agx               = mAgxSettings;
+    scene.VolumetricFog     = mVolumetricFogSettings;
+    scene.Bloom             = mBloomSettings;
+
+    try
+    {
+        SceneSerializer serializer(&scene);
+        serializer.Serialize(filepath);
+        mCurrentSceneFilePath = filepath;
+        mLastSceneStatusMessage = "Scene saved: " + filepath;
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        mLastSceneStatusMessage = std::string("Save failed: ") + e.what();
+        return false;
+    }
+}
+
+bool Editor::LoadSceneFromFile(const std::string& filepath)
+{
+    Scene scene;
+    scene.Entities      = &mEntities;
+    scene.TimeOfDay     = mTimeOfDaySettings;
+    scene.Taa           = mTaaSettings;
+    scene.Rtgi          = mRtgiSettings;
+    scene.Rtao          = mRtaoSettings;
+    scene.Gtao          = mGtaoSettings;
+    scene.Agx           = mAgxSettings;
+    scene.VolumetricFog = mVolumetricFogSettings;
+    scene.Bloom         = mBloomSettings;
+
+    try
+    {
+        SceneSerializer serializer(&scene);
+        mEntities.clear();
+        mSelectedEntityIndex = -1;
+        if (serializer.Deserialize(filepath))
+        {
+            mCurrentSceneFilePath   = filepath;
+            mLastSceneStatusMessage = "Scene loaded: " + filepath;
+            mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
+            return true;
+        }
+        mLastSceneStatusMessage = "Failed to deserialize: " + filepath;
+        return false;
+    }
+    catch (const std::exception& e)
+    {
+        mLastSceneStatusMessage = std::string("Load failed: ") + e.what();
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Async scene loading
+// ---------------------------------------------------------------------------
+
+bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
+{
+    if (IsSceneLoading()) return false;
+
+    mSceneLoadState.Progress = 0.0f;
+    mSceneLoadState.StatusMessage = "Loading...";
+    mSceneLoadState.InProgress = true;
+    mSceneLoadState.Completed = false;
+    mSceneLoadState.Result.reset();
+
+    std::string fp = filepath;
+    mSceneLoadWorker = std::thread([this, fp]()
+    {
+        SceneLoadData data;
+        Scene scene;
+        scene.Entities      = &data.Entities;
+        scene.TimeOfDay     = &data.TimeOfDay;
+        scene.Taa           = &data.Taa;
+        scene.Rtgi          = &data.Rtgi;
+        scene.Rtao          = &data.Rtao;
+        scene.Gtao          = &data.Gtao;
+        scene.Agx           = &data.Agx;
+        scene.VolumetricFog = &data.VolumetricFog;
+        scene.Bloom         = &data.Bloom;
+
+        try
+        {
+            SceneSerializer serializer(&scene);
+            bool ok = serializer.Deserialize(fp, SceneLoadProgressCallback, this);
+            mSceneLoadState.Completed.store(ok);
+        }
+        catch (...)
+        {
+            mSceneLoadState.Completed.store(false);
+        }
+
+        mSceneLoadState.Result.emplace(std::move(data));
+        mSceneLoadState.InProgress.store(false);
+    });
+
+    mCurrentSceneFilePath = filepath;
+    return true;
+}
+
+void Editor::UpdateSceneLoading()
+{
+    if (!mSceneLoadState.Result.has_value()) return;
+    if (mSceneLoadState.InProgress.load()) return;
+    if (mSceneLoadWorker.joinable()) mSceneLoadWorker.join();
+
+    if (mSceneLoadState.Completed.load())
+    {
+        auto& data       = *mSceneLoadState.Result;
+        mEntities        = std::move(data.Entities);
+        mSelectedEntityIndex = -1;
+        mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
+
+        if (mTimeOfDaySettings)       *mTimeOfDaySettings       = data.TimeOfDay;
+        if (mTaaSettings)             *mTaaSettings             = data.Taa;
+        if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
+        if (mRtaoSettings)            *mRtaoSettings            = data.Rtao;
+        if (mGtaoSettings)            *mGtaoSettings            = data.Gtao;
+        if (mAgxSettings)             *mAgxSettings             = data.Agx;
+        if (mVolumetricFogSettings)   *mVolumetricFogSettings   = data.VolumetricFog;
+        if (mBloomSettings)           *mBloomSettings           = data.Bloom;
+
+        mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
+    }
+    else
+    {
+        mLastSceneStatusMessage = "Failed to load: " + mCurrentSceneFilePath;
+    }
+
+    mSceneLoadState.Result.reset();
+}
+
+bool Editor::IsSceneLoading() const
+{
+    return mSceneLoadState.InProgress.load();
+}
+
+float Editor::GetSceneLoadProgress() const
+{
+    return mSceneLoadState.Progress.load();
+}
+
+std::string Editor::GetSceneLoadStatusMessage() const
+{
+    return mSceneLoadState.StatusMessage;
+}
+
+void Editor::SetSceneLoadProgress(float progress, const char* statusMessage)
+{
+    mSceneLoadState.Progress.store(progress);
+    if (statusMessage)
+        mSceneLoadState.StatusMessage = statusMessage;
+}
+
+void Editor::SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData)
+{
+    if (auto* editor = static_cast<Editor*>(userData))
+        editor->SetSceneLoadProgress(progress, statusMessage);
+}
+
+// ---------------------------------------------------------------------------
+// Viewport helpers
+// ---------------------------------------------------------------------------
+
+bool Editor::TryProjectWorldToViewport(
+    const DirectX::XMFLOAT3& worldPosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    ImVec2& outScreenPosition) const
+{
+    using namespace DirectX;
+    XMVECTOR pos = XMLoadFloat3(&worldPosition);
+    XMMATRIX vp  = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    XMVECTOR clip = XMVector4Transform(XMVectorSetW(pos, 1.0f), vp);
+
+    float w = XMVectorGetW(clip);
+    if (w < 0.0001f) return false;
+
+    float ndcX = XMVectorGetX(clip) / w;
+    float ndcY = XMVectorGetY(clip) / w;
+
+    if (ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f) return false;
+
+    outScreenPosition.x = viewportOrigin.x + (ndcX  * 0.5f + 0.5f) * viewportSize.x;
+    outScreenPosition.y = viewportOrigin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * viewportSize.y;
+    return true;
+}
+
+bool Editor::TryGetViewportWorldPositionOnGrid(
+    const ImVec2& mousePosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    DirectX::XMFLOAT3& outWorldPosition) const
+{
+    using namespace DirectX;
+
+    if (viewportSize.x <= 0.0f || viewportSize.y <= 0.0f) return false;
+
+    float ndcX = ((mousePosition.x - viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f;
+    float ndcY = 1.0f - ((mousePosition.y - viewportOrigin.y) / viewportSize.y) * 2.0f;
+
+    XMMATRIX invVP = XMMatrixInverse(nullptr, camera.GetViewMatrix() * camera.GetProjectionMatrix());
+
+    XMVECTOR nearClip = XMVector4Transform(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), invVP);
+    XMVECTOR farClip  = XMVector4Transform(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), invVP);
+
+    nearClip = nearClip / XMVectorSplatW(nearClip);
+    farClip  = farClip  / XMVectorSplatW(farClip);
+
+    XMVECTOR dir = XMVector3Normalize(farClip - nearClip);
+    float dirY = XMVectorGetY(dir);
+    if (std::abs(dirY) < 0.0001f) return false;
+
+    float t = -XMVectorGetY(nearClip) / dirY;
+    if (t < 0.0f) return false;
+
+    XMVECTOR hit = nearClip + dir * t;
+    XMStoreFloat3(&outWorldPosition, hit);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Viewport selection / interaction
+// ---------------------------------------------------------------------------
+
+void Editor::HandleViewportInteraction(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    bool viewportHovered)
+{
+    if (!viewportHovered) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing())
+    {
+        mViewportSelection.IsDragging = true;
+        mViewportSelection.Start       = io.MousePos;
+        mViewportSelection.Current     = io.MousePos;
+    }
+
+    if (mViewportSelection.IsDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        mViewportSelection.Current = io.MousePos;
+    }
+
+    if (mViewportSelection.IsDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        FinishViewportSelection(viewportOrigin, viewportSize, camera);
+        mViewportSelection.IsDragging = false;
+    }
+}
+
+void Editor::FinishViewportSelection(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera)
+{
+    // Simple point-click selection: pick the entity whose projected center is nearest the click.
+    ImVec2 clickPos = mViewportSelection.Current;
+    float  bestDist = 20.0f; // pixel threshold
+    int    bestIdx  = -1;
+
+    for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
+    {
+        ImVec2 screenPos;
+        if (TryProjectWorldToViewport(mEntities[i].Transform.Position, viewportOrigin, viewportSize, camera, screenPos))
+        {
+            float dx = screenPos.x - clickPos.x;
+            float dy = screenPos.y - clickPos.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestIdx  = i;
+            }
+        }
+    }
+
+    mSelectedEntityIndex = bestIdx;
+}
+
+void Editor::HandleManualGizmoInteraction(
+    const ImVec2& /*viewportOrigin*/,
+    const ImVec2& /*viewportSize*/,
+    const EditorCamera& /*camera*/,
+    bool /*viewportHovered*/,
+    Entity* /*selectedEntity*/)
+{
+    // Manual gizmo interaction is handled by ImGuizmo in DrawViewport.
+}
+
+void Editor::CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition)
+{
+    Entity e;
+    e.Name = "Geometry_" + std::to_string(mNextGeometryInstanceId++);
+    e.Transform.Position = worldPosition;
+    e.AddMeshComponent();
+    mEntities.push_back(std::move(e));
+    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+}
+
+// ---------------------------------------------------------------------------
+// Statistics overlay
+// ---------------------------------------------------------------------------
+
+void Editor::SetViewportStatisticsText(const char* text)
+{
+    mViewportStatisticsText = text;
+}
+
+void Editor::DrawViewportStatisticsOverlay() const
+{
+    if (!mShowViewportStatistics || !mViewportStatisticsText) return;
+
+    const ImGuiWindowFlags overlayFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMouseInputs;
+
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x + 10.0f,
+                                   ImGui::GetMainViewport()->WorkPos.y + 10.0f),
+                             ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+    if (ImGui::Begin("##stats_overlay", nullptr, overlayFlags))
+        ImGui::TextUnformatted(mViewportStatisticsText);
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// ---------------------------------------------------------------------------
+// Scene loading overlay
+// ---------------------------------------------------------------------------
+
+void Editor::DrawSceneLoadingOverlay()
+{
+    if (!IsSceneLoading()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 80.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+
+    if (ImGui::Begin("##loading_overlay", nullptr, flags))
+    {
+        ImGui::Text("Loading scene...");
+        ImGui::ProgressBar(GetSceneLoadProgress(), ImVec2(-1.0f, 0.0f));
+        ImGui::TextDisabled("%s", GetSceneLoadStatusMessage().c_str());
+    }
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Viewport placement icons
+// ---------------------------------------------------------------------------
+
+void Editor::DrawViewportPlacementIcons(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera)
+{
+    (void)viewportOrigin;
+    (void)viewportSize;
+    (void)camera;
+}
+
+void Editor::DrawManualGizmoPivot(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    const Entity* selectedEntity) const
+{
+    if (!selectedEntity) return;
+
+    ImVec2 screenPos;
+    if (TryProjectWorldToViewport(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, screenPos))
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddCircleFilled(screenPos, 5.0f, IM_COL32(255, 200, 0, 200));
+        dl->AddCircle(screenPos, 5.0f, IM_COL32(0, 0, 0, 200));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DrawToolbar
+// ---------------------------------------------------------------------------
+
+void Editor::DrawToolbar(
+    D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(4, 4));
+
+    const float iconSize = 24.0f;
+    const ImVec2 btnSize(iconSize + 8.0f, iconSize + 8.0f);
+
+    auto ToolButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, GizmoType type, const char* tooltip) {
+        bool active = (mActiveGizmo == type);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        bool clicked;
+        if (icon.ptr != 0)
+            clicked = ImGui::ImageButton(tooltip, TextureIdFromHandle(icon), ImVec2(iconSize, iconSize));
+        else
+            clicked = ImGui::Button(tooltip, btnSize);
+        if (active) ImGui::PopStyleColor();
+        if (clicked) mActiveGizmo = active ? GizmoType::None : type;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+        ImGui::SameLine();
+    };
+
+    ToolButton(selectIcon, GizmoType::None,      "Select  (Q)");
+    ToolButton(moveIcon,   GizmoType::Translate,  "Move    (W)");
+    ToolButton(rotateIcon, GizmoType::Rotate,     "Rotate  (E)");
+    ToolButton(scaleIcon,  GizmoType::Scale,      "Scale   (R)");
+
+    ImGui::PopStyleVar(2);
+}
+
+// ---------------------------------------------------------------------------
+// DrawViewport
+// ---------------------------------------------------------------------------
+
+void Editor::DrawViewport(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    Entity* selectedEntity)
+{
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImVec2 workPos = mainViewport->WorkPos;
+    const ImVec2 workSize = mainViewport->WorkSize;
+    constexpr float sidePanelWidth = 320.0f;
+    constexpr float panelPadding = 8.0f;
+
+    const ImVec2 viewportPos(workPos.x + sidePanelWidth + (panelPadding * 2.0f), workPos.y + panelPadding);
+    const ImVec2 viewportWindowSize(
+        workSize.x - (sidePanelWidth * 2.0f) - (panelPadding * 4.0f),
+        workSize.y - (panelPadding * 2.0f));
+
+    ImGui::SetNextWindowPos(viewportPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(viewportWindowSize, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("Viewport", nullptr,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+    const ImVec2 viewportOrigin = ImGui::GetCursorScreenPos();
+    const ImVec2 viewportSize   = ImGui::GetContentRegionAvail();
+
+    if (viewportSize.x > 1.0f && viewportSize.y > 1.0f && sceneTextureHandle.ptr != 0)
+        ImGui::Image(TextureIdFromHandle(sceneTextureHandle), viewportSize);
+
+    const bool viewportHovered = ImGui::IsWindowHovered();
+
+    // ImGuizmo gizmo for the selected entity
+    if (selectedEntity && mActiveGizmo != GizmoType::None)
+    {
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(viewportOrigin.x, viewportOrigin.y, viewportSize.x, viewportSize.y);
+
+        using namespace DirectX;
+
+        XMFLOAT4X4 view4x4, proj4x4;
+        XMStoreFloat4x4(&view4x4, XMMatrixTranspose(camera.GetViewMatrix()));
+        XMStoreFloat4x4(&proj4x4, XMMatrixTranspose(camera.GetProjectionMatrix()));
+
+        XMMATRIX entityMatrix = selectedEntity->Transform.GetTransform();
+        XMFLOAT4X4 entityFloat;
+        XMStoreFloat4x4(&entityFloat, XMMatrixTranspose(entityMatrix));
+
+        ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
+        if (mActiveGizmo == GizmoType::Rotate) op = ImGuizmo::ROTATE;
+        if (mActiveGizmo == GizmoType::Scale)  op = ImGuizmo::SCALE;
+
+        float delta[16];
+        if (ImGuizmo::Manipulate(&view4x4.m[0][0], &proj4x4.m[0][0],
+                                  op, ImGuizmo::WORLD, &entityFloat.m[0][0], delta))
+        {
+            XMMATRIX updated = XMMatrixTranspose(XMLoadFloat4x4(&entityFloat));
+            XMVECTOR scale, rot, trans;
+            XMMatrixDecompose(&scale, &rot, &trans, updated);
+
+            XMStoreFloat3(&selectedEntity->Transform.Position, trans);
+
+            XMFLOAT4 rotQ;
+            XMStoreFloat4(&rotQ, rot);
+            // Convert quaternion to Euler (approximate)
+            float sinr = 2.0f * (rotQ.w * rotQ.x + rotQ.y * rotQ.z);
+            float cosr = 1.0f - 2.0f * (rotQ.x * rotQ.x + rotQ.y * rotQ.y);
+            selectedEntity->Transform.Rotation.x = std::atan2(sinr, cosr);
+
+            float sinp = 2.0f * (rotQ.w * rotQ.y - rotQ.z * rotQ.x);
+            selectedEntity->Transform.Rotation.y = std::abs(sinp) >= 1.0f ? std::copysign(DirectX::XM_PIDIV2, sinp) : std::asin(sinp);
+
+            float siny = 2.0f * (rotQ.w * rotQ.z + rotQ.x * rotQ.y);
+            float cosy = 1.0f - 2.0f * (rotQ.y * rotQ.y + rotQ.z * rotQ.z);
+            selectedEntity->Transform.Rotation.z = std::atan2(siny, cosy);
+
+            XMFLOAT3 sc;
+            XMStoreFloat3(&sc, scale);
+            // Undo the MeshWorldScale
+            constexpr float invMeshScale = 1.0f / TransformComponent::MeshWorldScale;
+            selectedEntity->Transform.Scale = { sc.x * invMeshScale, sc.y * invMeshScale, sc.z * invMeshScale };
+        }
+    }
+
+    DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+    HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
+
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// ---------------------------------------------------------------------------
+// DrawLevelExplorerPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawLevelExplorerPanel()
+{
+    if (!ImGui::Begin("Level Explorer", &mShowLevelExplorerPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
+    {
+        const bool selected = (mSelectedEntityIndex == i);
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_SpanLabelWidth;
+        if (selected) flags |= ImGuiTreeNodeFlags_Selected;
+
+        ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(i)), flags,
+                          "%s", mEntities[i].Name.c_str());
+        if (ImGui::IsItemClicked())
+            mSelectedEntityIndex = i;
+        ImGui::TreePop();
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawComponentsPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawComponentsPanel()
+{
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImVec2 workPos = mainViewport->WorkPos;
+    const ImVec2 workSize = mainViewport->WorkSize;
+    constexpr float sidePanelWidth = 320.0f;
+    constexpr float panelPadding = 8.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(workPos.x + panelPadding, workPos.y + panelPadding), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(sidePanelWidth, workSize.y - (panelPadding * 2.0f)), ImGuiCond_Always);
+    if (!ImGui::Begin("Components", &mShowComponentsPanel,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    Entity* sel = GetSelectedEntity();
+    if (!sel)
+    {
+        ImGui::TextDisabled("No entity selected.");
+
+        ImGui::Spacing();
+        if (ImGui::CollapsingHeader("Create Entity", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            if (ImGui::Button("Create Geometry Entity"))
+            {
+                CreateGeometryInstanceAt({ 0.0f, 0.0f, 0.0f });
+            }
+
+            if (ImGui::Button("Create Point Light Entity"))
+            {
+                Entity e;
+                e.Name = "PointLight_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                e.AddPointLightComponent();
+                mEntities.push_back(std::move(e));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+            }
+
+            if (ImGui::Button("Create Audio Emitter Entity"))
+            {
+                Entity e;
+                e.Name = "AudioEmitter_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                e.AddAudioEmitterComponent();
+                mEntities.push_back(std::move(e));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+            }
+        }
+
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("Name");
+    ImGui::SameLine();
+    static char nameBuf[256];
+    strncpy_s(nameBuf, sel->Name.c_str(), sizeof(nameBuf) - 1);
+    if (ImGui::InputText("##name", nameBuf, sizeof(nameBuf)))
+        sel->Name = nameBuf;
+
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::DragFloat3("Position", &sel->Transform.Position.x, 0.01f);
+        ImGui::DragFloat3("Rotation", &sel->Transform.Rotation.x, 0.01f);
+        ImGui::DragFloat3("Scale",    &sel->Transform.Scale.x,    0.01f);
+    }
+
+    if (ImGui::CollapsingHeader("Add Component", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        const bool hasMesh = sel->Mesh.has_value();
+        const bool hasPointLight = sel->PointLight.has_value();
+        const bool hasAudioEmitter = sel->AudioEmitter.has_value();
+
+        if (!hasMesh)
+        {
+            if (ImGui::Button("Add Mesh Component"))
+                sel->AddMeshComponent();
+        }
+        else
+        {
+            ImGui::TextDisabled("Mesh Component added");
+        }
+
+        if (!hasPointLight)
+        {
+            if (ImGui::Button("Add Point Light Component"))
+                sel->AddPointLightComponent();
+        }
+        else
+        {
+            ImGui::TextDisabled("Point Light Component added");
+        }
+
+        if (!hasAudioEmitter)
+        {
+            if (ImGui::Button("Add Audio Emitter Component"))
+                sel->AddAudioEmitterComponent();
+        }
+        else
+        {
+            ImGui::TextDisabled("Audio Emitter Component added");
+        }
+    }
+
+    if (sel->Mesh.has_value() && ImGui::CollapsingHeader("Mesh Component"))
+    {
+        ImGui::TextDisabled("Mesh: %s", sel->Mesh->MeshPath.empty() ? "(none)" : sel->Mesh->MeshPath.c_str());
+        ImGui::TextDisabled("Material: %s", sel->Mesh->MaterialPath.empty() ? "(none)" : sel->Mesh->MaterialPath.c_str());
+    }
+
+    if (sel->PointLight.has_value() && ImGui::CollapsingHeader("Point Light Component"))
+    {
+        auto& pl = *sel->PointLight;
+        ImGui::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f);
+        ImGui::DragFloat("Radius",         &pl.Radius,          0.1f,  0.0f, 1000.0f);
+        float col[3] = { pl.ColorR, pl.ColorG, pl.ColorB };
+        if (ImGui::ColorEdit3("Color", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; }
+        ImGui::Checkbox("Cast Shadows",         &pl.CastShadows);
+        ImGui::Checkbox("Affect Volumetric Fog",&pl.AffectVolumetricFog);
+    }
+
+    if (sel->AudioEmitter.has_value() && ImGui::CollapsingHeader("Audio Emitter Component"))
+    {
+        auto& ae = *sel->AudioEmitter;
+        static char epBuf[512];
+        strncpy_s(epBuf, ae.EventPath.c_str(), sizeof(epBuf) - 1);
+        if (ImGui::InputText("Event Path", epBuf, sizeof(epBuf)))
+            ae.EventPath = epBuf;
+        ImGui::Checkbox("Auto Play", &ae.AutoPlay);
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawPropertiesPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* /*audioManager*/)
+{
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImVec2 workPos = mainViewport->WorkPos;
+    const ImVec2 workSize = mainViewport->WorkSize;
+    constexpr float sidePanelWidth = 320.0f;
+    constexpr float panelPadding = 8.0f;
+
+    ImGui::SetNextWindowPos(
+        ImVec2(workPos.x + workSize.x - sidePanelWidth - panelPadding, workPos.y + panelPadding),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(sidePanelWidth, workSize.y - (panelPadding * 2.0f)), ImGuiCond_Always);
+    if (!ImGui::Begin("Properties", &mShowPropertiesPanel,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (!selectedEntity)
+    {
+        ImGui::TextDisabled("No entity selected.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("Entity: %s", selectedEntity->Name.c_str());
+    ImGui::Separator();
+
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::DragFloat3("Position", &selectedEntity->Transform.Position.x, 0.01f);
+        ImGui::DragFloat3("Rotation", &selectedEntity->Transform.Rotation.x, 0.01f);
+        ImGui::DragFloat3("Scale",    &selectedEntity->Transform.Scale.x,    0.01f);
+    }
+
+    if (selectedEntity->PointLight.has_value())
+    {
+        if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& pl = *selectedEntity->PointLight;
+            ImGui::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f);
+            ImGui::DragFloat("Radius",         &pl.Radius,          0.1f,  0.0f, 1000.0f);
+            float col[3] = { pl.ColorR, pl.ColorG, pl.ColorB };
+            if (ImGui::ColorEdit3("Color##pl", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; }
+            ImGui::Checkbox("Cast Shadows##pl",          &pl.CastShadows);
+            ImGui::Checkbox("Affect Volumetric Fog##pl", &pl.AffectVolumetricFog);
+            ImGui::DragFloat("Falloff Exponent", &pl.FalloffExponent, 0.01f, 0.1f, 10.0f);
+            ImGui::DragFloat("Source Radius",    &pl.SourceRadius,    0.001f, 0.0f, 1.0f);
+            ImGui::Checkbox("Use Temperature",   &pl.UseTemperature);
+            if (pl.UseTemperature)
+                ImGui::DragFloat("Temperature (K)", &pl.TemperatureKelvin, 100.0f, 1000.0f, 20000.0f);
+        }
+    }
+
+    if (selectedEntity->Mesh.has_value())
+    {
+        if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextDisabled("Mesh path:     %s", selectedEntity->Mesh->MeshPath.empty()     ? "(none)" : selectedEntity->Mesh->MeshPath.c_str());
+            ImGui::TextDisabled("Material path: %s", selectedEntity->Mesh->MaterialPath.empty() ? "(none)" : selectedEntity->Mesh->MaterialPath.c_str());
+        }
+    }
+
+    if (selectedEntity->AudioEmitter.has_value())
+    {
+        if (ImGui::CollapsingHeader("Audio Emitter", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& ae = *selectedEntity->AudioEmitter;
+            static char epBuf[512];
+            strncpy_s(epBuf, ae.EventPath.c_str(), sizeof(epBuf) - 1);
+            if (ImGui::InputText("Event Path##ae", epBuf, sizeof(epBuf)))
+                ae.EventPath = epBuf;
+            ImGui::Checkbox("Auto Play##ae", &ae.AutoPlay);
+        }
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawAudioManagerWindow
+// ---------------------------------------------------------------------------
+
+void Editor::DrawAudioManagerWindow(AudioManager* audioManager)
+{
+    if (!ImGui::Begin("Audio Manager", &mShowAudioManagerPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (!audioManager || !audioManager->IsInitialized())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Audio system not initialised.");
+        ImGui::End();
+        return;
+    }
+
+    // Summary line
+    const auto& loadedBanks   = audioManager->GetLoadedBanks();
+    const auto& bankFailures  = audioManager->GetBankLoadFailures();
+    const auto& events        = audioManager->GetEvents();
+    ImGui::TextDisabled("Loaded Banks: %d  |  Failed: %d  |  Events: %d",
+                        static_cast<int>(loadedBanks.size()),
+                        static_cast<int>(bankFailures.size()),
+                        static_cast<int>(events.size()));
+    ImGui::TextDisabled("Path: %s", audioManager->GetAudioDataPath().string().c_str());
+    ImGui::Separator();
+
+    // ---- HRTF Spatialization --------------------------------------------------
+    if (ImGui::CollapsingHeader("HRTF Spatialization", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        bool hrtfEnabled = audioManager->IsHRTFEnabled();
+        if (ImGui::Checkbox("Enable HRTF", &hrtfEnabled))
+            audioManager->SetHRTFEnabled(hrtfEnabled);
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+            ImGui::TextUnformatted(
+                "Head-Related Transfer Function (HRTF) spatialization.\n"
+                "Convolves mono audio sources with measured head-related\n"
+                "impulse responses to produce binaural stereo output.\n\n"
+                "Uses zero-allocation Overlap-Add FFT convolution.\n"
+                "HRIR can be updated at runtime via AudioManager::GetHRTFNode().");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+
+        if (hrtfEnabled)
+        {
+            HRTFSpatializationNode* node = audioManager->GetHRTFNode();
+            if (node && node->IsInitialized())
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Node active  |  crossfade on HRIR change: enabled");
+            }
+        }
+
+        // ---- HRIR Database (MIT KEMAR) ----------------------------------------
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("HRIR Database (MIT KEMAR)");
+        ImGui::Spacing();
+
+        const HRIRDatabase* db = audioManager->GetHRIRDatabase();
+        if (!db->IsLoaded())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Not loaded");
+            ImGui::SameLine();
+            if (ImGui::Button("Load KEMAR Dataset"))
+            {
+                std::filesystem::path hrtfPath =
+                    std::filesystem::path(audioManager->GetAudioDataPath()).parent_path() / "HRTF";
+                std::string err;
+                if (!audioManager->LoadHRIRDatabase(hrtfPath, err))
+                {
+                    static std::string s_hrirError;
+                    s_hrirError = err;
+                    ImGui::OpenPopup("HRIRLoadError");
+                }
+            }
+            if (ImGui::BeginPopupModal("HRIRLoadError", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                static std::string s_hrirError;
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to load HRIR database:");
+                ImGui::TextWrapped("%s", s_hrirError.c_str());
+                if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Loaded  (%d measurements)",
+                               db->EntryCount());
+            ImGui::Spacing();
+
+            float elev = audioManager->GetHRTFElevation();
+            float azim = audioManager->GetHRTFAzimuth();
+            bool dirChanged = false;
+            dirChanged |= ImGui::SliderFloat("Elevation (deg)", &elev, -90.0f, 90.0f,  "%.1f");
+            dirChanged |= ImGui::SliderFloat("Azimuth (deg)",   &azim,   0.0f, 360.0f, "%.1f");
+            if (dirChanged)
+                audioManager->SetHRTFDirection(elev, azim);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Bilinear interpolation across KEMAR measurements.");
+        }
+    }
+
+    ImGui::Separator();
+
+    // ---- Loaded banks ---------------------------------------------------------
+    if (ImGui::CollapsingHeader("Loaded Banks", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (loadedBanks.empty())
+        {
+            ImGui::TextDisabled("No banks loaded.");
+        }
+        else
+        {
+            for (const auto& bank : loadedBanks)
+                ImGui::BulletText("%s", bank.c_str());
+        }
+    }
+
+    // ---- Bank load failures ---------------------------------------------------
+    if (!bankFailures.empty() && ImGui::CollapsingHeader("Bank Load Failures"))
+    {
+        for (const auto& fail : bankFailures)
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", fail.c_str());
+    }
+
+    // ---- Event list -----------------------------------------------------------
+    if (ImGui::CollapsingHeader("Events", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (events.empty())
+        {
+            ImGui::TextDisabled("No FMOD events were discovered in the loaded banks.");
+        }
+        else
+        {
+            for (int i = 0; i < static_cast<int>(events.size()); ++i)
+            {
+                ImGui::PushID(i);
+                ImGui::TextUnformatted(events[i].Path.c_str());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Play"))  audioManager->PlayEvent(i);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Stop"))  audioManager->StopEvent(i);
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Stop All"))
+            audioManager->StopAll();
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Draw (main entry called each frame by DX12RendererAPI)
+// ---------------------------------------------------------------------------
+
+void Editor::Draw(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    bool showStatistics,
+    AudioManager* audioManager)
+{
+    mSceneStatusMessage     = sceneStatusMessage;
+    mViewportStatisticsText = statisticsText;
+    mShowViewportStatistics = showStatistics;
+
+    UpdateSceneLoading();
+
+    Entity* selectedEntity = GetSelectedEntity();
+
+    DrawViewport(sceneTextureHandle, camera, selectedEntity);
+
+    if (mShowComponentsPanel)   DrawComponentsPanel();
+    if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();
+    if (mShowPropertiesPanel)    DrawPropertiesPanel(selectedEntity, audioManager);
+    if (mShowAudioManagerPanel)  DrawAudioManagerWindow(audioManager);
+
+    DrawViewportStatisticsOverlay();
+    DrawSceneLoadingOverlay();
+}

@@ -1,0 +1,397 @@
+﻿// RtGI.hlsl - DXR Global Illumination shader library (lib_6_3).
+
+// RAY_FLAG constants may not be pre-defined in all compiler configurations;
+// define them explicitly to avoid HLSL0033 errors.
+#ifndef RAY_FLAG_NONE
+#define RAY_FLAG_NONE                              0x00
+#define RAY_FLAG_CULL_BACK_FACING_TRIANGLES        0x10
+#define RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH   0x04
+#define RAY_FLAG_SKIP_CLOSEST_HIT_SHADER           0x08
+#endif
+struct PointLightGpu { float3 Position; float Radius; float3 Color; float InvRadiusSq; };
+cbuffer GiConstants : register(b0)
+{
+    float4x4 gInvViewProj;
+    float3 gCameraPos; float _c0;
+    float3 gSunDir;    float _c1;
+    float3 gSunColor;  float _c2;
+    float3 gSkyAmbient; float _c3;
+    float gMaxRayDist; int gBounceCount; int gRaysPerPixel; float gAccumAlpha;
+    int gFrameIndex; int gSkylightOnMiss; int gNumPointLights; int gResetAccumulation;
+    PointLightGpu gPointLights[16];
+    float gSaturation; int gDebugAlbedoOnly; float _cSatPad1; float _cSatPad2;
+};
+Texture2D<float4> gGBufferNormal : register(t0);
+Texture2D<float>  gDepthBuffer   : register(t1);
+Texture2D<float4> gHistory       : register(t2);
+Texture2D<float4> gPrimaryAlbedo : register(t7);
+RaytracingAccelerationStructure gTlas : register(t3);
+struct RtVertexGpu { float3 Position; float _pad0; float3 Normal; float _pad1; float2 TexCoord; float2 _pad2; };
+StructuredBuffer<RtVertexGpu> gRtVertices : register(t4);
+ByteAddressBuffer             gRtIndices  : register(t5);
+struct RtInstanceGpu { uint VertexOffset; uint IndexOffset; uint AlbedoSrvLo; uint AlbedoSrvHi; };
+StructuredBuffer<RtInstanceGpu> gRtInstances : register(t6);
+RWTexture2D<float4> gRawOutput   : register(u0);
+RWTexture2D<float4> gAccumOutput : register(u1);
+SamplerState gAlbedoSampler : register(s0);
+Texture2D<float4> gHitAlbedoTexture : register(t8, space0);
+struct GiPayload { float3 Radiance; float3 HitAlbedo; float3 HitNormal; float3 HitWorldPos; uint Hit; };
+struct TriAttributes { float2 Barycentrics; };
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x*2.0f-1.0f, 1.0f-uv.y*2.0f, depth, 1.0f);
+    float4 w = mul(ndc, gInvViewProj);
+    return w.xyz / w.w;
+}
+uint WangHash(uint s) { s=(s^61u)^(s>>16u); s*=9u; s^=(s>>4u); s*=0x27D4EB2Du; s^=(s>>15u); return s; }
+float UintToFloat01(uint x) { return (float)(x&0x00FFFFFFu)*(1.0f/(float)0x01000000u); }
+float RadicalInverseVdC(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return (float)bits * 2.3283064365386963e-10f;
+}
+float2 SampleHemisphereXi(uint sampleIndex, uint sampleCount, uint scramble)
+{
+    float jitterX = UintToFloat01(scramble);
+    float jitterY = UintToFloat01(WangHash(scramble ^ 0x9E3779B9u));
+    float x = ((float)sampleIndex + jitterX) / (float)max(sampleCount, 1u);
+    float y = frac(RadicalInverseVdC(sampleIndex) + jitterY);
+    return frac(float2(x, y));
+}
+float3 FaceForwardNormal(float3 N, float3 incidentDir)
+{
+    return (dot(N, incidentDir) > 0.0f) ? -N : N;
+}
+float ComputeRayBias(float3 pos, float3 N, float3 dir)
+{
+    // Curved stone arches are especially prone to self-intersection at grazing
+    // angles. Scale the bias up when the ray runs nearly parallel to the
+    // surface, and add a small world-space distance factor so large scenes do
+    // not end up with an effectively tiny bias.
+    float nd = saturate(abs(dot(normalize(N), normalize(dir))));
+    float grazingScale = lerp(4.0f, 1.0f, nd);
+    float distanceScale = 1.0f + min(length(pos - gCameraPos) * 0.001f, 3.0f);
+    return 0.0025f * grazingScale * distanceScale;
+}
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    float3 up=(abs(N.z)<0.999f)?float3(0,0,1):float3(1,0,0);
+    float3 T=normalize(cross(up,N)); float3 B=cross(N,T);
+    float r=sqrt(xi.x); float phi=6.28318530718f*xi.y;
+    return normalize(T*(r*cos(phi))+B*(r*sin(phi))+N*sqrt(max(0.0f,1.0f-xi.x)));
+}
+[shader("closesthit")]
+void ClosestHit(inout GiPayload p, in TriAttributes a)
+{
+    p.Hit=1;
+    RtInstanceGpu inst = gRtInstances[InstanceID()];
+    uint triBase = inst.IndexOffset + PrimitiveIndex() * 3u;
+    // The uploaded RT index buffer already stores indices with the per-instance
+    // vertex base baked in, so the closest-hit shader must read those absolute
+    // indices directly. Re-applying VertexOffset here would corrupt the fetches
+    // and produce unstable magenta/black debug output as the camera moves.
+    uint i0 = gRtIndices.Load(triBase * 4u + 0u);
+    uint i1 = gRtIndices.Load(triBase * 4u + 4u);
+    uint i2 = gRtIndices.Load(triBase * 4u + 8u);
+    RtVertexGpu v0 = gRtVertices[i0];
+    RtVertexGpu v1 = gRtVertices[i1];
+    RtVertexGpu v2 = gRtVertices[i2];
+    float w = 1.0f - a.Barycentrics.x - a.Barycentrics.y;
+    float3 bary = float3(w, a.Barycentrics.x, a.Barycentrics.y);
+    // Interpolate the triangle UVs at the ray hit so indirect bounces sample the
+    // same base-color texture data the raster path uses instead of CPU-baked tints.
+    float2 hitUv = v0.TexCoord * bary.x + v1.TexCoord * bary.y + v2.TexCoord * bary.z;
+    float3 localShadingNormal = normalize(v0.Normal * bary.x + v1.Normal * bary.y + v2.Normal * bary.z);
+    float3 localGeoNormal = cross(v1.Position - v0.Position, v2.Position - v0.Position);
+    if (dot(localGeoNormal, localGeoNormal) < 1e-10f)
+        localGeoNormal = localShadingNormal;
+    else
+        localGeoNormal = normalize(localGeoNormal);
+    // ObjectToWorld3x4() returns a float3x4 (3 rows x 4 cols); extract the upper-left 3x3
+    // manually because a direct cast to float3x3 is not valid in DXR HLSL.
+    float3x4 o2w = ObjectToWorld3x4();
+    float3x3 o2w3 = float3x3(o2w[0].xyz, o2w[1].xyz, o2w[2].xyz);
+    float3 geoNormal = normalize(mul(localGeoNormal, o2w3));
+    // Store the GEOMETRIC (unflipped) normal in HitNormal.
+    // NeeShadeHit uses this so that back-face hits on coloured surfaces (e.g. a
+    // floor ray striking the underside of a curtain) still see the sun/sky from
+    // the correct side and produce non-zero irradiance, enabling colour bleeding.
+    // The RayGen shader computes the offset direction independently by flipping
+    // this normal to face against the incoming ray direction.
+    float3 sampledAlbedo = gHitAlbedoTexture.SampleLevel(gAlbedoSampler, hitUv, 0.0f).rgb;
+    // Some instances can still fall back to the null descriptor when a material has
+    // no resolved base-color DDS. Keep GI from collapsing to black by falling back
+    // to white in that case so throughput/direct lighting remains stable.
+    if (dot(sampledAlbedo, sampledAlbedo) <= 1e-8f)
+        sampledAlbedo = float3(1.0f, 1.0f, 1.0f);
+    p.HitAlbedo   = saturate(sampledAlbedo);
+    p.HitNormal   = geoNormal;
+    p.HitWorldPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+}
+[shader("miss")]
+void Miss(inout GiPayload p)
+{ p.Hit=0; p.Radiance=float3(0,0,0); p.HitAlbedo=float3(0,0,0); p.HitNormal=float3(0,0,1); p.HitWorldPos=float3(0,0,0); }
+
+// --- Next Event Estimation (NEE) shadow infrastructure ---
+
+// Minimal payload for shadow rays; the miss shader sets Hit=0 when the
+// path to the light is unoccluded.  We initialise Hit=1 (blocked) so that
+// if the ray hits geometry the value is never written and remains 1.
+struct ShadowPayload { uint Hit; };
+
+[shader("miss")]
+void ShadowMiss(inout ShadowPayload p)
+{ p.Hit = 0; } // ray reached the light without hitting anything
+
+// Returns 1 if the segment [pos, pos+dir*maxDist] is blocked, 0 if clear.
+// Explicit first-hit accept + closest-hit skip keeps NEE shadow rays as cheap
+// occlusion tests instead of evaluating surface materials along the segment.
+uint TraceShadow(float3 pos, float3 dir, float maxDist)
+{
+    RayDesc sRay;
+    sRay.Origin    = pos;
+    sRay.Direction = dir;
+    sRay.TMin      = 0.001f;
+    sRay.TMax      = maxDist;
+    ShadowPayload sp; sp.Hit = 1; // assume blocked until miss shader fires
+    TraceRay(gTlas,
+        RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+        RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF,
+        0,   // hit group offset
+        1,   // hit group stride
+        1,   // miss shader index 1 = ShadowMiss
+        sRay, sp);
+    return sp.Hit;
+}
+
+// Push shadow rays slightly off the surface on the same side as the light ray.
+// Curved, dense meshes such as the Sponza arches are very sensitive to starting
+// shadow rays exactly on the hit point, which causes self-shadow acne that shows
+// up as black speckles in the GI result.
+float3 OffsetShadowOrigin(float3 pos, float3 N, float3 dir)
+{
+    float side = dot(N, dir) >= 0.0f ? 1.0f : -1.0f;
+    float bias = ComputeRayBias(pos, N, dir);
+    return pos + N * (bias * side);
+}
+
+// Approximate Hosek-Wilkie skylight visibility at a surface by probing a few
+// upward-biased directions in the visible hemisphere. This preserves coloured
+// bounce lighting from sky-lit fabrics/curtains without re-introducing the old
+// fully unshadowed blue ambient that washed the whole GI solution.
+float3 SampleVisibleSkylight(float3 pos, float3 N)
+{
+    const float3 worldUp = float3(0, 0, 1);
+    float3 probeDirs[3] =
+    {
+        normalize(N + worldUp),
+        normalize(N + worldUp * 2.0f),
+        normalize(N * 0.35f + worldUp)
+    };
+
+    float visibleWeight = 0.0f;
+    float totalWeight = 0.0f;
+
+    [unroll]
+    for (int i = 0; i < 3; ++i)
+    {
+        float3 L = probeDirs[i];
+        float NdL = saturate(dot(N, L));
+        if (NdL <= 0.0f)
+            continue;
+
+        totalWeight += NdL;
+        if (TraceShadow(OffsetShadowOrigin(pos, N, L), L, gMaxRayDist) == 0)
+            visibleWeight += NdL;
+    }
+
+    if (totalWeight <= 0.0f)
+        return float3(0, 0, 0);
+
+    return gSkyAmbient * (visibleWeight / totalWeight);
+}
+
+// Direct-lighting evaluation at a hit surface using NEE.
+// For each light source a shadow ray is cast; only unoccluded lights
+// contribute. Sky lighting is evaluated through explicit visibility-tested sky
+// probes instead of an unshadowed constant term, so sky-lit curtains can bleed
+// colour while enclosed areas stay appropriately dark.
+float3 NeeShadeHit(float3 pos, float3 N)
+{
+    float3 irr = float3(0,0,0);
+
+    // --- Directional sun light ---
+    float3 toSun = normalize(-gSunDir);
+    float sunNdL = saturate(dot(N, toSun));
+    if (sunNdL > 0.0f && TraceShadow(OffsetShadowOrigin(pos, N, toSun), toSun, gMaxRayDist) == 0)
+        irr += gSunColor * sunNdL;
+
+    // --- Visible sky light ---
+    irr += SampleVisibleSkylight(pos, N);
+
+    // --- Point lights ---
+    int i;
+    for (i = 0; i < gNumPointLights; ++i)
+    {
+        float3 tl   = gPointLights[i].Position - pos;
+        float  d2   = dot(tl, tl);
+        float  dist = sqrt(d2);
+        float3 L    = tl / dist;
+        float  NdL  = saturate(dot(N, L));
+        if (NdL > 0.0f)
+        {
+            // Smooth distance attenuation (at^4 falloff).
+            float at = saturate(1.0f - d2 * gPointLights[i].InvRadiusSq);
+            at = at * at;
+            // Only trace the shadow ray when the light has meaningful reach.
+            if (at > 0.0f && TraceShadow(OffsetShadowOrigin(pos, N, L), L, max(dist - 0.02f, 0.001f)) == 0)
+                irr += gPointLights[i].Color * NdL * at;
+        }
+    }
+    return irr;
+}
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 idx=DispatchRaysIndex().xy; uint2 dim=DispatchRaysDimensions().xy;
+    float2 uv=(float2(idx)+0.5f)/float2(dim);
+    float depth=gDepthBuffer[idx].r;
+    if(depth>=1.0f){ gRawOutput[idx]=float4(0,0,0,1); gAccumOutput[idx]=float4(0,0,0,1); return; }
+    float3 primaryN=normalize(gGBufferNormal[idx].rgb*2.0f-1.0f);
+    float3 primaryAlbedo = gPrimaryAlbedo[idx].rgb;
+    float3 primarySurfacePos=ReconstructWorldPos(uv,depth);
+    float3 primaryViewDir=normalize(primarySurfacePos-gCameraPos);
+    // Face-forward the raster normal against the camera ray before using it for
+    // the initial GI origin and hemisphere. Curved arch geometry is sensitive to
+    // tiny raster-vs-RT mismatches; using the raw normal can offset the origin to
+    // the wrong side of the surface and create transient dark speckles while moving.
+    float3 primaryFacingNormal=FaceForwardNormal(primaryN, primaryViewDir);
+    float primaryBias=ComputeRayBias(primarySurfacePos, primaryFacingNormal, primaryViewDir);
+    // Bias the first RT origin primarily back toward the camera instead of only
+    // along the G-buffer normal. Detailed normal-mapped surfaces such as the
+    // Sponza arches can have shading normals that do not line up with the RT
+    // triangle surface, and a pure normal offset can push the origin into the
+    // mesh and produce black self-intersection speckles while moving.
+    float3 primaryPos=primarySurfacePos-primaryViewDir*primaryBias+primaryFacingNormal*(primaryBias*0.25f);
+
+    // --- Debug: albedo-only mode ---
+    // Trace back toward the current visible surface and output that hit's raw
+    // albedo/tint. This avoids the previous hemisphere-randomized probe, which
+    // produced mostly magenta misses and made it hard to verify scene albedo.
+    if(gDebugAlbedoOnly)
+    {
+        float3 toSurface = primarySurfacePos - gCameraPos;
+        float surfaceDistance = length(toSurface);
+        float3 viewDir = surfaceDistance > 1e-5f ? (toSurface / surfaceDistance) : float3(0, 1, 0);
+        // Keep the debug ray tightly clamped around the visible G-buffer hit so
+        // the albedo test reports the currently visible surface instead of
+        // punching through to unrelated geometry behind it during camera motion.
+        RayDesc ray; ray.Origin=gCameraPos; ray.Direction=viewDir; ray.TMin=max(surfaceDistance - 0.01f, 0.001f); ray.TMax=surfaceDistance + 0.01f;
+        GiPayload pl; pl.Radiance=float3(0,0,0); pl.HitAlbedo=float3(0.5f,0.5f,0.5f); pl.HitNormal=float3(0,0,1); pl.HitWorldPos=float3(0,0,0); pl.Hit=0;
+        TraceRay(gTlas,RAY_FLAG_NONE,0xFF,0,1,0,ray,pl);
+        // Fall back to the current G-buffer surface instead of debug magenta so
+        // transient miss cases do not hide the underlying albedo data.
+        float3 albedoOut = pl.Hit==1 ? pl.HitAlbedo : float3(1,1,1);
+        gRawOutput[idx]=float4(albedoOut,1.0f);
+        gAccumOutput[idx]=float4(albedoOut,1.0f);
+        return;
+    }
+
+    // Real-time path: trace exactly one primary GI ray per pixel and keep a fixed
+    // two-bounce budget so shader cost is deterministic.
+    float3 rayOrigin  = primaryPos;
+    float3 rayNormal  = primaryFacingNormal;
+    float3 throughput = float3(1,1,1);
+    float3 total      = float3(0,0,0);
+    for(int bounce = 0; bounce < 2; ++bounce)
+    {
+        // Keep the hemisphere sample decorrelated across pixels/frames/bounces
+        // without relying on the removed per-ray loop or Russian roulette seed.
+        uint bounceScramble=WangHash((idx.x*1973u+idx.y*9277u+(uint)gFrameIndex*26699u)^uint((bounce+1)*7919));
+        float2 xi=SampleHemisphereXi(0u, 1u, bounceScramble);
+        float3 rd=CosineSampleHemisphere(rayNormal,xi);
+        RayDesc ray; ray.Origin=rayOrigin; ray.Direction=rd; ray.TMin=0.001f; ray.TMax=gMaxRayDist;
+        GiPayload pl; pl.Radiance=float3(0,0,0); pl.HitAlbedo=float3(0,0,0); pl.HitNormal=float3(0,0,1); pl.HitWorldPos=float3(0,0,0); pl.Hit=0;
+        // GI bounce rays must NOT cull back faces: curtains/fabric panels face away
+        // from the floor, so their back side would be silently skipped and no colour
+        // bleeding would occur.  Origin bias (+N*0.005) already prevents self-hits.
+        TraceRay(gTlas,RAY_FLAG_NONE,0xFF,0,1,0,ray,pl);
+        if(pl.Hit==1)
+        {
+            // Apply saturation boost to the hit surface albedo before using it
+            // for color bleeding and throughput.  This makes coloured surfaces
+            // (e.g. Sponza curtains) bleed their hue more visibly onto adjacent
+            // surfaces without altering overall brightness.
+            float3 hitAlbedo = pl.HitAlbedo;
+            if(gSaturation != 1.0f)
+            {
+                float luma = dot(hitAlbedo, float3(0.2126f, 0.7152f, 0.0722f));
+                hitAlbedo  = saturate(lerp(float3(luma,luma,luma), hitAlbedo, gSaturation));
+            }
+            // NEE: direct lighting at the bounce surface.
+            // pl.HitNormal is the GEOMETRIC normal (unflipped), so NeeShadeHit
+            // evaluates sun/sky from the authored bright side even for back-face
+            // hits (e.g. underside of curtain struck by a floor bounce ray).
+            float3 directIrr=NeeShadeHit(pl.HitWorldPos,pl.HitNormal);
+            total+=throughput*hitAlbedo*directIrr;
+            // Cosine-weighted sampling cancels the diffuse BRDF/PDF; only albedo remains.
+            throughput*=hitAlbedo;
+            // Compute the continuation normal by flipping the geometric normal
+            // to face AGAINST the incoming ray direction. This keeps the next
+            // bounce on the side of the surface we actually hit, which is
+            // especially important for thin/back-face geometry such as the
+            // Sponza arches; sampling around the unflipped normal can send the
+            // continuation ray back into the surface and produce dark spots.
+            float3 offsetNormal = FaceForwardNormal(pl.HitNormal, rd);
+            // Push the next bounce origin outward along the geometric hit normal
+            // and slightly along the outgoing ray direction so thin geometry and
+            // grazing hits are less likely to self-intersect and shadow-acne.
+            rayOrigin=pl.HitWorldPos+pl.HitNormal*0.05f+rd*0.01f;
+            rayNormal=offsetNormal;
+        }
+        else
+        {
+            // Ray escaped to sky; sky radiance weighted by throughput.
+            if(gSkylightOnMiss) total+=throughput*gSkyAmbient;
+            break;
+        }
+    }
+    // Apply GI output saturation boost to the single-path result before writing it
+    // directly to the raw output.
+    if(gSaturation != 1.0f)
+    {
+        float outLuma=dot(total,float3(0.2126f,0.7152f,0.0722f));
+        total=saturate(lerp(float3(outLuma,outLuma,outLuma),total,gSaturation));
+    }
+    // Store the visible surface's diffuse indirect contribution instead of raw
+    // irradiance. This keeps the RT GI debug view aligned with what artists expect
+    // to see and preserves coloured bounce lighting directly in the accumulation.
+    total *= primaryAlbedo;
+    gRawOutput[idx]=float4(total,1.0f);
+    // When the camera moves the history buffer contains pixels from the old view,
+    // so a full reuse causes ghosting/smearing. However, throwing history away
+    // entirely every motion frame produces visible black dropouts from sparse RT
+    // samples. Use a soft reset once valid history exists so motion stays stable
+    // without fully locking to old data.
+    float4 newSample=float4(total,1.0f);
+    if(gResetAccumulation)
+    {
+        if(gFrameIndex > 0)
+        {
+            float motionAlpha = max(gAccumAlpha, 0.35f);
+            gAccumOutput[idx]=lerp(gHistory[idx],newSample,motionAlpha);
+        }
+        else
+        {
+            gAccumOutput[idx]=newSample;
+        }
+    }
+    else
+        gAccumOutput[idx]=lerp(gHistory[idx],newSample,gAccumAlpha);
+}

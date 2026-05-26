@@ -1,0 +1,296 @@
+﻿// EditorMainMenu.cpp
+// Implements the editor main-menu bar and the Graphics Settings window.
+// The Graphics Settings window exposes all RTGI (Ray Traced Global Illumination)
+// parameters so artists can tune the ReSTIR-based denoiser at runtime.
+
+#include "pch.h"
+#include "EditorMainMenu.h"
+
+#include "imgui.h"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EditorMainMenu::Draw
+// Top-level call: draws the menu bar then any open sub-windows.
+// ─────────────────────────────────────────────────────────────────────────────
+void EditorMainMenu::Draw()
+{
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("Settings"))
+        {
+            ImGui::MenuItem("Graphics", nullptr, &mShowGraphicsSettings);
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+
+    if (mShowGraphicsSettings)
+        DrawGraphicsSettingsWindow();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EditorMainMenu::DrawGraphicsSettingsWindow
+// ─────────────────────────────────────────────────────────────────────────────
+void EditorMainMenu::DrawGraphicsSettingsWindow()
+{
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 800.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Graphics Settings", &mShowGraphicsSettings))
+    {
+        ImGui::End();
+        return;
+    }
+
+    RtGISettings& s = mRtGISettings;
+
+    // ── Global ────────────────────────────────────────────────────────────
+    ImGui::SeparatorText("Ray Traced Global Illumination");
+
+    ImGui::Checkbox("Enable RTGI", &s.Enabled);
+
+    ImGui::BeginDisabled(!s.Enabled);
+
+    // ── Ray quality ───────────────────────────────────────────────────────
+    ImGui::SeparatorText("Ray Quality");
+
+    ImGui::SliderInt("Rays Per Pixel", &s.RaysPerPixel, 1, 8,
+        "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Number of GI rays fired per pixel each frame.\n"
+        "Higher values improve quality but reduce performance.");
+
+    ImGui::SliderInt("Max Bounces", &s.MaxBounces, 1, 4,
+        "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Maximum indirect bounce depth. 1 = single-bounce GI only.");
+
+    ImGui::SliderFloat("Radiance Clamp", &s.RadianceClamp, 0.0f, 100.0f,
+        "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Clamp incoming radiance to suppress bright fireflies.\n"
+        "Set to 0 to disable clamping.");
+
+    // ── ReSTIR Temporal ───────────────────────────────────────────────────
+    ImGui::SeparatorText("ReSTIR – Temporal Resampling");
+
+    ImGui::Checkbox("Enable Temporal Reuse", &s.TemporalReuseEnabled);
+    ImGui::SetItemTooltip(
+        "Reuses GI path samples from previous frames via reservoir resampling.\n"
+        "Dramatically reduces noise at minimal performance cost.");
+
+    ImGui::BeginDisabled(!s.TemporalReuseEnabled);
+
+    ImGui::SliderInt("Max History Length", &s.MaxHistoryLength, 1, 32,
+        "%d frames", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Maximum number of frames a reservoir sample can persist.\n"
+        "Larger values reduce noise but slow adaptation to scene changes.");
+
+    ImGui::SliderFloat("Depth Threshold", &s.DepthThreshold, 0.001f, 0.5f,
+        "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Relative depth tolerance for matching geometry between frames.\n"
+        "Lower = stricter matching, fewer ghosting artifacts.");
+
+    ImGui::SliderFloat("Normal Threshold", &s.NormalThreshold, 0.0f, 1.0f,
+        "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Minimum dot-product between surface normals to consider a temporal match.\n"
+        "Lower = allows larger angle differences.");
+
+    ImGui::EndDisabled(); // temporal
+
+    // ── ReSTIR Spatial ────────────────────────────────────────────────────
+    ImGui::SeparatorText("ReSTIR – Spatial Resampling");
+
+    ImGui::Checkbox("Enable Spatial Reuse", &s.SpatialReuseEnabled);
+    ImGui::SetItemTooltip(
+        "Shares GI reservoirs with screen-space neighbours.\n"
+        "Improves convergence, especially for low Rays Per Pixel.");
+
+    ImGui::BeginDisabled(!s.SpatialReuseEnabled);
+
+    ImGui::SliderInt("Spatial Samples", &s.SpatialSamples, 1, 8,
+        "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Number of spatial neighbours merged per pixel.\n"
+        "More samples = higher quality but more compute.");
+
+    ImGui::SliderFloat("Spatial Radius (px)", &s.SpatialRadius, 1.0f, 32.0f,
+        "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Screen-space search radius in pixels for spatial neighbours.");
+
+    ImGui::EndDisabled(); // spatial
+
+    // ── Accumulation / Denoising ──────────────────────────────────────────
+    ImGui::SeparatorText("Temporal Accumulation");
+
+    ImGui::SliderFloat("Accumulation Blend", &s.AccumulationBlend, 0.0f, 1.0f,
+        "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Blend between current-frame GI (1.0) and accumulated history (0.0).\n"
+        "Lower values produce a smoother result but ghost more on motion.");
+
+    // ── Debug ─────────────────────────────────────────────────────────────
+    ImGui::SeparatorText("Debug");
+
+    const char* debugViews[] = { "Final Lit", "Raw GI Radiance", "GI Luminance" };
+    ImGui::Combo("Debug View", &s.DebugView, debugViews, IM_ARRAYSIZE(debugViews));
+    ImGui::SetItemTooltip(
+        "Override the final output:\n"
+        "  Final Lit     – normal composite output.\n"
+        "  Raw GI        – undenoised per-frame GI radiance.\n"
+        "  GI Luminance  – grey-scale luminance of accumulated GI.");
+
+    ImGui::EndDisabled(); // global enabled
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Ray Traced Ambient Occlusion
+    // ══════════════════════════════════════════════════════════════════════
+    ImGui::Spacing();
+    ImGui::SeparatorText("Ray Traced Ambient Occlusion");
+
+    RtAOSettings& ao = mRtAOSettings;
+
+    ImGui::Checkbox("Enable RTAO", &ao.Enabled);
+    ImGui::SetItemTooltip(
+        "Enables ray traced ambient occlusion.\n"
+        "Fires short occlusion rays from each G-Buffer pixel to darken\n"
+        "creases, corners, and areas with nearby geometry.");
+
+    ImGui::BeginDisabled(!ao.Enabled);
+
+    // ── Ray quality ───────────────────────────────────────────────────────
+    ImGui::SeparatorText("Ray Quality");
+
+    ImGui::SliderInt("AO Rays Per Pixel", &ao.RaysPerPixel, 1, 16,
+        "%d", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Number of occlusion rays fired per pixel per frame.\n"
+        "Higher values reduce noise but cost more GPU time.");
+
+    ImGui::SliderFloat("Max Ray Length", &ao.MaxRayLength, 0.01f, 10.0f,
+        "%.3f m", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Maximum length (world units) of each occlusion ray.\n"
+        "Shorter values produce tighter, surface-contact AO;\n"
+        "longer values approximate larger-scale shadowing.");
+
+    ImGui::SliderFloat("Ray Bias", &ao.RayBias, 0.0001f, 0.05f,
+        "%.4f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Normal-direction offset applied to ray origins to avoid\n"
+        "self-intersection / shadow acne. Increase if you see black dots.");
+
+    ImGui::SliderFloat("AO Power", &ao.AOPower, 0.5f, 4.0f,
+        "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Gamma exponent applied to the raw AO value.\n"
+        "Values > 1 darken occlusion; values < 1 brighten it.");
+
+    // ── Temporal accumulation ─────────────────────────────────────────────
+    ImGui::SeparatorText("Temporal Accumulation");
+
+    ImGui::SliderFloat("AO Accumulation Blend", &ao.AccumulationBlend, 0.0f, 1.0f,
+        "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Blend weight for the current frame in the exponential moving average.\n"
+        "Lower = smoother but slower to update on scene change;\n"
+        "higher = more responsive but noisier.");
+
+    // ── Spatial denoiser ──────────────────────────────────────────────────
+    ImGui::SeparatorText("Bilateral Spatial Filter");
+
+    ImGui::SliderFloat("Denoise Sharpness", &ao.DenoiseSharpness, 0.0f, 1.0f,
+        "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip(
+        "Controls edge preservation during bilateral blurring.\n"
+        "0 = very smooth (ignores geometry edges);\n"
+        "1 = sharp edges preserved, less smoothing.");
+
+    // ── Debug ─────────────────────────────────────────────────────────────
+    ImGui::SeparatorText("AO Debug View");
+
+    const char* aoDebugViews[] = { "Final AO", "Accumulated AO", "Filtered AO" };
+    ImGui::Combo("AO Debug View", &ao.DebugView, aoDebugViews, IM_ARRAYSIZE(aoDebugViews));
+    ImGui::SetItemTooltip(
+        "Override the AO output for inspection:\n"
+        "  Final AO      – normal resolved output.\n"
+        "  Accumulated   – temporally accumulated signal before blur.\n"
+        "  Filtered AO   – post-bilateral-blur signal.");
+
+    // ── RTAO Presets ──────────────────────────────────────────────────────
+    ImGui::Spacing();
+
+    if (ImGui::Button("AO Low"))
+    {
+        ao.RaysPerPixel      = 1;
+        ao.MaxRayLength      = 0.5f;
+        ao.AOPower           = 1.5f;
+        ao.AccumulationBlend = 0.2f;
+        ao.DenoiseSharpness  = 0.3f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("AO Medium"))
+    {
+        ao.RaysPerPixel      = 4;
+        ao.MaxRayLength      = 1.0f;
+        ao.AOPower           = 1.5f;
+        ao.AccumulationBlend = 0.1f;
+        ao.DenoiseSharpness  = 0.5f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("AO High"))
+    {
+        ao.RaysPerPixel      = 8;
+        ao.MaxRayLength      = 2.0f;
+        ao.AOPower           = 1.2f;
+        ao.AccumulationBlend = 0.05f;
+        ao.DenoiseSharpness  = 0.7f;
+    }
+
+    ImGui::EndDisabled(); // ao enabled
+
+    // ── Preset buttons ────────────────────────────────────────────────────
+    ImGui::Spacing();
+    ImGui::SeparatorText("RTGI Presets");
+
+    if (ImGui::Button("Low (Performance)"))
+    {
+        s.RaysPerPixel          = 1;
+        s.MaxBounces            = 1;
+        s.TemporalReuseEnabled  = true;
+        s.MaxHistoryLength      = 8;
+        s.SpatialReuseEnabled   = false;
+        s.AccumulationBlend     = 0.15f;
+        s.RadianceClamp         = 10.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Medium (Balanced)"))
+    {
+        s.RaysPerPixel          = 1;
+        s.MaxBounces            = 2;
+        s.TemporalReuseEnabled  = true;
+        s.MaxHistoryLength      = 12;
+        s.SpatialReuseEnabled   = true;
+        s.SpatialSamples        = 4;
+        s.SpatialRadius         = 20.0f;
+        s.AccumulationBlend     = 0.1f;
+        s.RadianceClamp         = 10.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("High (Quality)"))
+    {
+        s.RaysPerPixel          = 4;
+        s.MaxBounces            = 3;
+        s.TemporalReuseEnabled  = true;
+        s.MaxHistoryLength      = 20;
+        s.SpatialReuseEnabled   = true;
+        s.SpatialSamples        = 8;
+        s.SpatialRadius         = 28.0f;
+        s.AccumulationBlend     = 0.05f;
+        s.RadianceClamp         = 20.0f;
+    }
+
+    ImGui::End();
+}

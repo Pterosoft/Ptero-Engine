@@ -1,0 +1,224 @@
+﻿// RadianceProbes_Update.hlsl  –  cs_6_5
+// One thread per probe.
+// Fires g_RaysPerProbe uniform-sphere rays from the probe world position using
+// inline RayQuery (cs_6_5) and accumulates radiance into L2 SH coefficients.
+// The result is blended with the previous frame's SH via EMA (g_UpdateBlend).
+
+#include "RadianceProbes_Common.hlsli"
+
+// ─── Geometry pools (same as in RTGI RayGen) ────────────────────────────────
+struct GpuPackedVertex { float px, py, pz, nx, ny, nz; };
+struct GpuInstanceInfo { uint vertexOffset, indexOffset, vertexCount, indexCount, materialRangeOffset, materialRangeCount, _pad0, _pad1; };
+struct GpuMaterialRange { uint startPrimitive, primitiveCount; float albedoR, albedoG, albedoB, _pad0; };
+
+StructuredBuffer<GpuPackedVertex>       t_Vertices      : register(t1);
+StructuredBuffer<uint>                  t_Indices        : register(t2);
+StructuredBuffer<GpuInstanceInfo>       t_InstanceInfo   : register(t3);
+StructuredBuffer<GpuMaterialRange>      t_MaterialRanges : register(t4);
+
+// ─── TLAS ────────────────────────────────────────────────────────────────────
+RaytracingAccelerationStructure t_TLAS : register(t5);
+
+// ─── Probe SH buffers ────────────────────────────────────────────────────────
+StructuredBuffer<ProbeSH>   t_ProbeSH_Prev : register(t0);   // previous frame SH (read)
+RWStructuredBuffer<ProbeSH> u_ProbeSH      : register(u0);   // current frame SH (write)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow ray helper.
+// ─────────────────────────────────────────────────────────────────────────────
+bool ShadowRay(float3 origin, float3 dir, float maxDist)
+{
+    RayDesc ray;
+    ray.Origin    = origin;
+    ray.Direction = dir;
+    ray.TMin      = 0.01f;
+    ray.TMax      = maxDist;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
+    rq.TraceRayInline(t_TLAS,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
+        0xFF, ray);
+    while (rq.Proceed()) {}
+    return rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simple diffuse shade at a probe hit.
+// ─────────────────────────────────────────────────────────────────────────────
+float3 ShadeProbeHit(float3 hitPos, float3 hitNormal, float3 hitAlbedo)
+{
+    const float3 sunDir = -g_SunDir;
+    float ndotL = abs(dot(hitNormal, sunDir));
+    float sunVis = 1.0f;
+    if (ndotL > 0.0f)
+    {
+        float bias = max(0.01f, 0.02f * rsqrt(max(ndotL, 0.05f)));
+        float3 org  = hitPos + sunDir * bias;
+        sunVis = ShadowRay(org, sunDir, 1e4f) ? 1.0f : 0.0f;
+        sunVis = lerp(0.25f, 1.0f, sunVis);
+    }
+    float3 directLight = hitAlbedo * g_SunColor * ndotL * sunVis;
+    float skyAmbient   = saturate(abs(dot(hitNormal, float3(0, 0, 1))) * 0.5f + 0.5f);
+    float3 skyLight    = hitAlbedo * g_SkyColor * skyAmbient * 0.3f;
+    return directLight + skyLight;
+}
+
+float3 ResolveHitAlbedo(GpuInstanceInfo info, uint primIdx)
+{
+    [loop]
+    for (uint r = 0; r < info.materialRangeCount; ++r)
+    {
+        GpuMaterialRange range = t_MaterialRanges[info.materialRangeOffset + r];
+        if (primIdx >= range.startPrimitive && primIdx < range.startPrimitive + range.primitiveCount)
+            return float3(range.albedoR, range.albedoG, range.albedoB);
+    }
+    return float3(1.0f, 1.0f, 1.0f);
+}
+
+float3 ApplyColorLeakIntensity(float3 albedo)
+{
+    const float luminance = max(dot(albedo, float3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
+    return saturate(luminance.xxx + (albedo - luminance.xxx) * max(g_ColorLeakIntensity, 0.0f));
+}
+
+float3 EvaluateProbePointLights(float3 hitPos, float3 hitNormal, float3 hitAlbedo)
+{
+    float3 pointLightSum = float3(0.0f, 0.0f, 0.0f);
+
+    [loop]
+    for (int i = 0; i < min(g_NumPointLights, MAX_RADIANCE_PROBE_POINT_LIGHTS); ++i)
+    {
+        const float3 toLight = g_PointLightsCBuffer[i].Position - hitPos;
+        const float distSq = dot(toLight, toLight);
+        const float normDistSq = saturate(distSq * g_PointLightsCBuffer[i].InvRadiusSq);
+        if (normDistSq >= 1.0f)
+            continue;
+
+        const float invDist = rsqrt(max(distSq, 1e-6f));
+        const float lightDistance = rcp(invDist);
+        const float3 lightDir = toLight * invDist;
+        const float ndotL = abs(dot(hitNormal, lightDir));
+        if (ndotL <= 0.0f)
+            continue;
+
+        const float bias = max(0.01f, 0.02f * rsqrt(max(ndotL, 0.05f)));
+        const float maxShadowDistance = max(lightDistance - bias * 2.0f, 0.0f);
+        float visibility = 1.0f;
+        if (maxShadowDistance > 0.0f)
+        {
+            const float3 shadowOrigin = hitPos + hitNormal * bias + lightDir * bias;
+            visibility = ShadowRay(shadowOrigin, lightDir, maxShadowDistance) ? 1.0f : 0.0f;
+            visibility = lerp(0.25f, 1.0f, visibility);
+        }
+
+        const float falloff = (1.0f - normDistSq) * (1.0f - normDistSq);
+        pointLightSum += hitAlbedo * g_PointLightsCBuffer[i].Color * ndotL * falloff * visibility;
+    }
+
+    return pointLightSum;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sky radiance for rays that miss all geometry.
+// ─────────────────────────────────────────────────────────────────────────────
+float3 SkyRadiance(float3 dir)
+{
+    float t = saturate(dir.z);
+    return lerp(g_SkyColor * 0.7f, g_SkyColor, t);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main compute entry.
+// One thread group handles one probe (1 thread per probe, dispatched linearly).
+// ─────────────────────────────────────────────────────────────────────────────
+[numthreads(1, 1, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    uint probeIdx = DTid.x;
+    if (probeIdx >= g_TotalProbes)
+        return;
+
+    float3 probePos = ProbeCoordToWorld(ProbeIndexToCoord(probeIdx));
+
+    // Accumulate a fresh SH from this frame's rays.
+    ProbeSH freshSH;
+    [unroll] for (int c = 0; c < 7; ++c)
+        freshSH.c[c] = float4(0, 0, 0, 0);
+
+    const float weight = 4.0f * 3.14159265f / float(g_RaysPerProbe); // sphere solid angle per sample
+
+    [loop]
+    for (uint i = 0; i < g_RaysPerProbe; ++i)
+    {
+        uint rng = ProbeRng(probeIdx, i, g_FrameIndex);
+        float2 xi  = float2(ProbeRandFloat(rng), ProbeRandFloat(rng));
+        float3 dir = UniformSphere(xi);
+
+        RayDesc ray;
+        ray.Origin    = probePos + dir * 0.05f;
+        ray.Direction = dir;
+        ray.TMin      = 0.0f;
+        ray.TMax      = 1e4f;
+
+        RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
+        rq.TraceRayInline(t_TLAS, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, ray);
+        while (rq.Proceed()) {}
+
+        float3 radiance;
+        if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            float t2  = rq.CommittedRayT();
+            float3 hp = probePos + dir * t2;
+
+            uint instIdx = rq.CommittedInstanceIndex();
+            uint primIdx = rq.CommittedPrimitiveIndex();
+            float2 bary  = rq.CommittedTriangleBarycentrics();
+
+            GpuInstanceInfo info = t_InstanceInfo[instIdx];
+            uint i0 = t_Indices[info.indexOffset + primIdx * 3 + 0];
+            uint i1 = t_Indices[info.indexOffset + primIdx * 3 + 1];
+            uint i2 = t_Indices[info.indexOffset + primIdx * 3 + 2];
+
+            GpuPackedVertex v0 = t_Vertices[info.vertexOffset + i0];
+            GpuPackedVertex v1 = t_Vertices[info.vertexOffset + i1];
+            GpuPackedVertex v2 = t_Vertices[info.vertexOffset + i2];
+
+            float b0 = 1.0f - bary.x - bary.y;
+            float3 localNormal = normalize(b0  * float3(v0.nx, v0.ny, v0.nz)
+                                         + bary.x * float3(v1.nx, v1.ny, v1.nz)
+                                         + bary.y * float3(v2.nx, v2.ny, v2.nz));
+
+            float3x4 o2w = rq.CommittedObjectToWorld3x4();
+            float3x3 o2wRot = float3x3(
+                float3(o2w[0][0], o2w[1][0], o2w[2][0]),
+                float3(o2w[0][1], o2w[1][1], o2w[2][1]),
+                float3(o2w[0][2], o2w[1][2], o2w[2][2]));
+            float3 worldNormal = normalize(mul(o2wRot, localNormal));
+            if (dot(worldNormal, -dir) < 0.0f)
+                worldNormal = -worldNormal;
+
+            float3 hitAlbedo = ApplyColorLeakIntensity(ResolveHitAlbedo(info, primIdx));
+            radiance = ShadeProbeHit(hp, worldNormal, hitAlbedo);
+            radiance = max(radiance, hitAlbedo * 0.12f + g_SkyColor * 0.08f);
+        }
+        else
+        {
+            radiance = SkyRadiance(dir);
+        }
+
+        radiance = max(radiance, g_SkyColor * 0.05f);
+
+        SHAddSample(freshSH, dir, radiance, weight);
+    }
+
+    // EMA blend with previous frame SH.
+    ProbeSH prevSH = t_ProbeSH_Prev[probeIdx];
+    ProbeSH outSH;
+    float blend = saturate(g_UpdateBlend);
+    if (g_FrameIndex == 0)
+        blend = 1.0f;
+    [unroll] for (int c2 = 0; c2 < 7; ++c2)
+        outSH.c[c2] = lerp(prevSH.c[c2], freshSH.c[c2], blend);
+
+    u_ProbeSH[probeIdx] = outSH;
+}

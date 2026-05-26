@@ -1,0 +1,97 @@
+﻿// RtAO_Common.hlsli
+// Shared constants, utilities, and root-signature binding for all three
+// RTAO compute shader passes.
+
+#ifndef RTAO_COMMON_HLSLI
+#define RTAO_COMMON_HLSLI
+
+// ─── Root signature (matches RtAmbientOcclusion::CreateRootSignature) ─────────
+// [0] CBV  b0  – RtAOConstants
+// [1] SRV  t0  – input slot A  (normal+depth / raw AO / accum)
+// [2] SRV  t1  – input slot B  (TLAS / accum history / G-Buffer)
+// [3] UAV  u0  – output slot A (raw AO / accum write / resolved)
+// [4] UAV  u1  – output slot B (unused / unused / caller output)
+// ─────────────────────────────────────────────────────────────────────────────
+
+cbuffer RtAOConstants : register(b0)
+{
+    uint   g_FrameWidth;
+    uint   g_FrameHeight;
+    uint   g_FrameIndex;
+    uint   g_RaysPerPixel;
+
+    float  g_MaxRayLength;
+    float  g_RayBias;
+    float  g_AOPower;
+    float  g_AccumulationBlend;
+
+    float  g_DenoiseSharpness;
+    int    g_DebugView;
+    uint   g_Pad0;
+    uint   g_Pad1;
+
+    float4x4 g_ViewProjInv;   // inverse view-projection (row-major)
+
+    float3 g_CameraPos;
+    float  g_Pad2;
+}
+
+// ─── PCG random number generator ─────────────────────────────────────────────
+uint InitRng(uint2 pixel, uint frameIndex)
+{
+    return (pixel.x * 1973u + pixel.y * 9277u + frameIndex * 26699u) | 1u;
+}
+
+float RandFloat(inout uint state)
+{
+    state = state * 1664525u + 1013904223u;
+    return (state >> 8) * (1.0f / float(1 << 24));
+}
+
+// ─── Oct-normal decode (matching GBuffer.hlsl encoding) ──────────────────────
+float3 DecodeOctNormal(float2 f)
+{
+    f = f * 2.0f - 1.0f;
+    float3 n = float3(f.x, f.y, 1.0f - abs(f.x) - abs(f.y));
+    if (n.z < 0.0f)
+    {
+        float2 wrapped = (1.0f - abs(n.yx)) * (float2(n.xy >= 0.0f) * 2.0f - 1.0f);
+        n.xy = wrapped;
+    }
+    return normalize(n);
+}
+
+// ─── Reconstruct world-space position from depth ─────────────────────────────
+float3 ReconstructWorldPos(uint2 pixel, float depth)
+{
+    float2 uv  = (float2(pixel) + 0.5f) / float2(g_FrameWidth, g_FrameHeight);
+    float2 ndc = uv * 2.0f - 1.0f;
+    ndc.y      = -ndc.y;
+    float4 clip  = float4(ndc, depth, 1.0f);
+    float4 world = mul(clip, g_ViewProjInv);
+    return world.xyz / world.w;
+}
+
+// ─── Cosine-weighted hemisphere sample around N ───────────────────────────────
+float3 CosineSampleHemisphere(float2 xi, float3 N)
+{
+    float phi      = 6.28318530f * xi.x;
+    float cosTheta = sqrt(1.0f - xi.y);
+    float sinTheta = sqrt(xi.y);
+
+    float3 localDir = float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    float3 up    = abs(N.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 right = normalize(cross(up, N));
+    float3 fwd   = cross(N, right);
+
+    return normalize(localDir.x * right + localDir.y * fwd + localDir.z * N);
+}
+
+// ─── Linear pixel index ───────────────────────────────────────────────────────
+uint PixelIndex(uint2 pixel)
+{
+    return pixel.y * g_FrameWidth + pixel.x;
+}
+
+#endif // RTAO_COMMON_HLSLI

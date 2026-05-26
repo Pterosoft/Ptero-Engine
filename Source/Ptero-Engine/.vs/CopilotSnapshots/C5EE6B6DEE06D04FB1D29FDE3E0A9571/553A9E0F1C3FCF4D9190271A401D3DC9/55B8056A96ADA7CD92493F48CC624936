@@ -1,0 +1,43 @@
+﻿#include "VolumetricFogCommon.hlsli"
+
+Texture2D            gSceneDepth : register(t0);
+RaytracingAccelerationStructure gSceneTlas : register(t1);
+RWTexture3D<float4>  gLightingVolume : register(u0);
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    if (dispatchThreadId.x >= gFroxelWidth || dispatchThreadId.y >= gFroxelHeight || dispatchThreadId.z >= gDepthSlices)
+        return;
+
+    uint2 pixel = min(dispatchThreadId.xy * uint2(gFrameWidth, gFrameHeight) / uint2(gFroxelWidth, gFroxelHeight), uint2(gFrameWidth - 1, gFrameHeight - 1));
+    float2 uv = (float2(dispatchThreadId.xy) + 0.5f) / float2(gFroxelWidth, gFroxelHeight);
+    float viewDepth = SliceToViewDepth((float)dispatchThreadId.z);
+
+    float3 worldFar = ReconstructWorldPosition(uv, 1.0f);
+    float3 rayDir = normalize(worldFar - gCameraPos);
+    float3 worldPos = gCameraPos + rayDir * viewDepth;
+
+    float density = gDensity * ComputeHeightDensity(worldPos.z);
+    float visibility = 1.0f;
+
+    RayDesc shadowRay;
+    shadowRay.Origin = worldPos - normalize(gSunDir) * 0.05f;
+    shadowRay.Direction = -normalize(gSunDir);
+    shadowRay.TMin = 0.01f;
+    shadowRay.TMax = gMaxDistance;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
+    rayQuery.TraceRayInline(gSceneTlas, RAY_FLAG_NONE, 0xFF, shadowRay);
+    while (rayQuery.Proceed()) {}
+    if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        visibility = 0.0f;
+
+    float cosTheta = dot(rayDir, normalize(gSunDir));
+    float phase = HenyeyGreenstein(cosTheta, gAnisotropy);
+    float3 ambientScatter = gSkyColor * 0.35f;
+    float3 sunScatter = gSunColor * visibility * (phase * 24.0f);
+    float3 emissiveScatter = gEmissiveColor * gEmissiveIntensity;
+    float3 scattered = (gFogColor * (ambientScatter + sunScatter) + emissiveScatter) * density;
+    gLightingVolume[dispatchThreadId] = float4(scattered, density);
+}

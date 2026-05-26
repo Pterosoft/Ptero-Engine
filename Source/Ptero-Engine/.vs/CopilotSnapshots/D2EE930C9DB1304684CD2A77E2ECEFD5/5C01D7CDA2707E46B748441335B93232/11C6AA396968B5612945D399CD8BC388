@@ -1,0 +1,439 @@
+﻿#include "pch.h"
+#include "SeaRenderer.h"
+#include "DX12ShaderCompiler.h"
+#include "d3dx12.h"
+
+#include <cmath>
+#include <vector>
+
+using namespace DirectX;
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    UINT __stdcall DX12Context_GetFrameIndex();
+}
+
+struct SeaVertex
+{
+    XMFLOAT3 Position;
+    XMFLOAT2 UV;
+};
+
+bool SeaRenderer::Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* commandList)
+{
+    if (!device || !commandList)
+    {
+        return false;
+    }
+
+    if (!CreatePipelineState(device))
+    {
+        return false;
+    }
+
+    if (!CreateSeaMesh(device, commandList, 64))
+    {
+        return false;
+    }
+
+    // Create constant buffer
+    const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
+    const CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(SeaConstants));
+
+    if (FAILED(device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer))))
+    {
+        return false;
+    }
+
+    mConstantBuffer->SetName(L"SeaRenderer::ConstantBuffer");
+
+    if (FAILED(mConstantBuffer->Map(0, nullptr, &mConstantBufferMappedData)))
+    {
+        return false;
+    }
+
+    mIsInitialized = true;
+    return true;
+}
+
+void SeaRenderer::Render(
+    ID3D12GraphicsCommandList* commandList,
+    const XMMATRIX& viewMatrix,
+    const XMMATRIX& projectionMatrix,
+    const SeaSettings& settings,
+    float deltaTime)
+{
+    if (!mIsInitialized || !settings.Enabled)
+    {
+        return;
+    }
+
+    mAccumulatedTime += deltaTime;
+    UpdateConstants(viewMatrix, projectionMatrix, settings, deltaTime);
+
+    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+    commandList->IASetIndexBuffer(&mIndexBufferView);
+
+    commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+    commandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
+}
+
+void SeaRenderer::Shutdown()
+{
+    if (mConstantBufferMappedData)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mConstantBufferMappedData = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mIndexBuffer.Reset();
+    mVertexBuffer.Reset();
+    mPipelineState.Reset();
+    mRootSignature.Reset();
+
+    mIsInitialized = false;
+}
+
+bool SeaRenderer::CreatePipelineState(ID3D12Device* device)
+{
+    // Create root signature
+    D3D12_ROOT_PARAMETER rootParameters[1] = {};
+    rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameters[0].Descriptor.ShaderRegister = 0;
+    rootParameters[0].Descriptor.RegisterSpace = 0;
+    rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
+    rootSignatureDesc.NumParameters = _countof(rootParameters);
+    rootSignatureDesc.pParameters = rootParameters;
+    rootSignatureDesc.NumStaticSamplers = 0;
+    rootSignatureDesc.pStaticSamplers = nullptr;
+    rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+    if (FAILED(D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error)))
+    {
+        return false;
+    }
+
+    if (FAILED(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&mRootSignature))))
+    {
+        return false;
+    }
+
+    mRootSignature->SetName(L"SeaRenderer::RootSignature");
+
+    // Compile shaders using DX12Shader
+    DX12Shader vertexShader;
+    DX12Shader pixelShader;
+
+    ShaderCompileRequest vsRequest = {};
+    vsRequest.FilePath = L"Sea.hlsl";
+    vsRequest.EntryPoint = L"VSMain";
+    vsRequest.TargetProfile = L"vs_6_0";
+    vsRequest.Stage = ShaderStage::Vertex;
+
+    if (!vertexShader.Compile(vsRequest))
+    {
+        return false;
+    }
+
+    ShaderCompileRequest psRequest = {};
+    psRequest.FilePath = L"Sea.hlsl";
+    psRequest.EntryPoint = L"PSMain";
+    psRequest.TargetProfile = L"ps_6_0";
+    psRequest.Stage = ShaderStage::Pixel;
+
+    if (!pixelShader.Compile(psRequest))
+    {
+        return false;
+    }
+
+    // Define input layout
+    D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    // Create pipeline state
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+    psoDesc.pRootSignature = mRootSignature.Get();
+    psoDesc.VS = vertexShader.GetBytecode();
+    psoDesc.PS = pixelShader.GetBytecode();
+
+    // Rasterizer state
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    psoDesc.RasterizerState.MultisampleEnable = FALSE;
+    psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
+    psoDesc.RasterizerState.ForcedSampleCount = 0;
+    psoDesc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+    // Blend state
+    psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
+    psoDesc.BlendState.IndependentBlendEnable = FALSE;
+    const D3D12_RENDER_TARGET_BLEND_DESC defaultRenderTargetBlendDesc =
+    {
+        FALSE,FALSE,
+        D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+        D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_OP_ADD,
+        D3D12_LOGIC_OP_NOOP,
+        D3D12_COLOR_WRITE_ENABLE_ALL,
+    };
+    for (UINT i = 0; i < D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+        psoDesc.BlendState.RenderTarget[i] = defaultRenderTargetBlendDesc;
+
+    // Depth stencil state
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.DepthStencilState.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    psoDesc.DepthStencilState.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    const D3D12_DEPTH_STENCILOP_DESC defaultStencilOp =
+        { D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS };
+    psoDesc.DepthStencilState.FrontFace = defaultStencilOp;
+    psoDesc.DepthStencilState.BackFace = defaultStencilOp;
+
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count = 1;
+
+    if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState))))
+    {
+        return false;
+    }
+
+    mPipelineState->SetName(L"SeaRenderer::PipelineState");
+
+    return true;
+}
+
+bool SeaRenderer::CreateSeaMesh(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, int tessellationFactor)
+{
+    // Create a grid mesh for the sea surface
+    std::vector<SeaVertex> vertices;
+    std::vector<UINT> indices;
+
+    const float tileSize = 200.0f;
+    const float halfSize = tileSize * 0.5f;
+    const int gridSize = tessellationFactor;
+    const float step = tileSize / static_cast<float>(gridSize);
+
+    // Generate vertices
+    for (int z = 0; z <= gridSize; ++z)
+    {
+        for (int x = 0; x <= gridSize; ++x)
+        {
+            SeaVertex vertex;
+            vertex.Position.x = -halfSize + x * step;
+            vertex.Position.y = 0.0f;
+            vertex.Position.z = -halfSize + z * step;
+            vertex.UV.x = static_cast<float>(x) / gridSize;
+            vertex.UV.y = static_cast<float>(z) / gridSize;
+            vertices.push_back(vertex);
+        }
+    }
+
+    // Generate indices
+    for (int z = 0; z < gridSize; ++z)
+    {
+        for (int x = 0; x < gridSize; ++x)
+        {
+            const UINT topLeft = z * (gridSize + 1) + x;
+            const UINT topRight = topLeft + 1;
+            const UINT bottomLeft = (z + 1) * (gridSize + 1) + x;
+            const UINT bottomRight = bottomLeft + 1;
+
+            // First triangle
+            indices.push_back(topLeft);
+            indices.push_back(bottomLeft);
+            indices.push_back(topRight);
+
+            // Second triangle
+            indices.push_back(topRight);
+            indices.push_back(bottomLeft);
+            indices.push_back(bottomRight);
+        }
+    }
+
+    mIndexCount = static_cast<UINT>(indices.size());
+
+    // Create vertex buffer
+    {
+        const UINT vertexBufferSize = static_cast<UINT>(vertices.size() * sizeof(SeaVertex));
+        const CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+
+        if (FAILED(device->CreateCommittedResource(
+            &defaultHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&mVertexBuffer))))
+        {
+            return false;
+        }
+
+        mVertexBuffer->SetName(L"SeaRenderer::VertexBuffer");
+
+        const CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+        ComPtr<ID3D12Resource> vertexBufferUpload;
+        if (FAILED(device->CreateCommittedResource(
+            &uploadHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&vertexBufferUpload))))
+        {
+            return false;
+        }
+
+        void* mappedData;
+        vertexBufferUpload->Map(0, nullptr, &mappedData);
+        memcpy(mappedData, vertices.data(), vertexBufferSize);
+        vertexBufferUpload->Unmap(0, nullptr);
+
+        commandList->CopyResource(mVertexBuffer.Get(), vertexBufferUpload.Get());
+
+        D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            mVertexBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        commandList->ResourceBarrier(1, &barrier);
+
+        mVertexBufferView.BufferLocation = mVertexBuffer->GetGPUVirtualAddress();
+        mVertexBufferView.StrideInBytes = sizeof(SeaVertex);
+        mVertexBufferView.SizeInBytes = vertexBufferSize;
+    }
+
+    // Create index buffer
+    {
+        const UINT indexBufferSize = static_cast<UINT>(indices.size() * sizeof(UINT));
+        const CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+
+        if (FAILED(device->CreateCommittedResource(
+            &defaultHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&mIndexBuffer))))
+        {
+            return false;
+        }
+
+        mIndexBuffer->SetName(L"SeaRenderer::IndexBuffer");
+
+        const CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+        ComPtr<ID3D12Resource> indexBufferUpload;
+        if (FAILED(device->CreateCommittedResource(
+            &uploadHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&indexBufferUpload))))
+        {
+            return false;
+        }
+
+        void* mappedData;
+        indexBufferUpload->Map(0, nullptr, &mappedData);
+        memcpy(mappedData, indices.data(), indexBufferSize);
+        indexBufferUpload->Unmap(0, nullptr);
+
+        commandList->CopyResource(mIndexBuffer.Get(), indexBufferUpload.Get());
+
+        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            mIndexBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        commandList->ResourceBarrier(1, &barrier);
+
+        mIndexBufferView.BufferLocation = mIndexBuffer->GetGPUVirtualAddress();
+        mIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+        mIndexBufferView.SizeInBytes = indexBufferSize;
+    }
+
+    return true;
+}
+
+void SeaRenderer::UpdateConstants(
+    const XMMATRIX& viewMatrix,
+    const XMMATRIX& projectionMatrix,
+    const SeaSettings& settings,
+    float deltaTime)
+{
+    if (!mConstantBufferMappedData)
+    {
+        return;
+    }
+
+    SeaConstants constants = {};
+
+    const XMMATRIX viewProjection = viewMatrix * projectionMatrix;
+    XMStoreFloat4x4(&constants.ViewProjection, XMMatrixTranspose(viewProjection));
+
+    const XMMATRIX invViewProjection = XMMatrixInverse(nullptr, viewProjection);
+    XMStoreFloat4x4(&constants.InverseViewProjection, XMMatrixTranspose(invViewProjection));
+
+    const XMVECTOR cameraPos = XMMatrixInverse(nullptr, viewMatrix).r[3];
+    XMStoreFloat3(&constants.CameraPosition, cameraPos);
+
+    constants.Time = mAccumulatedTime;
+
+    constants.SeaColor = XMFLOAT3(settings.ColorR, settings.ColorG, settings.ColorB);
+    constants.SeaLevel = settings.SeaLevel;
+
+    constants.WaveHeight = settings.WaveHeight;
+    constants.WaveFrequency = settings.WaveFrequency;
+    constants.WaveSpeed = settings.WaveSpeed;
+    constants.WaveChoppiness = settings.WaveChoppiness;
+
+    constants.WindSpeed = settings.WindSpeed;
+    constants.WindDirectionAngle = settings.WindDirectionAngle;
+    constants.TileSize = settings.TileSize;
+    constants.Roughness = settings.Roughness;
+
+    constants.Metallic = settings.Metallic;
+    constants.FoamAmount = settings.FoamAmount;
+    constants.FoamThreshold = settings.FoamThreshold;
+    constants.ReflectionStrength = settings.ReflectionStrength;
+
+    constants.RefractionStrength = settings.RefractionStrength;
+    constants.FresnelPower = settings.FresnelPower;
+    constants.NormalStrength = settings.NormalStrength;
+    constants.DebugView = settings.DebugView;
+
+    constants.FoamEnabled = settings.FoamEnabled ? 1 : 0;
+
+    memcpy(mConstantBufferMappedData, &constants, sizeof(SeaConstants));
+}

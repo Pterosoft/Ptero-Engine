@@ -1,0 +1,130 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "VolumetricFogSettings.h"
+
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <cstdint>
+
+class VolumetricFogRenderer
+{
+public:
+    VolumetricFogRenderer() = default;
+    ~VolumetricFogRenderer() { Shutdown(); }
+
+    bool Initialize(UINT sceneWidth, UINT sceneHeight);
+    bool EnsureSize(UINT sceneWidth, UINT sceneHeight);
+    void Shutdown();
+
+    void Dispatch(
+        ID3D12GraphicsCommandList4* cmdList,
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
+        const VolumetricFogSettings& settings,
+        const float viewProjInv[16],
+        const float currViewProj[16],
+        const float cameraPos[3],
+        float nearPlane,
+        float farPlane,
+        float sunDirX,
+        float sunDirY,
+        float sunDirZ,
+        float sunColorR,
+        float sunColorG,
+        float sunColorB);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetIntegratedFogSrv() const { return mIntegratedSrvGpu; }
+    bool IsInitialized() const { return mIsInitialized; }
+    const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
+
+private:
+    struct alignas(256) FogConstants
+    {
+        uint32_t FrameWidth = 0;
+        uint32_t FrameHeight = 0;
+        uint32_t FroxelWidth = 0;
+        uint32_t FroxelHeight = 0;
+
+        uint32_t DepthSlices = 0;
+        uint32_t DebugView = 0;
+        float    NearPlane = 0.1f;
+        float    FarPlane = 100.0f;
+
+        float    StartDistance = 0.1f;
+        float    MaxDistance = 100.0f;
+        float    Density = 0.02f;
+        float    Anisotropy = 0.5f;
+
+        float    BaseHeight = 0.0f;
+        float    HeightFalloff = 0.0f;
+        float    _Pad0[2]{};
+
+        float    FogColor[3] = { 1.0f, 1.0f, 1.0f };
+        float    _Pad1 = 0.0f;
+
+        float    CameraPos[3]{};
+        float    _Pad2 = 0.0f;
+
+        float    SunDir[3]{};
+        float    _Pad3 = 0.0f;
+
+        float    SunColor[3]{};
+        float    _Pad4 = 0.0f;
+
+        float    ViewProjInv[16]{};
+        float    CurrViewProj[16]{};
+    };
+
+    bool CreateRootSignatures();
+    bool CreatePipelines();
+    bool CreateConstantBuffer();
+    bool CreateResolutionResources(const VolumetricFogSettings& settings);
+    bool CreateDescriptors();
+    void UploadConstants(
+        const VolumetricFogSettings& settings,
+        const float viewProjInv[16],
+        const float currViewProj[16],
+        const float cameraPos[3],
+        float nearPlane,
+        float farPlane,
+        float sunDirX,
+        float sunDirY,
+        float sunDirZ,
+        float sunColorR,
+        float sunColorG,
+        float sunColorB);
+
+    bool mIsInitialized = false;
+    UINT mSceneWidth = 0;
+    UINT mSceneHeight = 0;
+    UINT mFroxelWidth = 0;
+    UINT mFroxelHeight = 0;
+    UINT mDepthSlices = 0;
+    std::string mLastError;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mInjectRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mAccumulateRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mInjectPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mAccumulatePipelineState;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    FogConstants* mMappedConstants = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mLightingVolume;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mIntegratedFog;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mLightingSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mLightingSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mLightingUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mLightingUavGpu{};
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mIntegratedSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mIntegratedSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mIntegratedUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mIntegratedUavGpu{};
+
+    bool mDescriptorsAllocated = false;
+};

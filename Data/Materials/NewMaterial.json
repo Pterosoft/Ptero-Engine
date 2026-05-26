@@ -1,0 +1,35 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "heightScale": 0.05000000074505806,
+    "metallicFactor": 0.0,
+    "name": "NewMaterial",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "roughnessFactor": 1.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_BaseColor.dds",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_Normal.dds",
+        "opacity": "",
+        "roughness": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_Roughness.dds"
+    },
+    "useAlphaCutout": false,
+    "useTransparentBlend": false
+}

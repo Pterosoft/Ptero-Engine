@@ -1,0 +1,164 @@
+﻿// RtGI.hlsl - DXR Global Illumination shader library (lib_6_3).
+struct PointLightGpu { float3 Position; float Radius; float3 Color; float InvRadiusSq; };
+cbuffer GiConstants : register(b0)
+{
+    float4x4 gInvViewProj;
+    float3 gCameraPos; float _c0;
+    float3 gSunDir;    float _c1;
+    float3 gSunColor;  float _c2;
+    float3 gSkyAmbient; float _c3;
+    float gMaxRayDist; int gBounceCount; int gRaysPerPixel; float gAccumAlpha;
+    int gFrameIndex; int gSkylightOnMiss; int gNumPointLights; int gResetAccumulation;
+    PointLightGpu gPointLights[16];
+};
+Texture2D<float4> gGBufferNormal : register(t0);
+Texture2D<float>  gDepthBuffer   : register(t1);
+Texture2D<float4> gHistory       : register(t2);
+RaytracingAccelerationStructure gTlas : register(t3);
+struct RtVertexGpu { float3 Position; float _pad0; float3 Normal; float _pad1; float4 Color; };
+StructuredBuffer<RtVertexGpu> gRtVertices : register(t4);
+ByteAddressBuffer             gRtIndices  : register(t5);
+struct RtInstanceGpu { uint VertexOffset; uint IndexOffset; uint _pad0; uint _pad1; };
+StructuredBuffer<RtInstanceGpu> gRtInstances : register(t6);
+RWTexture2D<float4> gRawOutput   : register(u0);
+RWTexture2D<float4> gAccumOutput : register(u1);
+struct GiPayload { float3 Radiance; float3 HitAlbedo; float3 HitNormal; float3 HitWorldPos; uint Hit; };
+struct TriAttributes { float2 Barycentrics; };
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x*2.0f-1.0f, 1.0f-uv.y*2.0f, depth, 1.0f);
+    float4 w = mul(ndc, gInvViewProj);
+    return w.xyz / w.w;
+}
+uint WangHash(uint s) { s=(s^61u)^(s>>16u); s*=9u; s^=(s>>4u); s*=0x27D4EB2Du; s^=(s>>15u); return s; }
+float UintToFloat01(uint x) { return (float)(x&0x00FFFFFFu)*(1.0f/(float)0x01000000u); }
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    float3 up=(abs(N.z)<0.999f)?float3(0,0,1):float3(1,0,0);
+    float3 T=normalize(cross(up,N)); float3 B=cross(N,T);
+    float r=sqrt(xi.x); float phi=6.28318530718f*xi.y;
+    return normalize(T*(r*cos(phi))+B*(r*sin(phi))+N*sqrt(max(0.0f,1.0f-xi.x)));
+}
+[shader("closesthit")]
+void ClosestHit(inout GiPayload p, in TriAttributes a)
+{
+    p.Hit=1;
+    RtInstanceGpu inst = gRtInstances[InstanceID()];
+    uint triBase = inst.IndexOffset + PrimitiveIndex() * 3u;
+    uint i0 = gRtIndices.Load(triBase * 4u + 0u);
+    uint i1 = gRtIndices.Load(triBase * 4u + 4u);
+    uint i2 = gRtIndices.Load(triBase * 4u + 8u);
+    RtVertexGpu v0 = gRtVertices[i0];
+    RtVertexGpu v1 = gRtVertices[i1];
+    RtVertexGpu v2 = gRtVertices[i2];
+    float w = 1.0f - a.Barycentrics.x - a.Barycentrics.y;
+    float3 bary = float3(w, a.Barycentrics.x, a.Barycentrics.y);
+    float3 localNormal = normalize(v0.Normal * bary.x + v1.Normal * bary.y + v2.Normal * bary.z);
+    // ObjectToWorld3x4() returns a float3x4 (3 rows x 4 cols); extract the upper-left 3x3
+    // manually because a direct cast to float3x3 is not valid in DXR HLSL.
+    float3x4 o2w = ObjectToWorld3x4();
+    float3x3 o2w3 = float3x3(o2w[0].xyz, o2w[1].xyz, o2w[2].xyz);
+    float3 worldNormal = normalize(mul(localNormal, o2w3));
+    if (dot(worldNormal, WorldRayDirection()) > 0.0f) worldNormal = -worldNormal;
+    p.HitAlbedo = saturate(v0.Color.rgb * bary.x + v1.Color.rgb * bary.y + v2.Color.rgb * bary.z);
+    p.HitNormal = worldNormal;
+    p.HitWorldPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+}
+[shader("miss")]
+void Miss(inout GiPayload p)
+{ p.Hit=0; p.Radiance=float3(0,0,0); p.HitAlbedo=float3(0,0,0); p.HitNormal=float3(0,0,1); p.HitWorldPos=float3(0,0,0); }
+float3 ShadeHit(float3 pos, float3 N, float3 albedo)
+{
+    // Compute irradiance at the hit surface from all light sources.
+    // We return raw irradiance (not albedo-weighted) so the deferred pass can
+    // multiply by the *primary* surface albedo exactly once.
+    float3 irr=float3(0,0,0);
+    irr+=gSunColor*saturate(dot(N,normalize(-gSunDir)));
+    irr+=gSkyAmbient*saturate(N.z*0.5f+0.5f);
+    int i; for(i=0;i<gNumPointLights;++i){
+        float3 tl=gPointLights[i].Position-pos; float d2=dot(tl,tl);
+        float NdL=saturate(dot(N,tl*rsqrt(d2)));
+        // Smooth distance attenuation: at^4 falloff within the light radius.
+        float at=saturate(1.0f-(d2*gPointLights[i].InvRadiusSq));
+        irr+=gPointLights[i].Color*NdL*(at*at);
+    }
+    return irr;
+}
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 idx=DispatchRaysIndex().xy; uint2 dim=DispatchRaysDimensions().xy;
+    float2 uv=(float2(idx)+0.5f)/float2(dim);
+    float depth=gDepthBuffer[idx].r;
+    if(depth>=1.0f){ gRawOutput[idx]=float4(0,0,0,1); gAccumOutput[idx]=float4(0,0,0,1); return; }
+    float3 primaryN=normalize(gGBufferNormal[idx].rgb*2.0f-1.0f);
+    float3 primaryPos=ReconstructWorldPos(uv,depth)+primaryN*0.005f;
+    float3 total=float3(0,0,0);
+    int ri; for(ri=0;ri<gRaysPerPixel;++ri){
+        // Per-sample seed varies by pixel, sample index, and frame so each sample is unique.
+        uint seed=WangHash((idx.x*1973u+idx.y*9277u+(uint)gFrameIndex*26699u)^0x5678ABCDu+(uint)ri*8191u);
+        // Multi-bounce path: throughput accumulates the albedo product along the path,
+        // allowing coloured surfaces (e.g. curtains) to bleed colour into adjacent areas.
+        float3 rayOrigin  = primaryPos;
+        float3 rayNormal  = primaryN;
+        float3 throughput = float3(1,1,1);
+        float3 radiance   = float3(0,0,0);
+        int bounce;
+        for(bounce=0; bounce<max(gBounceCount,1); ++bounce)
+        {
+            // Independent random numbers per bounce to avoid correlation.
+            uint s0=WangHash(seed^(uint(bounce+1)*7919u));
+            uint s1=WangHash(s0^0xDEADBEEFu);
+            seed=s1;
+            float3 rd=CosineSampleHemisphere(rayNormal,float2(UintToFloat01(s0),UintToFloat01(s1)));
+            RayDesc ray; ray.Origin=rayOrigin; ray.Direction=rd; ray.TMin=0.001f; ray.TMax=gMaxRayDist;
+            GiPayload pl; pl.Radiance=float3(0,0,0); pl.HitAlbedo=float3(0,0,0); pl.HitNormal=float3(0,0,1); pl.HitWorldPos=float3(0,0,0); pl.Hit=0;
+            TraceRay(gTlas,RAY_FLAG_CULL_BACK_FACING_TRIANGLES,0xFF,0,1,0,ray,pl);
+            if(pl.Hit==1)
+            {
+                // Direct lighting at bounce surface, weighted by path throughput and
+                // surface albedo so coloured surfaces tint the indirect light.
+                float3 directIrr=ShadeHit(pl.HitWorldPos,pl.HitNormal,pl.HitAlbedo);
+                radiance+=throughput*pl.HitAlbedo*directIrr;
+                // Cosine-weighted sampling cancels the diffuse BRDF/PDF; only albedo remains.
+                        // Clamp albedo to [0, 0.95] per component so throughput strictly decreases
+                        // each bounce — this ensures Russian roulette can always terminate and
+                        // prevents white/near-white surfaces from locking throughput at 1.
+                        throughput*=clamp(pl.HitAlbedo,0.0f,0.95f);
+                        // Russian roulette after first bounce to bound cost while staying unbiased.
+                        if(bounce>0){
+                            float q=max(throughput.r,max(throughput.g,throughput.b));
+                            // Also cap q so the probability of termination is at least 5%
+                            q=min(q,0.95f);
+                            uint rr=WangHash(seed^0xCAFEBABEu); seed=rr;
+                            if(UintToFloat01(rr)>q) break;
+                            throughput/=max(q,0.0001f);
+                        }
+                rayOrigin=pl.HitWorldPos+pl.HitNormal*0.005f;
+                rayNormal=pl.HitNormal;
+            }
+            else
+            {
+                // Ray escaped to sky; sky radiance weighted by throughput.
+                if(gSkylightOnMiss) radiance+=throughput*gSkyAmbient;
+                break;
+            }
+        }
+        // Firefly clamp to reduce bright spikes.
+        // Use a moderate threshold: with physically-plausible albedos (< 1) the
+        // throughput decays each bounce so this mainly catches stray bright hits.
+        float lum=dot(radiance,float3(0.2126f,0.7152f,0.0722f));
+        if(lum>2.0f) radiance*=(2.0f/lum);
+        total+=radiance;
+    }
+    total/=(float)max(gRaysPerPixel,1);
+    gRawOutput[idx]=float4(total,1.0f);
+    // When the camera moves the history buffer contains pixels from the old view,
+    // so blending with it causes ghosting/smearing.  On a reset frame, write the
+    // current raw result directly so there is no stale history bleed-through.
+    float4 newSample=float4(total,1.0f);
+    if(gResetAccumulation)
+        gAccumOutput[idx]=newSample;
+    else
+        gAccumOutput[idx]=lerp(gHistory[idx],newSample,gAccumAlpha);
+}

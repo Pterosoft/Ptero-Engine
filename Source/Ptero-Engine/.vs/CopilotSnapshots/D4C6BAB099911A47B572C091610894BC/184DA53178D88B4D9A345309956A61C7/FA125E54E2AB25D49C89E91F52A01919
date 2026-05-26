@@ -1,0 +1,75 @@
+﻿#include "RtGI_Common.hlsli"
+
+#define NRD_COMPILER_DXC
+#include "NRD/NRD.hlsli"
+
+Texture2D<float4>   t_DenoisedSpec  : register(t0);
+Texture2D<float4>   t_NormalDepth   : register(t1);
+Texture2D<float4>   t_Material      : register(t2);
+RWTexture2D<float4> u_Output        : register(u0);
+
+float3 SampleSpecularHalf(uint2 halfPixel)
+{
+    float4 packed = t_DenoisedSpec.Load(int3(halfPixel, 0));
+    return RELAX_BackEnd_UnpackRadiance(packed).rgb;
+}
+
+float3 DecodeNormalFromGBuffer(float2 enc)
+{
+    float2 octN = enc * 2.0f - 1.0f;
+    float octZ = 1.0f - abs(octN.x) - abs(octN.y);
+    float2 wrapped = (1.0f - abs(octN.yx)) * (float2(octN.xy >= 0.0f) * 2.0f - 1.0f);
+    return normalize(float3(octZ < 0.0f ? wrapped : octN.xy, octZ));
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    const uint2 pixel = DTid.xy;
+    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+        return;
+
+    const float4 normalDepth = t_NormalDepth.Load(int3(pixel, 0));
+    const float depth = normalDepth.z;
+    if (depth <= 0.0f || depth >= 1.0f)
+    {
+        u_Output[pixel] = 0.0f.xxxx;
+        return;
+    }
+
+    const uint2 baseHalf = min(pixel / 2u, uint2(g_SpecularFrameWidth - 1, g_SpecularFrameHeight - 1));
+    float3 bestSpecular = 0.0f.xxx;
+    float bestWeight = 0.0f;
+
+    const float3 centerNormal = DecodeNormalFromGBuffer(normalDepth.xy);
+    const float centerRoughness = saturate(t_Material.Load(int3(pixel, 0)).r);
+
+    [unroll]
+    for (int oy = -1; oy <= 1; ++oy)
+    {
+        [unroll]
+        for (int ox = -1; ox <= 1; ++ox)
+        {
+            int2 halfCoord = int2(baseHalf) + int2(ox, oy);
+            halfCoord = clamp(halfCoord, int2(0, 0), int2(g_SpecularFrameWidth - 1, g_SpecularFrameHeight - 1));
+
+            uint2 guidePixel = min(uint2(halfCoord) * 2u, uint2(g_FrameWidth - 1, g_FrameHeight - 1));
+            float4 guideNormalDepth = t_NormalDepth.Load(int3(guidePixel, 0));
+            float3 guideNormal = DecodeNormalFromGBuffer(guideNormalDepth.xy);
+            float guideRoughness = saturate(t_Material.Load(int3(guidePixel, 0)).r);
+
+            float normalWeight = pow(saturate(dot(centerNormal, guideNormal)), 32.0f);
+            float roughnessWeight = saturate(1.0f - abs(centerRoughness - guideRoughness) * 8.0f);
+            float2 delta = (float2(halfCoord) + 0.5f) - ((float2(pixel) + 0.5f) * 0.5f);
+            float spatialWeight = rcp(1.0f + dot(delta, delta));
+            float weight = normalWeight * roughnessWeight * spatialWeight;
+
+            bestSpecular += SampleSpecularHalf(uint2(halfCoord)) * weight;
+            bestWeight += weight;
+        }
+    }
+
+    float3 resolved = (bestWeight > 0.0f) ? (bestSpecular / bestWeight) : 0.0f.xxx;
+    resolved *= g_SpecularResolveStrength;
+    u_Output[pixel] = float4(max(resolved, 0.0f.xxx), 1.0f);
+}

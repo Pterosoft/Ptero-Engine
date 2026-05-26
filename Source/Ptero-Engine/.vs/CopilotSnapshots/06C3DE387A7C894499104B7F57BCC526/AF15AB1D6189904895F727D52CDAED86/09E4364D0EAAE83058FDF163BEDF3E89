@@ -1,0 +1,99 @@
+﻿// RtAO_Spatial.hlsl  –  cs_6_5
+// RTAO Pass 2: edge-aware (bilateral) spatial filter.
+//
+// Samples a 5×5 neighbourhood around each pixel.  Contributions are weighted
+// by:
+//   - A Gaussian spatial weight based on pixel distance.
+//   - A geometry weight that rejects neighbours with significantly different
+//     normals or depth (controlled by g_DenoiseSharpness).
+//
+// The resolved result is written to u_ResolvedAO and optionally forwarded to
+// the caller's output UAV (u_CallerOutput) for use by the deferred-lighting pass.
+
+#include "RtAO_Common.hlsli"
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+Texture2D<float>  t_AccumAO     : register(t0);  // temporally accumulated AO
+Texture2D<float4> t_NormalDepth : register(t1);  // RG = oct-normal, B = depth
+
+// ─── Output ───────────────────────────────────────────────────────────────────
+RWTexture2D<float> u_ResolvedAO : register(u0);  // filtered AO output
+
+// ─── Gaussian kernel weights for a 5×5 filter (sigma ≈ 1.5) ─────────────────
+static const float k_GaussianKernel[5][5] =
+{
+    { 0.0030f, 0.0133f, 0.0219f, 0.0133f, 0.0030f },
+    { 0.0133f, 0.0596f, 0.0983f, 0.0596f, 0.0133f },
+    { 0.0219f, 0.0983f, 0.1621f, 0.0983f, 0.0219f },
+    { 0.0133f, 0.0596f, 0.0983f, 0.0596f, 0.0133f },
+    { 0.0030f, 0.0133f, 0.0219f, 0.0133f, 0.0030f },
+};
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchId : SV_DispatchThreadID)
+{
+    const uint2 pixel = dispatchId.xy;
+    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+        return;
+
+    float4 centerND    = t_NormalDepth[pixel];
+    float  centerDepth = centerND.b;
+
+    // Pass sky pixels through unchanged.
+    if (centerDepth >= 1.0f)
+    {
+        u_ResolvedAO[pixel] = t_AccumAO[pixel];
+        return;
+    }
+
+    float3 centerNormal = DecodeOctNormal(centerND.rg);
+
+    // Map sharpness [0,1] to depth/normal rejection thresholds.
+    // Higher sharpness → tighter tolerances → more edge preservation.
+    float depthTol  = lerp(0.5f, 0.02f,  g_DenoiseSharpness);
+    float normalTol = lerp(0.0f, 0.85f,  g_DenoiseSharpness);
+
+    float weightSum = 0.0f;
+    float aoSum     = 0.0f;
+
+    for (int dy = -2; dy <= 2; ++dy)
+    {
+        for (int dx = -2; dx <= 2; ++dx)
+        {
+            int2 samplePixel = (int2)pixel + int2(dx, dy);
+            samplePixel = clamp(samplePixel, int2(0, 0),
+                                int2(g_FrameWidth - 1, g_FrameHeight - 1));
+
+            float4 sampleND    = t_NormalDepth[samplePixel];
+            float  sampleDepth = sampleND.b;
+
+            if (sampleDepth >= 1.0f)
+                continue;
+
+            // Depth weight.
+            float depthDiff   = abs(centerDepth - sampleDepth);
+            float depthWeight = exp(-depthDiff / max(depthTol, 1e-6f));
+
+            // Normal weight.
+            float3 sampleNormal = DecodeOctNormal(sampleND.rg);
+            float  nDot         = saturate(dot(centerNormal, sampleNormal));
+            float  normalWeight = (nDot >= normalTol) ? 1.0f : 0.0f;
+
+            // Gaussian spatial weight.
+            float spatialWeight = k_GaussianKernel[dy + 2][dx + 2];
+
+            float w = spatialWeight * depthWeight * normalWeight;
+            aoSum     += t_AccumAO[samplePixel] * w;
+            weightSum += w;
+        }
+    }
+
+    float filtered = (weightSum > 1e-6f) ? (aoSum / weightSum) : t_AccumAO[pixel];
+
+    // Apply debug view override.
+    float result = filtered;
+    if (g_DebugView == 1)      result = t_AccumAO[pixel];   // raw accumulated AO
+    else if (g_DebugView == 2) result = filtered;           // spatial filtered (same as final)
+
+    u_ResolvedAO[pixel] = result;
+}

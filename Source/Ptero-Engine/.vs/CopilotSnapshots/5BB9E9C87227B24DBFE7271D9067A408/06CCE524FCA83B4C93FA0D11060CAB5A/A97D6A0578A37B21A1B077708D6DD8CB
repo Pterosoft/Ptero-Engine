@@ -1,0 +1,133 @@
+﻿// MeshEntity.hlsl
+// Per-entity mesh shader with base-color texture, Hosek-Wilkie scene lighting,
+// and PCF shadow mapping from the sun directional light.
+
+cbuffer EntityConstants : register(b0)
+{
+    float4x4 gMVP;      // pre-transposed model-view-projection
+    float4x4 gModel;    // pre-transposed model-to-world matrix for shadow projection
+};
+
+// Scene lighting data uploaded by DX12SceneRenderer every frame (b1).
+cbuffer SceneLighting : register(b1)
+{
+    float3 gSunDirection;   // world-space direction FROM sun TOWARD scene (normalised)
+    float  _LightPad0;
+    float3 gSunColor;       // sun colour × sun intensity (HDR, display-scaled)
+    float  _LightPad1;
+    float3 gSkyAmbient;     // sky ambient colour × sky intensity (HDR, display-scaled)
+    float  _LightPad2;
+};
+
+// Shadow map constants (b2).
+cbuffer ShadowData : register(b2)
+{
+    float4x4 gLightViewProj;    // pre-transposed world-to-light-clip matrix
+    float    gShadowMapSize;    // shadow map resolution in texels (e.g. 2048)
+    float    gShadowBias;       // depth comparison offset
+    float2   _ShadowPad;
+};
+
+Texture2D    gBaseColorTexture : register(t0);
+// Shadow map: R32_FLOAT depth values written during the shadow pass.
+Texture2D    gShadowMap        : register(t1);
+
+SamplerState               gLinearSampler    : register(s0);
+SamplerComparisonState     gShadowSampler    : register(s1);
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+struct PSInput
+{
+    float4 Position      : SV_Position;
+    float3 WorldPosition : WORLDPOS;
+    float3 Normal        : NORMAL;
+    float2 TexCoord      : TEXCOORD;
+    float4 Color         : COLOR;
+};
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    output.Position      = mul(float4(input.Position, 1.0f), gMVP);
+    // Transform to world space using the model matrix so the PS can project into
+    // the light's clip space for correct shadow map sampling.
+    output.WorldPosition = mul(float4(input.Position, 1.0f), gModel).xyz;
+    output.Normal        = mul(float4(input.Normal, 0.0f), gModel).xyz;
+    output.TexCoord      = input.TexCoord;
+    output.Color         = input.Color;
+    return output;
+}
+
+// 3×3 PCF kernel: samples the shadow map at 9 offsets around the projected
+// position and returns an average shadow factor in [0, 1] (0 = fully shadowed).
+float SampleShadowPCF(float4 lightClipPos)
+{
+    // Perform perspective divide.
+    float3 projCoords = lightClipPos.xyz / lightClipPos.w;
+
+    // Map from NDC [-1,+1] to UV [0,1] (Y is flipped in DX clip space).
+    float2 uv;
+    uv.x =  projCoords.x * 0.5f + 0.5f;
+    uv.y = -projCoords.y * 0.5f + 0.5f;
+
+    // Outside the shadow frustum: no shadow.
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f || projCoords.z < 0.0f || projCoords.z > 1.0f)
+        return 1.0f;
+
+    const float depth    = projCoords.z - gShadowBias;
+    const float texelSize = 1.0f / gShadowMapSize;
+
+    // 3×3 PCF: average 9 comparison samples.
+    float shadow = 0.0f;
+    [unroll]
+    for (int x = -1; x <= 1; ++x)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            float2 offset = float2((float)x, (float)y) * texelSize;
+            shadow += gShadowMap.SampleCmpLevelZero(gShadowSampler, uv + offset, depth);
+        }
+    }
+    return shadow / 9.0f;
+}
+
+float4 PSMain(PSInput input) : SV_Target
+{
+    float3 N = normalize(input.Normal);
+
+    // Project this world-space fragment into the sun's light clip space for
+    // shadow map look-up.  gLightViewProj is pre-transposed (row-major).
+    float4 lightClipPos = mul(float4(input.WorldPosition, 1.0f), gLightViewProj);
+
+    // 3×3 PCF shadow factor (1 = fully lit, 0 = fully shadowed).
+    float shadowFactor = SampleShadowPCF(lightClipPos);
+
+    // Convert the incoming sun direction into the standard point-to-light vector
+    // used by Lambert lighting so the Hosek-Wilkie directional light matches the shadow pass.
+    float3 L = normalize(-gSunDirection);
+
+    // Diffuse N·L from the sun directional light, attenuated by shadow.
+    float NdotL  = saturate(dot(N, L));
+    float3 diffuse = gSunColor * NdotL * shadowFactor;
+
+    // Sky ambient remains a simple hemisphere term. Since there is no separate
+    // skylight occlusion solution yet, reuse the shadow factor so enclosed areas
+    // such as Sponza do not stay uniformly lit by the Hosek-Wilkie sky colour.
+    float skyWeight = saturate(N.z * 0.5f + 0.5f);
+    float3 ambient = gSkyAmbient * skyWeight * shadowFactor;
+
+    // Combine lighting with texture and vertex colour.
+    float4 texColor = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord);
+    float3 lit = (diffuse + ambient) * texColor.rgb * input.Color.rgb;
+
+    return float4(lit, texColor.a * input.Color.a);
+}
+

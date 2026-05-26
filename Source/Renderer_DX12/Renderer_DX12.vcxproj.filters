@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Shaders">
+      <UniqueIdentifier>{2e5cdae9-a18b-48d6-817e-485eed1dcde9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\imgui">
+      <UniqueIdentifier>{b46de29f-d34d-4d39-a33e-12f4cf4895f9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\DDS">
+      <UniqueIdentifier>{a3532a35-3bd5-40eb-aeb3-3900fc61b8c0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\DX12">
+      <UniqueIdentifier>{b29b8b2f-607e-40ec-9f42-e257f69f2aba}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Textures">
+      <UniqueIdentifier>{67349db3-9f36-4e5d-8899-1d0db9ee1732}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\TAA">
+      <UniqueIdentifier>{bd2f8583-fabc-48e5-8eeb-2fef0c5a0c20}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Renderer">
+      <UniqueIdentifier>{e54f163b-fa8f-45ac-bbe1-363cbf914504}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\TimeofDay">
+      <UniqueIdentifier>{26f42339-7103-4802-a5c4-70e04a26902e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Lights">
+      <UniqueIdentifier>{557ba837-6cbf-4729-8c9e-932f454ad9b9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DX12Helper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="d3dx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="EditorMainMenu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DX12ShaderCompiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DX12SceneRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RendererStatisticsText.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Components.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ImGuizmoCompat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Editor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SceneSerializer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="EntityMeshRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TaaSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TAARenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TimeOfDaySettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="HosekWilkieSky.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SkyRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ShadowMapRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PointLightRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DeferredLightingPass.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtGISettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtGlobalIllumination.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="NrdDenoiser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtAOSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtAmbientOcclusion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AgxTonemapSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AgxTonemapper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumetricFogSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumetricFogRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="GtaoSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="XeGtaoRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BloomSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BloomRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RadianceProbeSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RadianceProbeRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PointShadowMapRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PointShadowSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="EditorMainMenu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_demo.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_draw.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_dx12.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_tables.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
+      <Filter>Source Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\MaterialEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SceneSerializer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="EntityMeshRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\AssetManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\FbxCompiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\SystemAssetApi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC4BC5.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC6HBC7.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DDSTextureLoader\DDSTextureLoader12.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexCompress.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexConvert.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexDDS.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexFlipRotate.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexHDR.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexImage.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexMipmaps.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexMisc.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexPMAlpha.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexResize.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexTGA.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexUtil.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexWIC.cpp">
+      <Filter>Source Files\DDS</Filter>
+    </ClCompile>
+    <ClCompile Include="DX12Context.cpp">
+      <Filter>Source Files\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="DX12RendererAPI.cpp">
+      <Filter>Source Files\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="DX12SceneRenderer.cpp">
+      <Filter>Source Files\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="DX12ShaderCompiler.cpp">
+      <Filter>Source Files\DX12</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\TextureImporter.cpp">
+      <Filter>Source Files\Textures</Filter>
+    </ClCompile>
+    <ClCompile Include="TextureManager.cpp">
+      <Filter>Source Files\Textures</Filter>
+    </ClCompile>
+    <ClCompile Include="TAARenderer.cpp">
+      <Filter>Source Files\TAA</Filter>
+    </ClCompile>
+    <ClCompile Include="ShadowMapRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DeferredLightingPass.cpp">
+      <Filter>Source Files\Renderer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\HosekWilkie\ArHosekSkyModel.c">
+      <Filter>Source Files\TimeofDay</Filter>
+    </ClCompile>
+    <ClCompile Include="HosekWilkieSky.cpp">
+      <Filter>Source Files\TimeofDay</Filter>
+    </ClCompile>
+    <ClCompile Include="SkyRenderer.cpp">
+      <Filter>Source Files\TimeofDay</Filter>
+    </ClCompile>
+    <ClCompile Include="PointLightRenderer.cpp">
+      <Filter>Source Files\Lights</Filter>
+    </ClCompile>
+    <ClCompile Include="RtGlobalIllumination.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="NrdDenoiser.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RtAmbientOcclusion.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AgxTonemapper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="VolumetricFogRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="XeGtaoRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="BloomRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RadianceProbeRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Editor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\ImGuizmo\ImGuizmo.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\MeshEntity.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\TAAResolve.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\SkyPass.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\ShadowDepth.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\PointLight.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\DeferredLighting.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\GBuffer.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\Data\Shaders\RtGI_Common.hlsli">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_Temporal.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_Composite.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_RayGen.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_Spatial.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtAO_Common.hlsli">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtAO_RayGen.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtAO_Spatial.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+  </ItemGroup>
+</Project>

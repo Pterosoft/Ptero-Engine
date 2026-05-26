@@ -1,0 +1,47 @@
+﻿#pragma once
+
+#if __has_include(<ImGuizmo.h>)
+#include <ImGuizmo.h>
+#else
+namespace ImGuizmo
+{
+    enum OPERATION
+    {
+        TRANSLATE,
+        ROTATE,
+        SCALE
+    };
+
+    enum MODE
+    {
+        LOCAL,
+        WORLD
+    };
+
+    inline void BeginFrame()
+    {
+    }
+
+    inline void SetOrthographic(bool)
+    {
+    }
+
+    inline void SetDrawlist()
+    {
+    }
+
+    inline void SetRect(float, float, float, float)
+    {
+    }
+
+    inline bool Manipulate(const float*, const float*, OPERATION, MODE, float*, float* = nullptr, const float* = nullptr)
+    {
+        return false;
+    }
+
+    inline bool IsUsing()
+    {
+        return false;
+    }
+}
+#endif

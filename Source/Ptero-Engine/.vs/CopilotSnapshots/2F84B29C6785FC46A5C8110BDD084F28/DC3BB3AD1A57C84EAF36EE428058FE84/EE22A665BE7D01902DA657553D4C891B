@@ -1,0 +1,779 @@
+﻿#include "pch.h"
+#include "DX12SceneRenderer.h"
+
+#include "..\System\include\System\AssetManager.h"
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_GetRenderSize(UINT* width, UINT* height);
+    HWND __stdcall DX12Context_GetWindowHandle();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+namespace
+{
+    constexpr DXGI_FORMAT SceneColorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    constexpr DXGI_FORMAT SceneDepthFormat = DXGI_FORMAT_D32_FLOAT;
+
+    std::vector<DX12SceneRenderer::Vertex> GenerateGridVertices()
+    {
+        constexpr float gridExtent = 50.0f;
+        constexpr float lineSpacing = 1.0f;
+        constexpr XMFLOAT4 gridColor(0.2f, 0.2f, 0.2f, 1.0f);
+
+        std::vector<DX12SceneRenderer::Vertex> vertices;
+        vertices.reserve(404);
+
+        // Emit one pair of vertices per grid line so the geometry can be drawn as a line list.
+        for (float position = -gridExtent; position <= gridExtent; position += lineSpacing)
+        {
+            vertices.push_back({ XMFLOAT3(position, -gridExtent, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3(position,  gridExtent, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3(-gridExtent, position, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3( gridExtent, position, 0.0f), gridColor });
+        }
+
+        return vertices;
+    }
+}
+
+bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    try
+    {
+        if (mIsInitialized)
+        {
+            return true;
+        }
+
+        if (commandList == nullptr)
+        {
+            return false;
+        }
+
+        mLastErrorMessage.clear();
+
+        mCamera.SetPosition(0.0f, -6.0f, 1.5f);
+        mCamera.LookAt(0.0f, 0.0f, 0.0f);
+
+        if (!CreatePipeline())
+        {
+            mLastErrorMessage = "Failed to create the DX12 scene pipeline or compile the cube shaders.";
+            Shutdown();
+            return false;
+        }
+
+        if (!EnsureSceneTargetMatchesWindowSize())
+        {
+            if (mLastErrorMessage.empty())
+            {
+                mLastErrorMessage = "Failed to create the off-screen scene render target.";
+            }
+            Shutdown();
+            return false;
+        }
+
+        if (!CreateGeometry(commandList))
+        {
+            mLastErrorMessage = "Failed to upload cube vertex or index buffers to the GPU.";
+            Shutdown();
+            return false;
+        }
+
+        if (!CreateConstantBuffer())
+        {
+            mLastErrorMessage = "Failed to create the camera constant buffer.";
+            Shutdown();
+            return false;
+        }
+
+        UpdateSceneConstants();
+
+        // Initialize the entity mesh renderer so it is ready to receive entities each frame.
+        if (!mEntityMeshRenderer.Initialize(commandList))
+        {
+            mLastErrorMessage = "Failed to initialize the entity mesh renderer.";
+            Shutdown();
+            return false;
+        }
+
+        // Initialize the TAA renderer.  Non-fatal if it fails – TAA is a quality feature
+        // and the engine still renders correctly without it.
+        if (!mTaaRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: TAA initialization failed – TAA disabled.\n");
+            if (mTaaRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mTaaRenderer.GetLastErrorMessage());
+            mTaaSettings.Enabled = false;
+        }
+
+        // Initialize the sky renderer.  Non-fatal if it fails.
+        if (!mSkyRenderer.Initialize(SceneColorFormat, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Sky renderer initialization failed.\n");
+            if (mSkyRenderer.GetLastError())
+                OutputDebugStringA(mSkyRenderer.GetLastError());
+        }
+
+        mIsInitialized = true;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        mLastErrorMessage = exception.what();
+        Shutdown();
+        return false;
+    }
+    catch (...)
+    {
+        mLastErrorMessage = "The DX12 scene renderer failed with an unknown exception during initialization.";
+        Shutdown();
+        return false;
+    }
+}
+
+void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
+{
+    if (!(mIsInitialized && commandList && mPipeline.GetRootSignature() && mPipeline.GetPipelineState()))
+    {
+        return;
+    }
+
+    if (!EnsureSceneTargetMatchesWindowSize())
+    {
+        return;
+    }
+
+    // Drive the editor camera once per frame so the constant buffer reflects live input.
+    UpdateCamera();
+    UpdateSceneConstants();
+
+    ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+    commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
+
+    const auto toSceneRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorTarget.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commandList->ResourceBarrier(1, &toSceneRenderTarget);
+
+    const D3D12_VIEWPORT viewport =
+    {
+        0.0f,
+        0.0f,
+        static_cast<float>(mSceneWidth),
+        static_cast<float>(mSceneHeight),
+        0.0f,
+        1.0f
+    };
+    const D3D12_RECT scissorRect = { 0, 0, static_cast<LONG>(mSceneWidth), static_cast<LONG>(mSceneHeight) };
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissorRect);
+
+    commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
+
+    const float sceneClearColor[] = { 0.12f, 0.14f, 0.18f, 1.0f };
+    commandList->ClearRenderTargetView(mSceneRtvHandle, sceneClearColor, 0, nullptr);
+    commandList->ClearDepthStencilView(mSceneDsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    commandList->SetGraphicsRootSignature(mPipeline.GetRootSignature());
+    commandList->SetPipelineState(mPipeline.GetPipelineState());
+
+    if (mGridEnabled)
+    {
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        commandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+
+        // Root CBVs keep the MVP update path simple while the renderer only needs a single constant buffer.
+        commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+        commandList->DrawInstanced(mVertexCount, 1, 0, 0);
+    }
+
+    // Render all scene entities that have an assigned mesh.
+    // The EntityMeshRenderer manages its own pipeline and per-entity GPU buffers.
+    // Pass the jittered VP matrix so entity meshes benefit from the same sub-pixel jitter.
+    mEntityMeshRenderer.Render(commandList, XMLoadFloat4x4(&mJitteredViewProjection), SceneColorFormat, SceneDepthFormat);
+
+    const auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorTarget.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toShaderResource);
+
+    // Run the TAA resolve pass when TAA is enabled.  This blends the current frame
+    // with the history buffer and writes into the output texture that ImGui displays.
+    if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+    {
+        mTaaRenderer.Resolve(
+            commandList,
+            mSceneColorTarget.Get(),
+            mSceneSrvCpuHandle,
+            mTaaSettings);
+
+        // Re-bind the shared SRV heap after the TAA pass so subsequent ImGui
+        // rendering sees the correct descriptor heap.
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+}
+
+void DX12SceneRenderer::Shutdown()
+{
+    mEntityMeshRenderer.Shutdown();
+    mTaaRenderer.Shutdown();
+
+    if (mConstantBuffer && mMappedConstants != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedConstants = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mVertexBuffer = {};
+    mIndexBuffer = {};
+    ReleaseSceneTargetResources();
+    mPipeline.mPipelineState.Reset();
+    mPipeline.mRootSignature.Reset();
+    mSceneSrvCpuHandle = {};
+    mSceneSrvGpuHandle = {};
+    mSceneTextureId = ImTextureID_Invalid;
+    mIsInitialized = false;
+}
+
+bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
+{
+    UINT renderWidth = 0;
+    UINT renderHeight = 0;
+    if (!DX12Context_GetRenderSize(&renderWidth, &renderHeight))
+    {
+        mLastErrorMessage = "Failed to query the DX12 back-buffer size.";
+        return false;
+    }
+
+    if (renderWidth == 0 || renderHeight == 0)
+    {
+        return true;
+    }
+
+    if (mSceneColorTarget && renderWidth == mSceneWidth && renderHeight == mSceneHeight)
+    {
+        return true;
+    }
+
+    // Recreate the scene targets whenever the editor window size changes so the
+    // viewport texture stays pixel-aligned with the current client area.
+    ReleaseSceneTargetResources();
+    mSceneWidth = renderWidth;
+    mSceneHeight = renderHeight;
+    mCamera.SetLens(XM_PIDIV4, static_cast<float>(mSceneWidth) / static_cast<float>(mSceneHeight), 0.1f, 100.0f);
+
+    if (!CreateSceneTarget())
+    {
+        mLastErrorMessage = "Failed to resize the off-screen scene render target to match the editor window.";
+        return false;
+    }
+
+    // Resize TAA textures to match the new viewport dimensions.
+    if (mTaaRenderer.IsInitialized())
+    {
+        mTaaRenderer.Initialize(mSceneWidth, mSceneHeight);
+    }
+
+    return true;
+}
+
+void DX12SceneRenderer::ReleaseSceneTargetResources()
+{
+    mSceneColorTarget.Reset();
+    mSceneDepthTarget.Reset();
+    mSceneRtvHeap.Reset();
+    mSceneDsvHeap.Reset();
+    mSceneRtvHandle = {};
+    mSceneDsvHandle = {};
+}
+
+bool DX12SceneRenderer::CreatePipeline()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const ShaderCompileRequest vertexShaderRequest
+    {
+        L"Shaders\\HelloCube.hlsl",
+        L"VSMain",
+        L"vs_5_0",
+        ShaderStage::Vertex
+    };
+
+    const ShaderCompileRequest pixelShaderRequest
+    {
+        L"Shaders\\HelloCube.hlsl",
+        L"PSMain",
+        L"ps_5_0",
+        ShaderStage::Pixel
+    };
+
+    if (!mVertexShader.Compile(vertexShaderRequest))
+    {
+        mLastErrorMessage = std::string("Vertex shader compilation failed: ")
+            + (mVertexShader.GetLastErrorMessage() ? mVertexShader.GetLastErrorMessage() : "Unknown shader compiler error.");
+        return false;
+    }
+
+    if (!mPixelShader.Compile(pixelShaderRequest))
+    {
+        mLastErrorMessage = std::string("Pixel shader compilation failed: ")
+            + (mPixelShader.GetLastErrorMessage() ? mPixelShader.GetLastErrorMessage() : "Unknown shader compiler error.");
+        return false;
+    }
+
+    D3D12_ROOT_PARAMETER rootParameter{};
+    rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameter.Descriptor.ShaderRegister = 0;
+    rootParameter.Descriptor.RegisterSpace = 0;
+    rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+    rootSignatureDesc.NumParameters = 1;
+    rootSignatureDesc.pParameters = &rootParameter;
+    rootSignatureDesc.NumStaticSamplers = 0;
+    rootSignatureDesc.pStaticSamplers = nullptr;
+    rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serializedRootSignature;
+    ComPtr<ID3DBlob> rootSignatureErrors;
+    DX12_THROW_IF_FAILED(D3D12SerializeRootSignature(
+        &rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &serializedRootSignature,
+        &rootSignatureErrors));
+    DX12_THROW_IF_FAILED(device->CreateRootSignature(
+        0,
+        serializedRootSignature->GetBufferPointer(),
+        serializedRootSignature->GetBufferSize(),
+        IID_PPV_ARGS(&mPipeline.mRootSignature)));
+
+    const D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = mPipeline.GetRootSignature();
+    psoDesc.VS = mVertexShader.GetBytecode();
+    psoDesc.PS = mPixelShader.GetBytecode();
+    psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
+    psoDesc.BlendState.IndependentBlendEnable = FALSE;
+    D3D12_RENDER_TARGET_BLEND_DESC renderTargetBlendDesc{};
+    renderTargetBlendDesc.BlendEnable = FALSE;
+    renderTargetBlendDesc.LogicOpEnable = FALSE;
+    renderTargetBlendDesc.SrcBlend = D3D12_BLEND_ONE;
+    renderTargetBlendDesc.DestBlend = D3D12_BLEND_ZERO;
+    renderTargetBlendDesc.BlendOp = D3D12_BLEND_OP_ADD;
+    renderTargetBlendDesc.SrcBlendAlpha = D3D12_BLEND_ONE;
+    renderTargetBlendDesc.DestBlendAlpha = D3D12_BLEND_ZERO;
+    renderTargetBlendDesc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    renderTargetBlendDesc.LogicOp = D3D12_LOGIC_OP_NOOP;
+    renderTargetBlendDesc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.BlendState.RenderTarget[0] = renderTargetBlendDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    psoDesc.RasterizerState.MultisampleEnable = FALSE;
+    psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
+    psoDesc.RasterizerState.ForcedSampleCount = 0;
+    psoDesc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.DepthStencilState.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    psoDesc.DepthStencilState.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    const D3D12_DEPTH_STENCILOP_DESC defaultStencilOp =
+    {
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_COMPARISON_FUNC_ALWAYS
+    };
+    psoDesc.DepthStencilState.FrontFace = defaultStencilOp;
+    psoDesc.DepthStencilState.BackFace = defaultStencilOp;
+    psoDesc.InputLayout = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = SceneColorFormat;
+    psoDesc.DSVFormat = SceneDepthFormat;
+    psoDesc.SampleDesc.Count = 1;
+
+    DX12_THROW_IF_FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipeline.mPipelineState)));
+    mPipeline.SetDebugName(L"Floor Grid Pipeline");
+    return true;
+}
+
+bool DX12SceneRenderer::CreateSceneTarget()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    if ((mSceneSrvCpuHandle.ptr == 0 || mSceneSrvGpuHandle.ptr == 0) &&
+        !DX12Context_AllocateSrvDescriptor(&mSceneSrvCpuHandle, &mSceneSrvGpuHandle))
+    {
+        return false;
+    }
+
+    mSceneTextureId = static_cast<ImTextureID>(mSceneSrvGpuHandle.ptr);
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
+    rtvHeapDesc.NumDescriptors = 1;
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mSceneRtvHeap)));
+    mSceneRtvHandle = mSceneRtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mSceneDsvHeap)));
+    mSceneDsvHandle = mSceneDsvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_RESOURCE_DESC colorTargetDesc{};
+    colorTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    colorTargetDesc.Alignment = 0;
+    colorTargetDesc.Width = mSceneWidth;
+    colorTargetDesc.Height = mSceneHeight;
+    colorTargetDesc.DepthOrArraySize = 1;
+    colorTargetDesc.MipLevels = 1;
+    colorTargetDesc.Format = SceneColorFormat;
+    colorTargetDesc.SampleDesc.Count = 1;
+    colorTargetDesc.SampleDesc.Quality = 0;
+    colorTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    colorTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE colorClearValue{};
+    colorClearValue.Format = SceneColorFormat;
+    colorClearValue.Color[0] = 0.12f;
+    colorClearValue.Color[1] = 0.14f;
+    colorClearValue.Color[2] = 0.18f;
+    colorClearValue.Color[3] = 1.0f;
+
+    D3D12_HEAP_PROPERTIES defaultHeapProperties{};
+    defaultHeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeapProperties.CreationNodeMask = 1;
+    defaultHeapProperties.VisibleNodeMask = 1;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &colorTargetDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &colorClearValue,
+        IID_PPV_ARGS(&mSceneColorTarget)));
+
+    device->CreateRenderTargetView(mSceneColorTarget.Get(), nullptr, mSceneRtvHandle);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = SceneColorFormat;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(mSceneColorTarget.Get(), &srvDesc, mSceneSrvCpuHandle);
+
+    D3D12_RESOURCE_DESC depthTargetDesc{};
+    depthTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthTargetDesc.Alignment = 0;
+    depthTargetDesc.Width = mSceneWidth;
+    depthTargetDesc.Height = mSceneHeight;
+    depthTargetDesc.DepthOrArraySize = 1;
+    depthTargetDesc.MipLevels = 1;
+    depthTargetDesc.Format = SceneDepthFormat;
+    depthTargetDesc.SampleDesc.Count = 1;
+    depthTargetDesc.SampleDesc.Quality = 0;
+    depthTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depthTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE depthClearValue{};
+    depthClearValue.Format = SceneDepthFormat;
+    depthClearValue.DepthStencil.Depth = 1.0f;
+    depthClearValue.DepthStencil.Stencil = 0;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &depthTargetDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthClearValue,
+        IID_PPV_ARGS(&mSceneDepthTarget)));
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+    dsvDesc.Format = SceneDepthFormat;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(mSceneDepthTarget.Get(), &dsvDesc, mSceneDsvHandle);
+
+    return true;
+}
+
+bool DX12SceneRenderer::CreateGeometry(ID3D12GraphicsCommandList* commandList)
+{
+    const std::vector<Vertex> gridVertices = GenerateGridVertices();
+    if (!CreateBufferWithUpload(
+        commandList,
+        gridVertices.data(),
+        static_cast<UINT64>(gridVertices.size() * sizeof(Vertex)),
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        mVertexBuffer))
+    {
+        return false;
+    }
+
+    mVertexBufferView.BufferLocation = mVertexBuffer.DefaultBuffer->GetGPUVirtualAddress();
+    mVertexBufferView.StrideInBytes = sizeof(Vertex);
+    mVertexBufferView.SizeInBytes = static_cast<UINT>(gridVertices.size() * sizeof(Vertex));
+
+    // The floor grid is drawn as a non-indexed line list, so vertex count is all that is needed at draw time.
+    mVertexCount = static_cast<UINT>(gridVertices.size());
+    return true;
+}
+
+bool DX12SceneRenderer::CreateConstantBuffer()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const UINT64 constantBufferSize = (sizeof(SceneConstants) + 255ull) & ~255ull;
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeapProperties.CreationNodeMask = 1;
+    uploadHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC constantBufferDesc{};
+    constantBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    constantBufferDesc.Alignment = 0;
+    constantBufferDesc.Width = constantBufferSize;
+    constantBufferDesc.Height = 1;
+    constantBufferDesc.DepthOrArraySize = 1;
+    constantBufferDesc.MipLevels = 1;
+    constantBufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    constantBufferDesc.SampleDesc.Count = 1;
+    constantBufferDesc.SampleDesc.Quality = 0;
+    constantBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    constantBufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &constantBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer)));
+
+    DX12_THROW_IF_FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedConstants)));
+    return true;
+}
+
+bool DX12SceneRenderer::CreateBufferWithUpload(
+    ID3D12GraphicsCommandList* commandList,
+    const void* initialData,
+    UINT64 dataSize,
+    D3D12_RESOURCE_STATES finalState,
+    BufferResource& outBuffer) const
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!(device && commandList && initialData && dataSize > 0))
+    {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES defaultHeapProperties{};
+    defaultHeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeapProperties.CreationNodeMask = 1;
+    defaultHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeapProperties.CreationNodeMask = 1;
+    uploadHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Alignment = 0;
+    bufferDesc.Width = dataSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.SampleDesc.Quality = 0;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&outBuffer.DefaultBuffer)));
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&outBuffer.UploadBuffer)));
+
+    void* mappedData = nullptr;
+    DX12_THROW_IF_FAILED(outBuffer.UploadBuffer->Map(0, nullptr, &mappedData));
+    std::memcpy(mappedData, initialData, static_cast<size_t>(dataSize));
+    outBuffer.UploadBuffer->Unmap(0, nullptr);
+
+    // Geometry upload follows the standard DX12 staging path: CPU writes to the upload heap,
+    // then the command list copies into the default heap before the buffer is used for drawing.
+    commandList->CopyBufferRegion(outBuffer.DefaultBuffer.Get(), 0, outBuffer.UploadBuffer.Get(), 0, dataSize);
+    const auto transitionBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        outBuffer.DefaultBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        finalState);
+    commandList->ResourceBarrier(1, &transitionBarrier);
+    return true;
+}
+
+void DX12SceneRenderer::UpdateCamera()
+{
+    static auto previousFrameTime = std::chrono::steady_clock::now();
+
+    const auto currentFrameTime = std::chrono::steady_clock::now();
+    const float deltaTime = std::chrono::duration<float>(currentFrameTime - previousFrameTime).count();
+    previousFrameTime = currentFrameTime;
+
+    HWND windowHandle = DX12Context_GetWindowHandle();
+    if (windowHandle == nullptr)
+    {
+        return;
+    }
+
+    POINT mousePosition{};
+    if (!GetCursorPos(&mousePosition))
+    {
+        return;
+    }
+
+    ScreenToClient(windowHandle, &mousePosition);
+
+    const bool moveForward = (GetAsyncKeyState('W') & 0x8000) != 0;
+    const bool moveBackward = (GetAsyncKeyState('S') & 0x8000) != 0;
+    const bool moveLeft = (GetAsyncKeyState('A') & 0x8000) != 0;
+    const bool moveRight = (GetAsyncKeyState('D') & 0x8000) != 0;
+    const bool rightMouseButtonDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+
+    // Feed the current keyboard state and mouse position into the camera every frame.
+    mCamera.Update(
+        deltaTime,
+        moveForward,
+        moveBackward,
+        moveLeft,
+        moveRight,
+        rightMouseButtonDown,
+        static_cast<float>(mousePosition.x),
+        static_cast<float>(mousePosition.y));
+}
+
+void DX12SceneRenderer::UpdateSceneConstants()
+{
+    if (mMappedConstants == nullptr)
+    {
+        return;
+    }
+
+    const XMMATRIX model      = XMMatrixIdentity();
+    const XMMATRIX view       = mCamera.GetViewMatrix();
+    XMMATRIX       projection = mCamera.GetProjectionMatrix();
+
+    // Detect camera movement by comparing the current view matrix to last frame's.
+    // When the camera has moved, signal the TAA renderer to discard stale history so
+    // it does not blend the old (misaligned) frame into the new one.
+    if (mTaaSettings.Enabled)
+    {
+        XMFLOAT4X4 viewF;
+        XMStoreFloat4x4(&viewF, view);
+        if (std::memcmp(&viewF, &mPreviousViewMatrix, sizeof(XMFLOAT4X4)) != 0)
+        {
+            mTaaSettings.ResetHistory = true;
+        }
+        mPreviousViewMatrix = viewF;
+    }
+
+    // Apply a sub-pixel Halton jitter to the projection matrix when TAA is enabled.
+    // Jittering causes each frame to sample a slightly different sub-pixel location;
+    // the TAA resolve pass then accumulates these into a stable anti-aliased image.
+    if (mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
+    {
+        // Halton(2,3) sequence gives a well-distributed low-discrepancy pattern.
+        constexpr UINT HaltonSequenceLength = 16;
+        static const float kHaltonX[HaltonSequenceLength] =
+        {
+             0.5f,   0.25f,  0.75f,  0.125f,  0.625f,  0.375f,  0.875f,  0.0625f,
+             0.5625f,0.3125f,0.8125f, 0.1875f, 0.6875f, 0.4375f, 0.9375f, 0.03125f
+        };
+        static const float kHaltonY[HaltonSequenceLength] =
+        {
+             1.f/3,  2.f/3, 1.f/9, 4.f/9, 7.f/9, 2.f/9, 5.f/9, 8.f/9,
+             1.f/27, 10.f/27,19.f/27,4.f/27,13.f/27,22.f/27,7.f/27,16.f/27
+        };
+
+        mJitterIndex = (mJitterIndex + 1) % HaltonSequenceLength;
+
+        // Convert jitter from pixel units to NDC (range [-1,1]).
+        const float jitterX = (kHaltonX[mJitterIndex] - 0.5f) * 2.0f / static_cast<float>(mSceneWidth)  * mTaaSettings.JitterScale;
+        const float jitterY = (kHaltonY[mJitterIndex] - 0.5f) * 2.0f / static_cast<float>(mSceneHeight) * mTaaSettings.JitterScale;
+
+        // Add the jitter directly to the last column of the projection matrix (NDC shift).
+        XMFLOAT4X4 projF;
+        XMStoreFloat4x4(&projF, projection);
+        projF._31 += jitterX;
+        projF._32 += jitterY;
+        projection = XMLoadFloat4x4(&projF);
+    }
+
+    // The floor grid lives on the Z-up ground plane so the camera transform is the only motion applied here.
+    const XMMATRIX mvp = XMMatrixTranspose(model * view * projection);
+    XMStoreFloat4x4(&mMappedConstants->ModelViewProjection, mvp);
+
+    // Cache the jittered VP so Render() can pass it to the entity renderer.
+    XMStoreFloat4x4(&mJitteredViewProjection, view * projection);
+}

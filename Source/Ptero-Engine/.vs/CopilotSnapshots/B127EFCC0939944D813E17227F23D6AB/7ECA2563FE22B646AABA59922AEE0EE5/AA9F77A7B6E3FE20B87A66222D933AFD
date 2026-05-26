@@ -1,0 +1,41 @@
+﻿#pragma once
+
+// RtGiSettings
+// All tunable parameters for the DXR ray-traced global illumination pass.
+// Exposed through the Graphics Settings window in the editor.
+struct RtGiSettings
+{
+    // Master toggle – when false the GI pass is skipped entirely.
+    bool  Enabled            = true;
+
+    // Number of indirect bounce rays shot from each G-Buffer pixel per frame.
+    // Higher values reduce noise but increase cost linearly.
+    int   RaysPerPixel       = 1;
+
+    // Maximum length of an indirect ray before it is treated as a miss.
+    float MaxRayDistance     = 100.0f;
+
+    // Number of diffuse bounces (1 = single-bounce GI; 2+ = multi-bounce).
+    int   BounceCount        = 1;
+
+    // Overall intensity multiplier applied to the accumulated GI contribution.
+    float Intensity          = 1.0f;
+
+    // Temporal accumulation weight (lower = more history, less noise, more lag).
+    float AccumulationAlpha  = 0.1f;
+
+    // Sky radiance applied to rays that miss all geometry.
+    // When false, miss rays contribute zero radiance (cheaper, darker result).
+    bool  SkylightOnMiss     = true;
+
+    // Debug: visualise raw noisy GI without temporal accumulation.
+    bool  DebugNoAccumulation = false;
+
+    // Saturation multiplier applied to the GI output and to bounce albedos.
+    // Values > 1 boost color bleeding from coloured surfaces (e.g. curtains).
+    float GiSaturation = 1.0f;
+
+    // Debug: output the raw first-hit albedo colour instead of radiance.
+    // Use this to verify that material tints are correctly loaded into the RT scene.
+    bool  DebugAlbedoOnly = false;
+};

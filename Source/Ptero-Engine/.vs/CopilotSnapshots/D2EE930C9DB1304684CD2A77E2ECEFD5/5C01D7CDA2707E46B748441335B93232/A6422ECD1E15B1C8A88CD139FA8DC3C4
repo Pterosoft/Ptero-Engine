@@ -1,0 +1,84 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "SeaSettings.h"
+
+#include <DirectXMath.h>
+#include <wrl/client.h>
+#include <d3d12.h>
+
+class SeaRenderer
+{
+public:
+    SeaRenderer() = default;
+    ~SeaRenderer() = default;
+
+    bool Initialize(ID3D12Device* device, ID3D12GraphicsCommandList* commandList);
+    void Render(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMMATRIX& viewMatrix,
+        const DirectX::XMMATRIX& projectionMatrix,
+        const SeaSettings& settings,
+        float deltaTime);
+    void Shutdown();
+
+    bool IsInitialized() const { return mIsInitialized; }
+
+private:
+    struct SeaConstants
+    {
+        DirectX::XMFLOAT4X4 ViewProjection;
+        DirectX::XMFLOAT4X4 InverseViewProjection;
+        DirectX::XMFLOAT3   CameraPosition;
+        float               Time;
+
+        DirectX::XMFLOAT3   SeaColor;
+        float               SeaLevel;
+
+        float               WaveHeight;
+        float               WaveFrequency;
+        float               WaveSpeed;
+        float               WaveChoppiness;
+
+        float               WindSpeed;
+        float               WindDirectionAngle;
+        float               TileSize;
+        float               Roughness;
+
+        float               Metallic;
+        float               FoamAmount;
+        float               FoamThreshold;
+        float               ReflectionStrength;
+
+        float               RefractionStrength;
+        float               FresnelPower;
+        float               NormalStrength;
+        int                 DebugView;
+
+        int                 FoamEnabled;
+        DirectX::XMFLOAT3   _Padding;
+    };
+
+    bool CreatePipelineState(ID3D12Device* device);
+    bool CreateSeaMesh(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, int tessellationFactor);
+    void UpdateConstants(
+        const DirectX::XMMATRIX& viewMatrix,
+        const DirectX::XMMATRIX& projectionMatrix,
+        const SeaSettings& settings,
+        float deltaTime);
+
+    bool mIsInitialized = false;
+    float mAccumulatedTime = 0.0f;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW mVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW mIndexBufferView = {};
+    UINT mIndexCount = 0;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    void* mConstantBufferMappedData = nullptr;
+};

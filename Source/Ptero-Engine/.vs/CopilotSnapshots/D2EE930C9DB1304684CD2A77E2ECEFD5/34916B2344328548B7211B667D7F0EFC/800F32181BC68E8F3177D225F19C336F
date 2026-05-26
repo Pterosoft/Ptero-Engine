@@ -1,0 +1,220 @@
+﻿// Sea Surface Shader
+// Adapted from Crest ocean system for DX12
+
+cbuffer SeaConstants : register(b0)
+{
+    float4x4 ViewProjection;
+    float4x4 InverseViewProjection;
+    float3   CameraPosition;
+    float    Time;
+
+    float3   SeaColor;
+    float    SeaLevel;
+
+    float    WaveHeight;
+    float    WaveFrequency;
+    float    WaveSpeed;
+    float    WaveChoppiness;
+
+    float    WindSpeed;
+    float    WindDirectionAngle;
+    float    TileSize;
+    float    Roughness;
+
+    float    Metallic;
+    float    FoamAmount;
+    float    FoamThreshold;
+    float    ReflectionStrength;
+
+    float    RefractionStrength;
+    float    FresnelPower;
+    float    NormalStrength;
+    int      DebugView;
+
+    int      FoamEnabled;
+    float3   _Padding;
+};
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float2 UV : TEXCOORD0;
+};
+
+struct PSInput
+{
+    float4 Position : SV_POSITION;
+    float3 WorldPos : POSITION0;
+    float2 UV : TEXCOORD0;
+    float3 Normal : NORMAL;
+};
+
+// Gerstner wave function (simplified from Crest)
+float3 GerstnerWave(float3 pos, float2 direction, float wavelength, float amplitude, float steepness, float phase)
+{
+    float k = 2.0 * 3.14159265 / wavelength;
+    float c = sqrt(9.8 / k);
+    float2 d = normalize(direction);
+    float f = k * (dot(d, pos.xz) - c * Time * phase);
+    float a = amplitude / k;
+
+    float3 result;
+    result.x = d.x * (a * steepness * cos(f));
+    result.y = a * sin(f);
+    result.z = d.y * (a * steepness * cos(f));
+
+    return result;
+}
+
+// Calculate wave normal (simplified)
+float3 CalculateWaveNormal(float3 worldPos, float2 windDir)
+{
+    const float delta = 0.1;
+
+    float3 p0 = worldPos;
+    float3 p1 = worldPos + float3(delta, 0, 0);
+    float3 p2 = worldPos + float3(0, 0, delta);
+
+    // Sample waves at three points
+    float3 w0 = GerstnerWave(p0, windDir, 10.0, WaveHeight, WaveChoppiness, WaveSpeed);
+    float3 w1 = GerstnerWave(p1, windDir, 10.0, WaveHeight, WaveChoppiness, WaveSpeed);
+    float3 w2 = GerstnerWave(p2, windDir, 10.0, WaveHeight, WaveChoppiness, WaveSpeed);
+
+    p0.y += w0.y;
+    p1.y += w1.y;
+    p2.y += w2.y;
+
+    float3 tangent = p1 - p0;
+    float3 bitangent = p2 - p0;
+
+    return normalize(cross(tangent, bitangent));
+}
+
+// Hash function for noise
+float Hash(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+// Simple noise function
+float Noise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = Hash(i);
+    float b = Hash(i + float2(1.0, 0.0));
+    float c = Hash(i + float2(0.0, 1.0));
+    float d = Hash(i + float2(1.0, 1.0));
+
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// Calculate foam
+float CalculateFoam(float3 worldPos, float3 normal)
+{
+    if (FoamEnabled == 0)
+        return 0.0;
+
+    // Foam appears on wave crests (based on normal facing up)
+    float crestFactor = saturate(dot(normal, float3(0, 1, 0)));
+
+    // Add noise for foam pattern
+    float foamNoise = Noise(worldPos.xz * 0.5 + Time * 0.1);
+    foamNoise = foamNoise * 0.5 + 0.5;
+
+    // Combine factors
+    float foam = smoothstep(FoamThreshold, 1.0, crestFactor) * foamNoise * FoamAmount;
+
+    return foam;
+}
+
+// Fresnel calculation
+float FresnelSchlick(float3 viewDir, float3 normal)
+{
+    float cosTheta = saturate(dot(viewDir, normal));
+    return pow(1.0 - cosTheta, FresnelPower);
+}
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+
+    // Calculate world position with camera following
+    float3 worldPos = input.Position;
+    worldPos.xz += CameraPosition.xz;
+    worldPos.y += SeaLevel;
+
+    // Calculate wind direction
+    float2 windDir = float2(cos(WindDirectionAngle), sin(WindDirectionAngle));
+
+    // Apply multiple wave octaves (Gerstner waves)
+    float3 displacement = float3(0, 0, 0);
+
+    // Primary wave
+    displacement += GerstnerWave(worldPos, windDir, 20.0, WaveHeight * 1.0, WaveChoppiness, WaveSpeed);
+
+    // Secondary waves
+    displacement += GerstnerWave(worldPos, windDir * 0.8, 10.0, WaveHeight * 0.5, WaveChoppiness * 0.8, WaveSpeed * 1.2);
+    displacement += GerstnerWave(worldPos, windDir * 1.2, 5.0, WaveHeight * 0.25, WaveChoppiness * 0.6, WaveSpeed * 1.5);
+
+    worldPos += displacement * WaveFrequency;
+
+    // Calculate normal
+    float3 normal = CalculateWaveNormal(worldPos, windDir);
+
+    output.WorldPos = worldPos;
+    output.Position = mul(float4(worldPos, 1.0), ViewProjection);
+    output.UV = input.UV;
+    output.Normal = normal;
+
+    return output;
+}
+
+float4 PSMain(PSInput input) : SV_TARGET
+{
+    // Normalize interpolated normal
+    float3 normal = normalize(input.Normal);
+
+    // View direction
+    float3 viewDir = normalize(CameraPosition - input.WorldPos);
+
+    // Calculate fresnel
+    float fresnel = FresnelSchlick(viewDir, normal) * ReflectionStrength;
+
+    // Calculate foam
+    float foam = CalculateFoam(input.WorldPos, normal);
+
+    // Base sea color
+    float3 color = SeaColor;
+
+    // Simple lighting (directional light from above-forward)
+    float3 lightDir = normalize(float3(0.3, 0.8, 0.5));
+    float ndotl = saturate(dot(normal, lightDir));
+    float3 lighting = lerp(float3(0.3, 0.3, 0.4), float3(1.0, 1.0, 1.0), ndotl);
+
+    // Apply lighting to sea color
+    color *= lighting;
+
+    // Add fresnel reflection (approximate sky reflection)
+    float3 skyColor = float3(0.5, 0.7, 1.0);
+    color = lerp(color, skyColor, fresnel);
+
+    // Add foam
+    color = lerp(color, float3(1.0, 1.0, 1.0), foam);
+
+    // Debug views
+    if (DebugView == 1) // Normals
+    {
+        color = normal * 0.5 + 0.5;
+    }
+    else if (DebugView == 2) // Foam
+    {
+        color = foam.xxx;
+    }
+
+    return float4(color, 1.0);
+}

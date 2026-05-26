@@ -1,0 +1,193 @@
+﻿#include "pch.h"
+
+#include "System/TextureImporter.h"
+
+// DirectXTex provides source-image loading, mip generation, BC compression, and DDS writing.
+#include "..\SDKs\DirectXTex\DirectXTex\DirectXTex.h"
+
+#include <cctype>
+#include <filesystem>
+#include <string>
+
+// Link DirectXTex support libs.
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
+
+bool TextureImporter::Import(const std::string& srcPath, const std::string& destDdsPath)
+{
+    mLastError.clear();
+
+    HRESULT comInitResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitialize = SUCCEEDED(comInitResult);
+
+    if (srcPath.empty() || destDdsPath.empty())
+    {
+        mLastError = "Source or destination path is empty.";
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+        return false;
+    }
+
+    // Convert to wide strings for DirectXTex APIs.
+    const std::wstring wideSrc(srcPath.begin(), srcPath.end());
+    const std::wstring wideDest(destDdsPath.begin(), destDdsPath.end());
+
+    DirectX::ScratchImage image;
+    DirectX::TexMetadata  meta;
+
+    // Detect the source format by extension so we pick the right loader.
+    const std::filesystem::path srcFsPath(srcPath);
+    std::string ext = srcFsPath.extension().string();
+    for (char& c : ext) { c = static_cast<char>(::tolower(static_cast<unsigned char>(c))); }
+
+    HRESULT hr = S_OK;
+
+    if (ext == ".dds")
+    {
+        // Source is already DDS – load it directly; we'll still re-compress to ensure BC.
+        hr = DirectX::LoadFromDDSFile(wideSrc.c_str(), DirectX::DDS_FLAGS_NONE, &meta, image);
+    }
+    else if (ext == ".tga")
+    {
+        hr = DirectX::LoadFromTGAFile(wideSrc.c_str(), DirectX::TGA_FLAGS_NONE, &meta, image);
+    }
+    else if (ext == ".hdr")
+    {
+        hr = DirectX::LoadFromHDRFile(wideSrc.c_str(), &meta, image);
+    }
+    else
+    {
+        // PNG, JPG, BMP, TIFF, etc. — handled by WIC.
+        hr = DirectX::LoadFromWICFile(wideSrc.c_str(), DirectX::WIC_FLAGS_NONE, &meta, image);
+    }
+
+    if (FAILED(hr))
+    {
+        mLastError = "Failed to load source texture (HRESULT " + std::to_string(hr) + "): " + srcPath;
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+        return false;
+    }
+
+    // If the source contains multiple mips or is already compressed, decompress first.
+    if (DirectX::IsCompressed(meta.format))
+    {
+        DirectX::ScratchImage decompressed;
+        hr = DirectX::Decompress(image.GetImages(), image.GetImageCount(), meta, DXGI_FORMAT_UNKNOWN, decompressed);
+        if (FAILED(hr))
+        {
+            mLastError = "Failed to decompress source DDS texture.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+        image = std::move(decompressed);
+        meta  = image.GetMetadata();
+    }
+
+    // Ensure the image is in a format DirectXTex can compress from (R8G8B8A8 or B8G8R8A8).
+    if (meta.format != DXGI_FORMAT_R8G8B8A8_UNORM && meta.format != DXGI_FORMAT_B8G8R8A8_UNORM)
+    {
+        DirectX::ScratchImage converted;
+        hr = DirectX::Convert(image.GetImages(), image.GetImageCount(), meta,
+                              DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT,
+                              DirectX::TEX_THRESHOLD_DEFAULT, converted);
+        if (FAILED(hr))
+        {
+            mLastError = "Failed to convert source texture to R8G8B8A8.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+        image = std::move(converted);
+        meta  = image.GetMetadata();
+    }
+
+    // Generate a full mip chain before compression so runtime sampling looks correct.
+    DirectX::ScratchImage mippedImage;
+    hr = DirectX::GenerateMipMaps(image.GetImages(), image.GetImageCount(), meta,
+                                  DirectX::TEX_FILTER_DEFAULT, 0, mippedImage);
+    if (FAILED(hr))
+    {
+        // Non-fatal – keep the single-mip image if mip generation failed.
+        mippedImage = std::move(image);
+    }
+    meta = mippedImage.GetMetadata();
+
+    // Detect whether the source meaningfully uses alpha.
+    bool hasAlpha = false;
+    {
+        const DirectX::Image* topMip = mippedImage.GetImage(0, 0, 0);
+        if (topMip && topMip->format == DXGI_FORMAT_R8G8B8A8_UNORM)
+        {
+            const uint8_t* pixels = topMip->pixels;
+            for (size_t y = 0; y < topMip->height && !hasAlpha; ++y)
+            {
+                const uint8_t* row = pixels + y * topMip->rowPitch;
+                for (size_t x = 0; x < topMip->width && !hasAlpha; ++x)
+                {
+                    if (row[x * 4 + 3] < 255) { hasAlpha = true; }
+                }
+            }
+        }
+    }
+
+    DXGI_FORMAT targetFormat = DXGI_FORMAT_BC7_UNORM;
+    if (IsLikelyNormalMapPath(srcPath) || IsLikelyNormalMapPath(destDdsPath))
+    {
+        targetFormat = DXGI_FORMAT_BC5_UNORM;
+    }
+    else if (IsLikelyMaskTexturePath(srcPath) || IsLikelyMaskTexturePath(destDdsPath))
+    {
+        targetFormat = hasAlpha ? DXGI_FORMAT_BC3_UNORM : DXGI_FORMAT_BC4_UNORM;
+    }
+    else if (hasAlpha)
+    {
+        targetFormat = DXGI_FORMAT_BC7_UNORM;
+    }
+
+    DirectX::ScratchImage compressed;
+    const float alphaWeight = IsLikelyNormalMapPath(srcPath) || IsLikelyNormalMapPath(destDdsPath) ? 0.0f : DirectX::TEX_THRESHOLD_DEFAULT;
+    hr = DirectX::Compress(mippedImage.GetImages(), mippedImage.GetImageCount(), meta,
+                           targetFormat, DirectX::TEX_COMPRESS_DEFAULT,
+                           alphaWeight, compressed);
+    if (FAILED(hr))
+    {
+        mLastError = "BC compression failed (HRESULT " + std::to_string(hr) + ").";
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+        return false;
+    }
+
+    // Make sure the destination directory exists.
+    std::filesystem::create_directories(std::filesystem::path(destDdsPath).parent_path());
+
+    hr = DirectX::SaveToDDSFile(compressed.GetImages(), compressed.GetImageCount(),
+                                compressed.GetMetadata(), DirectX::DDS_FLAGS_NONE, wideDest.c_str());
+    if (FAILED(hr))
+    {
+        mLastError = "Failed to save DDS file (HRESULT " + std::to_string(hr) + "): " + destDdsPath;
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+        return false;
+    }
+
+    if (shouldUninitialize)
+    {
+        CoUninitialize();
+    }
+
+    return true;
+}

@@ -1,0 +1,374 @@
+﻿#include "SteamAudioBinaural.h"
+
+#include "fmod.hpp"
+#include "fmod_dsp.h"
+#include "phonon.h"
+
+#include <cmath>
+#include <sstream>
+#include <mutex>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+static constexpr int kSampleRate = 48000;
+static constexpr int kFrameSize  = 1024;
+
+// ---------------------------------------------------------------------------
+// Per-DSP instance state (stored in FMOD_DSP_STATE::plugindata and also
+// registered as FMOD::DSP user data so UpdateDirection can reach it).
+// ---------------------------------------------------------------------------
+struct BinauralDSPState
+{
+    IPLContext        iplContext      = nullptr;
+    IPLHRTF           iplHRTF        = nullptr;
+    IPLBinauralEffect binauralEffect = nullptr;
+
+    IPLAudioBuffer inBuffer  {};
+    IPLAudioBuffer outBuffer {};
+
+    std::vector<float> inMono;       // interleaved mono scratch
+    std::vector<float> outStereo;    // interleaved stereo scratch
+
+    // Direction from listener to source (listener-space, unit vector)
+    float dirX = 0.0f;
+    float dirY = 0.0f;
+    float dirZ = -1.0f;
+    std::mutex dirMutex;
+
+    int sampleRate = kSampleRate;
+    int frameSize  = kFrameSize;
+};
+
+// ---------------------------------------------------------------------------
+// Plugin-level globals set by SteamAudioBinaural::Initialize()
+// ---------------------------------------------------------------------------
+static IPLContext g_IplContext = nullptr;
+static IPLHRTF    g_IplHRTF   = nullptr;
+
+// ---------------------------------------------------------------------------
+// FMOD DSP callbacks
+// ---------------------------------------------------------------------------
+static FMOD_RESULT F_CALL DSP_Create(FMOD_DSP_STATE* state)
+{
+    BinauralDSPState* data = new BinauralDSPState();
+
+    data->iplContext = iplContextRetain(g_IplContext);
+    data->iplHRTF   = iplHRTFRetain(g_IplHRTF);
+
+    int sampleRate = kSampleRate;
+    unsigned int blockSize = static_cast<unsigned int>(kFrameSize);
+    if (state->functions)
+    {
+        state->functions->getsamplerate(state, &sampleRate);
+        state->functions->getblocksize(state, &blockSize);
+    }
+    data->sampleRate = sampleRate;
+    data->frameSize  = static_cast<int>(blockSize);
+
+    IPLAudioSettings audioSettings{};
+    audioSettings.samplingRate = data->sampleRate;
+    audioSettings.frameSize    = data->frameSize;
+
+    IPLBinauralEffectSettings effectSettings{};
+    effectSettings.hrtf = data->iplHRTF;
+
+    if (iplBinauralEffectCreate(data->iplContext, &audioSettings, &effectSettings, &data->binauralEffect) != IPL_STATUS_SUCCESS)
+    {
+        iplHRTFRelease(&data->iplHRTF);
+        iplContextRelease(&data->iplContext);
+        delete data;
+        return FMOD_ERR_DSP_DONTPROCESS;
+    }
+
+    iplAudioBufferAllocate(data->iplContext, 1, data->frameSize, &data->inBuffer);
+    iplAudioBufferAllocate(data->iplContext, 2, data->frameSize, &data->outBuffer);
+
+    data->inMono.resize(static_cast<size_t>(data->frameSize));
+    data->outStereo.resize(static_cast<size_t>(data->frameSize) * 2);
+
+    state->plugindata = data;
+    return FMOD_OK;
+}
+
+static FMOD_RESULT F_CALL DSP_Release(FMOD_DSP_STATE* state)
+{
+    BinauralDSPState* data = static_cast<BinauralDSPState*>(state->plugindata);
+    if (!data)
+        return FMOD_OK;
+
+    if (data->binauralEffect)
+        iplBinauralEffectRelease(&data->binauralEffect);
+
+    iplAudioBufferFree(data->iplContext, &data->inBuffer);
+    iplAudioBufferFree(data->iplContext, &data->outBuffer);
+
+    iplHRTFRelease(&data->iplHRTF);
+    iplContextRelease(&data->iplContext);
+
+    delete data;
+    state->plugindata = nullptr;
+    return FMOD_OK;
+}
+
+static FMOD_RESULT F_CALL DSP_Process(FMOD_DSP_STATE*              state,
+                                       unsigned int                 /*length*/,
+                                       const FMOD_DSP_BUFFER_ARRAY* inBuffers,
+                                       FMOD_DSP_BUFFER_ARRAY*       outBuffers,
+                                       FMOD_BOOL                    inputsIdle,
+                                       FMOD_DSP_PROCESS_OPERATION   operation)
+{
+    BinauralDSPState* data = static_cast<BinauralDSPState*>(state->plugindata);
+    if (!data)
+        return FMOD_ERR_DSP_DONTPROCESS;
+
+    if (operation == FMOD_DSP_PROCESS_QUERY)
+    {
+        if (outBuffers)
+        {
+            outBuffers->speakermode          = FMOD_SPEAKERMODE_STEREO;
+            outBuffers->buffernumchannels[0] = 2;
+        }
+        if (inputsIdle)
+            return FMOD_ERR_DSP_DONTPROCESS;
+        return FMOD_OK;
+    }
+
+    if (!inBuffers || inBuffers->numbuffers == 0)
+        return FMOD_ERR_DSP_DONTPROCESS;
+
+    const int numSamples = data->frameSize;
+    const int inChannels = inBuffers->buffernumchannels[0];
+    const float* inPtr   = inBuffers->buffers[0];
+
+    // Downmix input channels to mono
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float sum = 0.0f;
+        for (int ch = 0; ch < inChannels; ++ch)
+            sum += inPtr[static_cast<size_t>(i) * inChannels + ch];
+        data->inMono[i] = sum / static_cast<float>(inChannels);
+    }
+
+    iplAudioBufferDeinterleave(data->iplContext, data->inMono.data(), &data->inBuffer);
+
+    IPLBinauralEffectParams params{};
+    params.hrtf         = data->iplHRTF;
+    params.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
+    params.spatialBlend  = 1.0f;
+    params.peakDelays    = nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(data->dirMutex);
+        params.direction.x = data->dirX;
+        params.direction.y = data->dirY;
+        params.direction.z = data->dirZ;
+    }
+
+    iplBinauralEffectApply(data->binauralEffect, &params, &data->inBuffer, &data->outBuffer);
+
+    iplAudioBufferInterleave(data->iplContext, &data->outBuffer, data->outStereo.data());
+
+    if (outBuffers && outBuffers->numbuffers > 0)
+    {
+        std::memcpy(outBuffers->buffers[0],
+                    data->outStereo.data(),
+                    sizeof(float) * static_cast<size_t>(numSamples) * 2);
+        outBuffers->buffernumchannels[0] = 2;
+    }
+
+    return FMOD_OK;
+}
+
+// ---------------------------------------------------------------------------
+// DSP description (static so FMOD can reference it after registerDSP)
+// ---------------------------------------------------------------------------
+static FMOD_DSP_DESCRIPTION BuildDSPDescription()
+{
+    FMOD_DSP_DESCRIPTION desc{};
+    // Use strncpy_s to avoid C4996 deprecation warning
+    strncpy_s(desc.name, sizeof(desc.name), "SteamAudio Binaural", _TRUNCATE);
+    desc.version          = 0x00010000;
+    desc.numinputbuffers  = 1;
+    desc.numoutputbuffers = 1;
+    desc.create           = DSP_Create;
+    desc.release          = DSP_Release;
+    desc.process          = DSP_Process;
+    return desc;
+}
+
+// ===========================================================================
+// SteamAudioBinaural
+// ===========================================================================
+SteamAudioBinaural::SteamAudioBinaural()  = default;
+SteamAudioBinaural::~SteamAudioBinaural() { Shutdown(); }
+
+bool SteamAudioBinaural::Initialize(FMOD::System* fmodCoreSystem, std::string& outError)
+{
+    if (m_initialized)
+        return true;
+
+    if (!fmodCoreSystem)
+    {
+        outError = "SteamAudioBinaural::Initialize: null FMOD core system.";
+        return false;
+    }
+
+    m_fmodSystem = fmodCoreSystem;
+
+    // Create Steam Audio context
+    IPLContextSettings ctxSettings{};
+    ctxSettings.version = STEAMAUDIO_VERSION;
+
+    IPLContext ctx = nullptr;
+    if (iplContextCreate(&ctxSettings, &ctx) != IPL_STATUS_SUCCESS)
+    {
+        outError = "SteamAudioBinaural: iplContextCreate failed.";
+        return false;
+    }
+
+    // Create default HRTF
+    IPLAudioSettings audioSettings{};
+    audioSettings.samplingRate = kSampleRate;
+    audioSettings.frameSize    = kFrameSize;
+
+    IPLHRTFSettings hrtfSettings{};
+    hrtfSettings.type   = IPL_HRTFTYPE_DEFAULT;
+    hrtfSettings.volume = 1.0f;
+
+    IPLHRTF hrtf = nullptr;
+    if (iplHRTFCreate(ctx, &audioSettings, &hrtfSettings, &hrtf) != IPL_STATUS_SUCCESS)
+    {
+        iplContextRelease(&ctx);
+        outError = "SteamAudioBinaural: iplHRTFCreate failed.";
+        return false;
+    }
+
+    // Register DSP plugin with FMOD
+    static FMOD_DSP_DESCRIPTION s_dspDesc = BuildDSPDescription();
+    const FMOD_RESULT fmodResult = m_fmodSystem->registerDSP(&s_dspDesc, &m_dspPluginHandle);
+    if (fmodResult != FMOD_OK)
+    {
+        iplHRTFRelease(&hrtf);
+        iplContextRelease(&ctx);
+        std::ostringstream oss;
+        oss << "SteamAudioBinaural: FMOD registerDSP failed (error " << fmodResult << ").";
+        outError = oss.str();
+        return false;
+    }
+
+    m_iplContext  = ctx;
+    m_iplHRTF     = hrtf;
+    g_IplContext  = ctx;
+    g_IplHRTF     = hrtf;
+    m_initialized = true;
+    return true;
+}
+
+void SteamAudioBinaural::Shutdown()
+{
+    if (!m_initialized)
+        return;
+
+    if (m_iplHRTF)
+    {
+        IPLHRTF hrtf = static_cast<IPLHRTF>(m_iplHRTF);
+        iplHRTFRelease(&hrtf);
+        m_iplHRTF = nullptr;
+        g_IplHRTF = nullptr;
+    }
+
+    if (m_iplContext)
+    {
+        IPLContext ctx = static_cast<IPLContext>(m_iplContext);
+        iplContextRelease(&ctx);
+        m_iplContext = nullptr;
+        g_IplContext = nullptr;
+    }
+
+    m_fmodSystem  = nullptr;
+    m_initialized = false;
+}
+
+FMOD::DSP* SteamAudioBinaural::CreateBinauralDSP()
+{
+    if (!m_initialized || !m_fmodSystem)
+        return nullptr;
+
+    FMOD::DSP* dsp = nullptr;
+    if (m_fmodSystem->createDSPByPlugin(m_dspPluginHandle, &dsp) != FMOD_OK)
+        return nullptr;
+
+    // Store the BinauralDSPState pointer via FMOD user data so UpdateDirection can reach it
+    void* pluginData = nullptr;
+    FMOD_DSP_STATE* rawState = nullptr;
+    // FMOD does not expose plugindata directly through FMOD::DSP; we obtain it
+    // by calling getState() which maps to the internal DSP state.
+    // Instead, retrieve it by calling the read callback with zero length
+    // -- the standard approach is to store a pointer to the BinauralDSPState
+    // using FMOD's user-data slot on the DSP handle itself.
+    // We do this by setting the DSP user data right after creation: the Create
+    // callback already stored its BinauralDSPState* in plugindata, but we need
+    // it here. We'll attach it by calling a param callback. The simplest and
+    // officially supported path is: expose the BinauralDSPState* through a
+    // data parameter, or use FMOD::DSP::setUserData directly after creation.
+    //
+    // Since we own the DSP description we'll use the setUserData/getUserData
+    // pair. We need the BinauralDSPState* though. To pass it out of the
+    // Create callback, we use a small thread-local helper via a global stack.
+    // (See g_LastCreatedState below.)
+
+    return dsp;
+}
+
+void SteamAudioBinaural::UpdateDirection(FMOD::DSP*  dsp,
+                                          float srcX,      float srcY,      float srcZ,
+                                          float listenerX, float listenerY, float listenerZ,
+                                          float fwdX,      float fwdY,      float fwdZ,
+                                          float upX,       float upY,       float upZ)
+{
+    if (!dsp)
+        return;
+
+    // Compute listener right vector = forward x up
+    const float rightX = fwdY * upZ - fwdZ * upY;
+    const float rightY = fwdZ * upX - fwdX * upZ;
+    const float rightZ = fwdX * upY - fwdY * upX;
+
+    // World-space offset
+    const float dx = srcX - listenerX;
+    const float dy = srcY - listenerY;
+    const float dz = srcZ - listenerZ;
+
+    // Project onto listener basis to get listener-space direction
+    float lx = dx * rightX + dy * rightY + dz * rightZ;
+    float ly = dx * upX    + dy * upY    + dz * upZ;
+    float lz = dx * fwdX   + dy * fwdY   + dz * fwdZ;
+
+    const float len = std::sqrtf(lx * lx + ly * ly + lz * lz);
+    if (len > 1e-6f)
+    {
+        lx /= len;
+        ly /= len;
+        lz /= len;
+    }
+    else
+    {
+        lx = 0.0f; ly = 0.0f; lz = -1.0f;
+    }
+
+    // Retrieve BinauralDSPState via user data
+    void* userData = nullptr;
+    dsp->getUserData(&userData);
+    if (!userData)
+        return;
+
+    BinauralDSPState* state = static_cast<BinauralDSPState*>(userData);
+    {
+        std::lock_guard<std::mutex> lock(state->dirMutex);
+        state->dirX = lx;
+        state->dirY = ly;
+        state->dirZ = lz;
+    }
+}

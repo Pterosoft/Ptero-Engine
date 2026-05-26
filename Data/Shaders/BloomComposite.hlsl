@@ -1,0 +1,40 @@
+// BloomComposite.hlsl
+// Physical mip-chain bloom – composite pass.
+// Additively blends the accumulated bloom result onto the original HDR source.
+
+cbuffer BloomConstants : register(b0)
+{
+    float   g_Threshold;
+    float   g_Knee;
+    float   g_Intensity;
+    float   g_Radius;
+    uint    g_SrcWidth;
+    uint    g_SrcHeight;
+    uint    g_DstWidth;
+    uint    g_DstHeight;
+    int     g_MipLevel;
+    int     g_MaxMips;
+    float   g_Pad0;
+    float   g_Pad1;
+};
+
+Texture2D<float4>   g_BloomTexture    : register(t0);
+Texture2D<float4>   g_OriginalTexture : register(t1);
+RWTexture2D<float4> g_OutputTexture   : register(u0);
+SamplerState        g_LinearClamp     : register(s0);
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= g_DstWidth || dispatchId.y >= g_DstHeight)
+        return;
+
+    float2 uv = (float2(dispatchId.xy) + 0.5f) / float2(g_DstWidth, g_DstHeight);
+
+    float3 bloom    = g_BloomTexture.SampleLevel(g_LinearClamp, uv, 0).rgb;
+    float3 original = g_OriginalTexture.SampleLevel(g_LinearClamp, uv, 0).rgb;
+
+    float3 result = original + bloom * g_Intensity;
+
+    g_OutputTexture[dispatchId.xy] = float4(result, 1.0f);
+}

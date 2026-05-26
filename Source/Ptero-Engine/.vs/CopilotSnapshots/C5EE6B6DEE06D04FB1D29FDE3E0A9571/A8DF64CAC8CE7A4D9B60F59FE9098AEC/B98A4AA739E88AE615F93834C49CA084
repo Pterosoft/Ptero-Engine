@@ -1,0 +1,628 @@
+﻿// RtAmbientOcclusion.cpp
+// Ray Traced Ambient Occlusion renderer.
+//
+// Pass sequence:
+//   Pass 0  RayGen      t0=GBufferNormal  t1=TLAS        t2=SceneDepth  u0=RawAO
+//   Pass 1  NrdPrepare  t0=GBufferNormal  t1=SceneDepth  t2=RawAO       u0-u3=NRD inputs
+//   Pass 2  NRD         denoise AO through the shared NRD wrapper
+//   Pass 3  Composite   t0=NRD output                              u0=Final AO
+
+#include "pch.h"
+#include "RtAmbientOcclusion.h"
+
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+static const wchar_t* kShaderRayGen       = L"Data/Shaders/RtAO_RayGen.hlsl";
+static const wchar_t* kShaderNrdPrepare   = L"Data/Shaders/RtAO_NrdPrepare.hlsl";
+static const wchar_t* kShaderNrdComposite = L"Data/Shaders/RtAO_NrdComposite.hlsl";
+
+namespace
+{
+    constexpr DXGI_FORMAT kAOFormat = DXGI_FORMAT_R16_FLOAT;
+    constexpr UINT kGroupSize = 8;
+
+    bool AllocDesc(D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, std::string& err)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&cpu, &gpu))
+        {
+            err = "RtAmbientOcclusion: ran out of SRV descriptor heap slots.";
+            return false;
+        }
+        return true;
+    }
+
+    ComPtr<ID3D12Resource> MakeTexture2D(
+        ID3D12Device* dev,
+        UINT w,
+        UINT h,
+        DXGI_FORMAT format,
+        D3D12_RESOURCE_STATES initialState,
+        LPCWSTR name)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = w;
+        desc.Height = h;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            initialState, nullptr,
+            IID_PPV_ARGS(&res)));
+        res->SetName(name);
+        return res;
+    }
+
+    ComPtr<ID3D12Resource> MakeUploadCB(ID3D12Device* dev, UINT64 size, void** outMapped)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = size;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&res)));
+        DX12_THROW_IF_FAILED(res->Map(0, nullptr, outMapped));
+        res->SetName(L"RTAO_ConstantBuffer");
+        return res;
+    }
+
+    bool CompilePSO(
+        ID3D12Device* dev,
+        ID3D12RootSignature* rootSig,
+        const wchar_t* filePath,
+        const wchar_t* entry,
+        ComPtr<ID3D12PipelineState>& outPSO,
+        std::string& err)
+    {
+        ShaderCompileRequest req{};
+        req.FilePath = filePath;
+        req.EntryPoint = entry;
+        req.TargetProfile = L"cs_6_5";
+        req.Stage = ShaderStage::Compute;
+
+        DX12Shader shader;
+        if (!shader.Compile(req))
+        {
+            err = std::string("RtAmbientOcclusion: shader compile failed ('")
+                + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "?") + "')";
+            return false;
+        }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = rootSig;
+        psoDesc.CS = shader.GetBytecode();
+        if (FAILED(dev->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPSO))))
+        {
+            err = "RtAmbientOcclusion: CreateComputePipelineState failed.";
+            return false;
+        }
+        return true;
+    }
+}
+
+bool RtAmbientOcclusion::Initialize(UINT width, UINT height)
+{
+    if (width == 0 || height == 0)
+        return false;
+
+    mLastError.clear();
+    try
+    {
+        if (!mIsInitialized)
+        {
+            if (!CreateRootSignature()) return false;
+            if (!CreateRootSignatureNrd()) return false;
+            if (!CreatePipelines()) return false;
+        }
+
+        if (!mIsInitialized || width != mWidth || height != mHeight)
+        {
+            mWidth = width;
+            mHeight = height;
+            if (!CreateResolutionBuffers()) return false;
+            if (!CreateDescriptors()) return false;
+            if (!InitNrd()) return false;
+            mFrameIndex = 0;
+        }
+
+        mIsInitialized = true;
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        mLastError = std::string("RtAmbientOcclusion::Initialize: ") + ex.what();
+        mInitFailed = true;
+        return false;
+    }
+}
+
+bool RtAmbientOcclusion::EnsureSize(UINT width, UINT height)
+{
+    if (width == mWidth && height == mHeight)
+        return true;
+    return Initialize(width, height);
+}
+
+void RtAmbientOcclusion::ResetHistory()
+{
+    mFrameIndex = 0;
+}
+
+void RtAmbientOcclusion::Shutdown()
+{
+    mNrdDenoiser.Shutdown();
+
+    if (mMappedCb && mConstantBuffer)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mRawAOBuffer.Reset();
+    mOutputBuffer.Reset();
+    mNrdDiffRadianceHitDist.Reset();
+    mNrdMotionVectors.Reset();
+    mNrdNormalRoughness.Reset();
+    mNrdViewZ.Reset();
+    mNrdOutDiff.Reset();
+    mRootSignature.Reset();
+    mRootSignatureNrd.Reset();
+    mPSO_RayGen.Reset();
+    mPSO_NrdPrepare.Reset();
+    mPSO_NrdComposite.Reset();
+    mIsInitialized = false;
+    mDescriptorsAllocated = false;
+    mNrdDescriptorsAllocated = false;
+}
+
+void RtAmbientOcclusion::Dispatch(
+    ID3D12GraphicsCommandList4* cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE gbufferNormalSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
+    const RtAOSettings& settings,
+    const float viewProjInv[16],
+    const float currViewProj[16],
+    const float prevViewProj[16],
+    const float cameraPos[3],
+    const float worldToViewMatrix[16],
+    const float viewToClipMatrix[16],
+    const float prevWorldToViewMatrix[16],
+    const float prevViewToClipMatrix[16],
+    const float cameraJitter[2],
+    const float prevCameraJitter[2],
+    float timeDeltaMs)
+{
+    UploadConstants(settings, viewProjInv, currViewProj, prevViewProj, cameraPos, worldToViewMatrix);
+
+    const UINT gx = (mWidth + kGroupSize - 1) / kGroupSize;
+    const UINT gy = (mHeight + kGroupSize - 1) / kGroupSize;
+
+    auto UavBarrier = [&](ID3D12Resource* r)
+    {
+        auto b = CD3DX12_RESOURCE_BARRIER::UAV(r);
+        cmdList->ResourceBarrier(1, &b);
+    };
+    auto ToSrv = [&](ID3D12Resource* r)
+    {
+        auto b = CD3DX12_RESOURCE_BARRIER::Transition(
+            r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &b);
+    };
+    auto ToUav = [&](ID3D12Resource* r)
+    {
+        auto b = CD3DX12_RESOURCE_BARRIER::Transition(
+            r, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmdList->ResourceBarrier(1, &b);
+    };
+
+    cmdList->SetComputeRootSignature(mRootSignature.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+    cmdList->SetPipelineState(mPSO_RayGen.Get());
+    cmdList->SetComputeRootDescriptorTable(1, gbufferNormalSrv);
+    cmdList->SetComputeRootDescriptorTable(2, tlasSrv);
+    cmdList->SetComputeRootDescriptorTable(3, sceneDepthSrv);
+    cmdList->SetComputeRootDescriptorTable(5, mRawAOUavGpu);
+    cmdList->Dispatch(gx, gy, 1);
+
+    UavBarrier(mRawAOBuffer.Get());
+    ToSrv(mRawAOBuffer.Get());
+
+    cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetPipelineState(mPSO_NrdPrepare.Get());
+    cmdList->SetComputeRootDescriptorTable(1, gbufferNormalSrv);
+    cmdList->SetComputeRootDescriptorTable(2, sceneDepthSrv);
+    cmdList->SetComputeRootDescriptorTable(3, mRawAOSrvGpu);
+    cmdList->SetComputeRootDescriptorTable(5, mNrdDiffRadianceUavGpu);
+    cmdList->SetComputeRootDescriptorTable(6, mNrdNormalRoughnessUavGpu);
+    cmdList->SetComputeRootDescriptorTable(7, mNrdViewZUavGpu);
+    cmdList->SetComputeRootDescriptorTable(8, mNrdMotionVectorsUavGpu);
+    cmdList->Dispatch(gx, gy, 1);
+
+    D3D12_RESOURCE_BARRIER uavBarriers[4];
+    uavBarriers[0] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdDiffRadianceHitDist.Get());
+    uavBarriers[1] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdNormalRoughness.Get());
+    uavBarriers[2] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdViewZ.Get());
+    uavBarriers[3] = CD3DX12_RESOURCE_BARRIER::UAV(mNrdMotionVectors.Get());
+    cmdList->ResourceBarrier(4, uavBarriers);
+
+    mNrdDenoiser.SetMaxAccumulationTime(0.12f, 60.0f);
+    mNrdDenoiser.SetAtrousIterations(4);
+    mNrdDenoiser.SetDisocclusionThreshold(0.02f);
+
+    const bool resetHistory = (mFrameIndex == 0);
+    mNrdDenoiser.Denoise(
+        cmdList,
+        viewToClipMatrix,
+        prevViewToClipMatrix,
+        worldToViewMatrix,
+        prevWorldToViewMatrix,
+        cameraJitter,
+        prevCameraJitter,
+        mFrameIndex,
+        resetHistory,
+        timeDeltaMs);
+
+    {
+        ID3D12DescriptorHeap* heap = DX12Context_GetSrvDescriptorHeap();
+        if (heap) cmdList->SetDescriptorHeaps(1, &heap);
+    }
+
+    auto outDiffToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        mNrdOutDiff.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmdList->ResourceBarrier(1, &outDiffToSrv);
+
+    ToUav(mOutputBuffer.Get());
+
+    cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetPipelineState(mPSO_NrdComposite.Get());
+    cmdList->SetComputeRootDescriptorTable(1, mNrdOutDiffSrvGpu);
+    cmdList->SetComputeRootDescriptorTable(5, mOutputUavGpu);
+    cmdList->Dispatch(gx, gy, 1);
+
+    UavBarrier(mOutputBuffer.Get());
+    ToSrv(mOutputBuffer.Get());
+
+    auto outDiffToUav = CD3DX12_RESOURCE_BARRIER::Transition(
+        mNrdOutDiff.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cmdList->ResourceBarrier(1, &outDiffToUav);
+
+    ToUav(mRawAOBuffer.Get());
+
+    ++mFrameIndex;
+}
+
+bool RtAmbientOcclusion::CreateRootSignature()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev)
+    {
+        mLastError = "RtAmbientOcclusion: no D3D12 device.";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE srvRange0{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
+    D3D12_DESCRIPTOR_RANGE srvRange1{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, 0 };
+    D3D12_DESCRIPTOR_RANGE srvRange2{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, 0 };
+    D3D12_DESCRIPTOR_RANGE srvRange3{ D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, 0 };
+    D3D12_DESCRIPTOR_RANGE uavRange0{ D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0 };
+
+    D3D12_ROOT_PARAMETER params[6]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable = { 1, &srvRange0 };
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable = { 1, &srvRange1 };
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable = { 1, &srvRange2 };
+    params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[4].DescriptorTable = { 1, &srvRange3 };
+    params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[5].DescriptorTable = { 1, &uavRange0 };
+    params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 6;
+    rsDesc.pParameters = params;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> serialised, errors;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &serialised, &errors)))
+    {
+        mLastError = "RtAmbientOcclusion: D3D12SerializeRootSignature failed.";
+        return false;
+    }
+
+    if (FAILED(dev->CreateRootSignature(0, serialised->GetBufferPointer(), serialised->GetBufferSize(), IID_PPV_ARGS(&mRootSignature))))
+    {
+        mLastError = "RtAmbientOcclusion: CreateRootSignature failed.";
+        return false;
+    }
+
+    mRootSignature->SetName(L"RTAO_RootSignature");
+    return true;
+}
+
+bool RtAmbientOcclusion::CreateRootSignatureNrd()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev)
+    {
+        mLastError = "RtAmbientOcclusion: no D3D12 device.";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE r[8]{};
+    r[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[0].NumDescriptors = 1; r[0].BaseShaderRegister = 0;
+    r[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[1].NumDescriptors = 1; r[1].BaseShaderRegister = 1;
+    r[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; r[2].NumDescriptors = 1; r[2].BaseShaderRegister = 2;
+    r[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[3].NumDescriptors = 1; r[3].BaseShaderRegister = 0;
+    r[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[4].NumDescriptors = 1; r[4].BaseShaderRegister = 1;
+    r[5].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[5].NumDescriptors = 1; r[5].BaseShaderRegister = 2;
+    r[6].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; r[6].NumDescriptors = 1; r[6].BaseShaderRegister = 3;
+
+    D3D12_ROOT_PARAMETER p[9]{};
+    p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    p[0].Descriptor.ShaderRegister = 0;
+    p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[1].DescriptorTable = { 1, &r[0] }; p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[2].DescriptorTable = { 1, &r[1] }; p[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[3].DescriptorTable = { 1, &r[2] }; p[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[4].DescriptorTable.NumDescriptorRanges = 0;
+    p[4].DescriptorTable.pDescriptorRanges = nullptr;
+    p[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[5].DescriptorTable = { 1, &r[3] }; p[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[6].DescriptorTable = { 1, &r[4] }; p[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[7].DescriptorTable = { 1, &r[5] }; p[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    p[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    p[8].DescriptorTable = { 1, &r[6] }; p[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 9;
+    rsDesc.pParameters = p;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> blob, err;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)))
+    {
+        mLastError = "RtAmbientOcclusion: failed to serialize NRD root signature.";
+        return false;
+    }
+    if (FAILED(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&mRootSignatureNrd))))
+    {
+        mLastError = "RtAmbientOcclusion: failed to create NRD root signature.";
+        return false;
+    }
+
+    return true;
+}
+
+bool RtAmbientOcclusion::CreatePipelines()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    if (!CompilePSO(dev, mRootSignature.Get(), kShaderRayGen, L"main", mPSO_RayGen, mLastError)) return false;
+    if (!CompilePSO(dev, mRootSignatureNrd.Get(), kShaderNrdPrepare, L"CSMain", mPSO_NrdPrepare, mLastError)) return false;
+    if (!CompilePSO(dev, mRootSignatureNrd.Get(), kShaderNrdComposite, L"CSMain", mPSO_NrdComposite, mLastError)) return false;
+    return true;
+}
+
+bool RtAmbientOcclusion::CreateResolutionBuffers()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    mRawAOBuffer.Reset();
+    mOutputBuffer.Reset();
+    mNrdDiffRadianceHitDist.Reset();
+    mNrdMotionVectors.Reset();
+    mNrdNormalRoughness.Reset();
+    mNrdViewZ.Reset();
+    mNrdOutDiff.Reset();
+
+    if (mMappedCb && mConstantBuffer)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+    mConstantBuffer.Reset();
+
+    mRawAOBuffer = MakeTexture2D(dev, mWidth, mHeight, kAOFormat, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_RawAO");
+    mOutputBuffer = MakeTexture2D(dev, mWidth, mHeight, kAOFormat, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RTAO_Output");
+    mNrdDiffRadianceHitDist = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_DiffRadiance");
+    mNrdMotionVectors = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_MotionVectors");
+    mNrdNormalRoughness = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R10G10B10A2_TYPELESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_NormalRoughness");
+    mNrdViewZ = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_ViewZ");
+    mNrdOutDiff = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_OutDiff");
+    mConstantBuffer = MakeUploadCB(dev, sizeof(RtAOConstants), &mMappedCb);
+
+    return true;
+}
+
+bool RtAmbientOcclusion::CreateDescriptors()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    if (!mDescriptorsAllocated)
+    {
+        if (!AllocDesc(mRawAOSrvCpu, mRawAOSrvGpu, mLastError)) return false;
+        if (!AllocDesc(mRawAOUavCpu, mRawAOUavGpu, mLastError)) return false;
+        if (!AllocDesc(mOutputSrvCpu, mOutputSrvGpu, mLastError)) return false;
+        if (!AllocDesc(mOutputUavCpu, mOutputUavGpu, mLastError)) return false;
+        mDescriptorsAllocated = true;
+    }
+
+    if (!mNrdDescriptorsAllocated)
+    {
+        if (!AllocDesc(mNrdDiffRadianceUavCpu, mNrdDiffRadianceUavGpu, mLastError)) return false;
+        if (!AllocDesc(mNrdMotionVectorsUavCpu, mNrdMotionVectorsUavGpu, mLastError)) return false;
+        if (!AllocDesc(mNrdNormalRoughnessUavCpu, mNrdNormalRoughnessUavGpu, mLastError)) return false;
+        if (!AllocDesc(mNrdViewZUavCpu, mNrdViewZUavGpu, mLastError)) return false;
+        if (!AllocDesc(mNrdOutDiffSrvCpu, mNrdOutDiffSrvGpu, mLastError)) return false;
+        mNrdDescriptorsAllocated = true;
+    }
+
+    auto MakeSrv = [&](ID3D12Resource* res, DXGI_FORMAT format, D3D12_CPU_DESCRIPTOR_HANDLE cpu)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC d{};
+        d.Format = format;
+        d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        d.Texture2D.MipLevels = 1;
+        dev->CreateShaderResourceView(res, &d, cpu);
+    };
+
+    auto MakeUav = [&](ID3D12Resource* res, DXGI_FORMAT format, D3D12_CPU_DESCRIPTOR_HANDLE cpu)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC d{};
+        d.Format = format;
+        d.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        dev->CreateUnorderedAccessView(res, nullptr, &d, cpu);
+    };
+
+    MakeSrv(mRawAOBuffer.Get(), kAOFormat, mRawAOSrvCpu);
+    MakeUav(mRawAOBuffer.Get(), kAOFormat, mRawAOUavCpu);
+    MakeSrv(mOutputBuffer.Get(), kAOFormat, mOutputSrvCpu);
+    MakeUav(mOutputBuffer.Get(), kAOFormat, mOutputUavCpu);
+
+    MakeUav(mNrdDiffRadianceHitDist.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, mNrdDiffRadianceUavCpu);
+    MakeUav(mNrdMotionVectors.Get(), DXGI_FORMAT_R16G16_FLOAT, mNrdMotionVectorsUavCpu);
+    MakeUav(mNrdNormalRoughness.Get(), DXGI_FORMAT_R10G10B10A2_UINT, mNrdNormalRoughnessUavCpu);
+    MakeUav(mNrdViewZ.Get(), DXGI_FORMAT_R32_FLOAT, mNrdViewZUavCpu);
+    MakeSrv(mNrdOutDiff.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, mNrdOutDiffSrvCpu);
+
+    return true;
+}
+
+bool RtAmbientOcclusion::InitNrd()
+{
+    mNrdDenoiser.Shutdown();
+
+    NrdInitTextures nrdTex{};
+    nrdTex.diffRadianceHitDist = mNrdDiffRadianceHitDist.Get();
+    nrdTex.motionVectors = mNrdMotionVectors.Get();
+    nrdTex.normalRoughness = mNrdNormalRoughness.Get();
+    nrdTex.viewZ = mNrdViewZ.Get();
+    nrdTex.outDiffRadiance = mNrdOutDiff.Get();
+    nrdTex.diffRadianceHitDistFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    nrdTex.motionVectorsFmt = DXGI_FORMAT_R16G16_FLOAT;
+    nrdTex.normalRoughnessFmt = DXGI_FORMAT_R10G10B10A2_UNORM;
+    nrdTex.viewZFmt = DXGI_FORMAT_R32_FLOAT;
+    nrdTex.outDiffRadianceFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    if (!mNrdDenoiser.Initialize(mWidth, mHeight, nrdTex))
+    {
+        mLastError = std::string("NRD init failed: ") + (mNrdDenoiser.GetLastError() ? mNrdDenoiser.GetLastError() : "unknown");
+        return false;
+    }
+
+    return true;
+}
+
+void RtAmbientOcclusion::UploadConstants(
+    const RtAOSettings& s,
+    const float viewProjInv[16],
+    const float currViewProj[16],
+    const float prevViewProj[16],
+    const float cameraPos[3],
+    const float worldToViewMatrix[16])
+{
+    RtAOConstants cb{};
+    cb.FrameWidth = mWidth;
+    cb.FrameHeight = mHeight;
+    cb.FrameIndex = mFrameIndex;
+    cb.RaysPerPixel = static_cast<uint32_t>((std::max)(1, s.RaysPerPixel));
+    cb.MaxRayLength = s.MaxRayLength;
+    cb.RayBias = s.RayBias;
+    cb.AOPower = s.AOPower;
+    cb.Intensity = s.Intensity;
+    cb.DebugView = s.DebugView;
+    std::memcpy(cb.ViewProjInv, viewProjInv, 16 * sizeof(float));
+    std::memcpy(cb.CurrViewProj, currViewProj, 16 * sizeof(float));
+    std::memcpy(cb.PrevViewProj, prevViewProj, 16 * sizeof(float));
+    if (worldToViewMatrix)
+    {
+        for (int r = 0; r < 4; ++r)
+        {
+            for (int c = 0; c < 4; ++c)
+            {
+                cb.WorldToView[r * 4 + c] = worldToViewMatrix[c * 4 + r];
+            }
+        }
+    }
+    else
+    {
+        static const float kIdentity[16] =
+        {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+        };
+        std::memcpy(cb.WorldToView, kIdentity, sizeof(kIdentity));
+    }
+    std::memcpy(cb.CameraPos, cameraPos, 3 * sizeof(float));
+    std::memcpy(mMappedCb, &cb, sizeof(cb));
+}

@@ -1,0 +1,15 @@
+﻿#pragma once
+
+#include <cstdint>
+#include <type_traits>
+
+struct PteroMeshHeader
+{
+    char magic[4] = { 'P', 'T', 'R', 'O' };
+    std::uint32_t version = 1;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t indexCount = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<PteroMeshHeader>, "PteroMeshHeader must stay trivially copyable for binary serialization.");
+static_assert(std::is_standard_layout_v<PteroMeshHeader>, "PteroMeshHeader must stay standard layout for binary serialization.");

@@ -1,0 +1,41 @@
+{
+    "name": "Limestone_Rubble_ubxbejwda_Mid",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "MatID_1",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

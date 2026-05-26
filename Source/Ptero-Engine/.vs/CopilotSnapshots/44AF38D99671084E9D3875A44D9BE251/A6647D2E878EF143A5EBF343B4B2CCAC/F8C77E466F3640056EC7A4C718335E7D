@@ -1,0 +1,303 @@
+﻿#include "pch.h"
+
+#include "System/FbxCompiler.h"
+
+#include "System/Mesh.h"
+#include "System/PteroMeshFormat.h"
+
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+#if defined(PTERO_FBX_SDK_AVAILABLE)
+#include <fbxsdk.h>
+
+namespace
+{
+    template <typename LayerElementType>
+    int ResolveLayerElementIndex(const LayerElementType* layerElement, const int elementIndex)
+    {
+        if (layerElement == nullptr || elementIndex < 0)
+        {
+            return -1;
+        }
+
+        switch (layerElement->GetReferenceMode())
+        {
+        case FbxLayerElement::eDirect:
+            return elementIndex;
+        case FbxLayerElement::eIndex:
+        case FbxLayerElement::eIndexToDirect:
+            return (elementIndex < layerElement->GetIndexArray().GetCount())
+                ? layerElement->GetIndexArray().GetAt(elementIndex)
+                : -1;
+        default:
+            return -1;
+        }
+    }
+
+    DirectX::XMFLOAT3 ConvertPositionToLeftHanded(const FbxVector4& position)
+    {
+        return DirectX::XMFLOAT3(
+            static_cast<float>(position[0]),
+            static_cast<float>(position[1]),
+            static_cast<float>(-position[2]));
+    }
+
+    DirectX::XMFLOAT3 ConvertNormalToLeftHanded(const FbxVector4& normal)
+    {
+        return DirectX::XMFLOAT3(
+            static_cast<float>(normal[0]),
+            static_cast<float>(normal[1]),
+            static_cast<float>(-normal[2]));
+    }
+
+    DirectX::XMFLOAT3 ReadNormal(const FbxMesh* mesh, const int controlPointIndex, const int polygonVertexIndex)
+    {
+        const FbxGeometryElementNormal* normalElement = mesh ? mesh->GetElementNormal(0) : nullptr;
+        if (normalElement == nullptr)
+        {
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        int resolvedIndex = -1;
+        switch (normalElement->GetMappingMode())
+        {
+        case FbxLayerElement::eByControlPoint:
+            resolvedIndex = ResolveLayerElementIndex(normalElement, controlPointIndex);
+            break;
+        case FbxLayerElement::eByPolygonVertex:
+            resolvedIndex = ResolveLayerElementIndex(normalElement, polygonVertexIndex);
+            break;
+        default:
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        if (resolvedIndex < 0 || resolvedIndex >= normalElement->GetDirectArray().GetCount())
+        {
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        return ConvertNormalToLeftHanded(normalElement->GetDirectArray().GetAt(resolvedIndex));
+    }
+
+    DirectX::XMFLOAT2 ReadUv(FbxMesh* mesh, const int controlPointIndex, const int polygonIndex, const int polygonVertexInPolygon)
+    {
+        const FbxGeometryElementUV* uvElement = mesh ? mesh->GetElementUV(0) : nullptr;
+        if (uvElement == nullptr)
+        {
+            return DirectX::XMFLOAT2(0.0f, 0.0f);
+        }
+
+        if (uvElement->GetMappingMode() == FbxLayerElement::eByControlPoint)
+        {
+            const int resolvedIndex = ResolveLayerElementIndex(uvElement, controlPointIndex);
+            if (resolvedIndex >= 0 && resolvedIndex < uvElement->GetDirectArray().GetCount())
+            {
+                const FbxVector2 uv = uvElement->GetDirectArray().GetAt(resolvedIndex);
+                return DirectX::XMFLOAT2(static_cast<float>(uv[0]), 1.0f - static_cast<float>(uv[1]));
+            }
+
+            return DirectX::XMFLOAT2(0.0f, 0.0f);
+        }
+
+        if (uvElement->GetMappingMode() == FbxLayerElement::eByPolygonVertex)
+        {
+            const int uvIndex = mesh->GetTextureUVIndex(polygonIndex, polygonVertexInPolygon);
+            if (uvIndex >= 0 && uvIndex < uvElement->GetDirectArray().GetCount())
+            {
+                const FbxVector2 uv = uvElement->GetDirectArray().GetAt(uvIndex);
+                return DirectX::XMFLOAT2(static_cast<float>(uv[0]), 1.0f - static_cast<float>(uv[1]));
+            }
+        }
+
+        return DirectX::XMFLOAT2(0.0f, 0.0f);
+    }
+
+    void CollectMeshNodesRecursive(FbxNode* node, std::vector<FbxMesh*>& meshes)
+    {
+        if (node == nullptr)
+        {
+            return;
+        }
+
+        if (FbxMesh* mesh = node->GetMesh(); mesh != nullptr)
+        {
+            meshes.push_back(mesh);
+        }
+
+        const int childCount = node->GetChildCount();
+        for (int childIndex = 0; childIndex < childCount; ++childIndex)
+        {
+            CollectMeshNodesRecursive(node->GetChild(childIndex), meshes);
+        }
+    }
+
+    bool TriangulateAndCollectMeshes(FbxScene* scene, std::vector<FbxMesh*>& meshes)
+    {
+        if (scene == nullptr)
+        {
+            return false;
+        }
+
+        FbxGeometryConverter geometryConverter(scene->GetFbxManager());
+        if (!geometryConverter.Triangulate(scene, true))
+        {
+            return false;
+        }
+
+        CollectMeshNodesRecursive(scene->GetRootNode(), meshes);
+        return !meshes.empty();
+    }
+
+    void ProcessMesh(FbxMesh* mesh, std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
+    {
+        if (mesh == nullptr || mesh->GetControlPoints() == nullptr)
+        {
+            return;
+        }
+
+        const FbxVector4* controlPoints = mesh->GetControlPoints();
+        const int polygonCount = mesh->GetPolygonCount();
+        int polygonVertexIndex = 0;
+
+        for (int polygonIndex = 0; polygonIndex < polygonCount; ++polygonIndex)
+        {
+            const int polygonSize = mesh->GetPolygonSize(polygonIndex);
+            if (polygonSize != 3)
+            {
+                polygonVertexIndex += polygonSize;
+                continue;
+            }
+
+            const std::uint32_t baseVertexIndex = static_cast<std::uint32_t>(vertices.size());
+
+            for (int polygonVertex = 0; polygonVertex < polygonSize; ++polygonVertex, ++polygonVertexIndex)
+            {
+                const int controlPointIndex = mesh->GetPolygonVertex(polygonIndex, polygonVertex);
+                Vertex vertex{};
+
+                if (controlPointIndex >= 0 && controlPointIndex < mesh->GetControlPointsCount())
+                {
+                    vertex.Position = ConvertPositionToLeftHanded(controlPoints[controlPointIndex]);
+                    vertex.Normal = ReadNormal(mesh, controlPointIndex, polygonVertexIndex);
+                    vertex.TexCoord = ReadUv(mesh, controlPointIndex, polygonIndex, polygonVertex);
+                }
+
+                vertex.Color = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+                vertices.push_back(vertex);
+            }
+
+            // Flipping the winding keeps front faces correct after the handedness change.
+            indices.push_back(baseVertexIndex + 0);
+            indices.push_back(baseVertexIndex + 2);
+            indices.push_back(baseVertexIndex + 1);
+        }
+    }
+}
+
+bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::string& pteroOutPath)
+{
+    FbxManager* fbxManager = FbxManager::Create();
+    if (fbxManager == nullptr)
+    {
+        return false;
+    }
+
+    auto destroyManager = [&fbxManager]()
+    {
+        if (fbxManager != nullptr)
+        {
+            fbxManager->Destroy();
+            fbxManager = nullptr;
+        }
+    };
+
+    FbxIOSettings* ioSettings = FbxIOSettings::Create(fbxManager, IOSROOT);
+    fbxManager->SetIOSettings(ioSettings);
+
+    FbxImporter* importer = FbxImporter::Create(fbxManager, "");
+    if (importer == nullptr)
+    {
+        destroyManager();
+        return false;
+    }
+
+    if (!importer->Initialize(fbxPath.c_str(), -1, fbxManager->GetIOSettings()))
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    FbxScene* scene = FbxScene::Create(fbxManager, "PteroScene");
+    if (scene == nullptr)
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    if (!importer->Import(scene))
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    importer->Destroy();
+
+    std::vector<FbxMesh*> meshes;
+    if (!TriangulateAndCollectMeshes(scene, meshes))
+    {
+        destroyManager();
+        return false;
+    }
+
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    for (FbxMesh* mesh : meshes)
+    {
+        ProcessMesh(mesh, vertices, indices);
+    }
+
+    if (const std::filesystem::path outputPath(pteroOutPath); outputPath.has_parent_path())
+    {
+        std::filesystem::create_directories(outputPath.parent_path());
+    }
+
+    std::ofstream outputStream(pteroOutPath, std::ios::binary);
+    if (!outputStream)
+    {
+        destroyManager();
+        return false;
+    }
+
+    PteroMeshHeader header{};
+    header.vertexCount = static_cast<std::uint32_t>(vertices.size());
+    header.indexCount = static_cast<std::uint32_t>(indices.size());
+
+    outputStream.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    if (!vertices.empty())
+    {
+        outputStream.write(reinterpret_cast<const char*>(vertices.data()), static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
+    }
+
+    if (!indices.empty())
+    {
+        outputStream.write(reinterpret_cast<const char*>(indices.data()), static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
+    }
+
+    const bool writeSucceeded = static_cast<bool>(outputStream);
+    destroyManager();
+    return writeSucceeded;
+}
+#else
+bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::string& pteroOutPath)
+{
+    (void)fbxPath;
+    (void)pteroOutPath;
+    return false;
+}
+#endif

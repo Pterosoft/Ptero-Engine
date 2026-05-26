@@ -1,0 +1,780 @@
+// RadianceProbeRenderer.cpp
+// Implements the world-space Radiance Probe grid: SH update pass (one thread per
+// probe firing uniform sphere rays via inline DXR) and the debug overlay pass
+// that ray-marches spheres in a fullscreen compute shader.
+
+#include "pch.h"
+#include "RadianceProbeRenderer.h"
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+
+#include "d3dx12.h"
+
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+#include <cmath>
+#include <vector>
+
+using namespace DirectX;
+
+using Microsoft::WRL::ComPtr;
+
+// ── Context helpers ──────────────────────────────────────────────────────────
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool __stdcall DX12Context_WaitForGPU();
+}
+
+namespace
+{
+    constexpr UINT kGroupSizeX = 8;
+    constexpr UINT kGroupSizeY = 8;
+
+    bool CreateUploadBuffer(ID3D12Device* dev, const void* data, UINT64 size, ComPtr<ID3D12Resource>& outRes)
+    {
+        auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto desc      = CD3DX12_RESOURCE_DESC::Buffer(size);
+        if (FAILED(dev->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&outRes))))
+            return false;
+
+        void* mapped = nullptr;
+        if (FAILED(outRes->Map(0, nullptr, &mapped)))
+            return false;
+        std::memcpy(mapped, data, static_cast<size_t>(size));
+        outRes->Unmap(0, nullptr);
+        return true;
+    }
+
+    void GenerateSolidSphere(
+        int                         stacks,
+        int                         slices,
+        std::vector<XMFLOAT3>&      outVerts,
+        std::vector<std::uint16_t>& outIndices)
+    {
+        outVerts.clear();
+        outIndices.clear();
+
+        for (int stack = 0; stack <= stacks; ++stack)
+        {
+            const float phi = XM_PI * static_cast<float>(stack) / static_cast<float>(stacks);
+            for (int slice = 0; slice <= slices; ++slice)
+            {
+                const float theta = XM_2PI * static_cast<float>(slice) / static_cast<float>(slices);
+                outVerts.push_back(XMFLOAT3(
+                    std::sinf(phi) * std::cosf(theta),
+                    std::cosf(phi),
+                    std::sinf(phi) * std::sinf(theta)));
+            }
+        }
+
+        const int cols = slices + 1;
+        for (int stack = 0; stack < stacks; ++stack)
+        {
+            for (int slice = 0; slice < slices; ++slice)
+            {
+                const std::uint16_t i0 = static_cast<std::uint16_t>(stack * cols + slice);
+                const std::uint16_t i1 = static_cast<std::uint16_t>(i0 + 1);
+                const std::uint16_t i2 = static_cast<std::uint16_t>((stack + 1) * cols + slice);
+                const std::uint16_t i3 = static_cast<std::uint16_t>(i2 + 1);
+
+                outIndices.push_back(i0); outIndices.push_back(i2); outIndices.push_back(i1);
+                outIndices.push_back(i1); outIndices.push_back(i2); outIndices.push_back(i3);
+            }
+        }
+    }
+
+    bool AllocDesc(D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, std::string& err)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&cpu, &gpu))
+        {
+            err = "RadianceProbeRenderer: out of SRV descriptor heap slots.";
+            return false;
+        }
+        return true;
+    }
+
+    ComPtr<ID3D12Resource> MakeStructuredBuf(ID3D12Device* dev, UINT64 size, LPCWSTR name)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = size;
+        desc.Height           = desc.DepthOrArraySize = desc.MipLevels = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+        res->SetName(name);
+        return res;
+    }
+
+    ComPtr<ID3D12Resource> MakeCB(ID3D12Device* dev, UINT64 size, void** mapped)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = size;
+        desc.Height           = desc.DepthOrArraySize = desc.MipLevels = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ComPtr<ID3D12Resource> res;
+        DX12_THROW_IF_FAILED(dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&res)));
+        DX12_THROW_IF_FAILED(res->Map(0, nullptr, mapped));
+        res->SetName(L"RadianceProbe_CB");
+        return res;
+    }
+
+    bool CompilePSO(ID3D12Device* dev, ID3D12RootSignature* rootSig,
+        const wchar_t* file, const wchar_t* entry,
+        ComPtr<ID3D12PipelineState>& pso, std::string& err)
+    {
+        ShaderCompileRequest req{};
+        req.FilePath     = file;
+        req.EntryPoint   = entry;
+        req.TargetProfile = L"cs_6_5";
+        req.Stage        = ShaderStage::Compute;
+
+        DX12Shader shader;
+        if (!shader.Compile(req))
+        {
+            err = std::string("RadianceProbeRenderer: compile '")
+                + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "?") + "'";
+            return false;
+        }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = rootSig;
+        desc.CS             = shader.GetBytecode();
+        if (FAILED(dev->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso))))
+        {
+            err = "RadianceProbeRenderer: CreateComputePipelineState failed.";
+            return false;
+        }
+        return true;
+    }
+} // anonymous namespace
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Public API
+// ──────────────────────────────────────────────────────────────────────────────
+
+bool RadianceProbeRenderer::Initialize(const RadianceProbeSettings& settings)
+{
+    mLastError.clear();
+    mInitFailed = false;
+    try
+    {
+        const uint32_t total = static_cast<uint32_t>(
+            settings.GridX * settings.GridY * settings.GridZ);
+        if (total == 0)
+        {
+            mLastError = "RadianceProbeRenderer: probe count is zero.";
+            mInitFailed = true;
+            return false;
+        }
+
+        const bool needRebuild = !mIsInitialized || total != mTotalProbes;
+
+        // If the probe grid dimensions changed while the renderer is active,
+        // wait for the GPU before replacing the structured buffers that may
+        // still be referenced by the update/debug passes from the previous frame.
+        if (needRebuild && mIsInitialized)
+            DX12Context_WaitForGPU();
+
+        mTotalProbes = total;
+
+        if (!mIsInitialized)
+        {
+            if (!CreateRootSignature()) return false;
+            if (!CreatePipelines())    return false;
+            if (!CreateDebugMesh())    return false;
+        }
+        if (needRebuild)
+        {
+            if (!CreateBuffers(total))      return false;
+            if (!CreateDescriptors(total))  return false;
+            mWriteIdx = 0;
+            mReadIdx = 0;
+        }
+
+        mIsInitialized = true;
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        mLastError  = std::string("RadianceProbeRenderer::Initialize: ") + ex.what();
+        mInitFailed = true;
+        return false;
+    }
+}
+
+void RadianceProbeRenderer::Shutdown()
+{
+    if (mMappedCb && mConstantBuffer)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mDebugVertexBuffer.Reset();
+    mDebugVertexUpload.Reset();
+    mDebugIndexBuffer.Reset();
+    mDebugIndexUpload.Reset();
+    mProbeSHBuffer[0].Reset();
+    mProbeSHBuffer[1].Reset();
+    mRootSignatureUpdate.Reset();
+    mRootSignatureDebug.Reset();
+    mPSO_Update.Reset();
+    mPSO_Debug.Reset();
+    mDescriptorsAllocated = false;
+    mIsInitialized        = false;
+    mTotalProbes          = 0;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Private helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+bool RadianceProbeRenderer::CreateRootSignature()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    // ── Update root signature ──────────────────────────────────────────────
+    // param 0: CBV b0
+    // param 1: SRV t0 (prev SH)
+    // param 2: SRV t1 (vertices)
+    // param 3: SRV t2 (indices)
+    // param 4: SRV t3 (instanceInfo)
+    // param 5: SRV t4 (material ranges)
+    // param 6: SRV t5 (TLAS)
+    // param 7: SRV t6..t37 (base-color textures)
+    // param 8: UAV u0 (current SH write)
+    {
+        D3D12_DESCRIPTOR_RANGE ranges[8]{};
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[3] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[4] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 4, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[5] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // TLAS
+        ranges[6] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 32, 6, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // base-color textures
+        ranges[7] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+
+        D3D12_ROOT_PARAMETER params[9]{};
+        params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        for (int i = 1; i <= 8; ++i)
+        {
+            params[i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[i].DescriptorTable.NumDescriptorRanges = 1;
+            params[i].DescriptorTable.pDescriptorRanges   = &ranges[i - 1];
+            params[i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+        }
+
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters = 9;
+        rsd.pParameters   = params;
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.MaxLOD = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister = 0;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rsd.NumStaticSamplers = 1;
+        rsd.pStaticSamplers   = &sampler;
+        rsd.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> blob, errBlob;
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errBlob)))
+        {
+            mLastError = "RadianceProbeRenderer: SerializeRootSignature (update) failed.";
+            return false;
+        }
+        DX12_THROW_IF_FAILED(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+            IID_PPV_ARGS(&mRootSignatureUpdate)));
+    }
+
+    // ── Debug root signature (graphics) ───────────────────────────────────
+    // param 0: CBV b0
+    // param 1: SRV t0 (probe SH)
+    {
+        D3D12_DESCRIPTOR_RANGE ranges[1]{};
+        ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+
+        D3D12_ROOT_PARAMETER params[2]{};
+        params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1].DescriptorTable.NumDescriptorRanges = 1;
+        params[1].DescriptorTable.pDescriptorRanges   = &ranges[0];
+        params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters     = 2;
+        rsd.pParameters       = params;
+        rsd.NumStaticSamplers = 0;
+        rsd.pStaticSamplers   = nullptr;
+        rsd.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+        ComPtr<ID3DBlob> blob, errBlob;
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errBlob)))
+        {
+            mLastError = "RadianceProbeRenderer: SerializeRootSignature (debug) failed.";
+            return false;
+        }
+        DX12_THROW_IF_FAILED(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+            IID_PPV_ARGS(&mRootSignatureDebug)));
+    }
+    return true;
+}
+
+bool RadianceProbeRenderer::CreatePipelines()
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    // Only build the update compute pipeline here.
+    // The debug graphics pipeline is created lazily in DrawDebug() so it can
+    // match the actual scene RTV format.
+    if (!CompilePSO(dev, mRootSignatureUpdate.Get(),
+            L"RadianceProbes_Update.hlsl", L"CSMain", mPSO_Update, mLastError))
+        return false;
+
+    return true;
+}
+
+bool RadianceProbeRenderer::CreateDebugPipeline(DXGI_FORMAT rtvFormat)
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    ShaderCompileRequest vsReq{};
+    vsReq.FilePath      = L"RadianceProbes_Debug.hlsl";
+    vsReq.EntryPoint    = L"VSMain";
+    vsReq.TargetProfile = L"vs_5_0";
+    vsReq.Stage         = ShaderStage::Vertex;
+
+    ShaderCompileRequest psReq{};
+    psReq.FilePath      = L"RadianceProbes_Debug.hlsl";
+    psReq.EntryPoint    = L"PSMain";
+    psReq.TargetProfile = L"ps_5_0";
+    psReq.Stage         = ShaderStage::Pixel;
+
+    DX12Shader vs, ps;
+    if (!vs.Compile(vsReq))
+    {
+        mLastError = std::string("RadianceProbeRenderer debug VS: ")
+            + (vs.GetLastErrorMessage() ? vs.GetLastErrorMessage() : "?");
+        return false;
+    }
+    if (!ps.Compile(psReq))
+    {
+        mLastError = std::string("RadianceProbeRenderer debug PS: ")
+            + (ps.GetLastErrorMessage() ? ps.GetLastErrorMessage() : "?");
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature        = mRootSignatureDebug.Get();
+    desc.VS                    = vs.GetBytecode();
+    desc.PS                    = ps.GetBytecode();
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    D3D12_INPUT_ELEMENT_DESC inputElement{};
+    inputElement.SemanticName         = "POSITION";
+    inputElement.SemanticIndex        = 0;
+    inputElement.Format               = DXGI_FORMAT_R32G32B32_FLOAT;
+    inputElement.InputSlot            = 0;
+    inputElement.AlignedByteOffset    = 0;
+    inputElement.InputSlotClass       = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    inputElement.InstanceDataStepRate = 0;
+    desc.InputLayout                  = { &inputElement, 1 };
+    desc.NumRenderTargets      = 1;
+    desc.RTVFormats[0]         = rtvFormat;
+    desc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+    desc.SampleMask            = UINT_MAX;
+    desc.SampleDesc.Count      = 1;
+
+    // Standard alpha blending so spheres read clearly as 3D objects.
+    D3D12_RENDER_TARGET_BLEND_DESC& rtBlend = desc.BlendState.RenderTarget[0];
+    rtBlend.BlendEnable           = TRUE;
+    rtBlend.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+    rtBlend.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+    rtBlend.BlendOp               = D3D12_BLEND_OP_ADD;
+    rtBlend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    rtBlend.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+    rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    desc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    desc.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
+    desc.RasterizerState.DepthClipEnable       = TRUE;
+    desc.BlendState.AlphaToCoverageEnable      = FALSE;
+    desc.DepthStencilState.DepthEnable         = FALSE;
+    desc.DepthStencilState.DepthWriteMask      = D3D12_DEPTH_WRITE_MASK_ZERO;
+    desc.DepthStencilState.DepthFunc           = D3D12_COMPARISON_FUNC_ALWAYS;
+    desc.DepthStencilState.StencilEnable       = FALSE;
+
+    if (FAILED(dev->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&mPSO_Debug))))
+    {
+        mLastError = "RadianceProbeRenderer: CreateGraphicsPipelineState (debug) failed.";
+        return false;
+    }
+
+    mDebugRtvFormat      = rtvFormat;
+    mDebugPipelineReady  = true;
+    return true;
+}
+
+bool RadianceProbeRenderer::CreateDebugMesh(ID3D12GraphicsCommandList* commandList)
+{
+    UNREFERENCED_PARAMETER(commandList);
+
+    if (mDebugVertexBuffer && mDebugIndexBuffer && mDebugIndexCount > 0)
+        return true;
+
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev)
+    {
+        mLastError = "RadianceProbeRenderer: no D3D12 device for debug mesh.";
+        return false;
+    }
+
+    std::vector<XMFLOAT3> verts;
+    std::vector<std::uint16_t> indices;
+    GenerateSolidSphere(12, 16, verts, indices);
+    mDebugIndexCount = static_cast<UINT>(indices.size());
+
+    const UINT64 vbSize = static_cast<UINT64>(verts.size()) * sizeof(XMFLOAT3);
+    const UINT64 ibSize = static_cast<UINT64>(indices.size()) * sizeof(std::uint16_t);
+
+    if (!CreateUploadBuffer(dev, verts.data(), vbSize, mDebugVertexBuffer) ||
+        !CreateUploadBuffer(dev, indices.data(), ibSize, mDebugIndexBuffer))
+    {
+        mLastError = "RadianceProbeRenderer: failed to create debug sphere mesh.";
+        return false;
+    }
+
+    mDebugVBView.BufferLocation = mDebugVertexBuffer->GetGPUVirtualAddress();
+    mDebugVBView.SizeInBytes    = static_cast<UINT>(vbSize);
+    mDebugVBView.StrideInBytes  = sizeof(XMFLOAT3);
+
+    mDebugIBView.BufferLocation = mDebugIndexBuffer->GetGPUVirtualAddress();
+    mDebugIBView.SizeInBytes    = static_cast<UINT>(ibSize);
+    mDebugIBView.Format         = DXGI_FORMAT_R16_UINT;
+    return true;
+}
+
+bool RadianceProbeRenderer::CreateBuffers(uint32_t totalProbes)
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    // sizeof(ProbeSHGpu) = 7 * 16 = 112 bytes
+    const UINT64 shBufSize = static_cast<UINT64>(totalProbes) * sizeof(ProbeSHGpu);
+
+    mProbeSHBuffer[0] = MakeStructuredBuf(dev, shBufSize, L"RadianceProbe_SH_0");
+    mProbeSHBuffer[1] = MakeStructuredBuf(dev, shBufSize, L"RadianceProbe_SH_1");
+    mProbeSHStates[0] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    mProbeSHStates[1] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    if (!mConstantBuffer)
+        mConstantBuffer = MakeCB(dev, sizeof(RadianceProbeConstants), &mMappedCb);
+
+    return true;
+}
+
+bool RadianceProbeRenderer::CreateDescriptors(uint32_t totalProbes)
+{
+    ID3D12Device* dev = DX12Context_GetDevice();
+    if (!dev) return false;
+
+    const UINT stride = static_cast<UINT>(sizeof(ProbeSHGpu)); // 112
+    const UINT count  = totalProbes;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        // Allocate descriptor slots once, then reuse the same handles whenever
+        // the probe count changes. Repeated live-resize from UI sliders would
+        // otherwise leak SRV/UAV heap entries and eventually stall/freeze.
+        if (!mDescriptorsAllocated)
+        {
+            if (!AllocDesc(mProbeSHSrvCpu[i], mProbeSHSrvGpu[i], mLastError)) return false;
+            if (!AllocDesc(mProbeSHUavCpu[i], mProbeSHUavGpu[i], mLastError)) return false;
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
+        srvDesc.Buffer.FirstElement        = 0;
+        srvDesc.Buffer.NumElements         = count;
+        srvDesc.Buffer.StructureByteStride = stride;
+        dev->CreateShaderResourceView(mProbeSHBuffer[i].Get(), &srvDesc, mProbeSHSrvCpu[i]);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.ViewDimension               = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Format                      = DXGI_FORMAT_UNKNOWN;
+        uavDesc.Buffer.FirstElement         = 0;
+        uavDesc.Buffer.NumElements          = count;
+        uavDesc.Buffer.StructureByteStride  = stride;
+        dev->CreateUnorderedAccessView(mProbeSHBuffer[i].Get(), nullptr, &uavDesc, mProbeSHUavCpu[i]);
+    }
+
+    mDescriptorsAllocated = true;
+    return true;
+}
+
+void RadianceProbeRenderer::UploadConstants(
+    const RadianceProbeSettings& settings,
+    float colorLeakIntensity,
+    int maxBounces,
+    const DeferredLightingPass::PointLightGpu* pointLights,
+    uint32_t numPointLights,
+    const float cameraPos[3],
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunR,    float sunG,    float sunB,
+    float skyR,    float skyG,    float skyB,
+    uint32_t frameIndex,
+    const float viewProj[16],
+    const float viewProjInv[16])
+{
+    if (!mMappedCb) return;
+
+    // Compute probe grid origin: either fixed or camera-centred.
+    float ox = settings.OriginX;
+    float oy = settings.OriginY;
+    float oz = settings.OriginZ;
+    if (settings.FollowCamera && cameraPos)
+    {
+        float halfX = (std::max)(settings.GridX - 1, 0) * settings.Spacing * 0.5f;
+        float halfY = (std::max)(settings.GridY - 1, 0) * settings.Spacing * 0.5f;
+        float halfZ = (std::max)(settings.GridZ - 1, 0) * settings.Spacing * 0.5f;
+        // Snap to nearest spacing grid cell to avoid per-frame SH invalidation.
+        auto snap = [](float v, float s) {
+            return std::floor(v / s) * s;
+        };
+        ox = snap(cameraPos[0] - halfX, settings.Spacing);
+        oy = snap(cameraPos[1] - halfY, settings.Spacing);
+        oz = snap(cameraPos[2] - halfZ, settings.Spacing);
+    }
+
+    RadianceProbeConstants cb{};
+    cb.ProbeGridX     = static_cast<uint32_t>(settings.GridX);
+    cb.ProbeGridY     = static_cast<uint32_t>(settings.GridY);
+    cb.ProbeGridZ     = static_cast<uint32_t>(settings.GridZ);
+    cb.ProbeSpacing   = settings.Spacing;
+    cb.ProbeOriginX   = ox;
+    cb.ProbeOriginY   = oy;
+    cb.ProbeOriginZ   = oz;
+    cb.UpdateBlend    = settings.UpdateBlend;
+    cb.RaysPerProbe   = static_cast<uint32_t>(std::clamp(settings.RaysPerProbe, 32, 256));
+    cb.FrameIndex     = frameIndex;
+    cb.TotalProbes    = mTotalProbes;
+    cb.DebugSphereRadius = settings.DebugSphereRadius;
+    cb.SunDirX  = sunDirX; cb.SunDirY  = sunDirY; cb.SunDirZ  = sunDirZ;
+    cb.SunColorR = sunR;   cb.SunColorG = sunG;   cb.SunColorB = sunB;
+    cb.SkyColorR = skyR;   cb.SkyColorG = skyG;   cb.SkyColorB = skyB;
+    if (cameraPos)
+    {
+        cb.CameraX = cameraPos[0]; cb.CameraY = cameraPos[1]; cb.CameraZ = cameraPos[2];
+    }
+    cb.ColorLeakIntensity = colorLeakIntensity;
+    cb.MaxBounces = (std::max)(maxBounces, 1);
+    cb.NumPointLights = static_cast<int32_t>(std::min<uint32_t>(numPointLights, DeferredLightingPass::kMaxPointLights));
+    if (pointLights != nullptr && cb.NumPointLights > 0)
+    {
+        std::memcpy(cb.PointLights, pointLights,
+            static_cast<size_t>(cb.NumPointLights) * sizeof(DeferredLightingPass::PointLightGpu));
+    }
+    if (viewProj)
+        std::memcpy(cb.ViewProj, viewProj, 64);
+    if (viewProjInv)
+        std::memcpy(cb.ViewProjInv, viewProjInv, 64);
+    cb.DebugView = settings.DebugShowProbes ? 4 : 0;
+    cb.DebugLightingMode = settings.DebugLightingMode;
+
+    std::memcpy(mMappedCb, &cb, sizeof(cb));
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Update (called once per frame after TLAS is ready)
+// ──────────────────────────────────────────────────────────────────────────────
+
+void RadianceProbeRenderer::Update(
+    ID3D12GraphicsCommandList4*  cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE  tlasSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  vertexSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  indexSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  instanceInfoSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  materialRangeSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  baseTextureTableSrv,
+    const RadianceProbeSettings& settings,
+    float                        colorLeakIntensity,
+    int                          maxBounces,
+    const DeferredLightingPass::PointLightGpu* pointLights,
+    uint32_t                     numPointLights,
+    const float                  cameraPos[3],
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunR,    float sunG,    float sunB,
+    float skyR,    float skyG,    float skyB,
+    uint32_t frameIndex)
+{
+    if (!mIsInitialized || mTotalProbes == 0) return;
+
+    UploadConstants(settings, colorLeakIntensity, maxBounces, pointLights, numPointLights, cameraPos,
+        sunDirX, sunDirY, sunDirZ,
+        sunR, sunG, sunB, skyR, skyG, skyB,
+        frameIndex);
+
+    const UINT writeIdx = mWriteIdx;
+    const UINT readIdx  = 1u - writeIdx;
+
+    if (mProbeSHStates[readIdx] == D3D12_RESOURCE_STATE_UNORDERED_ACCESS && frameIndex == 0)
+    {
+        const auto initReadToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mProbeSHBuffer[readIdx].Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &initReadToSrv);
+        mProbeSHStates[readIdx] = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    }
+
+    if (mProbeSHStates[readIdx] != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+    {
+        const auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mProbeSHBuffer[readIdx].Get(),
+            mProbeSHStates[readIdx],
+            D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        cmdList->ResourceBarrier(1, &toSrv);
+        mProbeSHStates[readIdx] = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    }
+
+    if (mProbeSHStates[writeIdx] != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        const auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+            mProbeSHBuffer[writeIdx].Get(),
+            mProbeSHStates[writeIdx],
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmdList->ResourceBarrier(1, &toUav);
+        mProbeSHStates[writeIdx] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    cmdList->SetComputeRootSignature(mRootSignatureUpdate.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootDescriptorTable(1, mProbeSHSrvGpu[readIdx]);    // t0: prev SH
+    cmdList->SetComputeRootDescriptorTable(2, vertexSrv);                   // t1: vertices
+    cmdList->SetComputeRootDescriptorTable(3, indexSrv);                    // t2: indices
+    cmdList->SetComputeRootDescriptorTable(4, instanceInfoSrv);             // t3: instanceInfo
+    cmdList->SetComputeRootDescriptorTable(5, materialRangeSrv);            // t4: material ranges
+    cmdList->SetComputeRootDescriptorTable(6, tlasSrv);                     // t5: TLAS
+    cmdList->SetComputeRootDescriptorTable(7, baseTextureTableSrv);         // t6..t37: base-color textures
+    cmdList->SetComputeRootDescriptorTable(8, mProbeSHUavGpu[writeIdx]);    // u0: current SH
+
+    cmdList->SetPipelineState(mPSO_Update.Get());
+    cmdList->Dispatch(mTotalProbes, 1, 1);
+
+    auto barrier = CD3DX12_RESOURCE_BARRIER::UAV(mProbeSHBuffer[writeIdx].Get());
+    cmdList->ResourceBarrier(1, &barrier);
+
+    const auto writeToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        mProbeSHBuffer[writeIdx].Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    cmdList->ResourceBarrier(1, &writeToSrv);
+    mProbeSHStates[writeIdx] = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
+    mReadIdx = writeIdx;
+    mWriteIdx = readIdx;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Debug overlay
+// ──────────────────────────────────────────────────────────────────────────────
+
+void RadianceProbeRenderer::DrawDebug(
+    ID3D12GraphicsCommandList*   cmdList,
+    D3D12_CPU_DESCRIPTOR_HANDLE  sceneRtvHandle,
+    D3D12_CPU_DESCRIPTOR_HANDLE  sceneDsvHandle,
+    DXGI_FORMAT                  sceneColorFormat,
+    UINT                         width,
+    UINT                         height,
+    const float                  viewProj[16],
+    const float                  viewProjInv[16])
+{
+    if (!mIsInitialized || mTotalProbes == 0) return;
+
+    // Lazily create the graphics debug pipeline on first call.
+    if (!mDebugPipelineReady || mDebugRtvFormat != sceneColorFormat)
+    {
+        if (!CreateDebugPipeline(sceneColorFormat)) return;
+    }
+    if (mDebugIndexCount == 0 && !CreateDebugMesh())
+        return;
+
+    // Update view-projection matrices in the constant buffer.
+    if (mMappedCb)
+    {
+        auto* cb = reinterpret_cast<RadianceProbeConstants*>(mMappedCb);
+        if (viewProj)    std::memcpy(cb->ViewProj,    viewProj,    64);
+        if (viewProjInv) std::memcpy(cb->ViewProjInv, viewProjInv, 64);
+        cb->DebugView = 4;
+    }
+
+    const UINT readIdx = mReadIdx;
+    if (mProbeSHStates[readIdx] != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+        return;
+
+    if (mMappedCb)
+    {
+        auto* cb = reinterpret_cast<RadianceProbeConstants*>(mMappedCb);
+        cb->DebugLightingMode = static_cast<int32_t>((std::max)(cb->DebugLightingMode, 0));
+    }
+
+    cmdList->SetGraphicsRootSignature(mRootSignatureDebug.Get());
+    cmdList->SetPipelineState(mPSO_Debug.Get());
+
+    cmdList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetGraphicsRootDescriptorTable(1, mProbeSHSrvGpu[readIdx]);
+
+    cmdList->OMSetRenderTargets(1, &sceneRtvHandle, FALSE, &sceneDsvHandle);
+
+    const D3D12_VIEWPORT vp = { 0.0f, 0.0f,
+        static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f };
+    const D3D12_RECT sr = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+    cmdList->RSSetViewports(1, &vp);
+    cmdList->RSSetScissorRects(1, &sr);
+
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmdList->IASetVertexBuffers(0, 1, &mDebugVBView);
+    cmdList->IASetIndexBuffer(&mDebugIBView);
+
+    // One real 3D sphere mesh per probe instance.
+    cmdList->DrawIndexedInstanced(mDebugIndexCount, mTotalProbes, 0, 0, 0);
+}

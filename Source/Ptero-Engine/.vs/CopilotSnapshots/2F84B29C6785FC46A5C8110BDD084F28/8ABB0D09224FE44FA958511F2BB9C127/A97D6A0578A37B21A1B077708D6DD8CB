@@ -1,0 +1,47 @@
+﻿// MeshEntity.hlsl
+// Per-entity mesh shader with base-color texture support.
+// A 1x1 white fallback texture is always bound at t0, so the shader
+// never needs a separate untextured path.
+
+cbuffer EntityConstants : register(b0)
+{
+    float4x4 gMVP;      // pre-transposed model-view-projection
+};
+
+Texture2D    gBaseColorTexture : register(t0);
+SamplerState gLinearSampler    : register(s0);
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+struct PSInput
+{
+    float4 Position : SV_Position;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    output.Position = mul(float4(input.Position, 1.0f), gMVP);
+    output.TexCoord = input.TexCoord;
+
+    // Simple N·L diffuse shading so geometry reads well even without textures.
+    float3 lightDir = normalize(float3(0.5f, 0.5f, -1.0f));
+    float  diffuse  = saturate(dot(normalize(input.Normal), -lightDir)) * 0.6f + 0.4f;
+    output.Color    = float4(input.Color.rgb * diffuse, input.Color.a);
+    return output;
+}
+
+float4 PSMain(PSInput input) : SV_Target
+{
+    float4 texColor = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord);
+    // Multiply texture with vertex color (vertex color carries the diffuse shading).
+    return texColor * input.Color;
+}

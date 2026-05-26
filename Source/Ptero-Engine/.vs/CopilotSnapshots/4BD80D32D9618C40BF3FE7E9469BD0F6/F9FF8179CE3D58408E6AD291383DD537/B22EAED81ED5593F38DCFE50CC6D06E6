@@ -1,0 +1,196 @@
+﻿#pragma once
+
+// RtGlobalIllumination
+// Implements a single-pass DXR ray-traced global illumination (GI) renderer.
+//
+// Each frame it:
+//   1. Rebuilds (or updates) the Top-Level Acceleration Structure (TLAS) from the
+//      current scene entity list.
+//   2. Dispatches rays from a DXR ray-generation shader (one ray per G-Buffer pixel).
+//      Rays pick up albedo from the first intersection and shade it with the sun light,
+//      then accumulate the result into a UAV texture.
+//   3. Blends the noisy raw output with a history buffer for temporal accumulation.
+//
+// The resulting RGBA16F texture (GetGiSrvGpu()) is then bound as t5 in the
+// DeferredLighting pass and added on top of the albedo term.
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "RtGiSettings.h"
+#include "Components.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+// Forward declarations to keep build times down.
+struct Entity;
+struct HosekWilkieResult;
+
+class RtGlobalIllumination
+{
+public:
+    // Must match PointLightGpu in DeferredLightingPass.h (32 bytes each).
+    struct PointLightGpu
+    {
+        DirectX::XMFLOAT3 Position;
+        float             Radius;
+        DirectX::XMFLOAT3 Color;
+        float             InvRadiusSq;
+    };
+    static_assert(sizeof(PointLightGpu) == 32);
+    static constexpr int kMaxPointLights = 16;
+
+    // Call once after the DX12 device is ready.
+    // Returns false (non-fatal) if the device does not support DXR Tier 1.0+.
+    bool Initialize(UINT width, UINT height);
+
+    // Resize the output texture when the scene viewport changes dimensions.
+    bool EnsureSize(UINT width, UINT height);
+
+    // Build / rebuild the TLAS from the current entity list.
+    // Must be called before Dispatch() each frame.
+    void BuildTlas(
+        ID3D12GraphicsCommandList4* cmdList4,
+        const std::vector<Entity>& entities);
+
+    // Dispatch one ray per G-Buffer pixel and accumulate the result.
+    void Dispatch(
+        ID3D12GraphicsCommandList4*          cmdList4,
+        D3D12_GPU_DESCRIPTOR_HANDLE          gbufferNormalSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE          depthSrv,
+        const RtGiSettings&                  settings,
+        const DirectX::XMFLOAT4X4&          invViewProj,
+        const DirectX::XMFLOAT3&            cameraPos,
+        const DirectX::XMFLOAT3&            sunDir,
+        const DirectX::XMFLOAT3&            sunColor,
+        const DirectX::XMFLOAT3&            skyAmbient,
+        const PointLightGpu*                 pointLights,
+        int                                  numPointLights);
+
+    // GPU descriptor handle for the accumulated GI texture (SRV).
+    // Bind as t5 in DeferredLighting.hlsl.
+    D3D12_GPU_DESCRIPTOR_HANDLE GetGiSrvGpu() const { return mAccumSrvGpu; }
+
+    bool IsInitialized() const { return mIsInitialized; }
+    bool HasInitFailed()  const { return mInitFailed; }
+
+    // Release upload buffers that were kept alive for the previous frame's BLAS builds.
+    // Call this after the GPU command list that contained BuildTlas() has finished executing.
+    void FlushPendingUploads() { mPendingUploads.clear(); }
+
+    void Shutdown();
+
+    const char* GetLastError() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+
+    // Constant buffer layout sent to the ray-generation shader each frame.
+    struct alignas(256) GiConstants
+    {
+        DirectX::XMFLOAT4X4 InvViewProj;   // for reconstructing world pos from depth
+        DirectX::XMFLOAT3   CameraPos;  float Pad0 = 0;
+        DirectX::XMFLOAT3   SunDir;     float Pad1 = 0; // direction FROM sun toward scene
+        DirectX::XMFLOAT3   SunColor;   float Pad2 = 0;
+        DirectX::XMFLOAT3   SkyAmbient; float Pad3 = 0;
+        float   MaxRayDistance;
+        int     BounceCount;
+        int     RaysPerPixel;
+        float   AccumulationAlpha;
+        int     FrameIndex;             // used for pseudo-random seed
+        int     SkylightOnMiss;         // bool as int for HLSL
+        int     NumPointLights;
+        int     ResetAccumulation;      // 1 = clear history (camera moved)
+        PointLightGpu PointLights[kMaxPointLights]; // 16*32 = 512 bytes
+        // Layout so far: 64+16+16+16+16+4+4+4+4+4+4+4+4+512 = 672 bytes; pad to 768 (3*256).
+        std::byte _Pad[96]{};
+    };
+    static_assert(sizeof(GiConstants) == 768);
+
+    bool CheckDxrSupport();
+    bool CreateOutputTextures(UINT width, UINT height);
+    bool CreateTlasBuffers(UINT maxInstances);
+    bool CreateDxrPipeline();
+    bool CreateShaderTable();
+    bool CreateConstantBuffer();
+
+    // Shared helper to allocate a descriptor from the engine SRV heap.
+    bool AllocateSrv(D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu);
+
+    // ---- DXR core ----
+    Microsoft::WRL::ComPtr<ID3D12Device5>              mDevice5;
+    Microsoft::WRL::ComPtr<ID3D12StateObject>          mStateObject;    // DXR pipeline
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>        mGlobalRS;       // global root signature
+
+    // ---- Acceleration structures ----
+    // BLAS per mesh pointer (keyed by source Mesh*)
+    struct BlasEntry
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Scratch;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Result;
+    };
+    std::unordered_map<const void*, BlasEntry> mBlasCache;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mTlasScratch;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mTlasBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mInstanceDescBuffer; // CPU-writable UPLOAD heap
+    UINT                                   mTlasMaxInstances = 0;
+
+
+
+    // ---- Output textures (RGBA16F) ----
+    // Raw noisy output written by the raygen shader.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mRawOutput;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRawUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mRawUavGpu{};
+
+    // Temporally-accumulated output that is sampled by the lighting pass.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mAccumOutput;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mAccumUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mAccumUavGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mAccumSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mAccumSrvGpu{};
+
+    // Previous-frame accumulation texture used for blending.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mHistoryOutput;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mHistorySrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mHistorySrvGpu{};
+
+    // ---- Shader table ----
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShaderTable;
+    UINT64                                 mShaderTableEntrySize = 0;
+    UINT64                                 mShaderTableSize      = 0;
+
+    // ---- Constant buffer ----
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    GiConstants*                           mMappedCB = nullptr;
+
+    UINT mWidth  = 0;
+    UINT mHeight = 0;
+    UINT mFrameIndex = 0;
+
+    // Track previous camera state to detect movement/rotation and reset accumulation.
+    DirectX::XMFLOAT3   mPrevCameraPos{ 1e30f, 1e30f, 1e30f };
+    DirectX::XMFLOAT4X4 mPrevInvViewProj{};
+    int                 mFramesSinceReset = 0; // ramps accumulation alpha after a camera move
+
+    bool mIsInitialized  = false;
+    bool mInitFailed     = false; // set true after a failed Initialize() to stop per-frame retries
+    bool mTlasBuiltThisFrame = false;
+    std::string mLastError;
+
+    // Upload buffers for BLAS geometry data – held alive until the GPU has
+    // finished the BuildRaytracingAccelerationStructure call.  Call
+    // FlushPendingUploads() after the command list is executed and the GPU
+    // fence has been signalled.
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> mPendingUploads;
+};

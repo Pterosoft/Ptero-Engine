@@ -1,0 +1,373 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "EntityMeshRenderer.h"
+#include "PointLightRenderer.h"
+#include "TAARenderer.h"
+#include "TaaSettings.h"
+#include "SkyRenderer.h"
+#include "HosekWilkieSky.h"
+#include "ShadowMapRenderer.h"
+#include "DeferredLightingPass.h"
+#include "TimeOfDaySettings.h"
+#include "RtGlobalIllumination.h"
+#include "RtGISettings.h"
+#include "RtAmbientOcclusion.h"
+#include "RtAOSettings.h"
+#include "AgxTonemapper.h"
+#include "AgxTonemapSettings.h"
+#include "VolumetricFogRenderer.h"
+#include "VolumetricFogSettings.h"
+#include "XeGtaoRenderer.h"
+#include "GtaoSettings.h"
+#include "BloomRenderer.h"
+#include "BloomSettings.h"
+#include "..\Ptero-Engine\EditorCamera.h"
+#include "..\Ptero-Engine\RenderInterfaces.h"
+
+#include "imgui.h"
+
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+class DX12Pipeline final : public IPipeline
+{
+public:
+    DX12Pipeline() = default;
+
+    const wchar_t* GetDebugName() const override
+    {
+        return mDebugName.c_str();
+    }
+
+    void SetDebugName(const std::wstring& debugName)
+    {
+        mDebugName = debugName;
+    }
+
+    ID3D12RootSignature* GetRootSignature() const
+    {
+        return mRootSignature.Get();
+    }
+
+    ID3D12PipelineState* GetPipelineState() const
+    {
+        return mPipelineState.Get();
+    }
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+private:
+    std::wstring mDebugName;
+};
+
+class DX12SceneRenderer
+{
+public:
+    struct Vertex
+    {
+        DirectX::XMFLOAT3 Position;
+        DirectX::XMFLOAT4 Color;
+    };
+
+    struct alignas(256) SceneConstants
+    {
+        DirectX::XMFLOAT4X4 ModelViewProjection;
+    };
+
+    struct BufferResource
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> DefaultBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> UploadBuffer;
+    };
+
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+    void Render(ID3D12GraphicsCommandList* commandList);
+    void Shutdown();
+
+    void SetCameraMovementSpeed(float movementSpeed)
+    {
+        mCamera.SetMovementSpeed(movementSpeed);
+    }
+
+    float GetCameraMovementSpeed() const
+    {
+        return mCamera.GetMovementSpeed();
+    }
+
+    void SetGridEnabled(bool isEnabled)
+    {
+        mGridEnabled = isEnabled;
+    }
+
+    bool IsGridEnabled() const
+    {
+        return mGridEnabled;
+    }
+
+    // Returns the final scene output for display:
+    //   AgX tonemapped → Bloom composited → TAA resolved → raw scene colour (in priority order when enabled).
+    ImTextureID GetSceneTextureId() const
+    {
+        if (mRtaoSettings.DebugView > 0)
+            return mSceneTextureId;
+        if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
+            return mAgxTonemapper.GetOutputTextureId();
+        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+            return mBloomRenderer.GetOutputTextureId();
+        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+            return mTaaRenderer.GetOutputTextureId();
+        return mSceneTextureId;
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetSceneTextureHandle() const
+    {
+        if (mRtaoSettings.DebugView > 0)
+            return mSceneSrvGpuHandle;
+        if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
+            return mAgxTonemapper.GetOutputGpuSrv();
+        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+            return mBloomRenderer.GetOutputGpuSrv();
+        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+            return mTaaRenderer.GetOutputGpuSrv();
+        return mSceneSrvGpuHandle;
+    }
+
+    TaaSettings& GetTaaSettings() { return mTaaSettings; }
+    const TaaSettings& GetTaaSettings() const { return mTaaSettings; }
+
+    TimeOfDaySettings& GetTimeOfDaySettings() { return mTimeOfDaySettings; }
+    const TimeOfDaySettings& GetTimeOfDaySettings() const { return mTimeOfDaySettings; }
+
+    RtGISettings& GetRtgiSettings() { return mRtgiSettings; }
+    const RtGISettings& GetRtgiSettings() const { return mRtgiSettings; }
+
+    RtAOSettings& GetRtaoSettings() { return mRtaoSettings; }
+    const RtAOSettings& GetRtaoSettings() const { return mRtaoSettings; }
+
+    AgxTonemapSettings& GetAgxSettings() { return mAgxSettings; }
+    const AgxTonemapSettings& GetAgxSettings() const { return mAgxSettings; }
+
+    VolumetricFogSettings& GetVolumetricFogSettings() { return mVolumetricFogSettings; }
+    const VolumetricFogSettings& GetVolumetricFogSettings() const { return mVolumetricFogSettings; }
+
+    GtaoSettings& GetGtaoSettings() { return mGtaoSettings; }
+    const GtaoSettings& GetGtaoSettings() const { return mGtaoSettings; }
+
+    BloomSettings& GetBloomSettings() { return mBloomSettings; }
+    const BloomSettings& GetBloomSettings() const { return mBloomSettings; }
+
+    const EditorCamera& GetCamera() const
+    {
+        return mCamera;
+    }
+
+    const char* GetLastErrorMessage() const
+    {
+        return mLastErrorMessage.empty() ? nullptr : mLastErrorMessage.c_str();
+    }
+
+    // Returns ImTextureID handles for each G-Buffer layer and the GI accumulation
+    // buffer so the editor can display them in a debug visualizer window.
+    ImTextureID GetGBufferAlbedoTextureId()   const { return static_cast<ImTextureID>(mDeferredLightingPass.GetSrvs().Albedo.ptr); }
+    ImTextureID GetGBufferNormalTextureId()   const { return static_cast<ImTextureID>(mDeferredLightingPass.GetSrvs().Normal.ptr); }
+    ImTextureID GetGBufferMaterialTextureId() const { return static_cast<ImTextureID>(mDeferredLightingPass.GetSrvs().Material.ptr); }
+    // Depth SRV lives on the scene renderer (R32_FLOAT view of the depth target).
+    ImTextureID GetGBufferDepthTextureId()    const { return static_cast<ImTextureID>(mDepthDebugSrvGpuHandle.ptr != 0 ? mDepthDebugSrvGpuHandle.ptr : mDepthSrvGpuHandle.ptr); }
+    ImTextureID GetGiAccumTextureId()         const { return static_cast<ImTextureID>(mRtgiRenderer.GetOutputSrv().ptr); }
+
+    // Transitions the scene depth buffer to PIXEL_SHADER_RESOURCE so ImGui can
+    // sample it in the G-Buffer debug window.  Call before ImGui::Render() and
+    // pair with TransitionDepthAfterRead() to restore DEPTH_WRITE afterwards.
+    void TransitionDepthForRead(ID3D12GraphicsCommandList* commandList);
+    void TransitionDepthAfterRead(ID3D12GraphicsCommandList* commandList);
+
+    // Provide the scene renderer with the current entity list so it can render
+    // each entity's assigned mesh every frame.
+    void SetEntities(std::vector<Entity>* entities)
+    {
+        mEntities = entities;
+        mEntityMeshRenderer.SetEntities(entities);
+    }
+
+    // Get the final scene color target resource for screenshot capture
+    ID3D12Resource* GetSceneColorTargetResource() const
+    {
+        // Return the final output texture based on which post-process is active
+        if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
+            return mAgxTonemapper.GetOutputResource();
+        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+            return mBloomRenderer.GetOutputResource();
+        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+            return mTaaRenderer.GetOutputResource();
+        return mSceneColorTarget.Get();
+    }
+
+private:
+    bool CreatePipeline();
+    bool CreateSceneTarget();
+    bool EnsureSceneTargetMatchesWindowSize();
+    bool CreateDepthDebugResources();
+    void RenderDepthDebugPreview(ID3D12GraphicsCommandList* commandList);
+    bool CreateGeometry(ID3D12GraphicsCommandList* commandList);
+    bool CreateConstantBuffer();
+    bool CreateBufferWithUpload(
+        ID3D12GraphicsCommandList* commandList,
+        const void* initialData,
+        UINT64 dataSize,
+        D3D12_RESOURCE_STATES finalState,
+        BufferResource& outBuffer) const;
+    void ReleaseSceneTargetResources();
+    void UpdateCamera();
+    void UpdateSceneConstants();
+    float ComputeSceneBoundRadius() const;
+    float GetMeshLocalRadius(const Mesh* mesh) const;
+    bool IsSceneContentDirtyForTemporal() const;
+
+    bool mIsInitialized = false;
+
+    DX12Shader mVertexShader;
+    DX12Shader mPixelShader;
+    DX12Pipeline mPipeline;
+    EditorCamera mCamera;
+
+    BufferResource mVertexBuffer;
+    BufferResource mIndexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    SceneConstants* mMappedConstants = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSceneColorTarget;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSceneDepthTarget;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mDepthDebugTarget;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mSceneRtvHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mSceneDsvHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDepthDebugRtvHeap;
+    D3D12_CPU_DESCRIPTOR_HANDLE mSceneRtvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mSceneDsvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mDepthDebugRtvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mSceneSrvCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mSceneSrvGpuHandle{};
+    // SRV for the scene depth buffer, bound to the deferred lighting pass for
+    // world-space position reconstruction.  Requires the depth resource to be
+    // created as DXGI_FORMAT_R32_TYPELESS.
+    D3D12_CPU_DESCRIPTOR_HANDLE mDepthSrvCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mDepthSrvGpuHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mDepthDebugSrvCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mDepthDebugSrvGpuHandle{};
+    ImTextureID mSceneTextureId = ImTextureID_Invalid;
+
+    D3D12_VERTEX_BUFFER_VIEW mVertexBufferView{};
+    D3D12_INDEX_BUFFER_VIEW mIndexBufferView{};
+    UINT mVertexCount = 0;
+    UINT mSceneWidth = 1280;
+    UINT mSceneHeight = 720;
+    bool mGridEnabled = true;
+    // Tracks the current D3D12 resource state of the scene depth buffer so Render()
+    // can issue the correct barrier transitions each frame.
+    D3D12_RESOURCE_STATES mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    std::string mLastErrorMessage;
+
+    // Jittered view-projection matrix computed each frame in UpdateSceneConstants().
+    // Used for both the grid and entity rendering so all geometry shares the same jitter.
+    DirectX::XMFLOAT4X4 mJitteredViewProjection{};
+    DirectX::XMFLOAT4X4 mNonJitteredViewProjection{}; // VP without TAA jitter, used by RT GI
+
+    // Jittered projection matrix (without view) stored so the sky pass can be jittered
+    // consistently with geometry, preventing sky fringing through mesh edges during TAA.
+    DirectX::XMFLOAT4X4 mJitteredProjection{};
+
+    // Previous frame's view matrix used to detect camera movement for TAA history reset.
+    DirectX::XMFLOAT4X4 mPreviousViewMatrix{};
+    bool                mCameraMovedThisFrame = false;
+
+    // Previous frame view-projection and camera position used by RTGI for temporal reservoir reprojection.
+    DirectX::XMFLOAT4X4 mPreviousViewProjectionForRtgi{};
+    DirectX::XMFLOAT4X4 mPreviousViewProjectionForRtao{};
+    DirectX::XMFLOAT3   mPrevCameraPositionForRtgi{};
+
+    // Non-jittered view and projection matrices stored separately so NRD can receive
+    // them as worldToView and viewToClip without needing to decompose the combined VP.
+    DirectX::XMFLOAT4X4 mNonJitteredViewMatrix{};
+    DirectX::XMFLOAT4X4 mNonJitteredProjectionMatrix{};
+    DirectX::XMFLOAT4X4 mPrevNonJitteredViewMatrix{};
+    DirectX::XMFLOAT4X4 mPrevNonJitteredProjectionMatrix{};
+
+    // Frame delta time in milliseconds, updated by UpdateCamera() and consumed by Dispatch.
+    float mFrameDeltaTimeMs = 16.667f;
+
+    struct alignas(256) DepthDebugConstants
+    {
+        float DepthScale = 256.0f;
+        float Pad[3]{};
+    };
+    Microsoft::WRL::ComPtr<ID3D12Resource> mDepthDebugConstantBuffer;
+    DepthDebugConstants*                    mMappedDepthDebugConstants = nullptr;
+    DX12Shader                              mDepthDebugVertexShader;
+    DX12Shader                              mDepthDebugPixelShader;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mDepthDebugRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mDepthDebugPipelineState;
+
+    // Handles GPU buffer management and draw calls for all scene entities (geometry pass).
+    EntityMeshRenderer mEntityMeshRenderer;
+    // Owns G-Buffer render targets and the fullscreen deferred-lighting resolve pass.
+    DeferredLightingPass mDeferredLightingPass;
+    // Draws a wireframe sphere gizmo for each point light in the scene.
+    PointLightRenderer mPointLightRenderer;
+    std::vector<Entity>* mEntities = nullptr;
+
+    // Temporal Anti-Aliasing renderer and settings.
+    TAARenderer mTaaRenderer;
+    TaaSettings mTaaSettings;
+
+    // Sky rendering and time-of-day lighting.
+    SkyRenderer          mSkyRenderer;
+    TimeOfDaySettings    mTimeOfDaySettings;
+    HosekWilkieResult    mHosekResult{};
+
+    // Shadow map renderer for the sun directional light.
+    ShadowMapRenderer    mShadowMapRenderer;
+
+    // Custom RTGI with ReSTIR-style temporal/spatial reservoir resampling.
+    RtGlobalIllumination mRtgiRenderer;
+    RtGISettings         mRtgiSettings;
+
+    // Ray Traced Ambient Occlusion.
+    RtAmbientOcclusion   mRtaoRenderer;
+    RtAOSettings         mRtaoSettings;
+
+    // Screen-Space Ambient Occlusion (XeGTAO).
+    XeGtaoRenderer       mGtaoRenderer;
+    GtaoSettings         mGtaoSettings;
+
+    // Physical mip-chain bloom.
+    BloomRenderer        mBloomRenderer;
+    BloomSettings        mBloomSettings;
+
+    // AgX tonemapper.
+    AgxTonemapper        mAgxTonemapper;
+    AgxTonemapSettings   mAgxSettings;
+
+    // Volumetric fog froxel renderer.
+    VolumetricFogRenderer mVolumetricFogRenderer;
+    VolumetricFogSettings mVolumetricFogSettings;
+
+    // Cached point lights built each frame; shared with the RT GI dispatch.
+    DeferredLightingPass::PointLightGpu mCachedPointLights[DeferredLightingPass::kMaxPointLights]{};
+    int                                 mNumCachedPointLights = 0;
+
+    // Jitter state for sub-pixel Halton offset (TAA projection jitter).
+    UINT mJitterIndex = 0;
+    // NRD expects camera jitter in pixel units in range [-0.5, 0.5].
+    float mCurrentCameraJitter[2] = {};
+    float mPrevCameraJitter[2] = {};
+    bool  mRtaoDebugViewWasActive = false;
+    bool  mRtaoJitterSuppressedLastFrame = false;
+    bool  mGtaoJitterSuppressedLastFrame = false;
+
+    // Cache a conservative local-space bounding radius per mesh so the shadow frustum
+    // can expand to fit large imported scenes without re-scanning every vertex each frame.
+    mutable std::unordered_map<const Mesh*, float> mMeshLocalRadiusCache;
+};

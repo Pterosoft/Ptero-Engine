@@ -1,0 +1,36 @@
+﻿#pragma once
+
+#include <windows.h>
+
+#include "imgui.h"
+#include "TaaSettings.h"
+#include "TimeOfDaySettings.h"
+#include "RtGiSettings.h"
+
+// G-Buffer and GI debug texture handles passed to the View menu visualizer.
+struct GBufferDebugTextureIds
+{
+    ImTextureID Albedo   = ImTextureID_Invalid;
+    ImTextureID Normal   = ImTextureID_Invalid;
+    ImTextureID Material = ImTextureID_Invalid;
+    ImTextureID Depth    = ImTextureID_Invalid;
+    ImTextureID GiAccum  = ImTextureID_Invalid;
+};
+
+void RenderEditorMainMenu(
+    HWND windowHandle,
+    void* editor,
+    ImTextureID sceneTextureId,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    float* cameraSpeed,
+    bool* gridEnabled,
+    bool* showStatistics,
+    bool* showViewportPlacementIcons,
+    bool* showComponentsPanel,
+    bool* showLevelExplorerPanel,
+    bool* showPropertiesPanel,
+    TaaSettings* taaSettings,
+    TimeOfDaySettings* timeOfDaySettings,
+    RtGiSettings* rtGiSettings,
+    const GBufferDebugTextureIds* gbufferTextureIds);

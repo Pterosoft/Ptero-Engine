@@ -1,0 +1,388 @@
+﻿#include "pch.h"
+
+#include "System/FbxCompiler.h"
+
+#include "System/Mesh.h"
+#include "System/PteroMeshFormat.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <unordered_map>
+#include <vector>
+
+// nlohmann/json for writing the auto-generated multi-material JSON alongside the .ptero file.
+#include "../../SDKs/nlohmann/json.hpp"
+
+#if defined(PTERO_FBX_SDK_AVAILABLE)
+#include <fbxsdk.h>
+
+namespace
+{
+    template <typename LayerElementType>
+    int ResolveLayerElementIndex(const LayerElementType* layerElement, const int elementIndex)
+    {
+        if (layerElement == nullptr || elementIndex < 0)
+        {
+            return -1;
+        }
+
+        switch (layerElement->GetReferenceMode())
+        {
+        case FbxLayerElement::eDirect:
+            return elementIndex;
+        case FbxLayerElement::eIndex:
+        case FbxLayerElement::eIndexToDirect:
+            return (elementIndex < layerElement->GetIndexArray().GetCount())
+                ? layerElement->GetIndexArray().GetAt(elementIndex)
+                : -1;
+        default:
+            return -1;
+        }
+    }
+
+    DirectX::XMFLOAT3 ConvertPositionToLeftHanded(const FbxVector4& position)
+    {
+        return DirectX::XMFLOAT3(
+            static_cast<float>(position[0]),
+            static_cast<float>(position[1]),
+            static_cast<float>(-position[2]));
+    }
+
+    DirectX::XMFLOAT3 ConvertNormalToLeftHanded(const FbxVector4& normal)
+    {
+        return DirectX::XMFLOAT3(
+            static_cast<float>(normal[0]),
+            static_cast<float>(normal[1]),
+            static_cast<float>(-normal[2]));
+    }
+
+    DirectX::XMFLOAT3 ReadNormal(const FbxMesh* mesh, const int controlPointIndex, const int polygonVertexIndex)
+    {
+        const FbxGeometryElementNormal* normalElement = mesh ? mesh->GetElementNormal(0) : nullptr;
+        if (normalElement == nullptr)
+        {
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        int resolvedIndex = -1;
+        switch (normalElement->GetMappingMode())
+        {
+        case FbxLayerElement::eByControlPoint:
+            resolvedIndex = ResolveLayerElementIndex(normalElement, controlPointIndex);
+            break;
+        case FbxLayerElement::eByPolygonVertex:
+            resolvedIndex = ResolveLayerElementIndex(normalElement, polygonVertexIndex);
+            break;
+        default:
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        if (resolvedIndex < 0 || resolvedIndex >= normalElement->GetDirectArray().GetCount())
+        {
+            return DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f);
+        }
+
+        return ConvertNormalToLeftHanded(normalElement->GetDirectArray().GetAt(resolvedIndex));
+    }
+
+    DirectX::XMFLOAT2 ReadUv(FbxMesh* mesh, const int controlPointIndex, const int polygonIndex, const int polygonVertexInPolygon)
+    {
+        const FbxGeometryElementUV* uvElement = mesh ? mesh->GetElementUV(0) : nullptr;
+        if (uvElement == nullptr)
+        {
+            return DirectX::XMFLOAT2(0.0f, 0.0f);
+        }
+
+        if (uvElement->GetMappingMode() == FbxLayerElement::eByControlPoint)
+        {
+            const int resolvedIndex = ResolveLayerElementIndex(uvElement, controlPointIndex);
+            if (resolvedIndex >= 0 && resolvedIndex < uvElement->GetDirectArray().GetCount())
+            {
+                const FbxVector2 uv = uvElement->GetDirectArray().GetAt(resolvedIndex);
+                return DirectX::XMFLOAT2(static_cast<float>(uv[0]), 1.0f - static_cast<float>(uv[1]));
+            }
+
+            return DirectX::XMFLOAT2(0.0f, 0.0f);
+        }
+
+        if (uvElement->GetMappingMode() == FbxLayerElement::eByPolygonVertex)
+        {
+            const int uvIndex = mesh->GetTextureUVIndex(polygonIndex, polygonVertexInPolygon);
+            if (uvIndex >= 0 && uvIndex < uvElement->GetDirectArray().GetCount())
+            {
+                const FbxVector2 uv = uvElement->GetDirectArray().GetAt(uvIndex);
+                return DirectX::XMFLOAT2(static_cast<float>(uv[0]), 1.0f - static_cast<float>(uv[1]));
+            }
+        }
+
+        return DirectX::XMFLOAT2(0.0f, 0.0f);
+    }
+
+    void CollectMeshNodesRecursive(FbxNode* node, std::vector<FbxMesh*>& meshes)
+    {
+        if (node == nullptr)
+        {
+            return;
+        }
+
+        if (FbxMesh* mesh = node->GetMesh(); mesh != nullptr)
+        {
+            meshes.push_back(mesh);
+        }
+
+        const int childCount = node->GetChildCount();
+        for (int childIndex = 0; childIndex < childCount; ++childIndex)
+        {
+            CollectMeshNodesRecursive(node->GetChild(childIndex), meshes);
+        }
+    }
+
+    bool TriangulateAndCollectMeshes(FbxScene* scene, std::vector<FbxMesh*>& meshes)
+    {
+        if (scene == nullptr)
+        {
+            return false;
+        }
+
+        FbxGeometryConverter geometryConverter(scene->GetFbxManager());
+        if (!geometryConverter.Triangulate(scene, true))
+        {
+            return false;
+        }
+
+        CollectMeshNodesRecursive(scene->GetRootNode(), meshes);
+        return !meshes.empty();
+    }
+
+    void ProcessMesh(FbxMesh* mesh, std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, std::vector<PteroSubMeshEntry>& subMeshEntries)
+    {
+        if (mesh == nullptr || mesh->GetControlPoints() == nullptr)
+        {
+            return;
+        }
+
+        // Read the per-polygon material element so each triangle can be bucketed by FBX material slot.
+        const FbxGeometryElementMaterial* materialElement = mesh->GetElementMaterialCount() > 0
+            ? mesh->GetElementMaterial(0)
+            : nullptr;
+
+        const FbxVector4* controlPoints = mesh->GetControlPoints();
+        const int polygonCount = mesh->GetPolygonCount();
+
+        // Group polygon indices by material id first, then emit them in order so the shared index buffer
+        // contains one contiguous run per material.  This mirrors how CryEngine/Unreal store sub-objects.
+        // key = materialId, value = list of triangle vertex triplets (controlPointIndex, polygonVertexIndex, ...)
+        struct TriVert
+        {
+            int controlPointIndex;
+            int polygonVertexIndex;
+            int polygonIndex;
+            int localVertex;
+        };
+        std::unordered_map<int, std::vector<TriVert>> perMaterialTris;
+
+        int polygonVertexIndex = 0;
+        for (int polygonIndex = 0; polygonIndex < polygonCount; ++polygonIndex)
+        {
+            const int polygonSize = mesh->GetPolygonSize(polygonIndex);
+            if (polygonSize != 3)
+            {
+                polygonVertexIndex += polygonSize;
+                continue;
+            }
+
+            // Resolve which material this triangle belongs to.
+            int materialId = 0;
+            if (materialElement != nullptr)
+            {
+                if (materialElement->GetMappingMode() == FbxLayerElement::eAllSame)
+                {
+                    // Every polygon uses the same material slot; resolve once.
+                    materialId = ResolveLayerElementIndex(materialElement, 0);
+                }
+                else
+                {
+                    // eByPolygon – each polygon stores its own index.
+                    materialId = ResolveLayerElementIndex(materialElement, polygonIndex);
+                }
+                if (materialId < 0) materialId = 0;
+            }
+
+            for (int polygonVertex = 0; polygonVertex < polygonSize; ++polygonVertex)
+            {
+                perMaterialTris[materialId].push_back({
+                    mesh->GetPolygonVertex(polygonIndex, polygonVertex),
+                    polygonVertexIndex + polygonVertex,
+                    polygonIndex,
+                    polygonVertex
+                });
+            }
+            polygonVertexIndex += polygonSize;
+        }
+
+        // Emit vertices/indices grouped by materialId in sorted order so material 0 comes first, etc.
+        std::vector<int> sortedMaterialIds;
+        sortedMaterialIds.reserve(perMaterialTris.size());
+        for (const auto& [id, _] : perMaterialTris)
+        {
+            sortedMaterialIds.push_back(id);
+        }
+        std::sort(sortedMaterialIds.begin(), sortedMaterialIds.end());
+
+        const std::uint32_t baseGlobalIndex = static_cast<std::uint32_t>(indices.size());
+
+        for (const int materialId : sortedMaterialIds)
+        {
+            const std::vector<TriVert>& triVerts = perMaterialTris.at(materialId);
+            // triVerts is already in triples of 3 vertices per triangle.
+            const std::uint32_t subMeshIndexStart = static_cast<std::uint32_t>(indices.size());
+
+            for (std::size_t i = 0; i + 2 < triVerts.size(); i += 3)
+            {
+                const std::uint32_t base = static_cast<std::uint32_t>(vertices.size());
+
+                for (int v = 0; v < 3; ++v)
+                {
+                    const TriVert& tv = triVerts[i + v];
+                    Vertex vertex{};
+                    if (tv.controlPointIndex >= 0 && tv.controlPointIndex < mesh->GetControlPointsCount())
+                    {
+                        vertex.Position = ConvertPositionToLeftHanded(controlPoints[tv.controlPointIndex]);
+                        vertex.Normal = ReadNormal(mesh, tv.controlPointIndex, tv.polygonVertexIndex);
+                        vertex.TexCoord = ReadUv(mesh, tv.controlPointIndex, tv.polygonIndex, tv.localVertex);
+                    }
+                    vertex.Color = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+                    vertices.push_back(vertex);
+                }
+
+                // Flipping winding keeps front faces correct after the handedness flip (Z negation).
+                indices.push_back(base + 0);
+                indices.push_back(base + 2);
+                indices.push_back(base + 1);
+            }
+
+            PteroSubMeshEntry entry{};
+            entry.materialId = static_cast<std::uint32_t>(materialId);
+            entry.indexStart = subMeshIndexStart;
+            entry.indexCount = static_cast<std::uint32_t>(indices.size()) - subMeshIndexStart;
+            subMeshEntries.push_back(entry);
+        }
+    }
+}
+
+bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::string& pteroOutPath)
+{
+    FbxManager* fbxManager = FbxManager::Create();
+    if (fbxManager == nullptr)
+    {
+        return false;
+    }
+
+    auto destroyManager = [&fbxManager]()
+    {
+        if (fbxManager != nullptr)
+        {
+            fbxManager->Destroy();
+            fbxManager = nullptr;
+        }
+    };
+
+    FbxIOSettings* ioSettings = FbxIOSettings::Create(fbxManager, IOSROOT);
+    fbxManager->SetIOSettings(ioSettings);
+
+    FbxImporter* importer = FbxImporter::Create(fbxManager, "");
+    if (importer == nullptr)
+    {
+        destroyManager();
+        return false;
+    }
+
+    if (!importer->Initialize(fbxPath.c_str(), -1, fbxManager->GetIOSettings()))
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    FbxScene* scene = FbxScene::Create(fbxManager, "PteroScene");
+    if (scene == nullptr)
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    if (!importer->Import(scene))
+    {
+        importer->Destroy();
+        destroyManager();
+        return false;
+    }
+
+    importer->Destroy();
+
+    std::vector<FbxMesh*> meshes;
+    if (!TriangulateAndCollectMeshes(scene, meshes))
+    {
+        destroyManager();
+        return false;
+    }
+
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+    std::vector<PteroSubMeshEntry> subMeshEntries;
+    for (FbxMesh* mesh : meshes)
+    {
+        ProcessMesh(mesh, vertices, indices, subMeshEntries);
+    }
+
+    if (const std::filesystem::path outputPath(pteroOutPath); outputPath.has_parent_path())
+    {
+        std::filesystem::create_directories(outputPath.parent_path());
+    }
+
+    std::ofstream outputStream(pteroOutPath, std::ios::binary);
+    if (!outputStream)
+    {
+        destroyManager();
+        return false;
+    }
+
+    PteroMeshHeader header{};
+    header.vertexCount = static_cast<std::uint32_t>(vertices.size());
+    header.indexCount = static_cast<std::uint32_t>(indices.size());
+    header.subMeshCount = static_cast<std::uint32_t>(subMeshEntries.size());
+
+    outputStream.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+    // Write the sub-mesh table immediately after the header so readers know the material layout before parsing geometry.
+    if (!subMeshEntries.empty())
+    {
+        outputStream.write(reinterpret_cast<const char*>(subMeshEntries.data()),
+            static_cast<std::streamsize>(subMeshEntries.size() * sizeof(PteroSubMeshEntry)));
+    }
+
+    if (!vertices.empty())
+    {
+        outputStream.write(reinterpret_cast<const char*>(vertices.data()), static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
+    }
+
+    if (!indices.empty())
+    {
+        outputStream.write(reinterpret_cast<const char*>(indices.data()), static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
+    }
+
+    const bool writeSucceeded = static_cast<bool>(outputStream);
+    destroyManager();
+    return writeSucceeded;
+}
+#else
+bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::string& pteroOutPath)
+{
+    (void)fbxPath;
+    (void)pteroOutPath;
+    return false;
+}
+#endif

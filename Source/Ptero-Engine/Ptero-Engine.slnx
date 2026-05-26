@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="../Audio/Audio.vcxproj" Id="ac3f9ca7-bb5e-4018-8271-dbe4fa3bc783" />
+  <Project Path="../Renderer_DX12/Renderer_DX12.vcxproj" Id="17da5c78-328f-4fa3-8082-9b429693168b" />
+  <Project Path="../System/System.vcxproj" Id="c392bd3f-864e-4324-b584-a978d6a36308" />
+  <Project Path="Ptero-Engine.vcxproj" Id="11e5ffc0-782f-4b55-ab77-7ebd87354f9b" />
+</Solution>

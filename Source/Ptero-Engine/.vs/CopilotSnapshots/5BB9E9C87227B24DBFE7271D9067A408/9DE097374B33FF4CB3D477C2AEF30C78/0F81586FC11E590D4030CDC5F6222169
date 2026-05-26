@@ -1,0 +1,406 @@
+﻿#include "pch.h"
+#include "PointLightRenderer.h"
+
+#include "d3dx12.h"
+
+#include <cmath>
+#include <cstring>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+namespace
+{
+    // Allocates a committed buffer resource and optionally copies initialData
+    // via an upload resource recorded into commandList.
+    static bool CreateAndUploadBuffer(
+        ID3D12Device*                          device,
+        ID3D12GraphicsCommandList*             commandList,
+        const void*                            initialData,
+        UINT64                                 dataSize,
+        D3D12_RESOURCE_STATES                  finalState,
+        ComPtr<ID3D12Resource>&                outDefault,
+        ComPtr<ID3D12Resource>&                outUpload)
+    {
+        auto heapDefault = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto heapUpload  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto bufDesc     = CD3DX12_RESOURCE_DESC::Buffer(dataSize);
+
+        if (FAILED(device->CreateCommittedResource(
+            &heapDefault, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&outDefault))))
+            return false;
+
+        if (FAILED(device->CreateCommittedResource(
+            &heapUpload, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&outUpload))))
+            return false;
+
+        D3D12_SUBRESOURCE_DATA sub{};
+        sub.pData      = initialData;
+        sub.RowPitch   = static_cast<LONG_PTR>(dataSize);
+        sub.SlicePitch = sub.RowPitch;
+        UpdateSubresources(commandList, outDefault.Get(), outUpload.Get(), 0, 0, 1, &sub);
+
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            outDefault.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
+        commandList->ResourceBarrier(1, &barrier);
+
+        return true;
+    }
+
+    // Build vertex and index data for a unit wireframe sphere using latitude/longitude rings.
+    // Vertices are stored as raw XMFLOAT3; indices form a line-list.
+    static void GenerateWireframeSphere(
+        int                          stacks,   // number of latitude bands
+        int                          slices,   // number of longitude segments
+        std::vector<XMFLOAT3>&       outVerts,
+        std::vector<std::uint16_t>&  outIndices)
+    {
+        outVerts.clear();
+        outIndices.clear();
+
+        // Generate the sphere vertex grid.
+        for (int stack = 0; stack <= stacks; ++stack)
+        {
+            const float phi = XM_PI * static_cast<float>(stack) / static_cast<float>(stacks);
+            for (int slice = 0; slice <= slices; ++slice)
+            {
+                const float theta = XM_2PI * static_cast<float>(slice) / static_cast<float>(slices);
+                XMFLOAT3 v{
+                    std::sinf(phi) * std::cosf(theta),
+                    std::sinf(phi) * std::sinf(theta),
+                    std::cosf(phi)
+                };
+                outVerts.push_back(v);
+            }
+        }
+
+        const int cols = slices + 1;
+
+        // Horizontal rings (latitude lines).
+        for (int stack = 0; stack <= stacks; ++stack)
+        {
+            for (int slice = 0; slice < slices; ++slice)
+            {
+                outIndices.push_back(static_cast<std::uint16_t>(stack * cols + slice));
+                outIndices.push_back(static_cast<std::uint16_t>(stack * cols + slice + 1));
+            }
+        }
+
+        // Vertical meridians (longitude lines).
+        for (int slice = 0; slice < slices; ++slice)
+        {
+            for (int stack = 0; stack < stacks; ++stack)
+            {
+                outIndices.push_back(static_cast<std::uint16_t>(stack       * cols + slice));
+                outIndices.push_back(static_cast<std::uint16_t>((stack + 1) * cols + slice));
+            }
+        }
+    }
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+bool PointLightRenderer::Initialize(
+    ID3D12GraphicsCommandList* commandList,
+    DXGI_FORMAT                colorFormat,
+    DXGI_FORMAT                depthFormat)
+{
+    if (!CreateSphereMesh(commandList))
+        return false;
+    if (!CreatePipeline(colorFormat, depthFormat))
+        return false;
+    return true;
+}
+
+void PointLightRenderer::Render(
+    ID3D12GraphicsCommandList* commandList,
+    const std::vector<Entity>& entities,
+    const XMMATRIX&            viewProjection)
+{
+    if (!mPipelineReady || mIndexCount == 0 || !mConstantBuffer)
+        return;
+
+    // Count how many point lights are in the scene this frame.
+    std::size_t lightCount = 0;
+    for (const Entity& e : entities)
+    {
+        if (e.HasPointLightComponent())
+            ++lightCount;
+    }
+
+    if (lightCount == 0)
+        return;
+
+    if (!EnsureConstantBuffer(lightCount))
+        return;
+
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    commandList->IASetVertexBuffers(0, 1, &mVBView);
+    commandList->IASetIndexBuffer(&mIBView);
+
+    std::size_t slot = 0;
+    for (const Entity& e : entities)
+    {
+        if (!e.HasPointLightComponent())
+            continue;
+
+        const PointLightComponent& pl = *e.PointLight;
+
+        // Scale the unit sphere to the light's influence radius and translate to its world position.
+        const XMMATRIX model = XMMatrixScaling(pl.Radius, pl.Radius, pl.Radius)
+                             * XMMatrixTranslation(
+                                   e.Transform.Position.x,
+                                   e.Transform.Position.y,
+                                   e.Transform.Position.z);
+        const XMMATRIX mvp = XMMatrixTranspose(model * viewProjection);
+
+        GizmoConstants& cb = mMappedCB[slot];
+        XMStoreFloat4x4(&cb.MVP, mvp);
+        cb.Color = { pl.ColorR, pl.ColorG, pl.ColorB, 1.0f };
+
+        const UINT64 cbOffset = static_cast<UINT64>(slot) * sizeof(GizmoConstants);
+        commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+        commandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
+
+        ++slot;
+    }
+}
+
+void PointLightRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedCB)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mCBCapacity = 0;
+
+    mVertexBuffer.Reset();
+    mVertexUpload.Reset();
+    mIndexBuffer.Reset();
+    mIndexUpload.Reset();
+
+    mRootSignature.Reset();
+    mPipelineState.Reset();
+    mVertexShader = DX12Shader{};
+    mPixelShader  = DX12Shader{};
+    mPipelineReady = false;
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+bool PointLightRenderer::CreateSphereMesh(ID3D12GraphicsCommandList* commandList)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "PointLightRenderer: no D3D12 device.";
+        return false;
+    }
+
+    std::vector<XMFLOAT3>      verts;
+    std::vector<std::uint16_t> indices;
+    GenerateWireframeSphere(12, 16, verts, indices);
+
+    mIndexCount = static_cast<UINT>(indices.size());
+
+    const UINT64 vbSize = verts.size()   * sizeof(XMFLOAT3);
+    const UINT64 ibSize = indices.size() * sizeof(std::uint16_t);
+
+    if (!CreateAndUploadBuffer(device, commandList, verts.data(),   vbSize,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, mVertexBuffer, mVertexUpload))
+    {
+        mLastError = "PointLightRenderer: failed to create vertex buffer.";
+        return false;
+    }
+
+    if (!CreateAndUploadBuffer(device, commandList, indices.data(), ibSize,
+            D3D12_RESOURCE_STATE_INDEX_BUFFER, mIndexBuffer, mIndexUpload))
+    {
+        mLastError = "PointLightRenderer: failed to create index buffer.";
+        return false;
+    }
+
+    mVBView.BufferLocation = mVertexBuffer->GetGPUVirtualAddress();
+    mVBView.SizeInBytes    = static_cast<UINT>(vbSize);
+    mVBView.StrideInBytes  = sizeof(XMFLOAT3);
+
+    mIBView.BufferLocation = mIndexBuffer->GetGPUVirtualAddress();
+    mIBView.SizeInBytes    = static_cast<UINT>(ibSize);
+    mIBView.Format         = DXGI_FORMAT_R16_UINT;
+
+    return true;
+}
+
+bool PointLightRenderer::CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+{
+    mPipelineReady = false;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "PointLightRenderer: no D3D12 device for pipeline creation.";
+        return false;
+    }
+
+    // Compile vertex and pixel shaders from PointLight.hlsl.
+    const ShaderCompileRequest vsReq{ L"Shaders\\PointLight.hlsl", L"VSMain", L"vs_5_0", ShaderStage::Vertex };
+    const ShaderCompileRequest psReq{ L"Shaders\\PointLight.hlsl", L"PSMain", L"ps_5_0", ShaderStage::Pixel  };
+
+    if (!mVertexShader.Compile(vsReq))
+    {
+        mLastError = std::string("PointLightRenderer VS compile failed: ")
+                   + (mVertexShader.GetLastErrorMessage() ? mVertexShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+    if (!mPixelShader.Compile(psReq))
+    {
+        mLastError = std::string("PointLightRenderer PS compile failed: ")
+                   + (mPixelShader.GetLastErrorMessage() ? mPixelShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+
+    // Root signature: single root CBV at slot 0 (b0) visible to VS and PS.
+    D3D12_ROOT_PARAMETER rootParam{};
+    rootParam.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParam.Descriptor.ShaderRegister = 0; // b0
+    rootParam.Descriptor.RegisterSpace  = 0;
+    rootParam.ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters     = 1;
+    rsDesc.pParameters       = &rootParam;
+    rsDesc.NumStaticSamplers = 0;
+    rsDesc.pStaticSamplers   = nullptr;
+    rsDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errors;
+    if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)))
+    {
+        mLastError = "PointLightRenderer: D3D12SerializeRootSignature failed.";
+        return false;
+    }
+    if (FAILED(device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
+            IID_PPV_ARGS(&mRootSignature))))
+    {
+        mLastError = "PointLightRenderer: CreateRootSignature failed.";
+        return false;
+    }
+
+    // Input layout: float3 POSITION only.
+    D3D12_INPUT_ELEMENT_DESC inputElement{};
+    inputElement.SemanticName         = "POSITION";
+    inputElement.SemanticIndex        = 0;
+    inputElement.Format               = DXGI_FORMAT_R32G32B32_FLOAT;
+    inputElement.InputSlot            = 0;
+    inputElement.AlignedByteOffset    = 0;
+    inputElement.InputSlotClass       = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+    inputElement.InstanceDataStepRate = 0;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature        = mRootSignature.Get();
+    pso.VS                    = mVertexShader.GetBytecode();
+    pso.PS                    = mPixelShader.GetBytecode();
+    pso.InputLayout           = { &inputElement, 1 };
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    pso.NumRenderTargets      = 1;
+    pso.RTVFormats[0]         = colorFormat;
+    pso.DSVFormat             = depthFormat;
+    pso.SampleDesc.Count      = 1;
+    pso.SampleMask            = UINT_MAX;
+
+    // Default rasterizer, no backface culling (gizmo sphere is single-sided wireframe).
+    pso.RasterizerState.FillMode              = D3D12_FILL_MODE_WIREFRAME;
+    pso.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
+    pso.RasterizerState.FrontCounterClockwise = FALSE;
+    pso.RasterizerState.DepthClipEnable       = TRUE;
+
+    // Depth-test so the sphere is occluded by solid geometry but no depth write.
+    pso.DepthStencilState.DepthEnable     = TRUE;
+    pso.DepthStencilState.DepthWriteMask  = D3D12_DEPTH_WRITE_MASK_ZERO;
+    pso.DepthStencilState.DepthFunc       = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    pso.DepthStencilState.StencilEnable   = FALSE;
+
+    // Additive blending so the gizmo tints the scene without fully overwriting it.
+    D3D12_RENDER_TARGET_BLEND_DESC rtBlend{};
+    rtBlend.BlendEnable           = TRUE;
+    rtBlend.SrcBlend              = D3D12_BLEND_ONE;
+    rtBlend.DestBlend             = D3D12_BLEND_ONE;
+    rtBlend.BlendOp               = D3D12_BLEND_OP_ADD;
+    rtBlend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
+    rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pso.BlendState.RenderTarget[0] = rtBlend;
+
+    if (FAILED(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mPipelineState))))
+    {
+        mLastError = "PointLightRenderer: CreateGraphicsPipelineState failed.";
+        return false;
+    }
+
+    mPipelineReady = true;
+    return true;
+}
+
+bool PointLightRenderer::EnsureConstantBuffer(std::size_t requiredCount)
+{
+    if (requiredCount == 0)
+        return true;
+    if (mConstantBuffer && mCBCapacity >= requiredCount)
+        return true;
+
+    // Release the old mapping before resizing.
+    if (mConstantBuffer && mMappedCB)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    // Pad to the next power-of-two count to avoid frequent reallocations.
+    std::size_t newCapacity = 1;
+    while (newCapacity < requiredCount)
+        newCapacity <<= 1;
+
+    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * sizeof(GizmoConstants);
+
+    D3D12_HEAP_PROPERTIES hp{};
+    hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+    hp.CreationNodeMask = 1;
+    hp.VisibleNodeMask  = 1;
+    auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(cbSize);
+
+    if (FAILED(device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&mConstantBuffer))))
+        return false;
+
+    if (FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedCB))))
+    {
+        mConstantBuffer.Reset();
+        return false;
+    }
+
+    mCBCapacity = newCapacity;
+    return true;
+}

@@ -1,0 +1,880 @@
+﻿#include "pch.h"
+#include "RtGlobalIllumination.h"
+
+#include "Components.h"
+#include "d3dx12.h"
+
+#include <dxcapi.h>
+#include <filesystem>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool          __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool          __stdcall DX12Context_AllocateSrvDescriptorWithIndex(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle,
+        UINT*                        outIndex);
+}
+
+static const wchar_t* kRayGenName     = L"RayGen";
+static const wchar_t* kClosestHitName = L"ClosestHit";
+static const wchar_t* kMissName       = L"Miss";
+static const wchar_t* kHitGroupName   = L"HitGroup";
+
+// ---------------------------------------------------------------------------
+// File-local helpers
+// ---------------------------------------------------------------------------
+namespace
+{
+    using DxcCreateInstanceProc = HRESULT(WINAPI*)(REFCLSID, REFIID, LPVOID*);
+
+    // Load dxcompiler.dll from the same directory as this DLL, then fall back
+    // to the PATH search.  Mirrors the logic in DX12ShaderCompiler.cpp so both
+    // always find the same copy of the compiler.
+    DxcCreateInstanceProc GetDxcProc()
+    {
+        static HMODULE hMod = nullptr;
+        if (hMod) goto found;
+
+        {
+            // Try module-relative path first (e.g. Binaries/dxcompiler.dll).
+            wchar_t mp[MAX_PATH]{};
+            HMODULE self = nullptr;
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(&GetDxcProc), &self);
+            if (GetModuleFileNameW(self, mp, MAX_PATH) > 0)
+            {
+                namespace fs = std::filesystem;
+                fs::path local = fs::path(mp).parent_path() / L"dxcompiler.dll";
+                hMod = LoadLibraryW(local.c_str());
+            }
+        }
+        // Fall back to system/PATH search.
+        if (!hMod) hMod = LoadLibraryW(L"dxcompiler.dll");
+
+        found:
+        if (!hMod) throw std::runtime_error("RtGI: failed to load dxcompiler.dll");
+        auto proc = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(hMod, "DxcCreateInstance"));
+        if (!proc) throw std::runtime_error("RtGI: DxcCreateInstance not found in dxcompiler.dll");
+        return proc;
+    }
+
+    // Compile RtGI.hlsl as a DXIL library (lib_6_6) using DXC.
+    // lib_6_6 is required for uint64_t raw buffer address loads in the hit shader.
+    std::vector<uint8_t> CompileRtLibrary(const std::wstring& shaderPath)
+    {
+        auto dxcCreate = GetDxcProc();
+        ComPtr<IDxcUtils>          utils;
+        ComPtr<IDxcCompiler3>      compiler;
+        ComPtr<IDxcIncludeHandler> inc;
+        DX12_THROW_IF_FAILED(dxcCreate(CLSID_DxcUtils,    IID_PPV_ARGS(&utils)));
+        DX12_THROW_IF_FAILED(dxcCreate(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
+        DX12_THROW_IF_FAILED(utils->CreateDefaultIncludeHandler(&inc));
+
+        UINT32 cp = DXC_CP_UTF8;
+        ComPtr<IDxcBlobEncoding> src;
+        DX12_THROW_IF_FAILED(utils->LoadFile(shaderPath.c_str(), &cp, &src));
+
+        DxcBuffer buf{ src->GetBufferPointer(), src->GetBufferSize(), DXC_CP_UTF8 };
+        std::vector<LPCWSTR> args = { shaderPath.c_str(), L"-T", L"lib_6_6" };
+
+        ComPtr<IDxcResult> res;
+        DX12_THROW_IF_FAILED(compiler->Compile(&buf, args.data(),
+            static_cast<UINT32>(args.size()), inc.Get(), IID_PPV_ARGS(&res)));
+
+        ComPtr<IDxcBlobUtf8> errs;
+        res->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
+        if (errs && errs->GetStringLength() > 0)
+            OutputDebugStringA(errs->GetStringPointer());
+
+        HRESULT status = S_OK;
+        DX12_THROW_IF_FAILED(res->GetStatus(&status));
+        DX12_THROW_IF_FAILED(status);
+
+        ComPtr<IDxcBlob> blob;
+        DX12_THROW_IF_FAILED(res->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&blob), nullptr));
+        const auto* p = static_cast<const uint8_t*>(blob->GetBufferPointer());
+        return std::vector<uint8_t>(p, p + blob->GetBufferSize());
+    }
+
+    // Walk up from the module directory to find Data/Shaders/RtGI.hlsl.
+    std::wstring FindRtGiShaderPath()
+    {
+        namespace fs = std::filesystem;
+        wchar_t mp[MAX_PATH]{};
+        HMODULE hm = nullptr;
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&FindRtGiShaderPath), &hm);
+        GetModuleFileNameW(hm, mp, MAX_PATH);
+        for (fs::path cur = fs::path(mp).parent_path(); !cur.empty(); cur = cur.parent_path())
+        {
+            fs::path c = cur / L"Data" / L"Shaders" / L"RtGI.hlsl";
+            if (fs::exists(c)) return fs::weakly_canonical(c).wstring();
+            if (cur == cur.parent_path()) break;
+        }
+        throw std::runtime_error("RtGI: could not locate Data/Shaders/RtGI.hlsl");
+    }
+
+    // Create a GPU-only (DEFAULT heap) buffer.
+    bool CreateGpuBuffer(ID3D12Device* dev, UINT64 size,
+        D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
+        ComPtr<ID3D12Resource>& out)
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+        d.Width              = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
+        d.Format             = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
+        d.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = flags;
+        return SUCCEEDED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
+    }
+
+    // Create a CPU-writable UPLOAD heap buffer.
+    bool CreateUploadBuf(ID3D12Device* dev, UINT64 size, ComPtr<ID3D12Resource>& out)
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+        d.Width              = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
+        d.Format             = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
+        d.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = D3D12_RESOURCE_FLAG_NONE;
+        return SUCCEEDED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&out)));
+    }
+
+    // Create a RGBA16F 2-D texture.
+    bool CreateRgba16Tex(ID3D12Device* dev, UINT w, UINT h,
+        D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
+        ComPtr<ID3D12Resource>& out)
+    {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension          = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width              = w; d.Height = h; d.DepthOrArraySize = 1; d.MipLevels = 1;
+        d.Format             = DXGI_FORMAT_R16G16B16A16_FLOAT; d.SampleDesc.Count = 1;
+        d.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN; d.Flags = flags;
+        return SUCCEEDED(dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
+    }
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// Public: Initialize
+// ---------------------------------------------------------------------------
+bool RtGlobalIllumination::Initialize(UINT width, UINT height)
+{
+    mLastError.clear();
+    mIsInitialized = false;
+    // Don't reset mInitFailed here so callers can still query the last error.
+    OutputDebugStringA("RtGI::Initialize - CheckDxrSupport\n");
+    if (!CheckDxrSupport())        { mInitFailed = true; return false; }
+    OutputDebugStringA("RtGI::Initialize - CreateOutputTextures\n");
+    if (!CreateOutputTextures(width, height)) { mInitFailed = true; return false; }
+    OutputDebugStringA("RtGI::Initialize - CreateConstantBuffer\n");
+    if (!CreateConstantBuffer())   { mInitFailed = true; return false; }
+    OutputDebugStringA("RtGI::Initialize - CreateDxrPipeline\n");
+    if (!CreateDxrPipeline())      { mInitFailed = true; return false; }
+    OutputDebugStringA("RtGI::Initialize - CreateShaderTable\n");
+    if (!CreateShaderTable())      { mInitFailed = true; return false; }
+    OutputDebugStringA("RtGI::Initialize - SUCCESS\n");
+    mInitFailed    = false;
+    mIsInitialized = true;
+    return true;
+}
+
+bool RtGlobalIllumination::EnsureSize(UINT width, UINT height)
+{
+    if (width == mWidth && height == mHeight) return true;
+    return CreateOutputTextures(width, height);
+}
+
+// ---------------------------------------------------------------------------
+// Public: BuildTlas
+// Builds BLASes for any new mesh and rebuilds the TLAS from all current entities.
+// ---------------------------------------------------------------------------
+void RtGlobalIllumination::BuildTlas(
+    ID3D12GraphicsCommandList4* cmdList4,
+    const std::vector<Entity>&  entities)
+{
+    if (!mIsInitialized || !mDevice5) return;
+    mTlasBuiltThisFrame = false;
+
+    // Release any upload buffers from the previous frame now that the GPU is done with them.
+    // (FlushPendingUploads() can also be called explicitly after a GPU fence wait.)
+    mPendingUploads.clear();
+
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
+    std::vector<InstanceGeometry>               instanceGeoms; // parallel array indexed by InstanceID
+
+    for (std::size_t i = 0; i < entities.size(); ++i)
+    {
+        const Entity& entity = entities[i];
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset) continue;
+
+        const Mesh* mesh    = entity.Mesh->MeshAsset.get();
+        const void* meshKey = mesh;
+
+        // Build a BLAS for this mesh if not already cached.
+        if (mBlasCache.find(meshKey) == mBlasCache.end())
+        {
+            const auto& verts   = mesh->GetVertices();
+            const auto& indices = mesh->GetIndices();
+            if (verts.empty() || indices.empty()) continue;
+
+            const UINT64 vbSize = verts.size()   * sizeof(Vertex);
+            const UINT64 ibSize = indices.size()  * sizeof(uint32_t);
+
+            // Upload geometry into temporary upload buffers for the AS build.
+            ComPtr<ID3D12Resource> vbUp, ibUp;
+            if (!CreateUploadBuf(mDevice5.Get(), vbSize, vbUp)) continue;
+            if (!CreateUploadBuf(mDevice5.Get(), ibSize, ibUp)) continue;
+
+            void* m = nullptr;
+            vbUp->Map(0, nullptr, &m); memcpy(m, verts.data(),   vbSize); vbUp->Unmap(0, nullptr);
+            ibUp->Map(0, nullptr, &m); memcpy(m, indices.data(), ibSize); ibUp->Unmap(0, nullptr);
+
+            // Also create GPU-resident (DEFAULT heap) copies so ClosestHit can read
+            // vertex normals / albedo without needing upload buffers to stay alive.
+            BlasEntry& e = mBlasCache[meshKey];
+            if (!CreateGpuBuffer(mDevice5.Get(), vbSize, D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST, e.VB)) continue;
+            if (!CreateGpuBuffer(mDevice5.Get(), ibSize, D3D12_RESOURCE_FLAG_NONE,
+                D3D12_RESOURCE_STATE_COPY_DEST, e.IB)) continue;
+
+            // Use a command list copy to transfer data to the DEFAULT heap buffers.
+            // The upload buffers are kept alive in mPendingUploads until GPU completion.
+            cmdList4->CopyResource(e.VB.Get(), vbUp.Get());
+            cmdList4->CopyResource(e.IB.Get(), ibUp.Get());
+
+            // Transition to shader-readable state.
+            D3D12_RESOURCE_BARRIER toSrv[2] =
+            {
+                CD3DX12_RESOURCE_BARRIER::Transition(e.VB.Get(),
+                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+                CD3DX12_RESOURCE_BARRIER::Transition(e.IB.Get(),
+                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+            };
+            cmdList4->ResourceBarrier(2, toSrv);
+
+            e.VertexCount = static_cast<UINT>(verts.size());
+            e.IndexCount  = static_cast<UINT>(indices.size());
+
+            // Create ByteAddressBuffer SRVs so the hit shader can access vertex/index
+            // data as bindless resources via ResourceDescriptorHeap[index].
+            {
+                ComPtr<ID3D12Device> dev2;
+                mDevice5.As(&dev2);
+                D3D12_SHADER_RESOURCE_VIEW_DESC baSrv{};
+                baSrv.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                baSrv.Format                     = DXGI_FORMAT_R32_TYPELESS;
+                baSrv.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                baSrv.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_RAW;
+                // VB: size in DWORD elements
+                D3D12_GPU_DESCRIPTOR_HANDLE gpuIgnore{};
+                if (e.VbSrvIndex == UINT_MAX)
+                    DX12Context_AllocateSrvDescriptorWithIndex(&e.VbSrvCpu, &gpuIgnore, &e.VbSrvIndex);
+                if (e.VbSrvIndex != UINT_MAX)
+                {
+                    baSrv.Buffer.FirstElement = 0;
+                    baSrv.Buffer.NumElements  = static_cast<UINT>(vbSize / 4);
+                    dev2->CreateShaderResourceView(e.VB.Get(), &baSrv, e.VbSrvCpu);
+                }
+                // IB
+                if (e.IbSrvIndex == UINT_MAX)
+                    DX12Context_AllocateSrvDescriptorWithIndex(&e.IbSrvCpu, &gpuIgnore, &e.IbSrvIndex);
+                if (e.IbSrvIndex != UINT_MAX)
+                {
+                    baSrv.Buffer.FirstElement = 0;
+                    baSrv.Buffer.NumElements  = static_cast<UINT>(ibSize / 4);
+                    dev2->CreateShaderResourceView(e.IB.Get(), &baSrv, e.IbSrvCpu);
+                }
+            }
+
+            D3D12_RAYTRACING_GEOMETRY_DESC geom{};
+            geom.Type  = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+            geom.Triangles.VertexBuffer.StartAddress  = vbUp->GetGPUVirtualAddress();
+            geom.Triangles.VertexBuffer.StrideInBytes = sizeof(Vertex);
+            geom.Triangles.VertexFormat               = DXGI_FORMAT_R32G32B32_FLOAT;
+            geom.Triangles.VertexCount                = e.VertexCount;
+            geom.Triangles.IndexBuffer                = ibUp->GetGPUVirtualAddress();
+            geom.Triangles.IndexFormat                = DXGI_FORMAT_R32_UINT;
+            geom.Triangles.IndexCount                 = e.IndexCount;
+
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inp{};
+            inp.Type           = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+            inp.Flags          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+            inp.NumDescs       = 1;
+            inp.DescsLayout    = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            inp.pGeometryDescs = &geom;
+
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO pre{};
+            mDevice5->GetRaytracingAccelerationStructurePrebuildInfo(&inp, &pre);
+
+            if (!CreateGpuBuffer(mDevice5.Get(), pre.ScratchDataSizeInBytes,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch)) continue;
+            if (!CreateGpuBuffer(mDevice5.Get(), pre.ResultDataMaxSizeInBytes,
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result)) continue;
+
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bd{};
+            bd.Inputs                           = inp;
+            bd.DestAccelerationStructureData    = e.Result->GetGPUVirtualAddress();
+            bd.ScratchAccelerationStructureData = e.Scratch->GetGPUVirtualAddress();
+            cmdList4->BuildRaytracingAccelerationStructure(&bd, 0, nullptr);
+
+            // UAV barrier to ensure the BLAS write is visible before the TLAS build.
+            D3D12_RESOURCE_BARRIER uavB = CD3DX12_RESOURCE_BARRIER::UAV(e.Result.Get());
+            cmdList4->ResourceBarrier(1, &uavB);
+
+            // Keep the upload buffers alive until the GPU finishes this frame's BLAS builds.
+            // They will be released at the start of the next BuildTlas() call.
+            mPendingUploads.push_back(std::move(vbUp));
+            mPendingUploads.push_back(std::move(ibUp));
+        }
+
+        const auto it = mBlasCache.find(meshKey);
+        if (it == mBlasCache.end() || !it->second.Result) continue;
+
+        // Build a 3x4 row-major world transform for the instance descriptor.
+        XMFLOAT4X4 w4;
+        XMStoreFloat4x4(&w4, XMMatrixTranspose(entity.Transform.GetTransform()));
+
+        D3D12_RAYTRACING_INSTANCE_DESC inst{};
+        memcpy(inst.Transform, &w4, sizeof(inst.Transform));
+        inst.InstanceID                          = static_cast<UINT>(instanceDescs.size());
+        inst.InstanceMask                        = 0xFF;
+        inst.InstanceContributionToHitGroupIndex = 0;
+        inst.Flags                               = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+        inst.AccelerationStructure               = it->second.Result->GetGPUVirtualAddress();
+        instanceDescs.push_back(inst);
+
+        // Record geometry descriptor heap indices for ClosestHit normal/albedo lookups.
+        InstanceGeometry ig{};
+        ig.VbSrvIndex  = it->second.VbSrvIndex;
+        ig.IbSrvIndex  = it->second.IbSrvIndex;
+        ig.VertexCount = it->second.VertexCount;
+        ig.IndexCount  = it->second.IndexCount;
+        instanceGeoms.push_back(ig);
+    }
+
+    if (instanceDescs.empty()) return;
+
+    const UINT numInst = static_cast<UINT>(instanceDescs.size());
+    if (numInst > mTlasMaxInstances || !mInstanceDescBuffer)
+    {
+        if (!CreateTlasBuffers(numInst * 2 + 8)) return;
+    }
+
+    // Upload instance descriptors.
+    void* mapped = nullptr;
+    mInstanceDescBuffer->Map(0, nullptr, &mapped);
+    memcpy(mapped, instanceDescs.data(), numInst * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
+    mInstanceDescBuffer->Unmap(0, nullptr);
+
+    // Build/upload the per-instance geometry table (VB/IB GPU VAs) so ClosestHit
+    // can look up vertex normals and albedo by InstanceID().
+    {
+        const UINT64 geomBufSize = numInst * sizeof(InstanceGeometry);
+        if (!mInstanceGeomBuffer || mInstanceGeomBuffer->GetDesc().Width < geomBufSize)
+        {
+            mInstanceGeomBuffer.Reset();
+            ComPtr<ID3D12Device> dev;
+            mDevice5.As(&dev);
+            auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+            auto dsc = CD3DX12_RESOURCE_DESC::Buffer(geomBufSize);
+            dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &dsc,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(&mInstanceGeomBuffer));
+        }
+        if (mInstanceGeomBuffer)
+        {
+            void* gm = nullptr;
+            mInstanceGeomBuffer->Map(0, nullptr, &gm);
+            memcpy(gm, instanceGeoms.data(), numInst * sizeof(InstanceGeometry));
+            mInstanceGeomBuffer->Unmap(0, nullptr);
+
+            // Allocate an SRV descriptor once; recreate the view each frame in case
+            // numInst changed.
+            if (!mInstGeomSrvAllocated)
+                mInstGeomSrvAllocated = AllocateSrv(&mInstGeomSrvCpu, &mInstGeomSrvGpu);
+
+            if (mInstGeomSrvAllocated)
+            {
+                ComPtr<ID3D12Device> dev2;
+                mDevice5.As(&dev2);
+                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+                srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+                srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
+                srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                srvDesc.Buffer.FirstElement        = 0;
+                srvDesc.Buffer.NumElements         = numInst;
+                srvDesc.Buffer.StructureByteStride = sizeof(InstanceGeometry); // 16 bytes
+                srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
+                dev2->CreateShaderResourceView(mInstanceGeomBuffer.Get(), &srvDesc, mInstGeomSrvCpu);
+            }
+        }
+    }
+
+    // Query TLAS prebuild info
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInp{};
+    tlasInp.Type          = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    tlasInp.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    tlasInp.NumDescs      = numInst;
+    tlasInp.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    tlasInp.InstanceDescs = mInstanceDescBuffer->GetGPUVirtualAddress();
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasPre{};
+    mDevice5->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInp, &tlasPre);
+
+    if (!mTlasBuffer || mTlasBuffer->GetDesc().Width < tlasPre.ResultDataMaxSizeInBytes)
+    {
+        mTlasBuffer.Reset();
+        if (!CreateGpuBuffer(mDevice5.Get(), tlasPre.ResultDataMaxSizeInBytes,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, mTlasBuffer)) return;
+    }
+    if (!mTlasScratch || mTlasScratch->GetDesc().Width < tlasPre.ScratchDataSizeInBytes)
+    {
+        mTlasScratch.Reset();
+        if (!CreateGpuBuffer(mDevice5.Get(), tlasPre.ScratchDataSizeInBytes,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COMMON, mTlasScratch)) return;
+    }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tlasDesc{};
+    tlasDesc.Inputs                           = tlasInp;
+    tlasDesc.DestAccelerationStructureData    = mTlasBuffer->GetGPUVirtualAddress();
+    tlasDesc.ScratchAccelerationStructureData = mTlasScratch->GetGPUVirtualAddress();
+    cmdList4->BuildRaytracingAccelerationStructure(&tlasDesc, 0, nullptr);
+
+    D3D12_RESOURCE_BARRIER uav = CD3DX12_RESOURCE_BARRIER::UAV(mTlasBuffer.Get());
+    cmdList4->ResourceBarrier(1, &uav);
+    mTlasBuiltThisFrame = true;
+}
+
+// ---------------------------------------------------------------------------
+// Public: Dispatch
+// ---------------------------------------------------------------------------
+void RtGlobalIllumination::Dispatch(
+    ID3D12GraphicsCommandList4*  cmdList4,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  depthSrv,
+    const RtGiSettings&          settings,
+    const XMFLOAT4X4&            invViewProj,
+    const XMFLOAT3&              cameraPos,
+    const XMFLOAT3&              sunDir,
+    const XMFLOAT3&              sunColor,
+    const XMFLOAT3&              skyAmbient,
+    const PointLightGpu*         pointLights,
+    int                          numPointLights)
+{
+    if (!mIsInitialized || !mTlasBuiltThisFrame || !mStateObject || !mShaderTable)
+    {
+        if (!mIsInitialized)           OutputDebugStringA("RtGI::Dispatch skipped: not initialized\n");
+        else if (!mTlasBuiltThisFrame) OutputDebugStringA("RtGI::Dispatch skipped: TLAS not built\n");
+        else if (!mStateObject)        OutputDebugStringA("RtGI::Dispatch skipped: no state object\n");
+        else if (!mShaderTable)        OutputDebugStringA("RtGI::Dispatch skipped: no shader table\n");
+        return;
+    }
+
+    // Detect camera movement and reset temporal accumulation to avoid ghosting.
+    const float dx = cameraPos.x - mPrevCameraPos.x;
+    const float dy = cameraPos.y - mPrevCameraPos.y;
+    const float dz = cameraPos.z - mPrevCameraPos.z;
+    const bool cameraMoved = (dx*dx + dy*dy + dz*dz) > 1e-6f;
+    mPrevCameraPos = cameraPos;
+
+    // Update per-frame constants.
+    mMappedCB->InvViewProj       = invViewProj;
+    mMappedCB->CameraPos         = cameraPos;
+    mMappedCB->SunDir            = sunDir;
+    mMappedCB->SunColor          = sunColor;
+    mMappedCB->SkyAmbient        = skyAmbient;
+    mMappedCB->MaxRayDistance    = settings.MaxRayDistance;
+    mMappedCB->BounceCount       = settings.BounceCount;
+    mMappedCB->RaysPerPixel      = settings.RaysPerPixel;
+    // On camera move or debug mode, use alpha=1 to discard history immediately.
+    mMappedCB->AccumulationAlpha = (settings.DebugNoAccumulation || cameraMoved) ? 1.0f : settings.AccumulationAlpha;
+    mMappedCB->FrameIndex        = static_cast<int>(mFrameIndex++);
+    mMappedCB->SkylightOnMiss    = settings.SkylightOnMiss ? 1 : 0;
+    mMappedCB->ResetAccumulation = cameraMoved ? 1 : 0;
+
+    // Copy point lights into the constant buffer (clamped to kMaxPointLights).
+    const int nLights = (std::min)(numPointLights, kMaxPointLights);
+    mMappedCB->NumPointLights = nLights;
+    for (int i = 0; i < nLights; ++i)
+        mMappedCB->PointLights[i] = pointLights[i];
+
+    // Transition raw output and accum textures to UAV state for writing.
+    D3D12_RESOURCE_BARRIER toUav[2] =
+    {
+        CD3DX12_RESOURCE_BARRIER::Transition(mRawOutput.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        CD3DX12_RESOURCE_BARRIER::Transition(mAccumOutput.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    };
+    cmdList4->ResourceBarrier(2, toUav);
+
+    // Bind the DXR pipeline and global root signature.
+    cmdList4->SetPipelineState1(mStateObject.Get());
+    cmdList4->SetComputeRootSignature(mGlobalRS.Get());
+
+    // Root parameter bindings (match CreateDxrPipeline layout):
+    //  [0] b0 – GiConstants CBV
+    //  [1] t0 – G-Buffer normal SRV table
+    //  [2] t1 – depth SRV table
+    //  [3] t2 – history SRV table
+    //  [4] t3 – TLAS inline SRV (raw VA)
+    //  [5] t4 – per-instance geometry table SRV
+    //  [6] u0 – raw noisy UAV table
+    //  [7] u1 – accumulation UAV table
+    cmdList4->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList4->SetComputeRootDescriptorTable(1, gbufferNormalSrv);
+    cmdList4->SetComputeRootDescriptorTable(2, depthSrv);
+    cmdList4->SetComputeRootDescriptorTable(3, mHistorySrvGpu);
+    cmdList4->SetComputeRootShaderResourceView(4, mTlasBuffer->GetGPUVirtualAddress());
+    if (mInstGeomSrvAllocated)
+        cmdList4->SetComputeRootDescriptorTable(5, mInstGeomSrvGpu);
+    cmdList4->SetComputeRootDescriptorTable(6, mRawUavGpu);
+    cmdList4->SetComputeRootDescriptorTable(7, mAccumUavGpu);
+
+    // Build and submit the DispatchRays call.
+    D3D12_DISPATCH_RAYS_DESC dr{};
+    dr.Width  = mWidth;
+    dr.Height = mHeight;
+    dr.Depth  = 1;
+    const UINT64 base = mShaderTable->GetGPUVirtualAddress();
+    dr.RayGenerationShaderRecord = { base,                           mShaderTableEntrySize };
+    dr.MissShaderTable           = { base + mShaderTableEntrySize,   mShaderTableEntrySize, mShaderTableEntrySize };
+    dr.HitGroupTable             = { base + 2*mShaderTableEntrySize, mShaderTableEntrySize, mShaderTableEntrySize };
+    cmdList4->DispatchRays(&dr);
+
+    // Transition raw output back to non-pixel SRV.
+    D3D12_RESOURCE_BARRIER rawBack = CD3DX12_RESOURCE_BARRIER::Transition(mRawOutput.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmdList4->ResourceBarrier(1, &rawBack);
+
+    // UAV barrier to flush accum writes before copy.
+    D3D12_RESOURCE_BARRIER accumUav = CD3DX12_RESOURCE_BARRIER::UAV(mAccumOutput.Get());
+    cmdList4->ResourceBarrier(1, &accumUav);
+
+    // Copy accum -> history for temporal blending next frame.
+    D3D12_RESOURCE_BARRIER histToDest = CD3DX12_RESOURCE_BARRIER::Transition(mHistoryOutput.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    cmdList4->ResourceBarrier(1, &histToDest);
+
+    D3D12_RESOURCE_BARRIER accumToSrc = CD3DX12_RESOURCE_BARRIER::Transition(mAccumOutput.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmdList4->ResourceBarrier(1, &accumToSrc);
+
+    cmdList4->CopyResource(mHistoryOutput.Get(), mAccumOutput.Get());
+
+    // Transition accum to pixel SRV for DeferredLighting; history back to non-pixel SRV.
+    D3D12_RESOURCE_BARRIER toSrv[2] =
+    {
+        CD3DX12_RESOURCE_BARRIER::Transition(mAccumOutput.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(mHistoryOutput.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+    };
+    cmdList4->ResourceBarrier(2, toSrv);
+}
+
+// ---------------------------------------------------------------------------
+// Public: Shutdown
+// ---------------------------------------------------------------------------
+void RtGlobalIllumination::Shutdown()
+{
+    if (mConstantBuffer && mMappedCB)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCB = nullptr;
+    }
+    mConstantBuffer.Reset();
+    mShaderTable.Reset();
+    mStateObject.Reset();
+    mGlobalRS.Reset();
+    mTlasBuffer.Reset();
+    mTlasScratch.Reset();
+    mInstanceDescBuffer.Reset();
+    mInstanceGeomBuffer.Reset();
+    mInstGeomSrvAllocated = false;
+    mBlasCache.clear();
+    mRawOutput.Reset();
+    mAccumOutput.Reset();
+    mHistoryOutput.Reset();
+    mDevice5.Reset();
+    mIsInitialized = false;
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+bool RtGlobalIllumination::AllocateSrv(
+    D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu)
+{
+    return DX12Context_AllocateSrvDescriptor(cpu, gpu);
+}
+
+bool RtGlobalIllumination::CheckDxrSupport()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) { mLastError = "RtGI: DX12 device not available."; return false; }
+
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&mDevice5))))
+    {
+        mLastError = "RtGI: ID3D12Device5 not supported (need a DXR-capable GPU on Windows 10 RS5+).";
+        return false;
+    }
+
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 opts5{};
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opts5, sizeof(opts5))) ||
+        opts5.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED)
+    {
+        mLastError = "RtGI: DXR Tier 1.0 not supported on this GPU.";
+        mDevice5.Reset();
+        return false;
+    }
+    return true;
+}
+
+bool RtGlobalIllumination::CreateOutputTextures(UINT width, UINT height)
+{
+    mWidth = width; mHeight = height;
+    ID3D12Device* dev = mDevice5.Get();
+
+    // Raw noisy output written by RayGen, starts as non-pixel SRV.
+    mRawOutput.Reset();
+    if (!CreateRgba16Tex(dev, width, height,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, mRawOutput))
+    { mLastError = "RtGI: failed to create raw output texture."; return false; }
+
+    // Temporally accumulated output, read by DeferredLighting as a pixel SRV.
+    mAccumOutput.Reset();
+    if (!CreateRgba16Tex(dev, width, height,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, mAccumOutput))
+    { mLastError = "RtGI: failed to create accum output texture."; return false; }
+
+    // History texture for temporal blending (non-pixel SRV / copy dest).
+    mHistoryOutput.Reset();
+    if (!CreateRgba16Tex(dev, width, height,
+        D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, mHistoryOutput))
+    { mLastError = "RtGI: failed to create history texture."; return false; }
+
+    // Allocate descriptors from the shared SRV/UAV heap.
+    if (!AllocateSrv(&mRawUavCpu,    &mRawUavGpu))    { mLastError = "RtGI: out of descriptors (raw UAV).";   return false; }
+    if (!AllocateSrv(&mAccumUavCpu,  &mAccumUavGpu))  { mLastError = "RtGI: out of descriptors (accum UAV)."; return false; }
+    if (!AllocateSrv(&mAccumSrvCpu,  &mAccumSrvGpu))  { mLastError = "RtGI: out of descriptors (accum SRV)."; return false; }
+    if (!AllocateSrv(&mHistorySrvCpu,&mHistorySrvGpu)){ mLastError = "RtGI: out of descriptors (hist SRV).";  return false; }
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format        = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    dev->CreateUnorderedAccessView(mRawOutput.Get(),   nullptr, &uavDesc, mRawUavCpu);
+    dev->CreateUnorderedAccessView(mAccumOutput.Get(), nullptr, &uavDesc, mAccumUavCpu);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels     = 1;
+    dev->CreateShaderResourceView(mAccumOutput.Get(),   &srvDesc, mAccumSrvCpu);
+    dev->CreateShaderResourceView(mHistoryOutput.Get(), &srvDesc, mHistorySrvCpu);
+    return true;
+}
+
+bool RtGlobalIllumination::CreateTlasBuffers(UINT maxInstances)
+{
+    mTlasMaxInstances = maxInstances;
+    mInstanceDescBuffer.Reset();
+    if (!CreateUploadBuf(mDevice5.Get(),
+        maxInstances * sizeof(D3D12_RAYTRACING_INSTANCE_DESC), mInstanceDescBuffer))
+    { mLastError = "RtGI: failed to allocate TLAS instance buffer."; return false; }
+    return true;
+}
+
+bool RtGlobalIllumination::CreateDxrPipeline()
+{
+    OutputDebugStringA("RtGI::CreateDxrPipeline - start\n");
+    ID3D12Device* device = mDevice5.Get();
+
+    // Global root signature (version 1.1 with CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+    // for SM6.6 bindless ResourceDescriptorHeap access in the hit shader).
+    {
+        // Use root signature version 1.1 so we can set
+        // CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED for SM6.6 ResourceDescriptorHeap access.
+        D3D12_VERSIONED_ROOT_SIGNATURE_DESC vrsDesc{};
+        vrsDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
+
+        D3D12_ROOT_SIGNATURE_DESC1& rsDesc = vrsDesc.Desc_1_1;
+        rsDesc.NumParameters = 8; // p[0..7]; p[8] reserved, not included
+        rsDesc.pParameters   = nullptr; // set below via versioned params
+        rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
+
+        // Version 1.1 uses D3D12_ROOT_PARAMETER1 arrays.
+        D3D12_ROOT_PARAMETER1 p1[9]{};
+        D3D12_DESCRIPTOR_RANGE1 dtNorm1{};
+        dtNorm1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        dtNorm1.NumDescriptors     = 1;
+        dtNorm1.BaseShaderRegister = 0;
+        dtNorm1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+        D3D12_DESCRIPTOR_RANGE1 dtDepth1{};
+        dtDepth1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        dtDepth1.NumDescriptors     = 1;
+        dtDepth1.BaseShaderRegister = 1;
+        dtDepth1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+        D3D12_DESCRIPTOR_RANGE1 dtHist1{};
+        dtHist1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        dtHist1.NumDescriptors     = 1;
+        dtHist1.BaseShaderRegister = 2;
+        dtHist1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+        D3D12_DESCRIPTOR_RANGE1 dtInstGeom1{};
+        dtInstGeom1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        dtInstGeom1.NumDescriptors     = 1;
+        dtInstGeom1.BaseShaderRegister = 4;
+        dtInstGeom1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+        D3D12_DESCRIPTOR_RANGE1 dtRaw1{};
+        dtRaw1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        dtRaw1.NumDescriptors     = 1;
+        dtRaw1.BaseShaderRegister = 0;
+        dtRaw1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+        D3D12_DESCRIPTOR_RANGE1 dtAccum1{};
+        dtAccum1.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        dtAccum1.NumDescriptors     = 1;
+        dtAccum1.BaseShaderRegister = 1;
+        dtAccum1.Flags              = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+
+        p1[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p1[0].Descriptor.ShaderRegister = 0;
+        p1[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        p1[1].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[1].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[1].DescriptorTable.pDescriptorRanges    = &dtNorm1;
+        p1[1].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        p1[2].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[2].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[2].DescriptorTable.pDescriptorRanges    = &dtDepth1;
+        p1[2].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        p1[3].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[3].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[3].DescriptorTable.pDescriptorRanges    = &dtHist1;
+        p1[3].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        p1[4].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        p1[4].Descriptor.ShaderRegister = 3; // t3 TLAS
+        p1[4].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        p1[5].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[5].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[5].DescriptorTable.pDescriptorRanges    = &dtInstGeom1;
+        p1[5].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        p1[6].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[6].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[6].DescriptorTable.pDescriptorRanges    = &dtRaw1;
+        p1[6].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        p1[7].ParameterType                        = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p1[7].DescriptorTable.NumDescriptorRanges  = 1;
+        p1[7].DescriptorTable.pDescriptorRanges    = &dtAccum1;
+        p1[7].ShaderVisibility                     = D3D12_SHADER_VISIBILITY_ALL;
+        rsDesc.pParameters = p1;
+
+        ComPtr<ID3DBlob> blob, err;
+        if (FAILED(D3D12SerializeVersionedRootSignature(&vrsDesc, &blob, &err)))
+        {
+            mLastError = "RtGI: root signature serialization failed.";
+            if (err) OutputDebugStringA(static_cast<const char*>(err->GetBufferPointer()));
+            return false;
+        }
+        if (FAILED(device->CreateRootSignature(0,
+            blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&mGlobalRS))))
+        { mLastError = "RtGI: CreateRootSignature failed."; return false; }
+    }
+    OutputDebugStringA("RtGI::CreateDxrPipeline - root sig OK, compiling shader\n");
+
+    // Compile the shader library (lib_6_6).
+    std::vector<uint8_t> dxil;
+    try { dxil = CompileRtLibrary(FindRtGiShaderPath()); }
+    catch (const std::exception& ex)
+    { mLastError = std::string("RtGI: shader compile failed: ") + ex.what(); return false; }
+
+    const D3D12_SHADER_BYTECODE libBC{ dxil.data(), dxil.size() };
+
+    D3D12_EXPORT_DESC exports[3] =
+    {
+        { kRayGenName,     nullptr, D3D12_EXPORT_FLAG_NONE },
+        { kClosestHitName, nullptr, D3D12_EXPORT_FLAG_NONE },
+        { kMissName,       nullptr, D3D12_EXPORT_FLAG_NONE },
+    };
+    D3D12_DXIL_LIBRARY_DESC lib{ libBC, 3, exports };
+
+    D3D12_HIT_GROUP_DESC hg{};
+    hg.HitGroupExport         = kHitGroupName;
+    hg.Type                   = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hg.ClosestHitShaderImport = kClosestHitName;
+
+    // Payload: float3 Radiance + float3 HitAlbedo + float3 HitNormal + float3 HitWorldPos + uint Hit
+    //          = 4 * 12 + 4 = 52 bytes.
+    // Attributes: float2 Barycentrics = 8 bytes.
+    D3D12_RAYTRACING_SHADER_CONFIG  sc{ 52, 8 };
+    D3D12_RAYTRACING_PIPELINE_CONFIG pc{ 1 };     // max recursion depth = 1
+    D3D12_GLOBAL_ROOT_SIGNATURE      grs{ mGlobalRS.Get() };
+
+    D3D12_STATE_SUBOBJECT subs[5] =
+    {
+        { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,               &lib },
+        { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,                  &hg  },
+        { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,   &sc  },
+        { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc  },
+        { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,      &grs },
+    };
+    D3D12_STATE_OBJECT_DESC soDesc{ D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, 5, subs };
+    if (FAILED(mDevice5->CreateStateObject(&soDesc, IID_PPV_ARGS(&mStateObject))))
+    { mLastError = "RtGI: CreateStateObject failed."; return false; }
+
+    return true;
+}
+
+bool RtGlobalIllumination::CreateShaderTable()
+{
+    // Each entry = shader identifier (D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES = 32 bytes)
+    // padded up to D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT (64 bytes).
+    mShaderTableEntrySize =
+        (D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES + D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT - 1)
+        & ~static_cast<UINT64>(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT - 1);
+    mShaderTableSize = 3 * mShaderTableEntrySize; // RayGen + Miss + HitGroup
+
+    if (!CreateUploadBuf(mDevice5.Get(), mShaderTableSize, mShaderTable))
+    { mLastError = "RtGI: failed to allocate shader table."; return false; }
+
+    ComPtr<ID3D12StateObjectProperties> prop;
+    if (FAILED(mStateObject->QueryInterface(IID_PPV_ARGS(&prop))))
+    { mLastError = "RtGI: ID3D12StateObjectProperties unavailable."; return false; }
+
+    uint8_t* p = nullptr;
+    mShaderTable->Map(0, nullptr, reinterpret_cast<void**>(&p));
+    memcpy(p,                            prop->GetShaderIdentifier(kRayGenName),    D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    memcpy(p + mShaderTableEntrySize,    prop->GetShaderIdentifier(kMissName),      D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    memcpy(p + 2*mShaderTableEntrySize,  prop->GetShaderIdentifier(kHitGroupName),  D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    mShaderTable->Unmap(0, nullptr);
+    return true;
+}
+
+bool RtGlobalIllumination::CreateConstantBuffer()
+{
+    if (!CreateUploadBuf(mDevice5.Get(), sizeof(GiConstants), mConstantBuffer))
+    { mLastError = "RtGI: failed to allocate constant buffer."; return false; }
+    mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedCB));
+    return true;
+}

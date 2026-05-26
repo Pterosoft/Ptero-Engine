@@ -1,0 +1,31 @@
+﻿// RtAO_Temporal.hlsl  –  cs_6_5
+// RTAO Pass 1: exponential moving average temporal accumulation.
+//
+// Blends the current raw AO frame with the accumulated history using
+// g_AccumulationBlend as the weight for the current frame.
+// The result is an AO signal with greatly reduced per-frame noise.
+
+#include "RtAO_Common.hlsli"
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+Texture2D<float> t_RawAO  : register(t0);  // current frame raw AO
+Texture2D<float> t_Accum  : register(t1);  // previous frame accumulation
+
+// ─── Output ───────────────────────────────────────────────────────────────────
+RWTexture2D<float> u_AccumOut : register(u0);  // updated accumulation buffer
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchId : SV_DispatchThreadID)
+{
+    const uint2 pixel = dispatchId.xy;
+    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+        return;
+
+    float current = t_RawAO[pixel];
+    float history = t_Accum[pixel];
+
+    // Exponential moving average: blend = 0 → use only history, 1 → use only current.
+    float blended = lerp(history, current, clamp(g_AccumulationBlend, 0.0f, 1.0f));
+
+    u_AccumOut[pixel] = blended;
+}

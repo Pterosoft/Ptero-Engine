@@ -1,0 +1,374 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{17da5c78-328f-4fa3-8082-9b429693168b}</ProjectGuid>
+    <RootNamespace>RendererDX12</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>..\..\Binaries</OutDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\imgui;..\SDKs\imgui\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\SDKs\NRD\_NRI_SDK\Lib\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>NRD.lib;NRI.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\imgui;..\SDKs\imgui\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableUAC>false</EnableUAC>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\imgui;..\SDKs\imgui\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
+      <Message>Copying dxcompiler.dll and dxil.dll</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\imgui;..\SDKs\imgui\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableUAC>false</EnableUAC>
+      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
+      <Message>Copying dxcompiler.dll and dxil.dll</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="AgxTonemapper.h" />
+    <ClInclude Include="AgxTonemapSettings.h" />
+    <ClInclude Include="BloomRenderer.h" />
+    <ClInclude Include="BloomSettings.h" />
+    <ClInclude Include="GtaoSettings.h" />
+    <ClInclude Include="PointShadowMapRenderer.h" />
+    <ClInclude Include="PointShadowSettings.h" />
+    <ClInclude Include="RadianceProbeRenderer.h" />
+    <ClInclude Include="RadianceProbeSettings.h" />
+    <ClInclude Include="RtAmbientOcclusion.h" />
+    <ClInclude Include="Components.h" />
+    <ClInclude Include="d3dx12.h" />
+    <ClInclude Include="DeferredLightingPass.h" />
+    <ClInclude Include="DX12Helper.h" />
+    <ClInclude Include="DX12SceneRenderer.h" />
+    <ClInclude Include="EntityMeshRenderer.h" />
+    <ClInclude Include="DX12ShaderCompiler.h" />
+    <ClInclude Include="Editor.h" />
+    <ClInclude Include="EditorMainMenu.h" />
+    <ClInclude Include="framework.h" />
+    <ClInclude Include="HosekWilkieSky.h" />
+    <ClInclude Include="ImGuizmoCompat.h" />
+    <ClInclude Include="NrdDenoiser.h" />
+    <ClInclude Include="pch.h" />
+    <ClInclude Include="PointLightRenderer.h" />
+    <ClInclude Include="RendererStatisticsText.h" />
+    <ClInclude Include="RtAOSettings.h" />
+    <ClInclude Include="RtGISettings.h" />
+    <ClInclude Include="RtGlobalIllumination.h" />
+    <ClInclude Include="SceneSerializer.h" />
+    <ClInclude Include="ShadowMapRenderer.h" />
+    <ClInclude Include="SkyRenderer.h" />
+    <ClInclude Include="TAARenderer.h" />
+    <ClInclude Include="TaaSettings.h" />
+    <ClInclude Include="TextureManager.h" />
+    <ClInclude Include="TimeOfDaySettings.h" />
+    <ClInclude Include="VolumetricFogRenderer.h" />
+    <ClInclude Include="VolumetricFogSettings.h" />
+    <ClInclude Include="XeGtaoRenderer.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="AgxTonemapper.cpp" />
+    <ClCompile Include="BloomRenderer.cpp" />
+    <ClCompile Include="DeferredLightingPass.cpp" />
+    <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="DX12Context.cpp" />
+    <ClCompile Include="DX12RendererAPI.cpp" />
+    <ClCompile Include="DX12SceneRenderer.cpp" />
+    <ClCompile Include="DX12ShaderCompiler.cpp" />
+    <ClCompile Include="Editor.cpp" />
+    <ClCompile Include="EditorMainMenu.cpp" />
+    <ClCompile Include="..\System\MaterialEditor.cpp" />
+    <ClCompile Include="..\System\src\AssetManager.cpp" />
+    <ClCompile Include="..\System\src\TextureImporter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalIncludeDirectories>..\SDKs\DirectXTex;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <!-- DirectXTex source units for texture conversion -->
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC4BC5.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC6HBC7.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexCompress.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexConvert.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexDDS.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexFlipRotate.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexHDR.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexImage.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexMipmaps.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexMisc.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexPMAlpha.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexResize.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexTGA.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexUtil.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexWIC.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\System\src\FbxCompiler.cpp" />
+    <ClCompile Include="..\System\src\SystemAssetApi.cpp" />
+    <ClCompile Include="EntityMeshRenderer.cpp" />
+    <ClCompile Include="HosekWilkieSky.cpp" />
+    <ClCompile Include="..\SDKs\HosekWilkie\ArHosekSkyModel.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="NrdDenoiser.cpp" />
+    <ClCompile Include="pch.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_dx12.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_win32.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_draw.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_tables.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\imgui\imgui_demo.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="PointLightRenderer.cpp" />
+    <ClCompile Include="RadianceProbeRenderer.cpp" />
+    <ClCompile Include="RtAmbientOcclusion.cpp" />
+    <ClCompile Include="RtGlobalIllumination.cpp" />
+    <ClCompile Include="SceneSerializer.cpp" />
+    <ClCompile Include="ShadowMapRenderer.cpp" />
+    <ClCompile Include="SkyRenderer.cpp" />
+    <ClCompile Include="TAARenderer.cpp" />
+    <ClCompile Include="TextureManager.cpp" />
+    <ClCompile Include="..\SDKs\DirectXTex\DDSTextureLoader\DDSTextureLoader12.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\DirectXTex\Common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="VolumetricFogRenderer.cpp" />
+    <ClCompile Include="XeGtaoRenderer.cpp" />
+    <ClCompile Include="..\SDKs\ImGuizmo\ImGuizmo.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="..\..\Data\Shaders\DeferredLighting.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\GBuffer.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\MeshEntity.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\PointLight.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\ShadowDepth.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\SkyPass.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\TAAResolve.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\Data\Shaders\RtGI_Common.hlsli">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_RayGen.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_Temporal.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+    <None Include="..\..\Data\Shaders\RtGI_Spatial.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+    <None Include="..\..\Data\Shaders\RtAO_Common.hlsli" />
+    <None Include="..\..\Data\Shaders\RtAO_RayGen.hlsl" />
+    <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl" />
+    <None Include="..\..\Data\Shaders\RtAO_Spatial.hlsl" />
+    <None Include="..\..\Data\Shaders\RtGI_Composite.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </None>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

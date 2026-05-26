@@ -1,0 +1,6 @@
+﻿# Copilot Instructions
+
+## Project Guidelines
+- User prefers explanatory comments in code changes to help understand the implementation.
+- Camera left/right movement should remain non-inverted: moving the mouse left should look left, and moving the mouse right should look right. Note that right-click camera look is also expected to follow this non-inverted behavior.
+- The real ImGuizmo pivot should be shown and used for transformations when available.

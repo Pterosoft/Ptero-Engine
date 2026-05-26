@@ -1,0 +1,227 @@
+﻿#pragma once
+
+// EntityMeshRenderer
+// Responsible for uploading and drawing every entity that has a MeshComponent
+// with an assigned mesh.  In the deferred rendering pipeline this class acts
+// as the G-Buffer geometry pass: it writes albedo, world-space normal, and
+// material data into three MRT outputs (GBuffer.hlsl) without performing any
+// lighting calculation.  Lighting is resolved separately by DeferredLightingPass.
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "TextureManager.h"
+#include "Components.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+class EntityMeshRenderer
+{
+public:
+    // Call once after the DX12 device is ready.  commandList is used to record
+    // the initial pipeline creation (no geometry upload happens here yet).
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+
+    // Called every frame before Render().  Gives the renderer the current entity
+    // list so it can upload new meshes and retire stale GPU buffers.
+    void SetEntities(std::vector<Entity>* entities);
+
+    // Record draw calls for every entity that has a fully loaded mesh.
+    // Must be called while the scene render-target + depth target are bound.
+    void Render(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMMATRIX& viewProjection,
+        DXGI_FORMAT colorFormat,
+        DXGI_FORMAT depthFormat);
+
+    // Render a depth-only pass using an external root signature and pipeline.
+    // rootSignature/pipelineState must have a single root CBV at slot 0 (b0, VS)
+    // for the per-entity MVP.  This reuses the GPU vertex/index buffers that
+    // were already uploaded for the main colour pass.
+    // lightViewProjection must be a column-major (pre-transposed) matrix.
+    void RenderDepthOnly(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12RootSignature*       rootSignature,
+        ID3D12PipelineState*       pipelineState,
+        const DirectX::XMFLOAT4X4& lightViewProjection);
+
+    // Upload the per-frame scene lighting data that the mesh shader reads from b1.
+    // Call this before Render() each frame.
+    void SetSceneLighting(
+        const DirectX::XMFLOAT3& sunDirection,
+        const DirectX::XMFLOAT3& sunColor,
+        const DirectX::XMFLOAT3& skyAmbient);
+
+    // Maximum point lights per frame – must match MAX_POINT_LIGHTS in MeshEntity.hlsl.
+    static constexpr int kMaxPointLights = 4;
+
+    // GPU-facing point light record uploaded to the lighting constant buffer.
+    struct PointLightGpu
+    {
+        DirectX::XMFLOAT3 Position;    // world-space position
+        float             Radius;      // influence radius
+        DirectX::XMFLOAT3 Color;       // pre-multiplied HDR colour (intensity baked in)
+        float             InvRadiusSq; // 1/(Radius^2) for smooth quadratic attenuation
+    };
+    static_assert(sizeof(PointLightGpu) == 32);
+
+    // Upload point light data gathered from the entity list each frame.
+    // Call after SetSceneLighting() and before Render().
+    void SetPointLights(const PointLightGpu* lights, int count);
+
+    // Upload the shadow map parameters (light-space VP + shadow map size) for
+    // the mesh shader's shadow sampling.  Call this before Render() each frame.
+    void SetShadowData(
+        const DirectX::XMFLOAT4X4& lightViewProjection,
+        float                       shadowMapSize,
+        D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvHandle);
+
+    void Shutdown();
+
+    bool ConsumeSceneContentChangedFlag()
+    {
+        const bool changed = mSceneContentChanged;
+        mSceneContentChanged = false;
+        return changed;
+    }
+
+    const char* GetLastErrorMessage() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    // GPU-side buffers for one entity's mesh.
+    struct EntityGpuMesh
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> VertexUpload;   // kept alive until upload fence
+        Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> IndexUpload;
+        D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
+        UINT                     IndexCount = 0;
+        // The MeshAsset pointer used when these buffers were built; used to
+        // detect when the mesh has been replaced and buffers must be rebuilt.
+        const Mesh*              SourceMesh = nullptr;
+    };
+
+    // Constant buffer layout – must be 256-byte aligned.
+    struct alignas(256) EntityConstants
+    {
+        DirectX::XMFLOAT4X4 MVP;
+        DirectX::XMFLOAT4X4 Model;   // model-to-world matrix for shadow world-position
+        std::byte            Padding[128]{};
+    };
+    static_assert(sizeof(EntityConstants) == 256);
+
+    // Per-frame scene lighting constant buffer layout – must match SceneLighting in MeshEntity.hlsl.
+    // Supports up to kMaxPointLights point lights packed alongside the directional sun/sky terms.
+    struct alignas(256) LightingConstants
+    {
+        DirectX::XMFLOAT3 SunDirection; float Pad0 = 0;
+        DirectX::XMFLOAT3 SunColor;     float Pad1 = 0;
+        DirectX::XMFLOAT3 SkyAmbient;   float Pad2 = 0;
+        int               NumPointLights = 0;
+        float             PadLights[3]{};
+        PointLightGpu     PointLights[kMaxPointLights]{};
+        std::byte         Padding[64]{};
+    };
+    static_assert(sizeof(LightingConstants) == 256);
+
+    // Shadow constant buffer layout – must match ShadowData in MeshEntity.hlsl.
+    struct alignas(256) ShadowConstants
+    {
+        DirectX::XMFLOAT4X4 LightViewProj;  // column-major (pre-transposed)
+        float               ShadowMapSize;  // texel resolution for PCF offset
+        float               ShadowBias;     // depth comparison bias
+        float               Pad[2];
+        std::byte           Padding[128]{};
+    };
+    static_assert(sizeof(ShadowConstants) == 256);
+
+    bool CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+    bool EnsureEntityGpuMesh(
+        ID3D12GraphicsCommandList* commandList,
+        std::size_t entityIndex,
+        const Mesh* mesh);
+    bool EnsureConstantBuffer(std::size_t requiredEntityCount);
+    bool EnsureDepthPassConstantBuffer(std::size_t requiredEntityCount);
+
+    // key = entity index
+    std::unordered_map<std::size_t, EntityGpuMesh> mGpuMeshes;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
+    EntityConstants*                             mMappedCB      = nullptr;
+    std::size_t                                  mCBCapacity    = 0; // slots allocated
+
+    // Separate per-entity constant buffer for the depth-only shadow pass.
+    // The shadow and main passes are recorded into the same command list, so they
+    // cannot safely share one upload buffer without later CPU writes overwriting
+    // constants that earlier draw calls still reference.
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mDepthPassConstantBuffer;
+    EntityConstants*                             mMappedDepthPassCB = nullptr;
+    std::size_t                                  mDepthPassCBCapacity = 0;
+
+    // Scene lighting constant buffer (one slot, updated every frame).
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mLightingCB;
+    LightingConstants*                           mMappedLightingCB = nullptr;
+
+    // Shadow data constant buffer (one slot, updated every frame).
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mShadowCB;
+    ShadowConstants*                             mMappedShadowCB = nullptr;
+    // Shadow map SRV handle cached from the last SetShadowData() call.
+    D3D12_GPU_DESCRIPTOR_HANDLE                  mShadowSrvHandle{};
+
+    DX12Shader mVertexShader;
+    DX12Shader mPixelShader;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    std::vector<Entity>* mEntities = nullptr;
+
+    // Texture loading and per-material-path SRV cache.
+    TextureManager mTextureManager;
+
+    // 1×1 white fallback texture used when an entity has no material or the texture is missing.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mFallbackTextureResource;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mFallbackCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mFallbackGpuHandle{};
+
+    bool CreateFallbackTexture(ID3D12GraphicsCommandList* commandList);
+
+    // Resolve a single-material file path to its base-color DDS path.
+    // Returns an empty string if the material cannot be read or has no base-color texture.
+    std::string ResolveBaseColorDdsPath(const std::string& materialRelativePath) const;
+
+    // For a multi-material JSON path, returns a map of materialId -> absolute DDS path.
+    // For a single-material JSON path, returns { {0, ddsPath} }.
+    // Returns an empty map on failure.
+    std::unordered_map<uint32_t, std::string> ResolveSubMaterialDdsPaths(const std::string& materialPath) const;
+
+    // Upload buffer for the fallback texture — kept alive until the GPU finishes
+    // consuming it (released after the first successful Render call).
+    Microsoft::WRL::ComPtr<ID3D12Resource> mFallbackUploadBuffer;
+
+    bool        mPipelineReady = false;
+    DXGI_FORMAT mColorFormat   = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT mDepthFormat   = DXGI_FORMAT_UNKNOWN;
+    bool        mSceneContentChanged = false;
+    std::string mLastError;
+};

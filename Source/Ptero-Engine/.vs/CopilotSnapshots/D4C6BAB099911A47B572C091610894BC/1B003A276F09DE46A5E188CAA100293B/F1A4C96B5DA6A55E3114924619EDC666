@@ -1,0 +1,6 @@
+﻿# Copilot Instructions
+
+## Project Guidelines
+- For this renderer's AgX controls, higher EV min/max values should correspond to brighter/day exposure rather than darker/night exposure.
+- The current black flicker issue is identified as stemming from RTAO rather than volumetric fog.
+- Validate rendering fixes, especially visual issues, carefully before claiming they are resolved.

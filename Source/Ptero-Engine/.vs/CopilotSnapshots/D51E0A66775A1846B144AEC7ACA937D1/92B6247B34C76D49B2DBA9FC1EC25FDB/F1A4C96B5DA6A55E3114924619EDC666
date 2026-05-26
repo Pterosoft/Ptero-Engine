@@ -1,0 +1,6 @@
+﻿# Copilot Instructions
+
+## Project Guidelines
+- User prefers explanatory comments in code changes to help understand the implementation.
+- Camera left/right movement and pivot transformations must remain non-inverted: if the user drags or moves left, the editor should respond left, and if right, respond right. Note that right-click camera look is expected to follow this non-inverted behavior, as the user corrected that it was previously inverted.
+- The real ImGuizmo pivot should be shown and used for transformations when available.

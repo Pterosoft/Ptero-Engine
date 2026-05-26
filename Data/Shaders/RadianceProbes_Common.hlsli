@@ -1,0 +1,219 @@
+// RadianceProbes_Common.hlsli
+// Shared types and helpers used by both the probe update and debug shaders.
+
+#ifndef RADIANCE_PROBES_COMMON_HLSLI
+#define RADIANCE_PROBES_COMMON_HLSLI
+
+#define MAX_RADIANCE_PROBE_POINT_LIGHTS 16
+
+struct ProbePointLightData
+{
+    float3 Position;
+    float  Radius;
+    float3 Color;
+    float  InvRadiusSq;
+    float  FalloffExponent;
+    float  SourceRadius;
+    float  CastShadows;
+    float  _Pad0;
+};
+
+// ─── Constant buffer (matches RadianceProbeConstants in RadianceProbeRenderer.h) ──
+cbuffer RadianceProbeConstants : register(b0)
+{
+    // Grid dimensions and spacing
+    uint   g_ProbeGridX;
+    uint   g_ProbeGridY;
+    uint   g_ProbeGridZ;
+    float  g_ProbeSpacing;
+
+    float3 g_ProbeOrigin;       // world-space origin of the grid (min corner)
+    float  g_UpdateBlend;       // EMA blend for SH update
+
+    uint   g_RaysPerProbe;
+    uint   g_FrameIndex;
+    uint   g_TotalProbes;
+    float  g_DebugSphereRadius;
+
+    float3 g_SunDir;            // FROM sun TO scene
+    float  g_Pad0;
+
+    float3 g_SunColor;
+    float  g_Pad1;
+
+    float3 g_SkyColor;
+    float  g_Pad2;
+
+    float3 g_CameraPos;
+    float  g_ColorLeakIntensity;
+
+    int    g_MaxBounces;
+    int    g_NumPointLights;
+    float2 g_Pad3;
+
+    ProbePointLightData g_PointLights[MAX_RADIANCE_PROBE_POINT_LIGHTS];
+
+    float4x4 g_ViewProj;        // for debug sphere MVP
+    float4x4 g_ViewProjInv;
+
+    int    g_DebugView;         // 4 = probe debug overlay
+    int    g_DebugLightingMode; // 0 = diffuse, 1 = specular-style
+    float2 g_Pad4;
+}
+
+// ─── L1 Spherical Harmonics coefficients per probe ───────────────────────────
+// 9 coefficients × 3 channels = 27 floats stored as 7 float4s (padded to 28 floats)
+// Layout: [0..2] = Y_00..Y_2-2 R, [3..5] = Y_00..Y_2-2 G, [6] = Y_00..Y_2-2 B (partial)
+// Actual layout: float4[7] where the 28th float is padding.
+// Simpler: 9 × float3 = 9 × 3 floats → pack as float4[7] (last xyz used, w = 0)
+struct ProbeSH
+{
+    float4 c[7]; // 7 × float4 = 28 floats; SH coefficients 0..8 RGB, c[6].w unused
+};
+
+// ─── SH Basis evaluation (L2, 9 coefficients) ────────────────────────────────
+// Standard real SH basis for a given direction d.
+float SHBasis0() { return 0.282095f; }
+float SHBasis1(float3 d) { return 0.488603f * d.y; }
+float SHBasis2(float3 d) { return 0.488603f * d.z; }
+float SHBasis3(float3 d) { return 0.488603f * d.x; }
+float SHBasis4(float3 d) { return 1.092548f * d.x * d.y; }
+float SHBasis5(float3 d) { return 1.092548f * d.y * d.z; }
+float SHBasis6(float3 d) { return 0.315392f * (3.0f * d.z * d.z - 1.0f); }
+float SHBasis7(float3 d) { return 1.092548f * d.x * d.z; }
+float SHBasis8(float3 d) { return 0.546274f * (d.x * d.x - d.y * d.y); }
+
+// Add a radiance sample (colour * weight) to an SH accumulator.
+// The 9 coefficients are stored interleaved: c[0..2]=coeff0_R,coeff0_G,coeff0_B, etc.
+void SHAddSample(inout ProbeSH sh, float3 dir, float3 radiance, float weight)
+{
+    float basis[9];
+    basis[0] = SHBasis0();
+    basis[1] = SHBasis1(dir);
+    basis[2] = SHBasis2(dir);
+    basis[3] = SHBasis3(dir);
+    basis[4] = SHBasis4(dir);
+    basis[5] = SHBasis5(dir);
+    basis[6] = SHBasis6(dir);
+    basis[7] = SHBasis7(dir);
+    basis[8] = SHBasis8(dir);
+
+    // Pack into float4[7]: indices 0-8 RGB → coeffs stored as (R0,G0,B0,R1) (G1,B1,R2,G2) etc.
+    // Simpler flat layout: coefficient i occupies c[i/1] but we use a 3-channel-per-coeff layout.
+    // We store coeff[i].rgb as (c[floor(i*3/4)][i*3 mod 4]).
+    // For simplicity use: c[0] = (coeff0.r, coeff0.g, coeff0.b, coeff1.r)
+    //                     c[1] = (coeff1.g, coeff1.b, coeff2.r, coeff2.g) ... etc.
+    // Actually use a simpler per-channel approach: c[0..2] = R coeffs 0..3, etc.
+    // Layout: c[0] = R[0..3], c[1] = R[4..7], c[2].x = R[8]
+    //         c[3] = G[0..3], c[4] = G[4..7], c[5].x = G[8]
+    //         c[6] = B[0..3], c[7] -- only 7 float4s available so B[4..7] shares float4[6].yzw and B[8] in [6+1 unused]
+    // Re-design: store all 9 × RGB = 27 floats in 7 float4s (28 slots, 1 padding):
+    // float4[0] = (R0,G0,B0,R1), float4[1]=(G1,B1,R2,G2), float4[2]=(B2,R3,G3,B3),
+    // float4[3]=(R4,G4,B4,R5),   float4[4]=(G5,B5,R6,G6), float4[5]=(B6,R7,G7,B7),
+    // float4[6]=(R8,G8,B8,0)
+    sh.c[0] += float4(radiance.r * basis[0] * weight, radiance.g * basis[0] * weight, radiance.b * basis[0] * weight,
+                      radiance.r * basis[1] * weight);
+    sh.c[1] += float4(radiance.g * basis[1] * weight, radiance.b * basis[1] * weight,
+                      radiance.r * basis[2] * weight, radiance.g * basis[2] * weight);
+    sh.c[2] += float4(radiance.b * basis[2] * weight, radiance.r * basis[3] * weight,
+                      radiance.g * basis[3] * weight, radiance.b * basis[3] * weight);
+    sh.c[3] += float4(radiance.r * basis[4] * weight, radiance.g * basis[4] * weight,
+                      radiance.b * basis[4] * weight, radiance.r * basis[5] * weight);
+    sh.c[4] += float4(radiance.g * basis[5] * weight, radiance.b * basis[5] * weight,
+                      radiance.r * basis[6] * weight, radiance.g * basis[6] * weight);
+    sh.c[5] += float4(radiance.b * basis[6] * weight, radiance.r * basis[7] * weight,
+                      radiance.g * basis[7] * weight, radiance.b * basis[7] * weight);
+    sh.c[6] += float4(radiance.r * basis[8] * weight, radiance.g * basis[8] * weight,
+                      radiance.b * basis[8] * weight, 0.0f);
+}
+
+// Evaluate SH irradiance for direction dir.
+float3 SHEvaluate(ProbeSH sh, float3 dir)
+{
+    float basis[9];
+    basis[0] = SHBasis0();
+    basis[1] = SHBasis1(dir);
+    basis[2] = SHBasis2(dir);
+    basis[3] = SHBasis3(dir);
+    basis[4] = SHBasis4(dir);
+    basis[5] = SHBasis5(dir);
+    basis[6] = SHBasis6(dir);
+    basis[7] = SHBasis7(dir);
+    basis[8] = SHBasis8(dir);
+
+    float3 result = float3(0, 0, 0);
+    result.r = sh.c[0].x * basis[0] + sh.c[0].w * basis[1] + sh.c[1].z * basis[2] + sh.c[2].y * basis[3]
+             + sh.c[3].x * basis[4] + sh.c[3].w * basis[5] + sh.c[4].z * basis[6] + sh.c[5].y * basis[7]
+             + sh.c[6].x * basis[8];
+    result.g = sh.c[0].y * basis[0] + sh.c[1].x * basis[1] + sh.c[1].w * basis[2] + sh.c[2].z * basis[3]
+             + sh.c[3].y * basis[4] + sh.c[4].x * basis[5] + sh.c[4].w * basis[6] + sh.c[5].z * basis[7]
+             + sh.c[6].y * basis[8];
+    result.b = sh.c[0].z * basis[0] + sh.c[1].y * basis[1] + sh.c[2].x * basis[2] + sh.c[2].w * basis[3]
+             + sh.c[3].z * basis[4] + sh.c[4].y * basis[5] + sh.c[5].x * basis[6] + sh.c[5].w * basis[7]
+             + sh.c[6].z * basis[8];
+    return max(result, 0.0f);
+}
+
+float3 SHEvaluateDiffuseIrradiance(ProbeSH sh, float3 dir)
+{
+    float basis[9];
+    basis[0] = SHBasis0() * 3.14159265f;
+    basis[1] = SHBasis1(dir) * 2.09439510f;
+    basis[2] = SHBasis2(dir) * 2.09439510f;
+    basis[3] = SHBasis3(dir) * 2.09439510f;
+    basis[4] = SHBasis4(dir) * 0.78539816f;
+    basis[5] = SHBasis5(dir) * 0.78539816f;
+    basis[6] = SHBasis6(dir) * 0.78539816f;
+    basis[7] = SHBasis7(dir) * 0.78539816f;
+    basis[8] = SHBasis8(dir) * 0.78539816f;
+
+    float3 result = float3(0, 0, 0);
+    result.r = sh.c[0].x * basis[0] + sh.c[0].w * basis[1] + sh.c[1].z * basis[2] + sh.c[2].y * basis[3]
+             + sh.c[3].x * basis[4] + sh.c[3].w * basis[5] + sh.c[4].z * basis[6] + sh.c[5].y * basis[7]
+             + sh.c[6].x * basis[8];
+    result.g = sh.c[0].y * basis[0] + sh.c[1].x * basis[1] + sh.c[1].w * basis[2] + sh.c[2].z * basis[3]
+             + sh.c[3].y * basis[4] + sh.c[4].x * basis[5] + sh.c[4].w * basis[6] + sh.c[5].z * basis[7]
+             + sh.c[6].y * basis[8];
+    result.b = sh.c[0].z * basis[0] + sh.c[1].y * basis[1] + sh.c[2].x * basis[2] + sh.c[2].w * basis[3]
+             + sh.c[3].z * basis[4] + sh.c[4].y * basis[5] + sh.c[5].x * basis[6] + sh.c[5].w * basis[7]
+             + sh.c[6].z * basis[8];
+    return max(result, 0.0f);
+}
+
+// Convert a linear probe index to a 3D grid coordinate.
+uint3 ProbeIndexToCoord(uint idx)
+{
+    uint x = idx % g_ProbeGridX;
+    uint y = (idx / g_ProbeGridX) % g_ProbeGridY;
+    uint z = idx / (g_ProbeGridX * g_ProbeGridY);
+    return uint3(x, y, z);
+}
+
+// World-space position of a probe at grid coordinate (ix, iy, iz).
+float3 ProbeCoordToWorld(uint3 coord)
+{
+    return g_ProbeOrigin + float3(coord) * g_ProbeSpacing;
+}
+
+// RNG helpers.
+uint ProbeRng(uint probeIdx, uint rayIdx, uint frameIndex)
+{
+    return (probeIdx * 1973u + rayIdx * 9277u + frameIndex * 26699u) | 1u;
+}
+
+float ProbeRandFloat(inout uint state)
+{
+    state = state * 1664525u + 1013904223u;
+    return (state >> 8) * (1.0f / float(1 << 24));
+}
+
+// Uniform sphere sample.
+float3 UniformSphere(float2 xi)
+{
+    float phi      = 6.28318530f * xi.x;
+    float cosTheta = 1.0f - 2.0f * xi.y;
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    return float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+}
+
+#endif // RADIANCE_PROBES_COMMON_HLSLI

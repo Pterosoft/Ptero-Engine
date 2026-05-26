@@ -1,0 +1,189 @@
+#pragma once
+
+#ifndef __D3DX12_H__
+#define __D3DX12_H__
+
+#include <d3d12.h>
+#include <cstring>
+
+// -------------------------------------------------------------------------
+// CD3DX12_RESOURCE_BARRIER – transition/aliasing/UAV barrier helpers
+// -------------------------------------------------------------------------
+struct CD3DX12_RESOURCE_BARRIER
+{
+    static D3D12_RESOURCE_BARRIER Transition(
+        _In_ ID3D12Resource* resource,
+        D3D12_RESOURCE_STATES stateBefore,
+        D3D12_RESOURCE_STATES stateAfter,
+        UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        D3D12_RESOURCE_BARRIER_FLAGS flags = D3D12_RESOURCE_BARRIER_FLAG_NONE)
+    {
+        D3D12_RESOURCE_BARRIER result{};
+        result.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        result.Flags = flags;
+        result.Transition.pResource = resource;
+        result.Transition.StateBefore = stateBefore;
+        result.Transition.StateAfter = stateAfter;
+        result.Transition.Subresource = subresource;
+        return result;
+    }
+
+    // UAV barrier – ensures all UAV reads/writes to pResource complete before subsequent accesses.
+    static D3D12_RESOURCE_BARRIER UAV(_In_ ID3D12Resource* pResource)
+    {
+        D3D12_RESOURCE_BARRIER result{};
+        result.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        result.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        result.UAV.pResource = pResource;
+        return result;
+    }
+};
+
+// -------------------------------------------------------------------------
+// CD3DX12_HEAP_PROPERTIES – convenient heap property constructor
+// -------------------------------------------------------------------------
+struct CD3DX12_HEAP_PROPERTIES : public D3D12_HEAP_PROPERTIES
+{
+    explicit CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE type,
+        UINT creationNodeMask = 1, UINT visibleNodeMask = 1)
+    {
+        Type                 = type;
+        CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+        MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+        CreationNodeMask     = creationNodeMask;
+        VisibleNodeMask      = visibleNodeMask;
+    }
+};
+
+// -------------------------------------------------------------------------
+// CD3DX12_RESOURCE_DESC – convenient resource description helpers
+// -------------------------------------------------------------------------
+struct CD3DX12_RESOURCE_DESC : public D3D12_RESOURCE_DESC
+{
+    static CD3DX12_RESOURCE_DESC Buffer(UINT64 width,
+        D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE,
+        UINT64 alignment = 0)
+    {
+        CD3DX12_RESOURCE_DESC desc{};
+        desc.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Alignment          = alignment;
+        desc.Width              = width;
+        desc.Height             = 1;
+        desc.DepthOrArraySize   = 1;
+        desc.MipLevels          = 1;
+        desc.Format             = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count   = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        desc.Flags              = flags;
+        return desc;
+    }
+};
+
+// -------------------------------------------------------------------------
+// GetRequiredIntermediateSize – compute the staging buffer size for a resource
+// -------------------------------------------------------------------------
+inline UINT64 GetRequiredIntermediateSize(
+    _In_ ID3D12Resource* destinationResource,
+    UINT firstSubresource,
+    UINT numSubresources)
+{
+    const D3D12_RESOURCE_DESC desc = destinationResource->GetDesc();
+
+    ID3D12Device* device = nullptr;
+    destinationResource->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
+
+    UINT64 requiredSize = 0;
+    device->GetCopyableFootprints(&desc, firstSubresource, numSubresources,
+        0, nullptr, nullptr, nullptr, &requiredSize);
+    device->Release();
+    return requiredSize;
+}
+
+// -------------------------------------------------------------------------
+// UpdateSubresources – upload CPU subresource data into a committed upload
+// buffer, then record a CopyTextureRegion/CopyBufferRegion into cmdList.
+// -------------------------------------------------------------------------
+inline UINT64 UpdateSubresources(
+    _In_ ID3D12GraphicsCommandList* cmdList,
+    _In_ ID3D12Resource* destinationResource,
+    _In_ ID3D12Resource* intermediate,
+    UINT64 intermediateOffset,
+    UINT firstSubresource,
+    UINT numSubresources,
+    _In_reads_(numSubresources) const D3D12_SUBRESOURCE_DATA* srcData)
+{
+    const D3D12_RESOURCE_DESC destDesc = destinationResource->GetDesc();
+
+    ID3D12Device* device = nullptr;
+    destinationResource->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device));
+
+    // Query the layout, row sizes, and total size for the subresources.
+    UINT64 requiredSize = 0;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT* layouts =
+        static_cast<D3D12_PLACED_SUBRESOURCE_FOOTPRINT*>(
+            _alloca(sizeof(D3D12_PLACED_SUBRESOURCE_FOOTPRINT) * numSubresources));
+    UINT64* rowSizesInBytes = static_cast<UINT64*>(_alloca(sizeof(UINT64) * numSubresources));
+    UINT*   numRows         = static_cast<UINT*>(_alloca(sizeof(UINT) * numSubresources));
+
+    device->GetCopyableFootprints(&destDesc, firstSubresource, numSubresources,
+        intermediateOffset, layouts, numRows, rowSizesInBytes, &requiredSize);
+    device->Release();
+
+    // Map the intermediate (upload) buffer and copy each subresource row-by-row.
+    BYTE* mappedData = nullptr;
+    intermediate->Map(0, nullptr, reinterpret_cast<void**>(&mappedData));
+
+    for (UINT i = 0; i < numSubresources; ++i)
+    {
+        const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& layout = layouts[i];
+        const UINT64 rowSize = rowSizesInBytes[i];
+        const UINT   rows    = numRows[i];
+        const UINT   slices  = layout.Footprint.Depth;
+
+        BYTE* destSlice = mappedData + layout.Offset;
+        const BYTE* srcSlice = static_cast<const BYTE*>(srcData[i].pData);
+
+        for (UINT z = 0; z < slices; ++z)
+        {
+            BYTE* destRow = destSlice + static_cast<SIZE_T>(layout.Footprint.RowPitch) * rows * z;
+            const BYTE* srcRow = srcSlice + srcData[i].SlicePitch * z;
+            for (UINT y = 0; y < rows; ++y)
+            {
+                std::memcpy(destRow + static_cast<SIZE_T>(layout.Footprint.RowPitch) * y,
+                    srcRow + srcData[i].RowPitch * y,
+                    static_cast<SIZE_T>(rowSize));
+            }
+        }
+    }
+
+    intermediate->Unmap(0, nullptr);
+
+    // Record the GPU copy commands.
+    if (destDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+    {
+        cmdList->CopyBufferRegion(destinationResource, 0,
+            intermediate, layouts[0].Offset, layouts[0].Footprint.Width);
+    }
+    else
+    {
+        for (UINT i = 0; i < numSubresources; ++i)
+        {
+            D3D12_TEXTURE_COPY_LOCATION dst{};
+            dst.pResource        = destinationResource;
+            dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = i + firstSubresource;
+
+            D3D12_TEXTURE_COPY_LOCATION src{};
+            src.pResource       = intermediate;
+            src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            src.PlacedFootprint = layouts[i];
+
+            cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+    }
+
+    return requiredSize;
+}
+
+#endif

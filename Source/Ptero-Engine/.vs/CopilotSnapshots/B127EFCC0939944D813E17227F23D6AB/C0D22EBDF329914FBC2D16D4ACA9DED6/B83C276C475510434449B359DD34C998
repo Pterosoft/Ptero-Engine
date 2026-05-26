@@ -1,0 +1,430 @@
+﻿// SharcGI.hlsl
+// DXR Global Illumination using NVIDIA SHARC (Spatial Hash Radiance Cache).
+//
+// Frame flow:
+//   1. RayGen shader fires one ray per G-Buffer pixel from world positions
+//      reconstructed from the depth buffer.
+//   2. On each hit, the closest-hit shader looks up cached irradiance from
+//      the SHARC resolved buffer, or falls back to a direct-lighting estimate,
+//      and accumulates that radiance back into the SHARC hash grid.
+//   3. The miss shader contributes sky radiance to SHARC entries near the
+//      camera horizon and writes zero to the screen-space GI output on a miss.
+//   4. After all rays finish the RayGen shader writes the screen-space GI
+//      result to the output UAV for the deferred-lighting pass to consume.
+//   5. A separate compute dispatch (SharcResolve.hlsl) ages and resolves
+//      all SHARC hash entries so they are ready for the next frame's queries.
+//
+// Compile as: dxc -T lib_6_3 SharcGI.hlsl
+
+#pragma pack_matrix(row_major)
+
+#define SHARC_RADIANCE_SCALE 1e3f
+#include "SharcCommon.h"
+
+// ---------------------------------------------------------------------------
+// Per-frame constant buffer
+// ---------------------------------------------------------------------------
+struct PointLightGpu
+{
+    float3 Position;
+    float  Radius;
+    float3 Color;
+    float  InvRadiusSq;
+};
+
+cbuffer SharcGiConstants : register(b0)
+{
+    float4x4  gInvViewProj;          // inverse jittered view-projection (row-major, pre-transposed)
+    float3    gCameraPos;     float  _c0;
+    float3    gSunDir;        float  _c1;   // direction FROM sun toward scene
+    float3    gSunColor;      float  _c2;
+    float3    gSkyAmbient;    float  _c3;
+    float     gMaxRayDist;
+    int       gBounceCount;
+    int       gRaysPerPixel;
+    float     gAccumAlpha;
+    int       gFrameIndex;
+    int       gSkylightOnMiss;
+    int       gNumPointLights;
+    int       gResetAccumulation;
+    // SHARC grid parameters
+    float     gSharcSceneScale;
+    int       gSharcAccumFrames;
+    float     gSharcRoughnessThreshold;
+    int       gSharcDownscaleFactor;
+    // Lighting extras
+    float     gSaturation;
+    int       gDebugAlbedoOnly;
+    float2    _cPad;
+    // Point lights follow
+    PointLightGpu gPointLights[16];
+};
+
+// ---------------------------------------------------------------------------
+// Resource bindings
+// ---------------------------------------------------------------------------
+// G-Buffer inputs (space 0)
+Texture2D<float4>  gGBufferNormal   : register(t0);   // encoded world normal
+Texture2D<float>   gDepthBuffer     : register(t1);   // scene depth
+Texture2D<float4>  gHistory         : register(t2);   // previous-frame GI accumulation
+RaytracingAccelerationStructure gTlas : register(t3);
+// RT geometry buffers
+struct RtVertexGpu { float3 Position; float _p0; float3 Normal; float _p1; float2 TexCoord; float2 _p2; };
+StructuredBuffer<RtVertexGpu>  gRtVertices  : register(t4);
+ByteAddressBuffer               gRtIndices   : register(t5);
+struct RtInstanceGpu { uint VertexOffset; uint IndexOffset; uint AlbedoSrvLo; uint AlbedoSrvHi; };
+StructuredBuffer<RtInstanceGpu> gRtInstances : register(t6);
+Texture2D<float4>   gPrimaryAlbedo  : register(t7);   // G-Buffer albedo for first hit
+
+// Output UAVs (space 0)
+RWTexture2D<float4>  gAccumOutput    : register(u0);  // screen-space GI result
+
+// SHARC hash-grid UAVs (space 1)
+RWStructuredBuffer<uint64_t>               u_SharcHashEntries    : register(u0, space1);
+RWStructuredBuffer<SharcAccumulationData>  u_SharcAccumBuffer    : register(u1, space1);
+RWStructuredBuffer<SharcPackedData>        u_SharcResolvedBuffer : register(u2, space1);
+
+// Per-instance albedo textures (local root signature)
+Texture2D<float4>   gHitAlbedoTexture : register(t8, space0);
+
+SamplerState gAlbedoSampler : register(s0);
+
+// ---------------------------------------------------------------------------
+// Utility: reconstruct world position from screen UV + depth
+// ---------------------------------------------------------------------------
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 w   = mul(ndc, gInvViewProj);
+    return w.xyz / w.w;
+}
+
+// ---------------------------------------------------------------------------
+// PRNG helpers
+// ---------------------------------------------------------------------------
+uint WangHash(uint s) { s=(s^61u)^(s>>16u); s*=9u; s^=(s>>4u); s*=0x27D4EB2Du; s^=(s>>15u); return s; }
+float UintToFloat01(uint x) { return (float)(x & 0x00FFFFFFu) * (1.0f / (float)0x01000000u); }
+
+float2 SampleHalton(uint idx)
+{
+    // Base-2 radical inverse
+    uint bits = idx;
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    float r2 = (float)bits * 2.3283064365386963e-10f;
+    // Base-3 radical inverse
+    float r3 = 0.0f; float base3 = 1.0f / 3.0f; uint n = idx;
+    while (n > 0u) { r3 += (float)(n % 3u) * base3; base3 /= 3.0f; n /= 3u; }
+    return float2(r2, r3);
+}
+
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    float3 up = (abs(N.z) < 0.999f) ? float3(0,0,1) : float3(1,0,0);
+    float3 T  = normalize(cross(up, N));
+    float3 B  = cross(N, T);
+    float r   = sqrt(xi.x);
+    float phi = 6.28318530718f * xi.y;
+    return normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(max(0.0f, 1.0f - xi.x)));
+}
+
+float3 FaceForward(float3 N, float3 incident)
+{
+    return (dot(N, incident) > 0.0f) ? -N : N;
+}
+
+// ---------------------------------------------------------------------------
+// Ray payload
+// ---------------------------------------------------------------------------
+struct GiPayload
+{
+    float3 Radiance;
+    float3 HitAlbedo;
+    float3 HitNormal;
+    float3 HitWorldPos;
+    uint   Hit;
+};
+
+struct ShadowPayload
+{
+    float Visibility; // 1 = unoccluded, 0 = shadowed
+};
+
+struct TriAttributes { float2 Barycentrics; };
+
+// ---------------------------------------------------------------------------
+// Shading helpers
+// ---------------------------------------------------------------------------
+float3 ShadeDirectSun(float3 hitPos, float3 N, float3 albedo,
+                      float3 sunDir, float3 sunColor)
+{
+    float3 L = -sunDir; // sunDir points FROM sun TOWARD scene; flip for lighting
+    float NdotL = saturate(dot(N, L));
+    if (NdotL <= 0.0f) return float3(0,0,0);
+
+    // Cast a shadow ray toward the sun
+    RayDesc shadowRay;
+    shadowRay.Origin    = hitPos + N * 0.002f;
+    shadowRay.Direction = L;
+    shadowRay.TMin      = 0.001f;
+    shadowRay.TMax      = gMaxRayDist;
+
+    ShadowPayload shadowPayload;
+    shadowPayload.Visibility = 1.0f;
+    TraceRay(gTlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF, 1, 0, 1, shadowRay, shadowPayload);
+
+    return albedo * sunColor * NdotL * shadowPayload.Visibility * (1.0f / 3.14159265f);
+}
+
+float3 ShadePointLights(float3 hitPos, float3 N, float3 albedo)
+{
+    float3 result = float3(0,0,0);
+    for (int i = 0; i < gNumPointLights; ++i)
+    {
+        float3 toLight = gPointLights[i].Position - hitPos;
+        float  dist2   = dot(toLight, toLight);
+        if (dist2 < 1e-6f) continue;
+        float  dist    = sqrt(dist2);
+        float3 L       = toLight / dist;
+        float  NdotL   = saturate(dot(N, L));
+        if (NdotL <= 0.0f) continue;
+        float  atten   = saturate(1.0f - dist2 * gPointLights[i].InvRadiusSq);
+        atten *= atten;
+        result += albedo * gPointLights[i].Color * NdotL * atten * (1.0f / 3.14159265f);
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Closest-hit shader
+// ---------------------------------------------------------------------------
+[shader("closesthit")]
+void ClosestHit(inout GiPayload payload, in TriAttributes attr)
+{
+    payload.Hit = 1u;
+
+    RtInstanceGpu inst   = gRtInstances[InstanceID()];
+    // triBase is the first element index in the flat index buffer for this triangle.
+    uint triBase = inst.IndexOffset + PrimitiveIndex() * 3u;
+    // The index buffer is a ByteAddressBuffer of uint32, so byte offset = element_index * 4.
+    // Indices are per-instance-local; add inst.VertexOffset to get the global vertex index.
+    uint i0 = inst.VertexOffset + gRtIndices.Load((triBase + 0u) * 4u);
+    uint i1 = inst.VertexOffset + gRtIndices.Load((triBase + 1u) * 4u);
+    uint i2 = inst.VertexOffset + gRtIndices.Load((triBase + 2u) * 4u);
+
+    RtVertexGpu v0 = gRtVertices[i0];
+    RtVertexGpu v1 = gRtVertices[i1];
+    RtVertexGpu v2 = gRtVertices[i2];
+
+    float2 bary = attr.Barycentrics;
+    float  w0   = 1.0f - bary.x - bary.y;
+
+    // Interpolate object-space normal and UV.
+    float3 objN = normalize(v0.Normal * w0 + v1.Normal * bary.x + v2.Normal * bary.y);
+    float2 uv   = v0.TexCoord * w0 + v1.TexCoord * bary.x + v2.TexCoord * bary.y;
+
+    // Transform normal to world space using the TLAS instance transform.
+    // ObjectToWorld3x4() gives the row-major object-to-world 3x4 matrix.
+    float3x4 o2w = ObjectToWorld3x4();
+    float3 N = normalize(mul((float3x3)o2w, objN));
+
+    // Face-forward: ensure normal points toward the incoming ray.
+    N = FaceForward(N, WorldRayDirection());
+
+    // World-space hit position from the ray equation (avoids object-space errors).
+    float3 worldPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+
+    // Sample albedo from the per-instance texture bound via local root signature.
+    float4 albedoSample = gHitAlbedoTexture.SampleLevel(gAlbedoSampler, uv, 0.0f);
+    float3 albedo = albedoSample.rgb;
+
+    // If the texture is black/unbound, fall back to a mid-grey so lighting is visible.
+    if (dot(albedo, albedo) < 0.001f)
+        albedo = float3(0.5f, 0.5f, 0.5f);
+
+    albedo = saturate(albedo);
+
+    // Apply saturation
+    float lum = dot(albedo, float3(0.2126f, 0.7152f, 0.0722f));
+    albedo = lerp(float3(lum, lum, lum), albedo, gSaturation);
+
+    payload.HitAlbedo   = albedo;
+    payload.HitNormal   = N;
+    payload.HitWorldPos = worldPos;
+
+    // Direct lighting at this secondary hit point.
+    // Sun: gSunDir points FROM sun TOWARD scene, so flip it for the light vector.
+    float3 L_sun  = normalize(-gSunDir);
+    float  NdotL  = saturate(dot(N, L_sun));
+    float3 directLit = albedo * gSunColor * NdotL * (1.0f / 3.14159265f)
+                     + ShadePointLights(worldPos, N, albedo);
+
+    // Query SHARC for cached indirect radiance at this hit point (world space).
+    SharcParameters sharcParams;
+    sharcParams.gridParameters.cameraPosition = gCameraPos;
+    sharcParams.gridParameters.sceneScale     = gSharcSceneScale;
+    sharcParams.gridParameters.logarithmBase  = SHARC_GRID_LOGARITHM_BASE;
+    sharcParams.gridParameters.levelBias      = SHARC_GRID_LEVEL_BIAS;
+    sharcParams.hashMapData.capacity          = (1u << SHARC_CAPACITY_LOG2);
+    sharcParams.hashMapData.hashEntriesBuffer = u_SharcHashEntries;
+    sharcParams.accumulationBuffer            = u_SharcAccumBuffer;
+    sharcParams.resolvedBuffer                = u_SharcResolvedBuffer;
+    sharcParams.radianceScale                 = SHARC_RADIANCE_SCALE;
+
+    float3 cachedIndirect = float3(0, 0, 0);
+    bool   hadCachedGI    = SharcGetCachedRadiance(worldPos, sharcParams, cachedIndirect);
+
+    // Total outgoing radiance = direct + cached indirect.
+    float3 outRadiance = directLit + (hadCachedGI ? cachedIndirect * albedo : float3(0, 0, 0));
+
+    // Feed direct lighting back into SHARC at the world-space hit point
+    // so future cache lookups at this position get correct lighting.
+    SharcUpdateEntry(worldPos, clamp(directLit, 0.0f, 65000.0f), sharcParams);
+
+    payload.Radiance = clamp(outRadiance, 0.0f, 65000.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Miss shaders
+// ---------------------------------------------------------------------------
+[shader("miss")]
+void Miss(inout GiPayload payload)
+{
+    payload.Hit = 0u;
+    // Return sky radiance only for secondary bounces inside the SHARC cache update path
+    // (closest-hit fires secondary rays that can miss geometry). For the screen-space raygen
+    // path the raygen shader handles misses itself without calling this shader's result,
+    // but we still provide it so secondary-bounce queries inside ShadeDirectSun can see sky.
+    payload.Radiance = (gSkylightOnMiss != 0) ? gSkyAmbient : float3(0.0f, 0.0f, 0.0f);
+}
+
+[shader("miss")]
+void ShadowMiss(inout ShadowPayload payload)
+{
+    payload.Visibility = 1.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Ray-generation shader
+// ---------------------------------------------------------------------------
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 launchIdx  = DispatchRaysIndex().xy;
+    uint2 launchDims = DispatchRaysDimensions().xy;
+
+    int ds = max(1, gSharcDownscaleFactor);
+
+    // Downscale: non-grid pixels copy the nearest grid-aligned neighbour's cached
+    // value from the history buffer so the full texture is always populated.
+    if (ds > 1 && ((int(launchIdx.x) % ds) != 0 || (int(launchIdx.y) % ds) != 0))
+    {
+        // Snap to the nearest grid-aligned pixel.
+        uint2 gridPx = (launchIdx / uint(ds)) * uint(ds);
+        float3 neighbour = gHistory.Load(int3(gridPx, 0)).rgb;
+        gAccumOutput[launchIdx] = float4(neighbour, 1.0f);
+        return;
+    }
+
+    float2 uv = (float2(launchIdx) + 0.5f) / float2(launchDims);
+
+    // Read G-Buffer depth
+    float depth = gDepthBuffer.Load(int3(launchIdx, 0)).r;
+    if (depth >= 1.0f)
+    {
+        // Sky pixel — always write zero (no GI contribution from empty sky)
+        gAccumOutput[launchIdx] = float4(0, 0, 0, 0);
+        return;
+    }
+
+    float3 worldPos = ReconstructWorldPos(uv, depth);
+
+    // Read G-Buffer normal
+    float4 normalSample = gGBufferNormal.Load(int3(launchIdx, 0));
+    float3 N = normalize(normalSample.xyz * 2.0f - 1.0f);
+
+    // Read primary albedo
+    float3 primaryAlbedo = gPrimaryAlbedo.Load(int3(launchIdx, 0)).rgb;
+    primaryAlbedo = saturate(primaryAlbedo);
+
+    // Apply saturation to primary albedo
+    float lum = dot(primaryAlbedo, float3(0.2126f, 0.7152f, 0.0722f));
+    primaryAlbedo = lerp(float3(lum, lum, lum), primaryAlbedo, gSaturation);
+
+    if (gDebugAlbedoOnly != 0)
+    {
+        gAccumOutput[launchIdx] = float4(primaryAlbedo, 1.0f);
+        return;
+    }
+
+    // Accumulate GI radiance over gRaysPerPixel samples.
+    float3 giAccum = float3(0, 0, 0);
+
+    for (int s = 0; s < gRaysPerPixel; ++s)
+    {
+        // Build a per-sample seed from frame index, pixel, and sample index.
+        uint seed = WangHash((uint)(gFrameIndex * 65537 + launchIdx.y * launchDims.x + launchIdx.x) ^ (uint)(s * 1234567));
+        float2 xi = frac(SampleHalton((uint)(gFrameIndex * gRaysPerPixel + s))
+                        + float2(UintToFloat01(seed), UintToFloat01(WangHash(seed))));
+
+        float3 rayDir    = CosineSampleHemisphere(N, xi);
+        // Offset the ray origin above the surface to prevent self-intersection.
+        float3 rayOrigin = worldPos + N * 0.003f;
+
+        // Always trace a ray — the closest-hit shader seeds the SHARC cache at the
+        // secondary hit position so the cache warms up over successive frames.
+        RayDesc ray;
+        ray.Origin    = rayOrigin;
+        ray.Direction = rayDir;
+        ray.TMin      = 0.001f;
+        ray.TMax      = gMaxRayDist;
+
+        GiPayload payload;
+        payload.Radiance    = float3(0,0,0);
+        payload.HitAlbedo   = float3(0,0,0);
+        payload.HitNormal   = float3(0,0,0);
+        payload.HitWorldPos = float3(0,0,0);
+        payload.Hit         = 0u;
+
+        TraceRay(gTlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+
+        float3 sampleRadiance = float3(0,0,0);
+        if (payload.Hit != 0u)
+        {
+            // payload.Radiance is the outgoing radiance at the secondary hit point
+            // (direct lighting + any cached multi-bounce indirect already baked in).
+            // Modulate by the primary surface albedo for the diffuse bounce.
+            sampleRadiance = clamp(payload.Radiance, 0.0f, 65000.0f) * primaryAlbedo;
+        }
+        else if (gSkylightOnMiss != 0)
+        {
+            // Ray escaped to sky — use sky ambient as the indirect contribution.
+            sampleRadiance = gSkyAmbient * primaryAlbedo;
+        }
+
+        giAccum += clamp(sampleRadiance, 0.0f, 65000.0f);
+    }
+
+    float3 giResult = giAccum / (float)max(gRaysPerPixel, 1);
+
+    // Guard against NaN/Inf that could arise from degenerate geometry or math.
+    if (any(isnan(giResult)) || any(isinf(giResult)))
+        giResult = float3(0, 0, 0);
+
+    // Temporal accumulation with history buffer.
+    float3 history   = gHistory.Load(int3(launchIdx, 0)).rgb;
+    // Also guard history against stale NaN from previous frames.
+    if (any(isnan(history)) || any(isinf(history)))
+        history = float3(0, 0, 0);
+    float  alpha     = gAccumAlpha;
+    if (gResetAccumulation != 0) alpha = 1.0f; // full overwrite on camera move/reset
+
+    float3 blended = lerp(history, giResult, alpha);
+
+    gAccumOutput[launchIdx] = float4(blended, 1.0f);
+}

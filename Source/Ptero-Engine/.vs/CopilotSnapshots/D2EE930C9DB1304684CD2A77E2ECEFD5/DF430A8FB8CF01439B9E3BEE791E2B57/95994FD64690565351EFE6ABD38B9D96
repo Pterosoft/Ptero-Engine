@@ -1,0 +1,46 @@
+﻿#pragma once
+
+struct SeaSettings
+{
+    bool  Enabled = false;
+
+    // Wave parameters
+    float WaveHeight = 1.0f;
+    float WaveFrequency = 0.5f;
+    float WaveSpeed = 1.0f;
+    float WaveChoppiness = 1.0f;
+
+    // Wind parameters (in km/h, similar to Crest)
+    float WindSpeed = 30.0f;
+    float WindDirectionAngle = 0.0f;
+
+    // Rendering parameters
+    float SeaLevel = 0.0f;
+    float TileSize = 100.0f;
+    int   TessellationFactor = 32;
+
+    // Water color and lighting
+    float ColorR = 0.0f;
+    float ColorG = 0.3f;
+    float ColorB = 0.5f;
+    float Roughness = 0.2f;
+    float Metallic = 0.0f;
+
+    // Foam parameters
+    bool  FoamEnabled = true;
+    float FoamAmount = 0.5f;
+    float FoamThreshold = 0.7f;
+
+    // Reflection and refraction
+    float ReflectionStrength = 1.0f;
+    float RefractionStrength = 0.5f;
+    float FresnelPower = 5.0f;
+
+    // Detail and quality
+    float NormalStrength = 1.0f;
+    int   CascadeCount = 4;
+    float CascadeScale = 2.0f;
+
+    // Debug
+    int   DebugView = 0; // 0 = final, 1 = normals, 2 = foam, 3 = wireframe
+};

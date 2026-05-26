@@ -1,0 +1,825 @@
+﻿#include "AudioManager.h"
+#include "SteamAudioBinaural.h"
+
+#include <windows.h>
+#include "fmod_studio.hpp"
+#include "fmod.hpp"
+#include "fmod_errors.h"
+
+#include <algorithm>
+#include <chrono>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+#include <filesystem>
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+namespace
+{
+    FMOD_VECTOR ToFmodVector(const float x, const float y, const float z)
+    {
+        FMOD_VECTOR vector{};
+        vector.x = x;
+        vector.y = y;
+        vector.z = z;
+        return vector;
+    }
+
+    bool FmodOk(FMOD_RESULT result, std::string& outError, const char* context)
+    {
+        if (result != FMOD_OK)
+        {
+            outError = std::string(context) + ": " + FMOD_ErrorString(result);
+            return false;
+        }
+        return true;
+    }
+
+    FMOD_3D_ATTRIBUTES Make3DAttributes(
+        const float positionX,
+        const float positionY,
+        const float positionZ,
+        const float forwardX,
+        const float forwardY,
+        const float forwardZ,
+        const float upX,
+        const float upY,
+        const float upZ)
+    {
+        FMOD_3D_ATTRIBUTES attributes{};
+        attributes.position = ToFmodVector(positionX, positionY, positionZ);
+        attributes.forward = ToFmodVector(forwardX, forwardY, forwardZ);
+        attributes.up = ToFmodVector(upX, upY, upZ);
+        return attributes;
+    }
+
+    std::filesystem::path ResolveFmodPluginPath()
+    {
+        wchar_t exePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
+            return {};
+
+        std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+        while (!current.empty())
+        {
+            const std::filesystem::path candidate = current / L"Source" / L"SDKs" / L"fmod" / L"plugins";
+            std::error_code ec;
+            if (std::filesystem::is_directory(candidate, ec))
+                return std::filesystem::weakly_canonical(candidate);
+
+            const std::filesystem::path parent = current.parent_path();
+            if (parent == current)
+                break;
+            current = parent;
+        }
+
+        return {};
+    }
+
+    std::filesystem::path ResolveSteamAudioFmodPluginPath()
+    {
+        wchar_t exePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
+            return {};
+
+        std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+        while (!current.empty())
+        {
+            const std::filesystem::path candidate = current / L"Source" / L"SDKs" / L"steamaudio_fmod" / L"lib" / L"windows-x64";
+            std::error_code ec;
+            if (std::filesystem::is_directory(candidate, ec))
+                return std::filesystem::weakly_canonical(candidate);
+
+            const std::filesystem::path parent = current.parent_path();
+            if (parent == current)
+                break;
+            current = parent;
+        }
+
+        return {};
+    }
+}
+
+bool AudioManager::PlayEventByPath(const std::string& eventPath)
+{
+    if (!m_initialized || eventPath.empty())
+        return false;
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    FMOD_RESULT result = m_studioSystem->getEvent(eventPath.c_str(), &desc);
+    if (result != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* inst = nullptr;
+    result = desc->createInstance(&inst);
+    if (result != FMOD_OK || !inst)
+        return false;
+
+    bool is3D = false;
+    if (desc->is3D(&is3D) == FMOD_OK && is3D)
+    {
+        const float previewDistance = 1.0f;
+        const FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+            m_listenerPosX + (m_listenerFwdX * previewDistance),
+            m_listenerPosY + (m_listenerFwdY * previewDistance),
+            m_listenerPosZ + (m_listenerFwdZ * previewDistance),
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f);
+        inst->set3DAttributes(&attributes);
+    }
+
+    result = inst->start();
+    inst->release();
+    return result == FMOD_OK;
+}
+
+// ---------------------------------------------------------------------------
+AudioManager::AudioManager() = default;
+AudioManager::~AudioManager()
+{
+    Shutdown();
+}
+
+// ---------------------------------------------------------------------------
+std::filesystem::path AudioManager::ResolveAudioDataPath()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
+        return {};
+
+    std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+    while (!current.empty())
+    {
+        const std::filesystem::path candidate = current / L"Data" / L"Audio";
+        std::error_code ec;
+        if (std::filesystem::is_directory(candidate, ec))
+            return std::filesystem::weakly_canonical(candidate);
+
+        const std::filesystem::path parent = current.parent_path();
+        if (parent == current)
+            break;
+        current = parent;
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::Initialize(std::string& outError)
+{
+    if (m_initialized)
+        return true;
+
+    m_audioDataPath.clear();
+    m_loadedBanks.clear();
+    m_loadedPlugins.clear();
+    m_pluginLoadFailures.clear();
+    m_bankLoadFailures.clear();
+    m_lastStatus.clear();
+
+    FMOD_RESULT result;
+
+    // Create the Studio System.
+    result = FMOD::Studio::System::create(&m_studioSystem);
+    if (!FmodOk(result, outError, "FMOD::Studio::System::create"))
+        return false;
+
+    FMOD::System* coreSystem = nullptr;
+    result = m_studioSystem->getCoreSystem(&coreSystem);
+    if (!FmodOk(result, outError, "FMOD::Studio::System::getCoreSystem") || !coreSystem)
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+        return false;
+    }
+
+    const std::filesystem::path steamAudioFmodPluginPath = ResolveSteamAudioFmodPluginPath();
+    if (!steamAudioFmodPluginPath.empty())
+    {
+        const std::string pluginSearchPathUtf8 = steamAudioFmodPluginPath.string();
+        coreSystem->setPluginPath(pluginSearchPathUtf8.c_str());
+
+        const std::filesystem::path steamAudioFmodPlugin = steamAudioFmodPluginPath / L"phonon_fmod.dll";
+        if (std::filesystem::exists(steamAudioFmodPlugin))
+        {
+            unsigned int pluginHandle = 0;
+            const std::string pluginPathUtf8 = steamAudioFmodPlugin.string();
+            const FMOD_RESULT pluginResult = coreSystem->loadPlugin(pluginPathUtf8.c_str(), &pluginHandle, 0);
+            if (pluginResult == FMOD_OK)
+            {
+                m_loadedPlugins.push_back(steamAudioFmodPlugin.filename().string());
+            }
+            else
+            {
+                m_pluginLoadFailures.push_back(steamAudioFmodPlugin.filename().string() + ": " + FMOD_ErrorString(pluginResult));
+            }
+        }
+        else
+        {
+            m_pluginLoadFailures.push_back("phonon_fmod.dll: not found in SDKs/steamaudio_fmod/lib/windows-x64");
+        }
+    }
+    else
+    {
+        m_pluginLoadFailures.push_back("Steam Audio FMOD plugin folder not found: SDKs/steamaudio_fmod/lib/windows-x64");
+    }
+
+    const std::filesystem::path pluginRoot = ResolveFmodPluginPath();
+    if (!pluginRoot.empty())
+    {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(pluginRoot, ec))
+        {
+            if (ec)
+                break;
+
+            if (!entry.is_regular_file())
+                continue;
+
+            const auto& path = entry.path();
+            if (_wcsicmp(path.extension().c_str(), L".dll") != 0)
+                continue;
+
+            const std::wstring normalized = path.wstring();
+            if (normalized.find(L"\\x64\\") == std::wstring::npos)
+                continue;
+
+            if (_wcsicmp(path.filename().c_str(), L"phonon_fmod.dll") == 0)
+                continue;
+
+            unsigned int pluginHandle = 0;
+            const std::string pluginPathUtf8 = path.string();
+            const FMOD_RESULT pluginResult = coreSystem->loadPlugin(pluginPathUtf8.c_str(), &pluginHandle, 0);
+            if (pluginResult == FMOD_OK)
+            {
+                m_loadedPlugins.push_back(path.filename().string());
+            }
+            else
+            {
+                m_pluginLoadFailures.push_back(path.filename().string() + ": " + FMOD_ErrorString(pluginResult));
+            }
+        }
+    }
+
+    // Initialise with sensible defaults (512 channels, live update in debug).
+    FMOD_STUDIO_INITFLAGS studioFlags = FMOD_STUDIO_INIT_NORMAL;
+#ifdef _DEBUG
+    studioFlags |= FMOD_STUDIO_INIT_LIVEUPDATE;
+#endif
+
+    result = m_studioSystem->initialize(512, studioFlags, FMOD_INIT_NORMAL, nullptr);
+    if (!FmodOk(result, outError, "FMOD::Studio::System::initialize"))
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+        return false;
+    }
+
+    FMOD::Studio::Bus* masterBus = nullptr;
+    if (m_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
+    {
+        masterBus->setMute(false);
+        masterBus->setPaused(false);
+        masterBus->setVolume(1.0f);
+    }
+
+    const FMOD_3D_ATTRIBUTES defaultListenerAttributes = Make3DAttributes(
+        m_listenerPosX,
+        m_listenerPosY,
+        m_listenerPosZ,
+        m_listenerFwdX,
+        m_listenerFwdY,
+        m_listenerFwdZ,
+        m_listenerUpX,
+        m_listenerUpY,
+        m_listenerUpZ);
+    m_studioSystem->setListenerAttributes(0, &defaultListenerAttributes);
+
+    // Load banks from Data/Audio.
+    m_audioDataPath = ResolveAudioDataPath();
+    if (!m_audioDataPath.empty())
+    {
+        std::error_code ec;
+        std::vector<std::filesystem::path> bankPaths;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(m_audioDataPath, ec))
+        {
+            if (ec) break;
+            if (!entry.is_regular_file()) continue;
+            const auto& p = entry.path();
+            if (_wcsicmp(p.extension().c_str(), L".bank") != 0) continue;
+
+            bankPaths.push_back(p);
+        }
+
+        std::sort(bankPaths.begin(), bankPaths.end(), [](const std::filesystem::path& a, const std::filesystem::path& b)
+        {
+            const std::wstring aName = a.filename().wstring();
+            const std::wstring bName = b.filename().wstring();
+            const bool aIsStrings = aName.find(L".strings.bank") != std::wstring::npos;
+            const bool bIsStrings = bName.find(L".strings.bank") != std::wstring::npos;
+            if (aIsStrings != bIsStrings)
+                return aIsStrings;
+            return _wcsicmp(aName.c_str(), bName.c_str()) < 0;
+        });
+
+        for (const auto& p : bankPaths)
+        {
+            std::error_code relativeError;
+            const std::filesystem::path relativePath = std::filesystem::relative(p, m_audioDataPath, relativeError);
+            const std::string displayPath = relativeError ? p.string() : relativePath.string();
+            const std::wstring fileName = p.filename().wstring();
+            const bool isStringsBank = fileName.find(L".strings.bank") != std::wstring::npos;
+
+            FMOD::Studio::Bank* bank = nullptr;
+            const std::string pathUtf8 = p.string();
+            FMOD_RESULT loadResult = m_studioSystem->loadBankFile(
+                pathUtf8.c_str(), FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+            if (loadResult == FMOD_OK && bank != nullptr)
+            {
+                m_banks.push_back(bank);
+                m_loadedBanks.push_back(displayPath);
+
+                if (!isStringsBank)
+                {
+                    const FMOD_RESULT sampleLoadResult = bank->loadSampleData();
+                    if (sampleLoadResult != FMOD_OK)
+                    {
+                        m_bankLoadFailures.push_back(displayPath + " sample data: " + FMOD_ErrorString(sampleLoadResult));
+                    }
+                }
+            }
+            else
+            {
+                std::string failure = displayPath + ": " + FMOD_ErrorString(loadResult);
+                if (loadResult == FMOD_ERR_PLUGIN_MISSING)
+                {
+                    failure += " (This bank references an FMOD plugin effect that is not loaded. If the bank was authored with Steam Audio FMOD integration, you need the Steam Audio FMOD Studio plugin runtime DLL, not just phonon.dll.)";
+                }
+                m_bankLoadFailures.push_back(std::move(failure));
+            }
+        }
+
+        if (bankPaths.empty())
+        {
+            m_lastStatus = "No .bank files were found in the resolved Data/Audio folder.";
+        }
+    }
+    else
+    {
+        m_lastStatus = "Could not resolve a Data/Audio folder relative to the executable.";
+    }
+
+    m_studioSystem->flushCommands();
+    m_studioSystem->flushSampleLoading();
+
+    m_initialized = true;
+    RefreshEventList();
+
+    if (m_lastStatus.empty())
+    {
+        std::ostringstream statusBuilder;
+        statusBuilder << "Loaded " << m_loadedBanks.size() << " bank(s) and discovered " << m_events.size() << " event(s).";
+        if (!m_loadedPlugins.empty())
+        {
+            statusBuilder << " Loaded " << m_loadedPlugins.size() << " FMOD plugin(s).";
+        }
+        if (!m_pluginLoadFailures.empty())
+        {
+            statusBuilder << " " << m_pluginLoadFailures.size() << " FMOD plugin(s) failed to load.";
+        }
+        if (!m_bankLoadFailures.empty())
+        {
+            statusBuilder << " " << m_bankLoadFailures.size() << " bank(s) failed to load.";
+        }
+        m_lastStatus = statusBuilder.str();
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::Update()
+{
+    if (!m_initialized || !m_studioSystem)
+        return;
+
+    m_studioSystem->update();
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::Shutdown()
+{
+    if (!m_initialized)
+        return;
+
+    DisableBinaural();
+    StopAll();
+
+    for (FMOD::Studio::EventInstance* inst : m_instances)
+    {
+        if (inst)
+            inst->release();
+    }
+    m_instances.clear();
+
+    for (FMOD::Studio::Bank* bank : m_banks)
+        bank->unload();
+    m_banks.clear();
+
+    if (m_studioSystem)
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+    }
+
+    m_events.clear();
+    m_initialized = false;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::RefreshEventList()
+{
+    m_events.clear();
+    m_instances.clear();
+
+    if (!m_studioSystem)
+        return;
+
+    for (FMOD::Studio::Bank* bank : m_banks)
+    {
+        int count = 0;
+        if (bank->getEventCount(&count) != FMOD_OK || count <= 0)
+            continue;
+
+        std::vector<FMOD::Studio::EventDescription*> descs(static_cast<size_t>(count));
+        int fetched = 0;
+        if (bank->getEventList(descs.data(), count, &fetched) != FMOD_OK)
+            continue;
+
+        for (int i = 0; i < fetched; ++i)
+        {
+            if (!descs[i]) continue;
+            char path[1024] = {};
+            int retrieved = 0;
+            if (descs[i]->getPath(path, static_cast<int>(std::size(path)), &retrieved) == FMOD_OK)
+            {
+                AudioEvent ev;
+                ev.Path = path;
+                ev.IsPlaying = false;
+                const auto duplicateIt = std::find_if(m_events.begin(), m_events.end(), [&ev](const AudioEvent& existing)
+                {
+                    return existing.Path == ev.Path;
+                });
+
+                if (duplicateIt == m_events.end())
+                    m_events.push_back(std::move(ev));
+            }
+        }
+    }
+
+    // Resize instance slots to match.
+    m_instances.resize(m_events.size(), nullptr);
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::PlayEvent(int index)
+{
+    if (!m_initialized || index < 0 || index >= static_cast<int>(m_events.size()))
+        return false;
+
+    // Stop any previous instance for this event.
+    StopEvent(index);
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    FMOD_RESULT result = m_studioSystem->getEvent(m_events[static_cast<size_t>(index)].Path.c_str(), &desc);
+    if (result != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* inst = nullptr;
+    result = desc->createInstance(&inst);
+    if (result != FMOD_OK || !inst)
+        return false;
+
+    desc->loadSampleData();
+    m_studioSystem->flushSampleLoading();
+
+    bool is3D = false;
+    if (desc->is3D(&is3D) == FMOD_OK && is3D)
+    {
+        const float previewDistance = 1.0f;
+        const FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+            m_listenerPosX + (m_listenerFwdX * previewDistance),
+            m_listenerPosY + (m_listenerFwdY * previewDistance),
+            m_listenerPosZ + (m_listenerFwdZ * previewDistance),
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f);
+        inst->set3DAttributes(&attributes);
+    }
+
+    result = inst->start();
+    if (result != FMOD_OK)
+    {
+        inst->release();
+        return false;
+    }
+
+    m_instances[static_cast<size_t>(index)] = inst;
+    m_events[static_cast<size_t>(index)].IsPlaying = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::StopEvent(int index)
+{
+    if (!m_initialized || index < 0 || index >= static_cast<int>(m_events.size()))
+        return false;
+
+    FMOD::Studio::EventInstance* inst = m_instances[static_cast<size_t>(index)];
+    if (inst)
+    {
+        inst->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+        inst->release();
+        m_instances[static_cast<size_t>(index)] = nullptr;
+    }
+    m_events[static_cast<size_t>(index)].IsPlaying = false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::StopAll()
+{
+    for (int i = 0; i < static_cast<int>(m_events.size()); ++i)
+        StopEvent(i);
+
+    for (EmitterState& emitter : m_emitters)
+    {
+        FMOD::Studio::EventInstance* instance = static_cast<FMOD::Studio::EventInstance*>(emitter.Instance);
+        if (instance)
+        {
+            if (emitter.BinauralDSP)
+            {
+                FMOD::DSP* dsp = static_cast<FMOD::DSP*>(emitter.BinauralDSP);
+                FMOD::ChannelGroup* channelGroup = nullptr;
+                if (instance->getChannelGroup(&channelGroup) == FMOD_OK && channelGroup)
+                    channelGroup->removeDSP(dsp);
+                dsp->release();
+                emitter.BinauralDSP = nullptr;
+            }
+            instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+            instance->release();
+            emitter.Instance = nullptr;
+        }
+        emitter.Playing = false;
+    }
+}
+
+void AudioManager::SetListenerTransform(
+    float positionX,
+    float positionY,
+    float positionZ,
+    float forwardX,
+    float forwardY,
+    float forwardZ,
+    float upX,
+    float upY,
+    float upZ)
+{
+    if (!m_initialized || !m_studioSystem)
+        return;
+
+    // Cache for binaural direction updates
+    m_listenerPosX = positionX; m_listenerPosY = positionY; m_listenerPosZ = positionZ;
+    m_listenerFwdX = forwardX;  m_listenerFwdY = forwardY;  m_listenerFwdZ = forwardZ;
+    m_listenerUpX  = upX;       m_listenerUpY  = upY;       m_listenerUpZ  = upZ;
+
+    FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+        positionX,
+        positionY,
+        positionZ,
+        forwardX,
+        forwardY,
+        forwardZ,
+        upX,
+        upY,
+        upZ);
+    m_studioSystem->setListenerAttributes(0, &attributes);
+}
+
+// ---------------------------------------------------------------------------
+bool AudioManager::EnableBinaural(std::string& outError)
+{
+    if (m_binauralEnabled)
+        return true;
+
+    if (!m_initialized || !m_studioSystem)
+    {
+        outError = "AudioManager::EnableBinaural: AudioManager is not initialized.";
+        return false;
+    }
+
+    // The project now uses the Steam Audio FMOD Studio plugin runtime
+    // (phonon_fmod.dll) loaded during FMOD startup. When events are already
+    // authored with the Steam Audio FMOD plugin in FMOD Studio, attaching an
+    // additional custom Steam Audio DSP in code can mute or otherwise corrupt
+    // the signal path. In this integration mode, EnableBinaural is a no-op and
+    // simply confirms that binaural processing is handled by the FMOD-authored
+    // plugin chain in the banks.
+    outError.clear();
+    m_binauralEnabled = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+void AudioManager::DisableBinaural()
+{
+    if (!m_binauralEnabled)
+        return;
+
+    // Remove binaural DSPs from all active emitters
+    for (EmitterState& emitter : m_emitters)
+    {
+        if (emitter.BinauralDSP)
+        {
+            FMOD::DSP* dsp = static_cast<FMOD::DSP*>(emitter.BinauralDSP);
+            FMOD::Studio::EventInstance* instance = static_cast<FMOD::Studio::EventInstance*>(emitter.Instance);
+            if (instance)
+            {
+                FMOD::ChannelGroup* channelGroup = nullptr;
+                if (instance->getChannelGroup(&channelGroup) == FMOD_OK && channelGroup)
+                    channelGroup->removeDSP(dsp);
+            }
+            dsp->release();
+            emitter.BinauralDSP = nullptr;
+        }
+    }
+
+    if (m_binaural)
+    {
+        m_binaural->Shutdown();
+        delete m_binaural;
+        m_binaural = nullptr;
+    }
+
+    m_binauralEnabled = false;
+}
+
+// ---------------------------------------------------------------------------
+AudioManager::EmitterHandle AudioManager::RegisterEmitter()
+{
+    for (int i = 0; i < static_cast<int>(m_emitters.size()); ++i)
+    {
+        if (!m_emitters[static_cast<size_t>(i)].Allocated)
+        {
+            m_emitters[static_cast<size_t>(i)] = EmitterState{};
+            m_emitters[static_cast<size_t>(i)].Allocated = true;
+            return EmitterHandle{ i };
+        }
+    }
+
+    m_emitters.push_back(EmitterState{});
+    m_emitters.back().Allocated = true;
+    return EmitterHandle{ static_cast<int>(m_emitters.size() - 1) };
+}
+
+void AudioManager::UnregisterEmitter(EmitterHandle handle)
+{
+    if (!handle.IsValid() || handle.Value >= static_cast<int>(m_emitters.size()))
+        return;
+
+    StopEmitter(handle);
+    m_emitters[static_cast<size_t>(handle.Value)] = EmitterState{};
+}
+
+bool AudioManager::SetEmitterEventPath(EmitterHandle handle, const std::string& eventPath)
+{
+    if (!handle.IsValid() || handle.Value >= static_cast<int>(m_emitters.size()))
+        return false;
+
+    EmitterState& emitter = m_emitters[static_cast<size_t>(handle.Value)];
+    if (!emitter.Allocated)
+        return false;
+
+    if (emitter.Path == eventPath)
+        return true;
+
+    StopEmitter(handle);
+    emitter.Path = eventPath;
+    return true;
+}
+
+bool AudioManager::SetEmitterTransform(EmitterHandle handle, float positionX, float positionY, float positionZ)
+{
+    if (!handle.IsValid() || handle.Value >= static_cast<int>(m_emitters.size()))
+        return false;
+
+    EmitterState& emitter = m_emitters[static_cast<size_t>(handle.Value)];
+    if (!emitter.Allocated)
+        return false;
+
+    emitter.PositionX = positionX;
+    emitter.PositionY = positionY;
+    emitter.PositionZ = positionZ;
+
+    FMOD::Studio::EventInstance* instance = static_cast<FMOD::Studio::EventInstance*>(emitter.Instance);
+    if (instance)
+    {
+        FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+            emitter.PositionX,
+            emitter.PositionY,
+            emitter.PositionZ,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f);
+        return instance->set3DAttributes(&attributes) == FMOD_OK;
+    }
+
+    return true;
+}
+
+bool AudioManager::PlayEmitter(EmitterHandle handle)
+{
+    if (!m_initialized || !handle.IsValid() || handle.Value >= static_cast<int>(m_emitters.size()))
+        return false;
+
+    EmitterState& emitter = m_emitters[static_cast<size_t>(handle.Value)];
+    if (!emitter.Allocated || emitter.Path.empty())
+        return false;
+
+    if (emitter.Instance)
+        return true;
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    if (m_studioSystem->getEvent(emitter.Path.c_str(), &desc) != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* instance = nullptr;
+    if (desc->createInstance(&instance) != FMOD_OK || !instance)
+        return false;
+
+    desc->loadSampleData();
+    m_studioSystem->flushSampleLoading();
+
+    FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+        emitter.PositionX,
+        emitter.PositionY,
+        emitter.PositionZ,
+        0.0f,
+        1.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f);
+    instance->set3DAttributes(&attributes);
+    const FMOD_RESULT result = instance->start();
+    emitter.Instance = instance;
+    emitter.Playing = (result == FMOD_OK);
+    if (result != FMOD_OK)
+    {
+        instance->release();
+        emitter.Instance = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+bool AudioManager::StopEmitter(EmitterHandle handle)
+{
+    if (!handle.IsValid() || handle.Value >= static_cast<int>(m_emitters.size()))
+        return false;
+
+    EmitterState& emitter = m_emitters[static_cast<size_t>(handle.Value)];
+    FMOD::Studio::EventInstance* instance = static_cast<FMOD::Studio::EventInstance*>(emitter.Instance);
+    if (instance)
+    {
+        // Remove and release binaural DSP before stopping
+        if (emitter.BinauralDSP)
+        {
+            FMOD::DSP* dsp = static_cast<FMOD::DSP*>(emitter.BinauralDSP);
+            FMOD::ChannelGroup* channelGroup = nullptr;
+            if (instance->getChannelGroup(&channelGroup) == FMOD_OK && channelGroup)
+                channelGroup->removeDSP(dsp);
+            dsp->release();
+            emitter.BinauralDSP = nullptr;
+        }
+
+        instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+        instance->release();
+        emitter.Instance = nullptr;
+    }
+    emitter.Playing = false;
+    return true;
+}

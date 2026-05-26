@@ -1,0 +1,14 @@
+﻿#pragma once
+
+#include <windows.h>
+
+#include "imgui.h"
+
+void RenderEditorMainMenu(
+    HWND windowHandle,
+    ImTextureID sceneTextureId,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    float* cameraSpeed,
+    bool* gridEnabled,
+    bool* showStatistics);

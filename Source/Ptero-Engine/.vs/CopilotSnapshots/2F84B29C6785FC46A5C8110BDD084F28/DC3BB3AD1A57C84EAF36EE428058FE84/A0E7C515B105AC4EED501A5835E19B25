@@ -1,0 +1,152 @@
+﻿#pragma once
+
+// EntityMeshRenderer
+// Responsible for uploading and drawing every entity that has a MeshComponent
+// with an assigned mesh.  Kept in its own file so DX12SceneRenderer only
+// orchestrates scene-level concerns (grid, camera, render-target) and this
+// class owns all per-entity GPU resource management.
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "TextureManager.h"
+#include "Components.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+class EntityMeshRenderer
+{
+public:
+    // Call once after the DX12 device is ready.  commandList is used to record
+    // the initial pipeline creation (no geometry upload happens here yet).
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+
+    // Called every frame before Render().  Gives the renderer the current entity
+    // list so it can upload new meshes and retire stale GPU buffers.
+    void SetEntities(std::vector<Entity>* entities);
+
+    // Record draw calls for every entity that has a fully loaded mesh.
+    // Must be called while the scene render-target + depth target are bound.
+    void Render(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMMATRIX& viewProjection,
+        DXGI_FORMAT colorFormat,
+        DXGI_FORMAT depthFormat);
+
+    // Upload the per-frame scene lighting data that the mesh shader reads from b1.
+    // Call this before Render() each frame.
+    void SetSceneLighting(
+        const DirectX::XMFLOAT3& sunDirection,
+        const DirectX::XMFLOAT3& sunColor,
+        const DirectX::XMFLOAT3& skyAmbient);
+
+    void Shutdown();
+
+    const char* GetLastErrorMessage() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    // GPU-side buffers for one entity's mesh.
+    struct EntityGpuMesh
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> VertexUpload;   // kept alive until upload fence
+        Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> IndexUpload;
+        D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
+        UINT                     IndexCount = 0;
+        // The MeshAsset pointer used when these buffers were built; used to
+        // detect when the mesh has been replaced and buffers must be rebuilt.
+        const Mesh*              SourceMesh = nullptr;
+    };
+
+    // Constant buffer layout – must be 256-byte aligned.
+    struct alignas(256) EntityConstants
+    {
+        DirectX::XMFLOAT4X4 MVP;
+        std::byte            Padding[192]{};
+    };
+    static_assert(sizeof(EntityConstants) == 256);
+
+    // Per-frame scene lighting constant buffer layout – must match SceneLighting in MeshEntity.hlsl.
+    struct alignas(256) LightingConstants
+    {
+        DirectX::XMFLOAT3 SunDirection; float Pad0 = 0;
+        DirectX::XMFLOAT3 SunColor;     float Pad1 = 0;
+        DirectX::XMFLOAT3 SkyAmbient;   float Pad2 = 0;
+        std::byte         Padding[160]{};
+    };
+    static_assert(sizeof(LightingConstants) == 256);
+
+    bool CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
+    bool EnsureEntityGpuMesh(
+        ID3D12GraphicsCommandList* commandList,
+        std::size_t entityIndex,
+        const Mesh* mesh);
+    bool EnsureConstantBuffer(std::size_t requiredEntityCount);
+
+    // key = entity index
+    std::unordered_map<std::size_t, EntityGpuMesh> mGpuMeshes;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
+    EntityConstants*                             mMappedCB      = nullptr;
+    std::size_t                                  mCBCapacity    = 0; // slots allocated
+
+    // Scene lighting constant buffer (one slot, updated every frame).
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mLightingCB;
+    LightingConstants*                           mMappedLightingCB = nullptr;
+
+    DX12Shader mVertexShader;
+    DX12Shader mPixelShader;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    std::vector<Entity>* mEntities = nullptr;
+
+    // Texture loading and per-material-path SRV cache.
+    TextureManager mTextureManager;
+
+    // 1×1 white fallback texture used when an entity has no material or the texture is missing.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mFallbackTextureResource;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mFallbackCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mFallbackGpuHandle{};
+
+    bool CreateFallbackTexture(ID3D12GraphicsCommandList* commandList);
+
+    // Resolve a single-material file path to its base-color DDS path.
+    // Returns an empty string if the material cannot be read or has no base-color texture.
+    std::string ResolveBaseColorDdsPath(const std::string& materialRelativePath) const;
+
+    // For a multi-material JSON path, returns a map of materialId -> absolute DDS path.
+    // For a single-material JSON path, returns { {0, ddsPath} }.
+    // Returns an empty map on failure.
+    std::unordered_map<uint32_t, std::string> ResolveSubMaterialDdsPaths(const std::string& materialPath) const;
+
+    // Upload buffer for the fallback texture — kept alive until the GPU finishes
+    // consuming it (released after the first successful Render call).
+    Microsoft::WRL::ComPtr<ID3D12Resource> mFallbackUploadBuffer;
+
+    bool        mPipelineReady = false;
+    DXGI_FORMAT mColorFormat   = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT mDepthFormat   = DXGI_FORMAT_UNKNOWN;
+    std::string mLastError;
+};

@@ -1,0 +1,11 @@
+﻿#pragma once
+
+// TAA settings exposed to both the scene renderer and the Graphics Settings UI.
+struct TaaSettings
+{
+    bool  Enabled = true;
+    float BlendFactor = 0.1f;        // weight of current frame; lower = more temporal accumulation
+    float JitterScale = 1.0f;        // sub-pixel jitter magnitude in pixels; 0 = no jitter
+    bool  UseSharpening = false;     // optional unsharp-mask pass applied on top of the resolved output
+    float SharpeningStrength = 0.2f; // sharpening amount when UseSharpening is true
+};

@@ -1,0 +1,265 @@
+﻿#pragma once
+
+// DeferredLightingPass
+// Owns the three G-Buffer render targets (albedo, normal, material) and the
+// fullscreen lighting-resolve pipeline.  The flow each frame is:
+//
+//   1. BeginGeometryPass()  – transition G-Buffer RTs to RenderTarget state,
+//                             bind them as MRT output together with the scene
+//                             depth buffer, and clear them.
+//   2. <geometry draw calls via EntityMeshRenderer>
+//   3. EndGeometryPass()    – transition G-Buffer RTs to PixelShaderResource.
+//   4. ResolveLight()       – run the fullscreen deferred-lighting quad.
+//                             Writes lit colour on top of the scene colour
+//                             target (sky was already rendered into it).
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <vector>
+
+struct VolumetricFogSettings;
+
+// Forward declare to avoid circular includes.
+struct Entity;
+
+// The G-Buffer SRV handles are exposed so EntityMeshRenderer's geometry pass
+// can verify it is writing the correct targets and for debug visualisation later.
+struct GBufferSrvs
+{
+    D3D12_GPU_DESCRIPTOR_HANDLE Albedo{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Normal{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Material{};
+    D3D12_GPU_DESCRIPTOR_HANDLE DepthReadback{}; // scene depth as SRV for reconstruction
+};
+
+class DeferredLightingPass
+{
+public:
+    // --- GPU-facing point light record; mirrors PointLightGpu in EntityMeshRenderer. ---
+    struct PointLightGpu
+    {
+        DirectX::XMFLOAT3 Position;
+        float             Radius;
+        DirectX::XMFLOAT3 Color;
+        float             InvRadiusSq;
+        float             FalloffExponent;
+        float             SourceRadius;
+        float             CastShadows;
+        float             _Pad0;
+    };
+    static_assert(sizeof(PointLightGpu) == 48);
+
+    // Maximum point lights the lighting shader supports.
+    // Must match MAX_POINT_LIGHTS in DeferredLighting.hlsl.
+    static constexpr int kMaxPointLights = 16;
+    static constexpr int kMaxShadowCastingPointLights = 4;
+    static constexpr int kPointShadowFacesPerLight = 6;
+
+    // Called once after the DX12 device is ready.
+    // sceneDepthTarget – the same D32_FLOAT resource used by the geometry pass.
+    // width/height     – initial scene resolution; re-created automatically when
+    //                    EnsureSize() is called with different dimensions.
+    bool Initialize(
+        UINT               width,
+        UINT               height,
+        DXGI_FORMAT        depthFormat);
+
+    // Resize G-Buffer RTs if the resolution has changed.
+    bool EnsureSize(UINT width, UINT height);
+
+    // Transition G-Buffer RTs to render-target state and bind them as MRT.
+    // The existing scene depth buffer is also bound as the shared DSV so the
+    // geometry pass writes into the correct depth buffer.
+    // Call this before drawing all scene geometry.
+    void BeginGeometryPass(
+        ID3D12GraphicsCommandList* commandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneDsvHandle,
+        UINT                        width,
+        UINT                        height) const;
+
+    // Transition G-Buffer RTs back to shader-resource state.
+    // Call this after all geometry draw calls are finished.
+    void EndGeometryPass(ID3D12GraphicsCommandList* commandList) const;
+
+    // Upload per-frame lighting parameters.
+    void SetSceneLighting(
+        const DirectX::XMFLOAT3& sunDirection,
+        const DirectX::XMFLOAT3& sunColor,
+        const DirectX::XMFLOAT3& skyAmbient);
+
+    // Upload point light data each frame.
+    void SetPointLights(const PointLightGpu* lights, int count);
+
+    // Upload camera/inverse-VP data for world-position reconstruction.
+    void SetCameraData(
+        const DirectX::XMFLOAT4X4& invViewProj,
+        const DirectX::XMFLOAT3&   cameraPosition);
+
+    // Upload shadow map parameters.
+    void SetShadowData(
+        const DirectX::XMFLOAT4X4& lightViewProjection,
+        float                       shadowMapSize,
+        D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvHandle);
+
+    // Supply the DXR GI accumulation texture SRV and an intensity multiplier.
+    // Call with handle={} and intensity=0.0f to disable GI contribution.
+    void SetGiSrv(D3D12_GPU_DESCRIPTOR_HANDLE giSrvHandle, float intensity);
+
+    // Supply the ray-traced specular reflections SRV and intensity multiplier.
+    // Call with handle={} and intensity=0.0f to disable specular contribution.
+    void SetSpecularSrv(D3D12_GPU_DESCRIPTOR_HANDLE specularSrvHandle, float intensity);
+
+    // Forward the RTGI debug mode so deferred lighting can show specular-only output.
+    void SetRtgiDebugView(int debugView);
+
+    // Supply the RTAO output texture SRV and an intensity multiplier.
+    // Call with handle={} and intensity=0.0f to disable RTAO contribution.
+    void SetAoSrv(D3D12_GPU_DESCRIPTOR_HANDLE aoSrvHandle, float intensity, int debugView = 0);
+
+    // Supply the accumulated volumetric fog 3D texture SRV.
+    void SetVolumetricFogSrv(D3D12_GPU_DESCRIPTOR_HANDLE fogSrvHandle, const VolumetricFogSettings* settings);
+    void SetPointShadowSrv(D3D12_GPU_DESCRIPTOR_HANDLE pointShadowSrvHandle, int activeShadowLightCount, float shadowMapSize, float shadowBias);
+    void SetPointShadowMatrices(const DirectX::XMFLOAT4X4* faceViewProjections, int activeShadowLightCount);
+
+    // Run the fullscreen deferred-lighting quad.
+    // The scene colour RT must already be in RenderTarget state.
+    // The G-Buffer must be in PixelShaderResource state (call EndGeometryPass first).
+    // sceneDepthSrvHandle – SRV for the scene depth texture for world-pos reconstruction.
+    void ResolveLight(
+        ID3D12GraphicsCommandList*  commandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneRtvHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvHandle,
+        DXGI_FORMAT                 sceneColorFormat,
+        UINT                        width,
+        UINT                        height) const;
+
+    // Expose G-Buffer RTV handles so BeginGeometryPass can also be called
+    // by external code if needed.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetAlbedoRtv()   const { return mRtvHandles[0]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetNormalRtv()   const { return mRtvHandles[1]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetMaterialRtv() const { return mRtvHandles[2]; }
+
+    // G-Buffer SRV GPU handles for binding in the lighting shader.
+    const GBufferSrvs& GetSrvs() const { return mSrvs; }
+
+    // Raw G-Buffer resource pointers for resource-barrier transitions (e.g. before DXR).
+    // Index: 0 = albedo, 1 = normal, 2 = material.
+    ID3D12Resource* GetGBufferResource(UINT index) const
+    {
+        return (index < 3u) ? mGBufferResources[index].Get() : nullptr;
+    }
+
+    bool IsInitialized() const { return mIsInitialized; }
+    void Shutdown();
+
+    const char* GetLastError() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    // Constant buffer layouts (must match DeferredLighting.hlsl).
+    struct alignas(256) CameraConstants
+    {
+        DirectX::XMFLOAT4X4 InvViewProj;
+        DirectX::XMFLOAT3   CameraPos;
+        float               Pad = 0;
+        std::byte           Padding[128]{};
+    };
+    static_assert(sizeof(CameraConstants) == 256);
+
+    struct LightingConstants
+    {
+        DirectX::XMFLOAT3 SunDirection; float Pad0 = 0;
+        DirectX::XMFLOAT3 SunColor;     float Pad1 = 0;
+        DirectX::XMFLOAT3 SkyAmbient;   float Pad2 = 0;
+        int               NumPointLights    = 0;
+        float             GiIntensity       = 0.0f; // 0 = GI disabled / not available
+        float             AoIntensity       = 0.0f; // 0 = RTAO disabled
+        int               AoDebugView       = 0;    // 0 = normal lit output, >0 = standalone AO debug
+        int               VolumetricFogEnabled = 0;
+        float             FogStartDistance = 0.1f;
+        float             FogMaxDistance   = 100.0f;
+        int               FogDebugView     = 0;
+        float             SpecularIntensity = 0.0f; // 0 = specular reflections disabled
+        float             Pad3[3]{};
+        PointLightGpu     PointLights[kMaxPointLights]{};
+        int               RtgiDebugView    = 0;
+        float             Pad4[3]{};
+    };
+    // LightingConstants is ~576 bytes; CB is allocated rounded up to 256 alignment.
+
+    struct alignas(256) ShadowConstants
+    {
+        DirectX::XMFLOAT4X4 LightViewProj;
+        float               ShadowMapSize;
+        float               ShadowBias;
+        float               PointShadowMapSize;
+        float               PointShadowBias;
+        DirectX::XMFLOAT4X4 PointShadowFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+    };
+
+    bool CreateGBufferResources(UINT width, UINT height);
+    bool CreateLightingPipeline(DXGI_FORMAT sceneColorFormat);
+    bool CreateConstantBuffers();
+
+    // G-Buffer resources (albedo, normal, material).
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[3]{};
+    GBufferSrvs                            mSrvs{};
+
+    // CPU handles matching the SRV allocations (kept for re-creating SRVs on resize).
+    D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[3]{};
+
+    // Lighting pipeline.
+    DX12Shader                                   mVertexShader;
+    DX12Shader                                   mPixelShader;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>  mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mPipelineState;
+
+    // Constant buffers.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mCameraCB;
+    CameraConstants*                        mMappedCameraCB  = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mLightingCB;
+    LightingConstants*                      mMappedLightingCB = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShadowCB;
+    ShadowConstants*                        mMappedShadowCB   = nullptr;
+
+    // Shadow SRV from last SetShadowData() call.
+    D3D12_GPU_DESCRIPTOR_HANDLE mShadowSrvHandle{};
+
+    // GI SRV and intensity from last SetGiSrv() call.
+    // Handle is zero-initialised; zero ptr means no GI contribution.
+    D3D12_GPU_DESCRIPTOR_HANDLE mGiSrvHandle{};
+    float                       mGiIntensity = 0.0f;
+
+    // Specular reflections SRV from last SetSpecularSrv() call.
+    D3D12_GPU_DESCRIPTOR_HANDLE mSpecularSrvHandle{};
+    float                       mSpecularIntensity = 0.0f;
+
+    // AO SRV and intensity from last SetAoSrv() call.
+    D3D12_GPU_DESCRIPTOR_HANDLE mAoSrvHandle{};
+    float                       mAoIntensity = 0.0f;
+
+    // Volumetric fog 3D texture SRV from last SetVolumetricFogSrv() call.
+    D3D12_GPU_DESCRIPTOR_HANDLE mFogSrvHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mPointShadowSrvHandle{};
+    int                         mPointShadowLightCount = 0;
+    float                       mPointShadowMapSize = 0.0f;
+    float                       mPointShadowBias = 0.0f;
+
+    UINT mWidth  = 0;
+    UINT mHeight = 0;
+
+    bool mIsInitialized   = false;
+    bool mPipelineReady   = false;
+    std::string mLastError;
+};

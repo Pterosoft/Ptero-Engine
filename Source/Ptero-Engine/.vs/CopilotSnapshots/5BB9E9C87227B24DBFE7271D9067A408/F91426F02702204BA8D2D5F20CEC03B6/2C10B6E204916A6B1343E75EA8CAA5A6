@@ -1,0 +1,117 @@
+﻿#include "pch.h"
+
+#include "SceneSerializer.h"
+
+#include "..\SDKs\nlohmann\json.hpp"
+
+#include <fstream>
+
+using json = nlohmann::json;
+
+void SceneSerializer::Serialize(const std::string& filepath)
+{
+    if (mScene == nullptr || mScene->Entities == nullptr)
+    {
+        return;
+    }
+
+    json sceneJson;
+    sceneJson["Entities"] = json::array();
+
+    for (const Entity& entity : *mScene->Entities)
+    {
+        json entityJson;
+        if (entity.HasNameComponent())
+        {
+            // The non-intrusive JSON macros on the component types handle conversion to JSON automatically.
+            entityJson["NameComponent"] = entity.GetNameComponent();
+        }
+
+        if (entity.HasTransformComponent())
+        {
+            entityJson["TransformComponent"] = entity.GetTransformComponent();
+        }
+
+        // Persist mesh and material paths so they survive level save/load cycles.
+        if (entity.HasMeshComponent())
+        {
+            entityJson["MeshComponent"] = *entity.Mesh;
+        }
+
+        // Persist all point light properties so lights survive level save/load cycles.
+        if (entity.HasPointLightComponent())
+        {
+            entityJson["PointLightComponent"] = *entity.PointLight;
+        }
+
+        sceneJson["Entities"].push_back(entityJson);
+    }
+
+    std::ofstream outputStream(filepath);
+    if (!outputStream)
+    {
+        return;
+    }
+
+    outputStream << sceneJson.dump(4);
+}
+
+bool SceneSerializer::Deserialize(const std::string& filepath)
+{
+    if (mScene == nullptr || mScene->Entities == nullptr)
+    {
+        return false;
+    }
+
+    std::ifstream inputStream(filepath);
+    if (!inputStream)
+    {
+        return false;
+    }
+
+    json sceneJson;
+    try
+    {
+        inputStream >> sceneJson;
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    if (!sceneJson.contains("Entities") || !sceneJson["Entities"].is_array())
+    {
+        return false;
+    }
+
+    mScene->Entities->clear();
+
+    for (const json& entityJson : sceneJson["Entities"])
+    {
+        Entity& entity = mScene->CreateEntity();
+
+        if (entityJson.contains("NameComponent"))
+        {
+            entity.AddNameComponent(entityJson["NameComponent"].get<NameComponent>());
+        }
+
+        if (entityJson.contains("TransformComponent"))
+        {
+            entity.AddTransformComponent(entityJson["TransformComponent"].get<TransformComponent>());
+        }
+
+        // Restore mesh/material paths; the asset handle will be lazily loaded on the next render frame.
+        if (entityJson.contains("MeshComponent"))
+        {
+            entity.AddMeshComponent() = entityJson["MeshComponent"].get<MeshComponent>();
+        }
+
+        // Restore the point light component if this entity had one when it was saved.
+        if (entityJson.contains("PointLightComponent"))
+        {
+            entity.AddPointLightComponent() = entityJson["PointLightComponent"].get<PointLightComponent>();
+        }
+    }
+
+    return true;
+}

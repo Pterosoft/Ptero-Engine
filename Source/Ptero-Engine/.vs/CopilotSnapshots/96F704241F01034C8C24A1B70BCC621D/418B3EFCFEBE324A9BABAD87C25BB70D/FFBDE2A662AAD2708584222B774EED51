@@ -1,0 +1,5 @@
+﻿<!-- ...existing code... -->
+<ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC6HBC7.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+<ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BCDirectCompute.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+<ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexCompress.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+<!-- ...existing code... -->

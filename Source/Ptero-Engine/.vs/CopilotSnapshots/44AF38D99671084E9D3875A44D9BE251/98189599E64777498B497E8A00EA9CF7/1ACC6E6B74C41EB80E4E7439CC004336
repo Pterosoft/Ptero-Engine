@@ -1,0 +1,208 @@
+﻿#pragma once
+
+#include "Components.h"
+#include "DX12Helper.h"
+#include "..\Ptero-Engine\EditorCamera.h"
+
+#include "imgui.h"
+
+#include <DirectXMath.h>
+
+#include <optional>
+#include <string>
+#include <vector>
+
+class SceneSerializer;
+
+class Editor
+{
+public:
+    enum class ManualGizmoHandle
+    {
+        None,
+        TranslateXAxis,
+        TranslateYAxis,
+        TranslateZAxis,
+        TranslateXYPlane,
+        TranslateXZPlane,
+        TranslateYZPlane,
+        Rotate,
+        ScaleXAxis,
+        ScaleYAxis,
+        ScaleZAxis,
+        Scale
+    };
+
+    enum class GizmoType
+    {
+        None,
+        Translate,
+        Rotate,
+        Scale
+    };
+
+    Editor();
+
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+    void Shutdown();
+
+    void SetShowViewportPlacementIcons(bool shouldShow)
+    {
+        mShowViewportPlacementIcons = shouldShow;
+    }
+
+    bool GetShowViewportPlacementIcons() const
+    {
+        return mShowViewportPlacementIcons;
+    }
+
+    bool* GetShowComponentsPanelPointer()
+    {
+        return &mShowComponentsPanel;
+    }
+
+    bool* GetShowLevelExplorerPanelPointer()
+    {
+        return &mShowLevelExplorerPanel;
+    }
+
+    bool* GetShowPropertiesPanelPointer()
+    {
+        return &mShowPropertiesPanel;
+    }
+
+    bool SaveSceneToFile(const std::string& filepath);
+    bool LoadSceneFromFile(const std::string& filepath);
+    bool CanCopySelectedEntity() const;
+    bool CanPasteEntity() const;
+    bool CanDeleteSelectedEntity() const;
+    bool CopySelectedEntity();
+    bool PasteCopiedEntity();
+    bool DeleteSelectedEntity();
+
+    const std::string& GetCurrentSceneFilePath() const
+    {
+        return mCurrentSceneFilePath;
+    }
+
+    const std::string& GetLastSceneStatusMessage() const
+    {
+        return mLastSceneStatusMessage;
+    }
+
+    void Draw(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        const char* sceneStatusMessage,
+        const char* statisticsText,
+        bool showStatistics);
+
+    void DrawToolbar(
+        D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon);
+
+    void DrawPropertiesPanel(Entity* selectedEntity);
+    void DrawViewport(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        Entity* selectedEntity);
+
+    Entity* GetSelectedEntity();
+
+private:
+    struct IconTexture
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle{};
+        D3D12_GPU_DESCRIPTOR_HANDLE GpuHandle{};
+        Microsoft::WRL::ComPtr<ID3D12Resource> Texture;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Upload;
+    };
+
+    struct ViewportSelectionState
+    {
+        bool IsDragging = false;
+        ImVec2 Start{};
+        ImVec2 Current{};
+    };
+
+    struct ManualGizmoState
+    {
+        bool IsActive = false;
+        ManualGizmoHandle ActiveHandle = ManualGizmoHandle::None;
+        ImVec2 StartMouse{};
+        DirectX::XMFLOAT3 StartPosition{};
+        DirectX::XMFLOAT3 StartRotation{};
+        DirectX::XMFLOAT3 StartScale{ 1.0f, 1.0f, 1.0f };
+        DirectX::XMFLOAT3 AxisWorldDirection{};
+        DirectX::XMFLOAT3 PlaneNormal{};
+        DirectX::XMFLOAT3 StartPlaneHit{};
+        ImVec2 AxisScreenDirection{};
+        float PixelsPerWorldUnit = 1.0f;
+        float StartAngle = 0.0f;
+    };
+
+    void DrawComponentsPanel();
+    void DrawLevelExplorerPanel();
+    bool LoadGeometryIcon(ID3D12GraphicsCommandList* commandList);
+    bool LoadIconTexture(const wchar_t* fileName, IconTexture& iconTexture, std::string* statusMessage, ID3D12GraphicsCommandList* commandList);
+    void ReleaseIconTexture(IconTexture& iconTexture);
+    void DrawViewportPlacementIcons(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera) const;
+    void DrawManualGizmoPivot(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const;
+    bool TryProjectWorldToViewport(
+        const DirectX::XMFLOAT3& worldPosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        ImVec2& outScreenPosition) const;
+    bool TryGetViewportWorldPositionOnGrid(
+        const ImVec2& mousePosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        DirectX::XMFLOAT3& outWorldPosition) const;
+    void HandleViewportInteraction(
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        bool viewportHovered);
+    void HandleManualGizmoInteraction(
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        bool viewportHovered,
+        Entity* selectedEntity);
+    void FinishViewportSelection(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera);
+    void CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition);
+    void DrawViewportStatisticsOverlay() const;
+
+    static ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+
+    std::vector<Entity> mEntities;
+    int mSelectedEntityIndex = -1;
+    GizmoType mActiveGizmo = GizmoType::None;
+    bool mGeometryPrototypeSelected = false;
+    bool mShowViewportPlacementIcons = true;
+    bool mShowComponentsPanel = true;
+    bool mShowLevelExplorerPanel = false;
+    bool mShowPropertiesPanel = true;
+    int mNextGeometryInstanceId = 1;
+    ViewportSelectionState mViewportSelection;
+    ManualGizmoState mManualGizmo;
+
+    IconTexture mGeometryIcon;
+    IconTexture mSelectIcon;
+    IconTexture mMoveIcon;
+    IconTexture mRotateIcon;
+    IconTexture mScaleIcon;
+    bool mGeometryIconLoadAttempted = false;
+    std::string mGeometryIconStatus;
+    std::string mCurrentSceneFilePath;
+    std::string mLastSceneStatusMessage;
+    std::optional<Entity> mCopiedEntity;
+
+    const char* mSceneStatusMessage = nullptr;
+    const char* mViewportStatisticsText = nullptr;
+    bool mShowViewportStatistics = true;
+};

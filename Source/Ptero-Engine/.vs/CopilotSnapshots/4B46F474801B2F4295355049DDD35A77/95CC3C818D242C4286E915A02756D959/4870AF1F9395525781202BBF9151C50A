@@ -1,0 +1,480 @@
+﻿#include "pch.h"
+#include "DX12Helper.h"
+#include "DX12SceneRenderer.h"
+#include "Editor.h"
+#include "RendererStatisticsText.h"
+
+#include "EditorMainMenu.h"
+
+#include "..\System\include\System\AssetManager.h"
+
+#include "imgui.h"
+#include "imgui_impl_dx12.h"
+#include "imgui_impl_win32.h"
+
+#include <array>
+#include <filesystem>
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+extern "C"
+{
+    bool __stdcall DX12Context_Initialize(HWND windowHandle);
+    bool __stdcall DX12Context_BeginFrame(
+        ID3D12GraphicsCommandList** commandList,
+        ID3D12Resource** backBuffer,
+        D3D12_CPU_DESCRIPTOR_HANDLE* rtvHandle,
+        UINT* frameIndex);
+    bool __stdcall DX12Context_EndFrame(UINT frameIndex);
+    bool __stdcall DX12Context_Resize(UINT width, UINT height);
+    HWND __stdcall DX12Context_GetWindowHandle();
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    D3D12_CPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorCpuHandle();
+    D3D12_GPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorGpuHandle();
+    const char* __stdcall DX12Context_GetLastError();
+    void __stdcall DX12Context_Shutdown();
+}
+
+namespace
+{
+    constexpr int ImGuiFrameCount = 2;
+    constexpr DXGI_FORMAT BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    bool gImGuiReady = false;
+    DX12SceneRenderer gSceneRenderer;
+    Editor gEditor;
+    RendererStatisticsText gRendererStatisticsText;
+    AssetManager gAssetManager;
+    std::string gRendererLastError;
+    std::array<bool, ImGuiFrameCount> gBackBufferHasBeenPresented{};
+    bool gShowRendererStatistics = true;
+
+    void SetRendererError(const std::string& errorMessage)
+    {
+        gRendererLastError = errorMessage;
+        OutputDebugStringA(gRendererLastError.c_str());
+        OutputDebugStringA("\n");
+    }
+
+    void ClearRendererError()
+    {
+        gRendererLastError.clear();
+    }
+
+    std::filesystem::path GetEditorExecutableDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath))) == 0)
+        {
+            return {};
+        }
+
+        return std::filesystem::path(executablePath).parent_path();
+    }
+
+    std::filesystem::path FindFontFileUpward(const wchar_t* fontFileStem)
+    {
+        namespace fs = std::filesystem;
+
+        fs::path currentPath = GetEditorExecutableDirectory();
+        while (!currentPath.empty())
+        {
+            const fs::path fontsDirectory = currentPath / L"Data" / L"Fonts";
+            if (fs::exists(fontsDirectory) && fs::is_directory(fontsDirectory))
+            {
+                std::error_code iteratorError;
+                for (fs::recursive_directory_iterator it(fontsDirectory, fs::directory_options::skip_permission_denied, iteratorError), end;
+                     it != end && !iteratorError;
+                     it.increment(iteratorError))
+                {
+                    std::error_code statusError;
+                    if (!it->is_regular_file(statusError) || statusError)
+                    {
+                        continue;
+                    }
+
+                    const std::wstring fileStem = it->path().stem().wstring();
+                    if (_wcsnicmp(fileStem.c_str(), fontFileStem, wcslen(fontFileStem)) == 0)
+                    {
+                        return fs::weakly_canonical(it->path());
+                    }
+                }
+            }
+
+            const fs::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    void ApplyEditorStyle()
+    {
+        ImGuiStyle& style = ImGui::GetStyle();
+        ImVec4* colors = style.Colors;
+
+        const ImVec4 accent(0.78f, 0.24f, 0.05f, 1.0f);
+        const ImVec4 accentHovered(0.86f, 0.32f, 0.10f, 1.0f);
+        const ImVec4 accentActive(0.68f, 0.18f, 0.03f, 1.0f);
+        const ImVec4 panel(0.08f, 0.07f, 0.07f, 0.96f);
+        const ImVec4 panelAlt(0.12f, 0.09f, 0.08f, 0.96f);
+        const ImVec4 frame(0.16f, 0.11f, 0.09f, 1.0f);
+        const ImVec4 text(0.95f, 0.92f, 0.89f, 1.0f);
+
+        style.WindowRounding = 5.0f;
+        style.FrameRounding = 4.0f;
+        style.GrabRounding = 4.0f;
+        style.ScrollbarRounding = 4.0f;
+        style.TabRounding = 4.0f;
+        style.PopupRounding = 4.0f;
+        style.WindowBorderSize = 1.0f;
+        style.FrameBorderSize = 1.0f;
+
+        colors[ImGuiCol_Text] = text;
+        colors[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.56f, 0.52f, 1.0f);
+        colors[ImGuiCol_WindowBg] = panel;
+        colors[ImGuiCol_ChildBg] = ImVec4(0.06f, 0.05f, 0.05f, 0.94f);
+        colors[ImGuiCol_PopupBg] = panelAlt;
+        colors[ImGuiCol_Border] = ImVec4(0.42f, 0.18f, 0.10f, 0.80f);
+        colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[ImGuiCol_FrameBg] = frame;
+        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.27f, 0.15f, 0.10f, 1.0f);
+        colors[ImGuiCol_FrameBgActive] = ImVec4(0.34f, 0.18f, 0.11f, 1.0f);
+        colors[ImGuiCol_TitleBg] = ImVec4(0.28f, 0.11f, 0.05f, 1.0f);
+        colors[ImGuiCol_TitleBgActive] = accent;
+        colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.22f, 0.09f, 0.05f, 0.90f);
+        colors[ImGuiCol_MenuBarBg] = ImVec4(0.16f, 0.08f, 0.05f, 1.0f);
+        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.08f, 0.06f, 0.05f, 1.0f);
+        colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.42f, 0.19f, 0.10f, 1.0f);
+        colors[ImGuiCol_ScrollbarGrabHovered] = accentHovered;
+        colors[ImGuiCol_ScrollbarGrabActive] = accentActive;
+        colors[ImGuiCol_CheckMark] = accentHovered;
+        colors[ImGuiCol_SliderGrab] = accent;
+        colors[ImGuiCol_SliderGrabActive] = accentHovered;
+        colors[ImGuiCol_Button] = accent;
+        colors[ImGuiCol_ButtonHovered] = accentHovered;
+        colors[ImGuiCol_ButtonActive] = accentActive;
+        colors[ImGuiCol_Header] = ImVec4(0.42f, 0.16f, 0.08f, 0.90f);
+        colors[ImGuiCol_HeaderHovered] = accentHovered;
+        colors[ImGuiCol_HeaderActive] = accentActive;
+        colors[ImGuiCol_Separator] = ImVec4(0.52f, 0.20f, 0.10f, 0.70f);
+        colors[ImGuiCol_SeparatorHovered] = accentHovered;
+        colors[ImGuiCol_SeparatorActive] = accentActive;
+        colors[ImGuiCol_ResizeGrip] = ImVec4(0.62f, 0.23f, 0.10f, 0.25f);
+        colors[ImGuiCol_ResizeGripHovered] = accentHovered;
+        colors[ImGuiCol_ResizeGripActive] = accentActive;
+        colors[ImGuiCol_Tab] = ImVec4(0.30f, 0.12f, 0.06f, 1.0f);
+        colors[ImGuiCol_TabHovered] = accentHovered;
+        colors[ImGuiCol_TabActive] = accent;
+        colors[ImGuiCol_TabUnfocused] = ImVec4(0.18f, 0.09f, 0.06f, 1.0f);
+        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.24f, 0.11f, 0.07f, 1.0f);
+        colors[ImGuiCol_PlotLines] = accentHovered;
+        colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.95f, 0.56f, 0.26f, 1.0f);
+        colors[ImGuiCol_PlotHistogram] = accent;
+        colors[ImGuiCol_PlotHistogramHovered] = accentHovered;
+        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.78f, 0.24f, 0.05f, 0.35f);
+        colors[ImGuiCol_DragDropTarget] = accentHovered;
+        colors[ImGuiCol_NavHighlight] = accentHovered;
+    }
+
+    void TryLoadEditorFont(ImGuiIO& io)
+    {
+        const std::filesystem::path playfairDisplayPath = FindFontFileUpward(L"PlayfairDisplay-Regular");
+        if (playfairDisplayPath.empty())
+        {
+            OutputDebugStringA("PlayfairDisplay-Regular font was not found under Data\\Fonts. Falling back to the default ImGui font.\n");
+            return;
+        }
+
+        ImFontConfig fontConfig{};
+        fontConfig.OversampleH = 2;
+        fontConfig.OversampleV = 2;
+        fontConfig.PixelSnapH = false;
+
+        if (io.Fonts->AddFontFromFileTTF(playfairDisplayPath.string().c_str(), 18.0f, &fontConfig) == nullptr)
+        {
+            OutputDebugStringA("Failed to load PlayfairDisplay-Regular. Falling back to the default ImGui font.\n");
+            return;
+        }
+    }
+
+    void ShutdownImGui()
+    {
+        if (!gImGuiReady)
+        {
+            return;
+        }
+
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        gImGuiReady = false;
+    }
+
+    bool InitializeImGui()
+    {
+        ID3D12Device* device = DX12Context_GetDevice();
+        ID3D12CommandQueue* commandQueue = DX12Context_GetCommandQueue();
+        ID3D12DescriptorHeap* srvHeap = DX12Context_GetSrvDescriptorHeap();
+        HWND windowHandle = DX12Context_GetWindowHandle();
+
+        if (!(device && commandQueue && srvHeap && windowHandle))
+        {
+            SetRendererError("InitializeImGui failed because the device, command queue, descriptor heap, or window handle was not ready.");
+            return false;
+        }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+        ImGui::StyleColorsDark();
+        ApplyEditorStyle();
+        TryLoadEditorFont(io);
+
+        if (!ImGui_ImplWin32_Init(windowHandle))
+        {
+            SetRendererError("ImGui_ImplWin32_Init failed for the editor window.");
+            ImGui::DestroyContext();
+            return false;
+        }
+
+        ImGui_ImplDX12_InitInfo initInfo{};
+        initInfo.Device = device;
+        initInfo.CommandQueue = commandQueue;
+        initInfo.NumFramesInFlight = ImGuiFrameCount;
+        initInfo.RTVFormat = BackBufferFormat;
+        initInfo.DSVFormat = DXGI_FORMAT_UNKNOWN;
+        initInfo.SrvDescriptorHeap = srvHeap;
+        initInfo.LegacySingleSrvCpuDescriptor = DX12Context_GetSrvDescriptorCpuHandle();
+        initInfo.LegacySingleSrvGpuDescriptor = DX12Context_GetSrvDescriptorGpuHandle();
+
+        if (!ImGui_ImplDX12_Init(&initInfo))
+        {
+            SetRendererError("ImGui_ImplDX12_Init failed while binding Dear ImGui to DirectX 12.");
+            ImGui_ImplWin32_Shutdown();
+            ImGui::DestroyContext();
+            return false;
+        }
+
+        gImGuiReady = true;
+        return true;
+    }
+}
+
+extern "C"
+{
+    __declspec(dllexport) bool __stdcall RendererDX12_Initialize(HWND windowHandle)
+    {
+        ClearRendererError();
+        gEditor.Shutdown();
+        gBackBufferHasBeenPresented.fill(false);
+        gRendererStatisticsText = RendererStatisticsText();
+        gShowRendererStatistics = true;
+
+        if (!DX12Context_Initialize(windowHandle))
+        {
+            const char* contextError = DX12Context_GetLastError();
+            SetRendererError(contextError != nullptr
+                ? std::string("RendererDX12_Initialize failed during DX12 context startup: ") + contextError
+                : "RendererDX12_Initialize failed during DX12 context startup.");
+            return false;
+        }
+
+        if (!InitializeImGui())
+        {
+            if (gRendererLastError.empty())
+            {
+                SetRendererError("RendererDX12_Initialize failed during ImGui startup.");
+            }
+            DX12Context_Shutdown();
+            return false;
+        }
+
+        return true;
+    }
+
+    __declspec(dllexport) bool __stdcall RendererDX12_Render()
+    {
+        // Acquire command list + current swap chain back buffer for this frame.
+        ID3D12GraphicsCommandList* commandList = nullptr;
+        ID3D12Resource* backBuffer = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle{};
+        UINT frameIndex = 0;
+
+        if (!DX12Context_BeginFrame(&commandList, &backBuffer, &rtvHandle, &frameIndex))
+        {
+            const char* contextError = DX12Context_GetLastError();
+            SetRendererError(contextError != nullptr
+                ? std::string("RendererDX12_Render could not begin a frame: ") + contextError
+                : "RendererDX12_Render could not begin a frame.");
+            return false;
+        }
+
+        gRendererStatisticsText.MarkFrame();
+
+        const bool sceneReady = gSceneRenderer.Initialize(commandList);
+        if (sceneReady)
+        {
+            // For each entity that has a MeshPath but no loaded MeshAsset, ask the
+            // AssetManager to load it now so it becomes visible in the next frame.
+            for (Entity& entity : gEditor.GetEntities())
+            {
+                if (!entity.HasMeshComponent())
+                {
+                    continue;
+                }
+
+                MeshComponent& mc = *entity.Mesh;
+                if (!mc.MeshPath.empty() && !mc.MeshAsset)
+                {
+                    mc.MeshAsset = gAssetManager.GetMesh(mc.MeshPath);
+                }
+            }
+
+            // Give the scene renderer an up-to-date view of the entity list every frame.
+            gSceneRenderer.SetEntities(&gEditor.GetEntities());
+
+            gSceneRenderer.Render(commandList);
+            gEditor.Initialize(commandList);
+        }
+
+        // Swap-chain buffers begin life in COMMON state. After the first successful
+        // present they transition between PRESENT and RENDER_TARGET every frame.
+        const D3D12_RESOURCE_STATES backBufferStateBeforeRender =
+            gBackBufferHasBeenPresented[frameIndex]
+            ? D3D12_RESOURCE_STATE_PRESENT
+            : D3D12_RESOURCE_STATE_COMMON;
+
+        // Transition the back buffer into render-target state.
+        auto toRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
+            backBuffer,
+            backBufferStateBeforeRender,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        commandList->ResourceBarrier(1, &toRenderTarget);
+
+        commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+        // Match the editor background so the app chrome stays neutral while the actual
+        // scene is shown inside the in-app viewport window.
+        const float clearColor[] = { 0.08f, 0.10f, 0.14f, 1.0f };
+        commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+        if (gImGuiReady)
+        {
+            ImGui_ImplDX12_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            ImGui::NewFrame();
+
+            // Keep the editor menu rendering in its own file so this function only orchestrates the frame.
+            float cameraSpeed = gSceneRenderer.GetCameraMovementSpeed();
+            bool gridEnabled = gSceneRenderer.IsGridEnabled();
+            bool showViewportPlacementIcons = gEditor.GetShowViewportPlacementIcons();
+            RenderEditorMainMenu(
+                DX12Context_GetWindowHandle(),
+                &gEditor,
+                gSceneRenderer.GetSceneTextureId(),
+                gSceneRenderer.GetLastErrorMessage(),
+                gRendererStatisticsText.GetText(),
+                &cameraSpeed,
+                &gridEnabled,
+                &gShowRendererStatistics,
+                &showViewportPlacementIcons,
+                gEditor.GetShowComponentsPanelPointer(),
+                gEditor.GetShowLevelExplorerPanelPointer(),
+                gEditor.GetShowPropertiesPanelPointer(),
+                &gSceneRenderer.GetTaaSettings(),
+                &gSceneRenderer.GetTimeOfDaySettings(),
+                &gSceneRenderer.GetRtGiSettings());
+            gEditor.SetShowViewportPlacementIcons(showViewportPlacementIcons);
+            gEditor.Draw(
+                gSceneRenderer.GetSceneTextureHandle(),
+                gSceneRenderer.GetCamera(),
+                gSceneRenderer.GetLastErrorMessage(),
+                gRendererStatisticsText.GetText(),
+                gShowRendererStatistics);
+            gSceneRenderer.SetCameraMovementSpeed(cameraSpeed);
+            gSceneRenderer.SetGridEnabled(gridEnabled);
+
+            ImGui::Render();
+
+            ID3D12DescriptorHeap* descriptorHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+            commandList->SetDescriptorHeaps(1, descriptorHeaps);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+        }
+
+        // Transition back to present state so swap chain can display the frame.
+        auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
+            backBuffer,
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT);
+        commandList->ResourceBarrier(1, &toPresent);
+
+        if (!DX12Context_EndFrame(frameIndex))
+        {
+            const char* contextError = DX12Context_GetLastError();
+            SetRendererError(contextError != nullptr
+                ? std::string("RendererDX12_Render failed while presenting a frame: ") + contextError
+                : "RendererDX12_Render failed while presenting a frame.");
+            return false;
+        }
+
+        gBackBufferHasBeenPresented[frameIndex] = true;
+
+        return true;
+    }
+
+    __declspec(dllexport) bool __stdcall RendererDX12_HandleWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+    {
+        if (!gImGuiReady)
+        {
+            return false;
+        }
+
+        return ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam) != 0;
+    }
+
+    __declspec(dllexport) bool __stdcall RendererDX12_Resize(UINT width, UINT height)
+    {
+        if (!DX12Context_Resize(width, height))
+        {
+            const char* contextError = DX12Context_GetLastError();
+            SetRendererError(contextError != nullptr
+                ? std::string("RendererDX12_Resize failed: ") + contextError
+                : "RendererDX12_Resize failed.");
+            return false;
+        }
+
+        // Resized swap-chain buffers start life in COMMON state again.
+        gBackBufferHasBeenPresented.fill(false);
+        return true;
+    }
+
+    __declspec(dllexport) void __stdcall RendererDX12_Shutdown()
+    {
+        gEditor.Shutdown();
+        gSceneRenderer.Shutdown();
+        ShutdownImGui();
+        DX12Context_Shutdown();
+        gBackBufferHasBeenPresented.fill(false);
+    }
+
+    __declspec(dllexport) const char* __stdcall RendererDX12_GetLastError()
+    {
+        if (!gRendererLastError.empty())
+        {
+            return gRendererLastError.c_str();
+        }
+
+        const char* sceneError = gSceneRenderer.GetLastErrorMessage();
+        return (sceneError != nullptr && sceneError[0] != '\0') ? sceneError : nullptr;
+    }
+}

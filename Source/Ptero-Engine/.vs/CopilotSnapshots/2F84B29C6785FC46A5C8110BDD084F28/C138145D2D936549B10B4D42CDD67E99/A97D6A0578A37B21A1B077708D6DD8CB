@@ -1,0 +1,69 @@
+﻿// MeshEntity.hlsl
+// Per-entity mesh shader with base-color texture support and Hosek-Wilkie scene lighting.
+// A 1x1 white fallback texture is always bound at t0, so the shader
+// never needs a separate untextured path.
+
+cbuffer EntityConstants : register(b0)
+{
+    float4x4 gMVP;      // pre-transposed model-view-projection
+};
+
+// Scene lighting data uploaded by DX12SceneRenderer every frame (b1).
+cbuffer SceneLighting : register(b1)
+{
+    float3 gSunDirection;   // world-space direction FROM scene TOWARD sun (normalised)
+    float  _LightPad0;
+    float3 gSunColor;       // sun colour × sun intensity (HDR, display-scaled)
+    float  _LightPad1;
+    float3 gSkyAmbient;     // sky ambient colour × sky intensity (HDR, display-scaled)
+    float  _LightPad2;
+};
+
+Texture2D    gBaseColorTexture : register(t0);
+SamplerState gLinearSampler    : register(s0);
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+struct PSInput
+{
+    float4 Position : SV_Position;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    output.Position = mul(float4(input.Position, 1.0f), gMVP);
+    output.Normal   = input.Normal;
+    output.TexCoord = input.TexCoord;
+    output.Color    = input.Color;
+    return output;
+}
+
+float4 PSMain(PSInput input) : SV_Target
+{
+    float3 N = normalize(input.Normal);
+
+    // Diffuse N·L from the sun directional light.
+    float NdotL  = saturate(dot(N, gSunDirection));
+    float3 diffuse = gSunColor * NdotL;
+
+    // Sky ambient (hemisphere: upper hemisphere gets full sky, lower gets half).
+    float skyWeight = N.z * 0.5f + 0.5f; // N.z in world = up component (Z-up)
+    float3 ambient = gSkyAmbient * skyWeight;
+
+    // Combine lighting with texture and vertex colour.
+    float4 texColor = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord);
+    float3 lit = (diffuse + ambient) * texColor.rgb * input.Color.rgb;
+
+    return float4(lit, texColor.a * input.Color.a);
+}
+

@@ -1,0 +1,256 @@
+﻿#pragma once
+
+// SharcGlobalIllumination
+// Implements DXR global illumination using the NVIDIA SHARC (Spatial Hash Radiance Cache).
+//
+// Each frame:
+//   1. Rebuilds/updates the Top-Level Acceleration Structure from the scene entity list.
+//   2. Dispatches one DXR ray per G-Buffer pixel (downscaled by SharcDownscaleFactor).
+//      Rays query/update the SHARC hash grid and write screen-space GI to a UAV.
+//   3. Runs a compute resolve pass to age and blend SHARC hash entries.
+//   4. The RGBA16F accumulation texture is exposed via GetGiSrvGpu() and bound as t5
+//      in DeferredLighting.hlsl.
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "SharcGiSettings.h"
+#include "Components.h"
+#include "TextureManager.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+struct Entity;
+struct HosekWilkieResult;
+
+class SharcGlobalIllumination
+{
+public:
+    // Must match PointLightGpu in DeferredLightingPass.h
+    struct PointLightGpu
+    {
+        DirectX::XMFLOAT3 Position;
+        float             Radius;
+        DirectX::XMFLOAT3 Color;
+        float             InvRadiusSq;
+    };
+    static_assert(sizeof(PointLightGpu) == 32);
+    static constexpr int kMaxPointLights = 16;
+
+    // Number of SHARC hash-grid slots (1 << SHARC_CAPACITY_LOG2 from SharcCommon.h).
+    static constexpr UINT kSharcCapacity = (1u << 20); // 1 048 576 slots
+
+    // Call once after the DX12 device is ready.
+    bool Initialize(UINT width, UINT height);
+
+    // Resize output texture when viewport changes.
+    bool EnsureSize(UINT width, UINT height);
+
+    // Build/update the TLAS from the current entity list.
+    void BuildTlas(
+        ID3D12GraphicsCommandList4* cmdList4,
+        const std::vector<Entity>& entities);
+
+    // Dispatch DXR rays and run the SHARC resolve compute pass.
+    void Dispatch(
+        ID3D12GraphicsCommandList4*          cmdList4,
+        D3D12_GPU_DESCRIPTOR_HANDLE          gbufferNormalSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE          depthSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE          gbufferAlbedoSrv,
+        const SharcGiSettings&               settings,
+        const DirectX::XMFLOAT4X4&          reconstructionInvViewProj,
+        const DirectX::XMFLOAT4X4&          stableInvViewProj,
+        const DirectX::XMFLOAT3&            cameraPos,
+        const DirectX::XMFLOAT3&            sunDir,
+        const DirectX::XMFLOAT3&            sunColor,
+        const DirectX::XMFLOAT3&            skyAmbient,
+        const PointLightGpu*                 pointLights,
+        int                                  numPointLights);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetGiSrvGpu() const { return mAccumSrvGpu; }
+
+    bool IsInitialized() const { return mIsInitialized; }
+    bool HasInitFailed()  const { return mInitFailed; }
+
+    void FlushPendingUploads() { mPendingUploads.clear(); }
+    void Shutdown();
+
+    const char* GetLastError() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    // ---------------------------------------------------------------------------
+    // Constant buffer layouts
+    // ---------------------------------------------------------------------------
+
+    // Must match cbuffer SharcGiConstants in SharcGI.hlsl
+    struct alignas(256) SharcGiCB
+    {
+        DirectX::XMFLOAT4X4 InvViewProj;
+        DirectX::XMFLOAT3   CameraPos;       float Pad0 = 0;
+        DirectX::XMFLOAT3   SunDir;          float Pad1 = 0;
+        DirectX::XMFLOAT3   SunColor;        float Pad2 = 0;
+        DirectX::XMFLOAT3   SkyAmbient;      float Pad3 = 0;
+        float   MaxRayDist;
+        int     BounceCount;
+        int     RaysPerPixel;
+        float   AccumAlpha;
+        int     FrameIndex;
+        int     SkylightOnMiss;
+        int     NumPointLights;
+        int     ResetAccumulation;
+        float   SharcSceneScale;
+        int     SharcAccumFrames;
+        float   SharcRoughnessThreshold;
+        int     SharcDownscaleFactor;
+        float   Saturation;
+        int     DebugAlbedoOnly;
+        float   _pad0;
+        float   _pad1;
+        PointLightGpu PointLights[kMaxPointLights]; // 16 * 32 = 512 bytes
+        std::byte _Pad[16]{};
+    };
+
+    // Must match cbuffer SharcResolveConstants in SharcResolve.hlsl
+    struct alignas(256) SharcResolveCB
+    {
+        int   AccumFrameNum;
+        int   StaleFrameNum;
+        float _p0; float _p1;
+        DirectX::XMFLOAT3 CameraPosPrev; float _p2;
+        DirectX::XMFLOAT3 CameraPosCur;  float _p3;
+        UINT  FrameIndex;
+        UINT  Capacity;
+        float _p4; float _p5;
+    };
+
+    struct RtVertexGpu
+    {
+        DirectX::XMFLOAT3 Position; float Pad0 = 0;
+        DirectX::XMFLOAT3 Normal;   float Pad1 = 0;
+        DirectX::XMFLOAT2 TexCoord;
+        DirectX::XMFLOAT2 Pad2{ 0, 0 };
+    };
+
+    struct RtInstanceGpu
+    {
+        std::uint32_t VertexOffset = 0;
+        std::uint32_t IndexOffset  = 0;
+        std::uint32_t AlbedoSrvLo  = 0;
+        std::uint32_t AlbedoSrvHi  = 0;
+    };
+
+    bool CheckDxrSupport();
+    bool CreateOutputTextures(UINT width, UINT height);
+    bool CreateSharcBuffers();
+    bool CreateTlasBuffers(UINT maxInstances);
+    bool CreateDxrPipeline();
+    bool CreateShaderTable(const std::vector<D3D12_GPU_DESCRIPTOR_HANDLE>& hitGroupAlbedoSrvs = {});
+    bool CreateConstantBuffers();
+    bool CreateResolvePipeline();
+    bool EnsureRtGeometryBuffers(UINT vertexCount, UINT indexCount, UINT instanceCount);
+    bool AllocateSrv(D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu);
+
+    Microsoft::WRL::ComPtr<ID3D12Device5>        mDevice5;
+    Microsoft::WRL::ComPtr<ID3D12StateObject>    mDxrStateObject;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>  mDxrGlobalRS;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>  mDxrHitGroupLocalRS;
+
+    // Resolve compute pipeline
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>  mResolveRS;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mResolvePSO;
+
+    // Acceleration structures
+    struct BlasEntry
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Scratch;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Result;
+    };
+    std::unordered_map<const void*, BlasEntry> mBlasCache;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mTlasScratch;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mTlasBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mInstanceDescBuffer;
+    UINT mTlasMaxInstances = 0;
+
+    // Screen-space GI output texture (RGBA16F)
+    Microsoft::WRL::ComPtr<ID3D12Resource> mAccumOutput;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mAccumUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mAccumUavGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mAccumSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mAccumSrvGpu{};
+
+    // History for temporal accumulation
+    Microsoft::WRL::ComPtr<ID3D12Resource> mHistoryOutput;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mHistorySrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mHistorySrvGpu{};
+
+    // SHARC hash-grid buffers
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSharcHashEntries;    // RWStructuredBuffer<uint64>
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSharcAccumBuffer;    // RWStructuredBuffer<SharcAccumulationData>
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSharcResolvedBuffer; // RWStructuredBuffer<SharcPackedData>
+    D3D12_CPU_DESCRIPTOR_HANDLE            mSharcHashUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mSharcHashUavGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mSharcAccumUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mSharcAccumUavGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mSharcResolvedUavCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mSharcResolvedUavGpu{};
+
+    // RT geometry vertex/index/instance buffers
+    Microsoft::WRL::ComPtr<ID3D12Resource> mRtVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mRtIndexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mRtInstanceBuffer;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtVertexSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mRtVertexSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtIndexSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mRtIndexSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtInstanceSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mRtInstanceSrvGpu{};
+
+    // Null descriptor for instances with no albedo texture
+    D3D12_CPU_DESCRIPTOR_HANDLE            mNullAlbedoSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE            mNullAlbedoSrvGpu{};
+
+    // Shader table
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShaderTable;
+    UINT64  mShaderTableEntrySize  = 0;
+    UINT64  mShaderTableSize       = 0;
+    UINT    mHitGroupRecordCount   = 1;
+
+    // Constant buffers
+    Microsoft::WRL::ComPtr<ID3D12Resource> mDxrCB;
+    SharcGiCB*                             mMappedDxrCB   = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mResolveCB;
+    SharcResolveCB*                        mMappedResolveCB = nullptr;
+
+    // Texture manager for per-instance albedo textures
+    TextureManager mTextureManager;
+
+    UINT  mWidth  = 0;
+    UINT  mHeight = 0;
+    bool  mIsInitialized = false;
+    bool  mInitFailed    = false;
+    bool  mTlasBuiltThisFrame = false;
+    bool  mRtGeometryDirty    = true;
+    bool  mNeedsFirstFrameClear = true; // clear accum + history textures on first Dispatch
+    UINT  mFrameIndex         = 0;
+    UINT  mFramesSinceReset   = 0;
+
+    UINT  mRtVertexCapacity   = 0;
+    UINT  mRtIndexCapacity    = 0;
+    UINT  mRtInstanceCapacity = 0;
+
+    DirectX::XMFLOAT3   mPrevCameraPos{};
+    DirectX::XMFLOAT4X4 mPrevStableInvViewProj{};
+
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> mPendingUploads;
+    std::string mLastError;
+};

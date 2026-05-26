@@ -1,0 +1,234 @@
+﻿// RtGI.hlsl
+// DXR Global Illumination shader library.
+//
+// Contains three shaders:
+//   RayGen  – one ray per G-Buffer pixel; reconstructs world pos from depth,
+//             shoots an indirect diffuse ray in a cosine-weighted direction,
+//             shades the hit point with the sun/sky, and blends into the
+//             temporal accumulation buffer.
+//   ClosestHit – reads the hit geometry albedo (stored as vertex color) and
+//                evaluates a simple Lambertian response.
+//   Miss       – returns sky radiance (optionally zero).
+
+// -------------------------------------------------------------------------
+// Bindings (global root signature)
+// -------------------------------------------------------------------------
+
+// b0 – per-frame GI constants
+cbuffer GiConstants : register(b0)
+{
+    float4x4 gInvViewProj;      // row-major pre-transposed inverse(VP)
+    float3   gCameraPos;    float _c0;
+    float3   gSunDir;       float _c1; // direction FROM sun TOWARD scene
+    float3   gSunColor;     float _c2;
+    float3   gSkyAmbient;   float _c3;
+    float    gMaxRayDist;
+    int      gBounceCount;
+    int      gRaysPerPixel;
+    float    gAccumAlpha;
+    int      gFrameIndex;
+    int      gSkylightOnMiss; // 1 = use sky, 0 = zero
+    float2   _pad;
+};
+
+// t0 – world-space normal G-Buffer
+Texture2D<float4>   gGBufferNormal  : register(t0);
+// t1 – scene depth buffer
+Texture2D<float>    gDepthBuffer    : register(t1);
+// t2 – previous-frame accumulation (history)
+Texture2D<float4>   gHistory        : register(t2);
+// t3 – TLAS
+RaytracingAccelerationStructure gTlas : register(t3);
+
+// u0 – raw noisy output for this frame
+RWTexture2D<float4> gRawOutput  : register(u0);
+// u1 – blended temporal accumulation output
+RWTexture2D<float4> gAccumOutput : register(u1);
+
+// -------------------------------------------------------------------------
+// Payload and attribute structs
+// -------------------------------------------------------------------------
+struct GiPayload
+{
+    float3 Radiance;    // irradiance collected at hit
+    float3 HitAlbedo;   // surface albedo at hit (for recursive bounces)
+    float3 HitNormal;   // surface normal at hit
+    uint   Hit;         // 1 = ray hit geometry, 0 = miss  (bool has undefined HLSL payload size)
+};
+
+struct TriAttributes
+{
+    float2 Barycentrics;
+};
+
+// -------------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------------
+
+// Reconstruct world-space position from depth and screen UV.
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc     = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 worldH  = mul(ndc, gInvViewProj);
+    return worldH.xyz / worldH.w;
+}
+
+// Very cheap pseudo-random from two uint seeds (Wang hash).
+uint WangHash(uint seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4u);
+    seed *= 0x27D4EB2Du;
+    seed = seed ^ (seed >> 15u);
+    return seed;
+}
+
+float UintToFloat01(uint x)
+{
+    return (float)(x & 0x00FFFFFFu) / (float)0x01000000u;
+}
+
+// Cosine-weighted hemisphere sample aligned to a surface normal.
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    // Build TBN frame.
+    float3 up    = (abs(N.z) < 0.999f) ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 T     = normalize(cross(up, N));
+    float3 B     = cross(N, T);
+
+    float r   = sqrt(xi.x);
+    float phi = 6.28318530718f * xi.y;
+
+    float3 localDir = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0f, 1.0f - xi.x)));
+    return normalize(T * localDir.x + B * localDir.y + N * localDir.z);
+}
+
+// -------------------------------------------------------------------------
+// Ray-generation shader
+// -------------------------------------------------------------------------
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 launchIdx  = DispatchRaysIndex().xy;
+    uint2 launchDim  = DispatchRaysDimensions().xy;
+
+    // Compute UV for this pixel.
+    float2 uv = (float2(launchIdx) + 0.5f) / float2(launchDim);
+
+    // Read depth; sky pixels get no GI.
+    float depth = gDepthBuffer[launchIdx].r;
+    if (depth >= 1.0f)
+    {
+        gRawOutput[launchIdx]   = float4(0, 0, 0, 1);
+        gAccumOutput[launchIdx] = float4(0, 0, 0, 1);
+        return;
+    }
+
+    // Read normal and reconstruct world position.
+    float4 normalSample = gGBufferNormal[launchIdx];
+    float3 N            = normalize(normalSample.rgb * 2.0f - 1.0f);
+    float3 worldPos     = ReconstructWorldPos(uv, depth);
+
+    // Offset slightly along normal to avoid self-intersection.
+    float3 rayOrigin = worldPos + N * 0.01f;
+
+    // Accumulate indirect radiance over RaysPerPixel samples.
+    float3 totalRadiance = float3(0, 0, 0);
+
+    for (int rayIdx = 0; rayIdx < gRaysPerPixel; ++rayIdx)
+    {
+        // Generate pseudo-random numbers.
+        uint seed0 = WangHash((launchIdx.x * 1973u + launchIdx.y * 9277u + (uint)gFrameIndex * 26699u) ^ 0x5678ABCDu + (uint)rayIdx * 8191u);
+        uint seed1 = WangHash(seed0 ^ 0xDEADBEEFu);
+        float2 xi  = float2(UintToFloat01(seed0), UintToFloat01(seed1));
+
+        // Cosine-weighted diffuse direction.
+        float3 rayDir = CosineSampleHemisphere(N, xi);
+
+        // Trace the indirect ray.
+        RayDesc ray;
+        ray.Origin    = rayOrigin;
+        ray.Direction = rayDir;
+        ray.TMin      = 0.001f;
+        ray.TMax      = gMaxRayDist;
+
+        GiPayload payload;
+        payload.Radiance   = float3(0, 0, 0);
+        payload.HitAlbedo  = float3(0, 0, 0);
+        payload.HitNormal  = float3(0, 0, 1);
+        payload.Hit        = false;
+
+        TraceRay(
+            gTlas,
+            0,      // RAY_FLAG_NONE
+            0xFF,   // instance mask
+            0,      // hit group offset
+            1,      // geometry contribution multiplier
+            0,      // miss shader index
+            ray,
+            payload);
+
+        if (payload.Hit)
+        {
+            // Shade the hit point with the sun directional light (single-bounce Lambertian).
+            float3 L      = normalize(-gSunDir);
+            float  NdotL  = saturate(dot(payload.HitNormal, L));
+            float3 skyW   = saturate(payload.HitNormal.z * 0.5f + 0.5f) * gSkyAmbient;
+            float3 radiance = payload.HitAlbedo * (gSunColor * NdotL + skyW);
+            totalRadiance += radiance;
+        }
+        else if (gSkylightOnMiss)
+        {
+            // Miss: return sky ambient as radiance.
+            float skyW = saturate(rayDir.z * 0.5f + 0.5f);
+            totalRadiance += gSkyAmbient * skyW;
+        }
+    }
+
+    float3 rawGi = totalRadiance / max(1, gRaysPerPixel);
+    gRawOutput[launchIdx] = float4(rawGi, 1.0f);
+
+    // Temporal accumulation: blend with previous history.
+    float3 history = gHistory[launchIdx].rgb;
+    float3 accum   = lerp(history, rawGi, gAccumAlpha);
+    gAccumOutput[launchIdx] = float4(accum, 1.0f);
+}
+
+// -------------------------------------------------------------------------
+// Closest-hit shader
+// Uses barycentric interpolation for normals; for simplicity reads the
+// geometry color (white default) as albedo — a full implementation would
+// read material textures here.
+// -------------------------------------------------------------------------
+[shader("closesthit")]
+void ClosestHit(inout GiPayload payload, in TriAttributes attr)
+{
+    // We don't have a global geometry buffer bound in this simple implementation,
+    // so return a diffuse gray as default albedo.
+    // When per-instance material data is available it can be read via InstanceID()
+    // and a bindless texture/buffer array.
+    payload.HitAlbedo = float3(0.5f, 0.5f, 0.5f);
+    payload.HitNormal = float3(0.0f, 0.0f, 1.0f); // placeholder; ideally from vertex buffer
+    payload.Hit       = true;
+
+    // Compute an approximate surface normal from the object-to-world transform.
+    // ObjectToWorld3x4() returns a 3x4 row-major matrix; its 3x3 part rotates normals.
+    float3x4 otw = ObjectToWorld3x4();
+    // Use the Z column as a rough "up" normal for this triangle.
+    // A proper implementation would interpolate per-vertex normals here.
+    float3 wsNormal = normalize(float3(otw[0][2], otw[1][2], otw[2][2]));
+    payload.HitNormal = wsNormal;
+}
+
+// -------------------------------------------------------------------------
+// Miss shader
+// -------------------------------------------------------------------------
+[shader("miss")]
+void Miss(inout GiPayload payload)
+{
+    payload.Hit       = false;
+    payload.Radiance  = float3(0, 0, 0);
+    payload.HitAlbedo = float3(0, 0, 0);
+    payload.HitNormal = float3(0, 0, 1);
+}

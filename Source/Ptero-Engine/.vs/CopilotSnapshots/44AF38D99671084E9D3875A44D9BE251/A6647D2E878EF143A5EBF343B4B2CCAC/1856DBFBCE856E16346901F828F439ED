@@ -1,0 +1,249 @@
+﻿#include "pch.h"
+
+#include "System/AssetManager.h"
+
+#include "System/FbxCompiler.h"
+#include "System/PteroMeshFormat.h"
+
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <utility>
+#include <vector>
+
+namespace
+{
+    bool IsPathInsideRoot(const std::filesystem::path& rootPath, const std::filesystem::path& candidatePath)
+    {
+        const std::filesystem::path normalizedRootPath = rootPath.lexically_normal();
+        const std::filesystem::path normalizedCandidatePath = candidatePath.lexically_normal();
+
+        auto rootIterator = normalizedRootPath.begin();
+        auto candidateIterator = normalizedCandidatePath.begin();
+        for (; rootIterator != normalizedRootPath.end(); ++rootIterator, ++candidateIterator)
+        {
+            if (candidateIterator == normalizedCandidatePath.end() || *rootIterator != *candidateIterator)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::filesystem::path FindProjectDataDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+        {
+            return {};
+        }
+
+        // Walk upward from the editor executable until the repository Data folder is found.
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path dataDirectory = currentPath / "Data";
+            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
+            {
+                return dataDirectory;
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+}
+
+bool AssetManager::ImportFbxToDataDirectory(
+    const std::string& sourceFbxPath,
+    const std::string& targetDirectoryRelativeToData,
+    std::string* importedFbxPath)
+{
+    mLastErrorMessage.clear();
+
+    if (sourceFbxPath.empty())
+    {
+        mLastErrorMessage = "The source FBX path is empty.";
+        return false;
+    }
+
+    const std::filesystem::path sourcePath(sourceFbxPath);
+    if (!std::filesystem::exists(sourcePath) || !std::filesystem::is_regular_file(sourcePath))
+    {
+        mLastErrorMessage = "The source FBX file does not exist.";
+        return false;
+    }
+
+    const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+    if (dataDirectory.empty())
+    {
+        mLastErrorMessage = "Failed to locate the project's Data directory.";
+        return false;
+    }
+
+    const std::filesystem::path targetDirectory = targetDirectoryRelativeToData.empty()
+        ? dataDirectory / "Imported"
+        : (dataDirectory / std::filesystem::path(targetDirectoryRelativeToData)).lexically_normal();
+
+    if (!IsPathInsideRoot(dataDirectory, targetDirectory))
+    {
+        mLastErrorMessage = "The target import folder must stay inside the Data directory.";
+        return false;
+    }
+
+    std::filesystem::create_directories(targetDirectory);
+
+    const std::filesystem::path destinationFbxPath = targetDirectory / sourcePath.filename();
+
+    // Copy the imported source asset into Data so the editor can browse project-owned content in one place.
+    if (!std::filesystem::exists(destinationFbxPath) || !std::filesystem::equivalent(sourcePath, destinationFbxPath))
+    {
+        std::filesystem::copy_file(sourcePath, destinationFbxPath, std::filesystem::copy_options::overwrite_existing);
+    }
+
+    const std::filesystem::path destinationPteroPath = destinationFbxPath.string() + ".ptero";
+    if (!FbxCompiler::CompileFbxToPtero(destinationFbxPath.string(), destinationPteroPath.string()))
+    {
+        mLastErrorMessage = "Failed to compile the imported FBX file into a cooked .ptero mesh inside Data.";
+        return false;
+    }
+
+    mMeshCache.erase(destinationFbxPath.string());
+
+    if (importedFbxPath != nullptr)
+    {
+        *importedFbxPath = destinationFbxPath.string();
+    }
+
+    return true;
+}
+
+std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
+{
+    mLastErrorMessage.clear();
+
+    if (fbxFilePath.empty())
+    {
+        mLastErrorMessage = "The FBX file path is empty.";
+        return nullptr;
+    }
+
+    if (const auto cachedMesh = mMeshCache.find(fbxFilePath); cachedMesh != mMeshCache.end())
+    {
+        return cachedMesh->second;
+    }
+
+    const std::string pteroPath = fbxFilePath + ".ptero";
+    if (!std::filesystem::exists(pteroPath))
+    {
+        // Bake the FBX on demand so runtime loads hit the compact cooked mesh format after the first import.
+        if (!FbxCompiler::CompileFbxToPtero(fbxFilePath, pteroPath))
+        {
+            mLastErrorMessage = "Failed to compile the FBX file into a cooked .ptero mesh.";
+            return nullptr;
+        }
+    }
+
+    std::ifstream inputStream(pteroPath, std::ios::binary);
+    if (!inputStream)
+    {
+        mLastErrorMessage = "Failed to open the cooked .ptero mesh from disk.";
+        return nullptr;
+    }
+
+    PteroMeshHeader header{};
+    inputStream.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!inputStream || std::memcmp(header.magic, "PTRO", 4) != 0)
+    {
+        mLastErrorMessage = "The cooked mesh header is invalid.";
+        return nullptr;
+    }
+
+    // If the cached .ptero was baked by an older compiler that lacks sub-mesh support, re-cook it now.
+    if (header.version != kPteroMeshVersion)
+    {
+        inputStream.close();
+        if (!FbxCompiler::CompileFbxToPtero(fbxFilePath, pteroPath))
+        {
+            mLastErrorMessage = "The cooked mesh is outdated and re-compilation failed.";
+            return nullptr;
+        }
+
+        inputStream.open(pteroPath, std::ios::binary);
+        if (!inputStream)
+        {
+            mLastErrorMessage = "Failed to re-open the re-cooked .ptero mesh from disk.";
+            return nullptr;
+        }
+
+        inputStream.read(reinterpret_cast<char*>(&header), sizeof(header));
+        if (!inputStream || std::memcmp(header.magic, "PTRO", 4) != 0 || header.version != kPteroMeshVersion)
+        {
+            mLastErrorMessage = "Re-cooked mesh header is still invalid.";
+            return nullptr;
+        }
+    }
+
+    // Read the sub-mesh table that sits between the header and the vertex data (version 2+).
+    std::vector<SubMesh> subMeshes;
+    if (header.subMeshCount > 0)
+    {
+        std::vector<PteroSubMeshEntry> entries(header.subMeshCount);
+        inputStream.read(reinterpret_cast<char*>(entries.data()),
+            static_cast<std::streamsize>(entries.size() * sizeof(PteroSubMeshEntry)));
+        if (!inputStream)
+        {
+            mLastErrorMessage = "Failed to read the sub-mesh table from the cooked mesh.";
+            return nullptr;
+        }
+
+        subMeshes.reserve(entries.size());
+        for (const PteroSubMeshEntry& entry : entries)
+        {
+            SubMesh sm{};
+            sm.materialId = entry.materialId;
+            sm.indexStart = entry.indexStart;
+            sm.indexCount = entry.indexCount;
+            subMeshes.push_back(sm);
+        }
+    }
+
+    std::vector<Vertex> vertices(header.vertexCount);
+    std::vector<std::uint32_t> indices(header.indexCount);
+
+    if (!vertices.empty())
+    {
+        inputStream.read(reinterpret_cast<char*>(vertices.data()), static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
+    }
+
+    if (!indices.empty())
+    {
+        inputStream.read(reinterpret_cast<char*>(indices.data()), static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
+    }
+
+    if (!inputStream)
+    {
+        mLastErrorMessage = "The cooked mesh file ended before all vertex and index data was read.";
+        return nullptr;
+    }
+
+    auto mesh = std::make_shared<Mesh>(std::move(vertices), std::move(indices));
+    if (!mesh->UploadToGpu())
+    {
+        mLastErrorMessage = "The mesh data loaded, but the GPU upload step failed.";
+        return nullptr;
+    }
+
+    mMeshCache.emplace(fbxFilePath, mesh);
+    return mesh;
+}

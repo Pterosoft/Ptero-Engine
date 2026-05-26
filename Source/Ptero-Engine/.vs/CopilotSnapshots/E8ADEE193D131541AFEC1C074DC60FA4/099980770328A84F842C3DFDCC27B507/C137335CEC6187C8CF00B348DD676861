@@ -1,0 +1,180 @@
+﻿#pragma once
+
+// RtGlobalIllumination.h
+// Custom Ray Traced Global Illumination renderer for Ptero-Engine.
+//
+// Four compute passes (DXR inline ray-tracing in CS or standard CS fallback):
+//   Pass 0 - RayGen    : fire GI rays, write initial reservoirs + radiance
+//   Pass 1 - Temporal  : ReSTIR temporal resampling against previous frame
+//   Pass 2 - Spatial   : ReSTIR spatial resampling from screen neighbours
+//   Pass 3 - Composite : temporal accumulation + final colour output
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "RtGISettings.h"
+
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <cstdint>
+
+using Microsoft::WRL::ComPtr;
+
+// -----------------------------------------------------------------------
+// GPU constant buffer shared across all four RTGI shaders.
+// -----------------------------------------------------------------------
+struct alignas(256) RtGIConstants
+{
+    uint32_t FrameWidth;
+    uint32_t FrameHeight;
+    uint32_t FrameIndex;
+    uint32_t RaysPerPixel;
+
+    uint32_t MaxHistoryLength;
+    uint32_t SpatialSamples;
+    float    SpatialRadius;
+    float    DepthThreshold;
+
+    float    NormalThreshold;
+    float    RadianceClamp;
+    float    AccumulationBlend;
+    int      MaxBounces;
+
+    int      DebugView;
+    int      TemporalReuseEnabled;
+    int      SpatialReuseEnabled;
+    int      _pad0;
+
+    float    ViewProjInv[16];   // row-major inverse view-projection (for GBuffer reconstruction)
+    float    PrevViewProj[16];  // row-major previous-frame view-projection (for temporal reprojection)
+    float    ViewProj[16];      // row-major current view-projection (for screen-space ray marching)
+
+    float    CameraPos[3];
+    float    _pad1;
+};
+
+// -----------------------------------------------------------------------
+// One element in the per-pixel GI reservoir structured buffer.
+// -----------------------------------------------------------------------
+struct RtGIPackedReservoir
+{
+    float    posX, posY, posZ;
+    uint32_t packedNormal;      // oct-encoded 2x snorm16
+
+    float    radR, radG, radB;
+    float    weight;            // W = w_sum / (M * p_hat)
+
+    uint32_t M;                 // candidate count
+    uint32_t age;               // temporal age of the chosen sample
+    uint32_t _pad0, _pad1;
+};
+
+class RtGlobalIllumination
+{
+public:
+    RtGlobalIllumination()  = default;
+    ~RtGlobalIllumination() { Shutdown(); }
+
+    // Initialize (or re-initialize) for the given render resolution.
+    bool Initialize(UINT width, UINT height);
+
+    // Resize resolution-dependent resources (no-op if size unchanged).
+    bool EnsureSize(UINT width, UINT height);
+
+    // Release all GPU resources.
+    void Shutdown();
+
+    // Dispatch all four RTGI compute passes for this frame.
+    //   gbufferAlbedoSrv       - GPU handle for the albedo G-Buffer SRV
+    //   gbufferNormalDepthSrv  - GPU handle for the normal+depth G-Buffer SRV
+    //   viewProjInv            - row-major inverse view-projection (16 floats)
+    //   prevViewProj           - row-major previous frame view-projection (16 floats)
+    //   cameraPos              - world-space camera position (3 floats)
+    void Dispatch(
+        ID3D12GraphicsCommandList4*  cmdList,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+        const RtGISettings&          settings,
+        const float                  viewProjInv[16],
+        const float                  prevViewProj[16],
+        const float                  viewProj[16],
+        const float                  cameraPos[3]);
+
+    // Shader-visible SRV GPU handle for the final accumulated GI output (RGBA16F).
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputSrv() const { return mOutputSrvGpu; }
+
+    bool        IsInitialized() const { return mIsInitialized; }
+    bool        HasInitFailed() const { return mInitFailed; }
+    const char* GetLastError()  const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
+
+private:
+    bool CreateRootSignature();
+    bool CreatePipelines();
+    bool CreateResolutionBuffers();
+    bool CreateDescriptors();
+
+    void UploadConstants(
+        const RtGISettings& s,
+        const float viewProjInv[16],
+        const float prevViewProj[16],
+        const float viewProj[16],
+        const float cameraPos[3]);
+
+    bool     mIsInitialized         = false;
+    bool     mInitFailed            = false;
+    UINT     mWidth                 = 0;
+    UINT     mHeight                = 0;
+    uint32_t mFrameIndex            = 0;
+    std::string mLastError;
+
+    ComPtr<ID3D12RootSignature>  mRootSignature;
+
+    // One PSO per compute pass.
+    ComPtr<ID3D12PipelineState>  mPSO_RayGen;
+    ComPtr<ID3D12PipelineState>  mPSO_Temporal;
+    ComPtr<ID3D12PipelineState>  mPSO_Spatial;
+    ComPtr<ID3D12PipelineState>  mPSO_Composite;
+
+    // Persistently-mapped 256-byte upload constant buffer.
+    ComPtr<ID3D12Resource>  mConstantBuffer;
+    void*                   mMappedCb = nullptr;
+
+    // Ping-pong reservoir structured buffers (read/write swap each frame).
+    ComPtr<ID3D12Resource>  mReservoirBuffer[2];
+
+    // Intermediate GI radiance buffer (RGBA16F), written by RayGen, read by Temporal/Spatial.
+    ComPtr<ID3D12Resource>  mRadianceBuffer;
+
+    // Temporal accumulation history (RGBA16F), read and written by Composite each frame.
+    ComPtr<ID3D12Resource>  mAccumBuffer;
+
+    // Final composited GI output (RGBA16F), read by the deferred lighting pass as t5.
+    ComPtr<ID3D12Resource>  mOutputBuffer;
+
+    // Non-shader-visible CPU heap for ClearUnorderedAccessViewFloat.
+    ComPtr<ID3D12DescriptorHeap>  mCpuUavHeap;
+
+    // Shader-visible SRV/UAV descriptors allocated from the shared heap.
+    D3D12_CPU_DESCRIPTOR_HANDLE mReservoirSrvCpu[2] = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mReservoirSrvGpu[2] = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE mReservoirUavCpu[2] = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mReservoirUavGpu[2] = {};
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mRadianceSrvCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mRadianceSrvGpu = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE mRadianceUavCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mRadianceUavGpu = {};
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mAccumSrvCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mAccumSrvGpu = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE mAccumUavCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mAccumUavGpu = {};
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUavCpu = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputUavGpu = {};
+
+    bool     mDescriptorsAllocated = false;
+    uint32_t mReservoirWriteIdx    = 0;  // which buffer receives reservoir writes this frame
+};

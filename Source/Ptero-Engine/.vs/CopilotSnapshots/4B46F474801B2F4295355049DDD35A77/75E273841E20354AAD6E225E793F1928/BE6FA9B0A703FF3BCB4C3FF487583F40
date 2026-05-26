@@ -1,0 +1,291 @@
+﻿// RtGI.hlsl â€“ DXR Global Illumination shader library.
+//
+// Shoots one indirect diffuse ray per G-Buffer pixel.  The hit point is
+// shaded with the sun directional light, sky ambient, and up to 16 point
+// lights.  Vertex normals and albedo are read from the GPU-resident vertex /
+// index buffers that are indexed via gInstGeom[InstanceID()].
+//
+// Temporal accumulation is blended with the previous frame's history, and
+// the history is discarded (alpha=1) whenever the camera moves.
+
+// -------------------------------------------------------------------------
+// Bindings
+// -------------------------------------------------------------------------
+struct PointLightGpu
+{
+    float3 Position;
+    float  Radius;
+    float3 Color;
+    float  InvRadiusSq;
+};
+
+cbuffer GiConstants : register(b0)
+{
+    float4x4 gInvViewProj;
+    float3   gCameraPos;    float _c0;
+    float3   gSunDir;       float _c1; // direction FROM sun toward scene
+    float3   gSunColor;     float _c2;
+    float3   gSkyAmbient;   float _c3;
+    float    gMaxRayDist;
+    int      gBounceCount;
+    int      gRaysPerPixel;
+    float    gAccumAlpha;
+    int      gFrameIndex;
+    int      gSkylightOnMiss;
+    int      gNumPointLights;
+    int      gResetAccumulation;
+    PointLightGpu gPointLights[16];
+};
+
+// Vertex layout must match SceneTypes.h: Position(3) Normal(3) TexCoord(2) Color(4)
+struct Vertex
+{
+    float3 Position;
+    float3 Normal;
+    float2 TexCoord;
+    float4 Color;
+};
+
+struct InstanceGeometry
+{
+    uint VbSrvIndex;  // index into the SRV descriptor heap (ByteAddressBuffer over VB)
+    uint IbSrvIndex;  // index into the SRV descriptor heap (ByteAddressBuffer over IB)
+    uint VertexCount;
+    uint IndexCount;
+};
+
+Texture2D<float4>              gGBufferNormal : register(t0);
+Texture2D<float>               gDepthBuffer   : register(t1);
+Texture2D<float4>              gHistory        : register(t2);
+RaytracingAccelerationStructure gTlas          : register(t3);
+StructuredBuffer<InstanceGeometry> gInstGeom   : register(t4);
+
+RWTexture2D<float4> gRawOutput   : register(u0);
+RWTexture2D<float4> gAccumOutput : register(u1);
+
+// -------------------------------------------------------------------------
+// Payload
+// -------------------------------------------------------------------------
+struct GiPayload
+{
+    float3 Radiance;
+    float3 HitAlbedo;
+    float3 HitNormal;
+    float3 HitWorldPos; // world-space hit position, computed in ClosestHit
+    uint   Hit;
+};
+
+struct TriAttributes { float2 Barycentrics; };
+
+// -------------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------------
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc    = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 worldH = mul(ndc, gInvViewProj);
+    return worldH.xyz / worldH.w;
+}
+
+uint WangHash(uint seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed ^= (seed >> 4u);
+    seed *= 0x27D4EB2Du;
+    seed ^= (seed >> 15u);
+    return seed;
+}
+
+float UintToFloat01(uint x) { return (float)(x & 0x00FFFFFFu) * (1.0f / (float)0x01000000u); }
+
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    float3 up = (abs(N.z) < 0.999f) ? float3(0,0,1) : float3(1,0,0);
+    float3 T  = normalize(cross(up, N));
+    float3 B  = cross(N, T);
+    float  r   = sqrt(xi.x);
+    float  phi = 6.28318530718f * xi.y;
+    float3 d   = float3(r*cos(phi), r*sin(phi), sqrt(max(0.0f, 1.0f - xi.x)));
+    return normalize(T*d.x + B*d.y + N*d.z);
+}
+
+// -------------------------------------------------------------------------
+// ClosestHit â€“ reads interpolated vertex normal and albedo from the mesh VB.
+// -------------------------------------------------------------------------
+[shader("closesthit")]
+void ClosestHit(inout GiPayload payload, in TriAttributes attr)
+{
+    payload.Hit = 1;
+
+    // Default values in case the geometry buffer isn't set up yet.
+    payload.HitAlbedo = float3(0.7f, 0.7f, 0.7f);
+    payload.HitNormal = float3(0.0f, 0.0f, 1.0f);
+
+    uint instId = InstanceID();
+
+    // Read the per-instance geometry pointers.
+    InstanceGeometry ig = gInstGeom[instId];
+    if (ig.VbSrvIndex == 0xFFFFFFFFu || ig.IbSrvIndex == 0xFFFFFFFFu) return;
+
+    // Fetch the three vertex indices for this triangle using bindless ByteAddressBuffer.
+    uint primIdx = PrimitiveIndex();
+    ByteAddressBuffer ibBuf = ResourceDescriptorHeap[ig.IbSrvIndex];
+    uint i0 = ibBuf.Load((primIdx * 3 + 0) * 4);
+    uint i1 = ibBuf.Load((primIdx * 3 + 1) * 4);
+    uint i2 = ibBuf.Load((primIdx * 3 + 2) * 4);
+
+    // Load the three vertices from the VB as a ByteAddressBuffer.
+    // Vertex stride: Position(12) + Normal(12) + TexCoord(8) + Color(16) = 48 bytes.
+    ByteAddressBuffer vbBuf = ResourceDescriptorHeap[ig.VbSrvIndex];
+    uint stride = 48;
+    Vertex v0, v1, v2;
+    v0.Position = asfloat(vbBuf.Load3(i0 * stride + 0));
+    v0.Normal   = asfloat(vbBuf.Load3(i0 * stride + 12));
+    v0.Color    = asfloat(vbBuf.Load4(i0 * stride + 32));
+    v1.Position = asfloat(vbBuf.Load3(i1 * stride + 0));
+    v1.Normal   = asfloat(vbBuf.Load3(i1 * stride + 12));
+    v1.Color    = asfloat(vbBuf.Load4(i1 * stride + 32));
+    v2.Position = asfloat(vbBuf.Load3(i2 * stride + 0));
+    v2.Normal   = asfloat(vbBuf.Load3(i2 * stride + 12));
+    v2.Color    = asfloat(vbBuf.Load4(i2 * stride + 32));
+
+    // Barycentric interpolation.
+    float2 bc  = attr.Barycentrics;
+    float  bc0 = 1.0f - bc.x - bc.y;
+    float3 localNorm  = normalize(v0.Normal * bc0 + v1.Normal * bc.x + v2.Normal * bc.y);
+    float4 vertColor  = v0.Color * bc0 + v1.Color * bc.x + v2.Color * bc.y;
+
+    // Transform normal to world space using the object-to-world matrix.
+    float3x4 otw = ObjectToWorld3x4();
+    float3x3 normalMat = float3x3(otw[0].xyz, otw[1].xyz, otw[2].xyz);
+    float3 wsNormal = normalize(mul(localNorm, transpose(normalMat)));
+
+    payload.HitNormal   = wsNormal;
+    payload.HitAlbedo   = vertColor.rgb;
+    // Compute world-space hit position here while RayTCurrent() is valid.
+    payload.HitWorldPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+}
+
+// -------------------------------------------------------------------------
+// Miss
+// -------------------------------------------------------------------------
+[shader("miss")]
+void Miss(inout GiPayload payload)
+{
+    payload.Hit        = 0;
+    payload.Radiance   = float3(0, 0, 0);
+    payload.HitAlbedo  = float3(0, 0, 0);
+    payload.HitNormal  = float3(0, 0, 1);
+    payload.HitWorldPos = float3(0, 0, 0);
+}
+
+// -------------------------------------------------------------------------
+// Shade a GI hit point with sun + sky + point lights (Lambertian).
+// -------------------------------------------------------------------------
+float3 ShadeHit(float3 hitPos, float3 hitNormal, float3 hitAlbedo)
+{
+    float3 irradiance = float3(0, 0, 0);
+
+    // Sun directional light (gSunDir points FROM sun toward scene, so negate for L).
+    float3 L     = normalize(-gSunDir);
+    float  NdotL = saturate(dot(hitNormal, L));
+    irradiance  += gSunColor * NdotL;
+
+    // Sky ambient: hemisphere integral approximated with a cosine-weighted blend.
+    float skyW = saturate(hitNormal.z * 0.5f + 0.5f);
+    irradiance += gSkyAmbient * skyW;
+
+    // Point lights.
+    for (int i = 0; i < gNumPointLights; ++i)
+    {
+        float3 toLight = gPointLights[i].Position - hitPos;
+        float  dist2   = dot(toLight, toLight);
+        float3 Lp      = toLight * rsqrt(dist2);
+        float  NdotLp  = saturate(dot(hitNormal, Lp));
+        // Smooth distance attenuation: saturate(1 - (d/r)^4)^2 / d^2
+        float  r2      = gPointLights[i].Radius * gPointLights[i].Radius;
+        float  atten   = saturate(1.0f - (dist2 * gPointLights[i].InvRadiusSq) *
+                                          (dist2 * gPointLights[i].InvRadiusSq));
+        atten = atten * atten / max(dist2, 0.0001f);
+        irradiance += gPointLights[i].Color * NdotLp * atten;
+    }
+
+    return hitAlbedo * irradiance;
+}
+
+// -------------------------------------------------------------------------
+// RayGen
+// -------------------------------------------------------------------------
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 launchIdx = DispatchRaysIndex().xy;
+    uint2 launchDim = DispatchRaysDimensions().xy;
+
+    float2 uv    = (float2(launchIdx) + 0.5f) / float2(launchDim);
+    float  depth = gDepthBuffer[launchIdx].r;
+
+    // Sky pixels: no GI.
+    if (depth >= 1.0f)
+    {
+        gRawOutput[launchIdx]   = float4(0, 0, 0, 1);
+        gAccumOutput[launchIdx] = float4(0, 0, 0, 1);
+        return;
+    }
+
+    float4 normalSample = gGBufferNormal[launchIdx];
+    // Normal is encoded as N*0.5+0.5 in the G-buffer.
+    float3 N        = normalize(normalSample.rgb * 2.0f - 1.0f);
+    float3 worldPos = ReconstructWorldPos(uv, depth);
+    // Offset slightly along normal to avoid self-intersection.
+    float3 rayOrigin = worldPos + N * 0.005f;
+
+    float3 totalRadiance = float3(0, 0, 0);
+
+    for (int rayIdx = 0; rayIdx < gRaysPerPixel; ++rayIdx)
+    {
+        uint seed0 = WangHash((launchIdx.x * 1973u + launchIdx.y * 9277u +
+                               (uint)gFrameIndex * 26699u) ^ 0x5678ABCDu + (uint)rayIdx * 8191u);
+        uint seed1 = WangHash(seed0 ^ 0xDEADBEEFu);
+        float2 xi  = float2(UintToFloat01(seed0), UintToFloat01(seed1));
+
+        float3 rayDir = CosineSampleHemisphere(N, xi);
+
+        RayDesc ray;
+        ray.Origin    = rayOrigin;
+        ray.Direction = rayDir;
+        ray.TMin      = 0.005f;
+        ray.TMax      = gMaxRayDist;
+
+        GiPayload payload;
+        payload.Radiance    = float3(0,0,0);
+        payload.HitAlbedo  = float3(0,0,0);
+        payload.HitNormal  = float3(0,0,1);
+        payload.HitWorldPos = float3(0,0,0);
+        payload.Hit        = 0;
+
+        TraceRay(gTlas, 0u, 0xFFu, 0u, 1u, 0u, ray, payload);
+
+        if (payload.Hit != 0)
+        {
+            // HitWorldPos was computed in ClosestHit where RayTCurrent() is valid.
+            totalRadiance += ShadeHit(payload.HitWorldPos, payload.HitNormal, payload.HitAlbedo);
+        }
+        else if (gSkylightOnMiss)
+        {
+            // Sky radiance on miss.
+            float skyW = saturate(rayDir.z * 0.5f + 0.5f);
+            totalRadiance += gSkyAmbient * (0.5f + 0.5f * skyW);
+        }
+    }
+
+    float3 rawGi = totalRadiance / (float)max(1, gRaysPerPixel);
+    gRawOutput[launchIdx] = float4(rawGi, 1.0f);
+
+    // Temporal accumulation.  When gResetAccumulation is set (camera moved),
+    // gAccumAlpha is already forced to 1.0 by the CPU so this naturally clears.
+    float3 history = gHistory[launchIdx].rgb;
+    float3 accum   = lerp(history, rawGi, gAccumAlpha);
+    gAccumOutput[launchIdx] = float4(accum, 1.0f);
+}

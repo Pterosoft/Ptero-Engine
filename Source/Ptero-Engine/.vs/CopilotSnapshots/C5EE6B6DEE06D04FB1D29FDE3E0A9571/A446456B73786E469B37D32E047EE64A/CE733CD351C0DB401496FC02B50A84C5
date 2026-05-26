@@ -1,0 +1,551 @@
+﻿#include "pch.h"
+#include "VolumetricFogRenderer.h"
+
+#include "d3dx12.h"
+
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+namespace
+{
+    constexpr UINT kInjectGroupX = 8;
+    constexpr UINT kInjectGroupY = 8;
+    constexpr UINT kInjectGroupZ = 1;
+    constexpr UINT kAccumulateGroupX = 8;
+    constexpr UINT kAccumulateGroupY = 8;
+    constexpr DXGI_FORMAT kFogFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    bool AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, std::string& err)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&cpu, &gpu))
+        {
+            err = "VolumetricFogRenderer: ran out of shared SRV/UAV descriptor heap slots.";
+            return false;
+        }
+        return true;
+    }
+
+    ComPtr<ID3D12Resource> CreateTexture3D(
+        ID3D12Device* device,
+        UINT width,
+        UINT height,
+        UINT depth,
+        DXGI_FORMAT format,
+        D3D12_RESOURCE_STATES initialState,
+        const wchar_t* name)
+    {
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heapProps.CreationNodeMask = 1;
+        heapProps.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = static_cast<UINT16>(depth);
+        desc.MipLevels = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> resource;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            initialState,
+            nullptr,
+            IID_PPV_ARGS(&resource)));
+        resource->SetName(name);
+        return resource;
+    }
+
+    bool CompileComputePso(
+        ID3D12Device* device,
+        ID3D12RootSignature* rootSignature,
+        const wchar_t* filePath,
+        const wchar_t* entryPoint,
+        ComPtr<ID3D12PipelineState>& outPso,
+        std::string& err)
+    {
+        ShaderCompileRequest request{};
+        request.FilePath = filePath;
+        request.EntryPoint = entryPoint;
+        request.TargetProfile = L"cs_6_5";
+        request.Stage = ShaderStage::Compute;
+
+        DX12Shader shader;
+        if (!shader.Compile(request))
+        {
+            err = std::string("VolumetricFogRenderer: shader compile failed: ")
+                + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown");
+            return false;
+        }
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = rootSignature;
+        psoDesc.CS = shader.GetBytecode();
+        if (FAILED(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&outPso))))
+        {
+            err = "VolumetricFogRenderer: CreateComputePipelineState failed.";
+            return false;
+        }
+
+        return true;
+    }
+}
+
+bool VolumetricFogRenderer::Initialize(UINT sceneWidth, UINT sceneHeight)
+{
+    if (sceneWidth == 0 || sceneHeight == 0)
+        return false;
+
+    mLastError.clear();
+
+    if (!mInjectRootSignature)
+    {
+        if (!CreateRootSignatures())
+            return false;
+    }
+
+    if (!mInjectPipelineState)
+    {
+        if (!CreatePipelines())
+            return false;
+    }
+
+    if (!mConstantBuffer)
+    {
+        if (!CreateConstantBuffer())
+            return false;
+    }
+
+    mSceneWidth = sceneWidth;
+    mSceneHeight = sceneHeight;
+
+    if (!CreateResolutionResources(VolumetricFogSettings{}))
+        return false;
+    if (!CreateDescriptors())
+        return false;
+
+    mIsInitialized = true;
+    return true;
+}
+
+bool VolumetricFogRenderer::EnsureSize(UINT sceneWidth, UINT sceneHeight)
+{
+    if (sceneWidth == mSceneWidth && sceneHeight == mSceneHeight && mIsInitialized)
+        return true;
+    return Initialize(sceneWidth, sceneHeight);
+}
+
+bool VolumetricFogRenderer::EnsureSize(UINT sceneWidth, UINT sceneHeight, const VolumetricFogSettings& settings)
+{
+    const UINT froxelTileSize = static_cast<UINT>(std::clamp(settings.FroxelTileSize, 4, 32));
+    const UINT desiredFroxelWidth = ((sceneWidth + froxelTileSize - 1u) / froxelTileSize) > 1u ? ((sceneWidth + froxelTileSize - 1u) / froxelTileSize) : 1u;
+    const UINT desiredFroxelHeight = ((sceneHeight + froxelTileSize - 1u) / froxelTileSize) > 1u ? ((sceneHeight + froxelTileSize - 1u) / froxelTileSize) : 1u;
+    const UINT desiredSlices = static_cast<UINT>(std::clamp(settings.DepthSlices, 8, 128));
+
+    if (sceneWidth == mSceneWidth
+        && sceneHeight == mSceneHeight
+        && desiredFroxelWidth == mFroxelWidth
+        && desiredFroxelHeight == mFroxelHeight
+        && desiredSlices == mDepthSlices
+        && mIsInitialized)
+    {
+        return true;
+    }
+
+    if (sceneWidth == 0 || sceneHeight == 0)
+        return false;
+
+    mSceneWidth = sceneWidth;
+    mSceneHeight = sceneHeight;
+
+    if (!mInjectRootSignature && !CreateRootSignatures())
+        return false;
+    if (!mInjectPipelineState && !CreatePipelines())
+        return false;
+    if (!mConstantBuffer && !CreateConstantBuffer())
+        return false;
+    if (!CreateResolutionResources(settings))
+        return false;
+    if (!CreateDescriptors())
+        return false;
+
+    mIsInitialized = true;
+    return true;
+}
+
+void VolumetricFogRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedConstants)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedConstants = nullptr;
+    }
+
+    mLightingVolume.Reset();
+    mIntegratedFog.Reset();
+    mConstantBuffer.Reset();
+    mInjectPipelineState.Reset();
+    mAccumulatePipelineState.Reset();
+    mInjectRootSignature.Reset();
+    mAccumulateRootSignature.Reset();
+    mIsInitialized = false;
+}
+
+void VolumetricFogRenderer::Dispatch(
+    ID3D12GraphicsCommandList4* cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
+    const VolumetricFogSettings& settings,
+    const float viewProjInv[16],
+    const float currViewProj[16],
+    const float cameraPos[3],
+    float nearPlane,
+    float farPlane,
+    float sunDirX,
+    float sunDirY,
+    float sunDirZ,
+    float sunColorR,
+    float sunColorG,
+    float sunColorB,
+    float skyColorR,
+    float skyColorG,
+    float skyColorB)
+{
+    if (!(cmdList && mIsInitialized && mConstantBuffer && mLightingVolume && mIntegratedFog))
+        return;
+
+    UploadConstants(
+        settings,
+        viewProjInv,
+        currViewProj,
+        cameraPos,
+        nearPlane,
+        farPlane,
+        sunDirX,
+        sunDirY,
+        sunDirZ,
+        sunColorR,
+        sunColorG,
+        sunColorB,
+        skyColorR,
+        skyColorG,
+        skyColorB);
+
+    auto toUav = [](ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES fromState)
+    {
+        const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource, fromState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        list->ResourceBarrier(1, &barrier);
+    };
+    auto toSrv = [](ID3D12GraphicsCommandList* list, ID3D12Resource* resource)
+    {
+        const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        list->ResourceBarrier(1, &barrier);
+    };
+    auto uavBarrier = [](ID3D12GraphicsCommandList* list, ID3D12Resource* resource)
+    {
+        const auto barrier = CD3DX12_RESOURCE_BARRIER::UAV(resource);
+        list->ResourceBarrier(1, &barrier);
+    };
+
+    toUav(cmdList, mLightingVolume.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    toUav(cmdList, mIntegratedFog.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    cmdList->SetComputeRootSignature(mInjectRootSignature.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetPipelineState(mInjectPipelineState.Get());
+    cmdList->SetComputeRootDescriptorTable(1, sceneDepthSrv);
+    cmdList->SetComputeRootDescriptorTable(2, tlasSrv);
+    cmdList->SetComputeRootDescriptorTable(3, mLightingUavGpu);
+    cmdList->Dispatch(
+        (mFroxelWidth + kInjectGroupX - 1) / kInjectGroupX,
+        (mFroxelHeight + kInjectGroupY - 1) / kInjectGroupY,
+        mDepthSlices);
+
+    uavBarrier(cmdList, mLightingVolume.Get());
+    toSrv(cmdList, mLightingVolume.Get());
+
+    cmdList->SetComputeRootSignature(mAccumulateRootSignature.Get());
+    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetPipelineState(mAccumulatePipelineState.Get());
+    cmdList->SetComputeRootDescriptorTable(1, mLightingSrvGpu);
+    cmdList->SetComputeRootDescriptorTable(2, mIntegratedUavGpu);
+    cmdList->Dispatch(
+        (mFroxelWidth + kAccumulateGroupX - 1) / kAccumulateGroupX,
+        (mFroxelHeight + kAccumulateGroupY - 1) / kAccumulateGroupY,
+        1);
+
+    uavBarrier(cmdList, mIntegratedFog.Get());
+    toSrv(cmdList, mIntegratedFog.Get());
+}
+
+bool VolumetricFogRenderer::CreateRootSignatures()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "VolumetricFogRenderer: no D3D12 device.";
+        return false;
+    }
+
+    {
+        D3D12_DESCRIPTOR_RANGE ranges[3]{};
+        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ranges[0].NumDescriptors = 1;
+        ranges[0].BaseShaderRegister = 0;
+        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ranges[1].NumDescriptors = 1;
+        ranges[1].BaseShaderRegister = 1;
+        ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        ranges[2].NumDescriptors = 1;
+        ranges[2].BaseShaderRegister = 0;
+
+        D3D12_ROOT_PARAMETER params[4]{};
+        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        for (UINT i = 0; i < 3; ++i)
+        {
+            params[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[i + 1].DescriptorTable.NumDescriptorRanges = 1;
+            params[i + 1].DescriptorTable.pDescriptorRanges = &ranges[i];
+            params[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        }
+
+        D3D12_ROOT_SIGNATURE_DESC desc{};
+        desc.NumParameters = static_cast<UINT>(std::size(params));
+        desc.pParameters = params;
+        desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> blob;
+        ComPtr<ID3DBlob> errors;
+        if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &errors))
+            || FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&mInjectRootSignature))))
+        {
+            mLastError = "VolumetricFogRenderer: failed to create injection root signature.";
+            return false;
+        }
+    }
+
+    {
+        D3D12_DESCRIPTOR_RANGE ranges[2]{};
+        ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ranges[0].NumDescriptors = 1;
+        ranges[0].BaseShaderRegister = 0;
+        ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        ranges[1].NumDescriptors = 1;
+        ranges[1].BaseShaderRegister = 0;
+
+        D3D12_ROOT_PARAMETER params[3]{};
+        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        for (UINT i = 0; i < 2; ++i)
+        {
+            params[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[i + 1].DescriptorTable.NumDescriptorRanges = 1;
+            params[i + 1].DescriptorTable.pDescriptorRanges = &ranges[i];
+            params[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        }
+
+        D3D12_ROOT_SIGNATURE_DESC desc{};
+        desc.NumParameters = static_cast<UINT>(std::size(params));
+        desc.pParameters = params;
+        desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> blob;
+        ComPtr<ID3DBlob> errors;
+        if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &errors))
+            || FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&mAccumulateRootSignature))))
+        {
+            mLastError = "VolumetricFogRenderer: failed to create accumulation root signature.";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool VolumetricFogRenderer::CreatePipelines()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "VolumetricFogRenderer: no D3D12 device.";
+        return false;
+    }
+
+    if (!CompileComputePso(device, mInjectRootSignature.Get(), L"Data/Shaders/VolumetricFogInject.hlsl", L"CSMain", mInjectPipelineState, mLastError))
+        return false;
+    if (!CompileComputePso(device, mAccumulateRootSignature.Get(), L"Data/Shaders/VolumetricFogAccumulate.hlsl", L"CSMain", mAccumulatePipelineState, mLastError))
+        return false;
+    return true;
+}
+
+bool VolumetricFogRenderer::CreateConstantBuffer()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = sizeof(FogConstants);
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer))))
+    {
+        mLastError = "VolumetricFogRenderer: failed to create constant buffer.";
+        return false;
+    }
+
+    if (FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedConstants))))
+    {
+        mLastError = "VolumetricFogRenderer: failed to map constant buffer.";
+        return false;
+    }
+
+    return true;
+}
+
+bool VolumetricFogRenderer::CreateResolutionResources(const VolumetricFogSettings& settings)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    const UINT froxelTileSize = static_cast<UINT>(std::clamp(settings.FroxelTileSize, 4, 32));
+    mFroxelWidth = ((mSceneWidth + froxelTileSize - 1u) / froxelTileSize) > 1u ? ((mSceneWidth + froxelTileSize - 1u) / froxelTileSize) : 1u;
+    mFroxelHeight = ((mSceneHeight + froxelTileSize - 1u) / froxelTileSize) > 1u ? ((mSceneHeight + froxelTileSize - 1u) / froxelTileSize) : 1u;
+    mDepthSlices = static_cast<UINT>(std::clamp(settings.DepthSlices, 8, 128));
+
+    mLightingVolume = CreateTexture3D(device, mFroxelWidth, mFroxelHeight, mDepthSlices, kFogFormat, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VolumetricFog_LightingVolume");
+    mIntegratedFog = CreateTexture3D(device, mFroxelWidth, mFroxelHeight, mDepthSlices, kFogFormat, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VolumetricFog_IntegratedFog");
+    return true;
+}
+
+bool VolumetricFogRenderer::CreateDescriptors()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    if (!mDescriptorsAllocated)
+    {
+        if (!AllocateDescriptor(mLightingSrvCpu, mLightingSrvGpu, mLastError)) return false;
+        if (!AllocateDescriptor(mLightingUavCpu, mLightingUavGpu, mLastError)) return false;
+        if (!AllocateDescriptor(mIntegratedSrvCpu, mIntegratedSrvGpu, mLastError)) return false;
+        if (!AllocateDescriptor(mIntegratedUavCpu, mIntegratedUavGpu, mLastError)) return false;
+        mDescriptorsAllocated = true;
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = kFogFormat;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    srvDesc.Texture3D.MipLevels = 1;
+    srvDesc.Texture3D.MostDetailedMip = 0;
+    srvDesc.Texture3D.ResourceMinLODClamp = 0.0f;
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = kFogFormat;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+    uavDesc.Texture3D.WSize = mDepthSlices;
+
+    device->CreateShaderResourceView(mLightingVolume.Get(), &srvDesc, mLightingSrvCpu);
+    device->CreateUnorderedAccessView(mLightingVolume.Get(), nullptr, &uavDesc, mLightingUavCpu);
+    device->CreateShaderResourceView(mIntegratedFog.Get(), &srvDesc, mIntegratedSrvCpu);
+    device->CreateUnorderedAccessView(mIntegratedFog.Get(), nullptr, &uavDesc, mIntegratedUavCpu);
+    return true;
+}
+
+void VolumetricFogRenderer::UploadConstants(
+    const VolumetricFogSettings& settings,
+    const float viewProjInv[16],
+    const float currViewProj[16],
+    const float cameraPos[3],
+    float nearPlane,
+    float farPlane,
+    float sunDirX,
+    float sunDirY,
+    float sunDirZ,
+    float sunColorR,
+    float sunColorG,
+    float sunColorB,
+    float skyColorR,
+    float skyColorG,
+    float skyColorB)
+{
+    FogConstants constants{};
+    const auto maxu = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a : b; };
+    const auto maxi = [](int a, int b) -> int { return a > b ? a : b; };
+    const auto maxf = [](float a, float b) -> float { return a > b ? a : b; };
+    constants.FrameWidth = mSceneWidth;
+    constants.FrameHeight = mSceneHeight;
+    const uint32_t tileSize = static_cast<uint32_t>(std::clamp(settings.FroxelTileSize, 4, 32));
+    constants.FroxelWidth = maxu(1u, (mSceneWidth + tileSize - 1u) / tileSize);
+    constants.FroxelHeight = maxu(1u, (mSceneHeight + tileSize - 1u) / tileSize);
+    constants.DepthSlices = static_cast<uint32_t>(std::clamp(settings.DepthSlices, 8, 128));
+    constants.DebugView = static_cast<uint32_t>(maxi(0, settings.DebugView));
+    constants.NearPlane = maxf(0.001f, nearPlane);
+    constants.FarPlane = maxf(constants.NearPlane + 0.001f, farPlane);
+    constants.StartDistance = maxf(constants.NearPlane, settings.StartDistance);
+    constants.MaxDistance = maxf(constants.StartDistance + 0.001f, settings.MaxDistance);
+    constants.Density = maxf(0.0f, settings.Density);
+    constants.Anisotropy = std::clamp(settings.Anisotropy, -0.95f, 0.95f);
+    constants.BaseHeight = settings.BaseHeight;
+    constants.HeightFalloff = maxf(0.0f, settings.HeightFalloff);
+    constants.FogColor[0] = settings.ColorR;
+    constants.FogColor[1] = settings.ColorG;
+    constants.FogColor[2] = settings.ColorB;
+    constants.CameraPos[0] = cameraPos[0];
+    constants.CameraPos[1] = cameraPos[1];
+    constants.CameraPos[2] = cameraPos[2];
+    constants.SunDir[0] = sunDirX;
+    constants.SunDir[1] = sunDirY;
+    constants.SunDir[2] = sunDirZ;
+    constants.SunColor[0] = sunColorR;
+    constants.SunColor[1] = sunColorG;
+    constants.SunColor[2] = sunColorB;
+    constants.SkyColor[0] = skyColorR;
+    constants.SkyColor[1] = skyColorG;
+    constants.SkyColor[2] = skyColorB;
+    std::memcpy(constants.ViewProjInv, viewProjInv, sizeof(constants.ViewProjInv));
+    std::memcpy(constants.CurrViewProj, currViewProj, sizeof(constants.CurrViewProj));
+    std::memcpy(mMappedConstants, &constants, sizeof(constants));
+
+    mFroxelWidth = constants.FroxelWidth;
+    mFroxelHeight = constants.FroxelHeight;
+    mDepthSlices = constants.DepthSlices;
+}

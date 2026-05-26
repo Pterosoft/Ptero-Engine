@@ -1,0 +1,6 @@
+﻿# Copilot Instructions
+
+## Project Guidelines
+- User prefers explanatory comments in code changes to help understand the implementation.
+- Camera left/right movement should remain non-inverted.
+- The real ImGuizmo pivot should be shown and used for transformations when available.

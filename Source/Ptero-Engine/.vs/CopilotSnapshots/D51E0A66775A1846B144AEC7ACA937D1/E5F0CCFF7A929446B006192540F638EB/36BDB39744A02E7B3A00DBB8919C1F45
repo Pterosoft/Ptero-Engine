@@ -1,0 +1,70 @@
+﻿#pragma once
+
+#include "Components.h"
+#include "DX12Helper.h"
+#include "..\Ptero-Engine\EditorCamera.h"
+
+#include "imgui.h"
+
+#include <string>
+#include <vector>
+
+class Editor
+{
+public:
+    enum class GizmoType
+    {
+        None,
+        Translate,
+        Rotate,
+        Scale
+    };
+
+    Editor();
+
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+    void Shutdown();
+
+    void Draw(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        const char* sceneStatusMessage,
+        const char* statisticsText,
+        bool showStatistics);
+
+    void DrawToolbar(
+        D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon);
+
+    void DrawPropertiesPanel(Entity* selectedEntity);
+    void DrawViewport(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        Entity* selectedEntity);
+
+    Entity* GetSelectedEntity();
+
+private:
+    void DrawLevelPanel();
+    bool LoadGeometryIcon(ID3D12GraphicsCommandList* commandList);
+    void DrawViewportStatisticsOverlay() const;
+
+    static ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+
+    std::vector<Entity> mEntities;
+    int mSelectedEntityIndex = 0;
+    GizmoType mActiveGizmo = GizmoType::None;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE mGeometryIconCpuHandle{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mGeometryIconGpuHandle{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGeometryIconTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGeometryIconUpload;
+    bool mGeometryIconLoadAttempted = false;
+    std::string mGeometryIconStatus;
+
+    const char* mSceneStatusMessage = nullptr;
+    const char* mViewportStatisticsText = nullptr;
+    bool mShowViewportStatistics = true;
+};

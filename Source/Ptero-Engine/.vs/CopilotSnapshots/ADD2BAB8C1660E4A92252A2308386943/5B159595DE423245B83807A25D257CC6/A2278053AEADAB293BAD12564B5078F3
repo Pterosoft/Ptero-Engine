@@ -1,0 +1,2268 @@
+﻿#include "pch.h"
+#include "Editor.h"
+
+#include "ImGuizmoCompat.h"
+#include "SceneSerializer.h"
+
+#include <commdlg.h>
+#include <wincodec.h>
+#include <shlobj.h>
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <cstring>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
+#include <vector>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "shell32.lib")
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool __stdcall DX12Context_GetRenderSize(UINT* width, UINT* height);
+}
+
+namespace
+{
+    constexpr float ManualGizmoAxisLengthWorldUnits = 0.8f;
+    constexpr float ManualGizmoHandleSizeWorldUnits = 0.18f;
+
+    struct DecodedImageData
+    {
+        std::vector<std::uint8_t> Pixels;
+        UINT Width = 0;
+        UINT Height = 0;
+    };
+
+    std::filesystem::path FindNamedFile(const wchar_t* fileName)
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath))) == 0)
+        {
+            return {};
+        }
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            std::error_code iteratorError;
+            for (std::filesystem::recursive_directory_iterator it(
+                     currentPath,
+                     std::filesystem::directory_options::skip_permission_denied,
+                     iteratorError),
+                 end;
+                 it != end && !iteratorError;
+                 it.increment(iteratorError))
+            {
+                std::error_code statusError;
+                if (!it->is_regular_file(statusError) || statusError)
+                {
+                    continue;
+                }
+
+                if (_wcsicmp(it->path().filename().c_str(), fileName) == 0)
+                {
+                    return it->path();
+                }
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    std::filesystem::path FindIconFile(const wchar_t* fileName)
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath))) == 0)
+        {
+            return {};
+        }
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path candidateInDataIcons = currentPath / L"Data" / L"Icons" / fileName;
+            if (std::filesystem::exists(candidateInDataIcons))
+            {
+                return std::filesystem::weakly_canonical(candidateInDataIcons);
+            }
+
+            const std::filesystem::path candidateInDataRoot = currentPath / L"Data" / fileName;
+            if (std::filesystem::exists(candidateInDataRoot))
+            {
+                return std::filesystem::weakly_canonical(candidateInDataRoot);
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return FindNamedFile(fileName);
+    }
+
+    std::filesystem::path GetDefaultScreenshotDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath))) == 0)
+        {
+            return std::filesystem::current_path() / "Ptero-Engine" / "Screenshots";
+        }
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            if (_stricmp(currentPath.filename().string().c_str(), "Ptero-Engine") == 0)
+            {
+                return currentPath / "Screenshots";
+            }
+
+            const std::filesystem::path candidate = currentPath / "Ptero-Engine";
+            if (std::filesystem::exists(candidate) && std::filesystem::is_directory(candidate))
+            {
+                return candidate / "Screenshots";
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return std::filesystem::path(executablePath).parent_path() / "Ptero-Engine" / "Screenshots";
+    }
+
+    bool EnsureDirectoryExists(const std::string& directoryPath)
+    {
+        if (directoryPath.empty())
+        {
+            return false;
+        }
+
+        std::error_code errorCode;
+        const std::filesystem::path path(directoryPath);
+        if (std::filesystem::exists(path, errorCode))
+        {
+            return std::filesystem::is_directory(path, errorCode);
+        }
+
+        return std::filesystem::create_directories(path, errorCode);
+    }
+
+    bool LoadDecodedImage(const std::filesystem::path& imagePath, DecodedImageData& outImageData, std::string& outErrorMessage)
+    {
+        const HRESULT initializeResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const bool shouldUninitialize = SUCCEEDED(initializeResult);
+
+        ComPtr<IWICImagingFactory> imagingFactory;
+        HRESULT hr = CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&imagingFactory));
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to create the WIC imaging factory for Geometry.png.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        ComPtr<IWICBitmapDecoder> decoder;
+        hr = imagingFactory->CreateDecoderFromFilename(
+            imagePath.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnDemand,
+            &decoder);
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to open Geometry.png with WIC.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        ComPtr<IWICBitmapFrameDecode> frame;
+        hr = decoder->GetFrame(0, &frame);
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to read the first frame from Geometry.png.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        ComPtr<IWICFormatConverter> converter;
+        hr = imagingFactory->CreateFormatConverter(&converter);
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to create the WIC format converter for Geometry.png.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        hr = converter->Initialize(
+            frame.Get(),
+            GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to convert Geometry.png into RGBA8 pixel data.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        hr = converter->GetSize(&outImageData.Width, &outImageData.Height);
+        if (FAILED(hr) || outImageData.Width == 0 || outImageData.Height == 0)
+        {
+            outErrorMessage = "Geometry.png did not report a valid image size.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        const UINT bytesPerPixel = 4;
+        const UINT rowPitch = outImageData.Width * bytesPerPixel;
+        outImageData.Pixels.resize(static_cast<size_t>(rowPitch) * static_cast<size_t>(outImageData.Height));
+
+        hr = converter->CopyPixels(nullptr, rowPitch, static_cast<UINT>(outImageData.Pixels.size()), outImageData.Pixels.data());
+        if (FAILED(hr))
+        {
+            outErrorMessage = "Failed to copy Geometry.png pixels out of WIC.";
+            if (shouldUninitialize)
+            {
+                CoUninitialize();
+            }
+            return false;
+        }
+
+        // Release all WIC COM objects before CoUninitialize so their final Release() calls do not
+        // execute after WindowsCodecs.dll has already been unloaded for this apartment.
+        converter.Reset();
+        frame.Reset();
+        decoder.Reset();
+        imagingFactory.Reset();
+
+        if (shouldUninitialize)
+        {
+            CoUninitialize();
+        }
+
+        return true;
+    }
+
+    XMFLOAT3 QuaternionToEulerRadians(FXMVECTOR quaternion)
+    {
+        XMFLOAT4 rotation{};
+        XMStoreFloat4(&rotation, quaternion);
+
+        const float sinPitchCosYaw = 2.0f * ((rotation.w * rotation.x) + (rotation.y * rotation.z));
+        const float cosPitchCosYaw = 1.0f - (2.0f * ((rotation.x * rotation.x) + (rotation.y * rotation.y)));
+        const float pitch = std::atan2(sinPitchCosYaw, cosPitchCosYaw);
+
+        const float sinYaw = 2.0f * ((rotation.w * rotation.y) - (rotation.z * rotation.x));
+        const float yaw = std::abs(sinYaw) >= 1.0f
+            ? std::copysign(XM_PIDIV2, sinYaw)
+            : std::asin(sinYaw);
+
+        const float sinRollCosYaw = 2.0f * ((rotation.w * rotation.z) + (rotation.x * rotation.y));
+        const float cosRollCosYaw = 1.0f - (2.0f * ((rotation.y * rotation.y) + (rotation.z * rotation.z)));
+        const float roll = std::atan2(sinRollCosYaw, cosRollCosYaw);
+
+        return XMFLOAT3(pitch, yaw, roll);
+    }
+
+    struct SelectionRect
+    {
+        ImVec2 Min{};
+        ImVec2 Max{};
+
+        bool Contains(const ImVec2& point) const
+        {
+            return point.x >= Min.x && point.x <= Max.x && point.y >= Min.y && point.y <= Max.y;
+        }
+    };
+
+    SelectionRect MakeSelectionRect(const ImVec2& startPoint, const ImVec2& endPoint)
+    {
+        return SelectionRect{
+            ImVec2((std::min)(startPoint.x, endPoint.x), (std::min)(startPoint.y, endPoint.y)),
+            ImVec2((std::max)(startPoint.x, endPoint.x), (std::max)(startPoint.y, endPoint.y)) };
+    }
+
+    bool TryWorldPointToViewport(
+        const XMVECTOR& worldPosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        ImVec2& outScreenPosition)
+    {
+        const XMMATRIX viewProjection = camera.GetViewMatrixZUp() * camera.GetProjectionMatrix();
+        const XMVECTOR projected = XMVector4Transform(worldPosition, viewProjection);
+        const float clipW = XMVectorGetW(projected);
+        if (clipW <= 0.0f)
+        {
+            return false;
+        }
+
+        const XMVECTOR ndc = XMVectorScale(projected, 1.0f / clipW);
+        const float ndcX = XMVectorGetX(ndc);
+        const float ndcY = XMVectorGetY(ndc);
+        const float ndcZ = XMVectorGetZ(ndc);
+        if (ndcZ < 0.0f || ndcZ > 1.0f)
+        {
+            return false;
+        }
+
+        outScreenPosition.x = viewportOrigin.x + ((ndcX * 0.5f) + 0.5f) * viewportSize.x;
+        outScreenPosition.y = viewportOrigin.y + ((-ndcY * 0.5f) + 0.5f) * viewportSize.y;
+        return true;
+    }
+
+    bool TryGetManualGizmoScreenGeometry(
+        const XMFLOAT3& pivotWorldPosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        ImVec2& outPivotScreenPosition,
+        ImVec2& outXAxisEnd,
+        ImVec2& outYAxisEnd,
+        ImVec2& outZAxisEnd)
+    {
+        const XMVECTOR pivot = XMVectorSet(pivotWorldPosition.x, pivotWorldPosition.y, pivotWorldPosition.z, 1.0f);
+
+        // Calculate distance from camera to pivot to maintain consistent screen-space gizmo size
+        const XMVECTOR cameraPosition = XMLoadFloat3(&camera.GetPosition());
+        const XMVECTOR toPivot = XMVectorSubtract(pivot, cameraPosition);
+        const float distanceToPivot = XMVectorGetX(XMVector3Length(toPivot));
+
+        // Scale gizmo size based on distance to maintain consistent screen-space appearance
+        // At reference distance of 10 units, use the default size
+        constexpr float referenceDistance = 10.0f;
+        const float scaleFactor = distanceToPivot / referenceDistance;
+        const float adjustedAxisLength = ManualGizmoAxisLengthWorldUnits * scaleFactor;
+
+        const XMVECTOR xAxisWorldEnd = XMVectorAdd(pivot, XMVectorSet(adjustedAxisLength, 0.0f, 0.0f, 0.0f));
+        const XMVECTOR yAxisWorldEnd = XMVectorAdd(pivot, XMVectorSet(0.0f, adjustedAxisLength, 0.0f, 0.0f));
+        const XMVECTOR zAxisWorldEnd = XMVectorAdd(pivot, XMVectorSet(0.0f, 0.0f, adjustedAxisLength, 0.0f));
+
+        return TryWorldPointToViewport(pivot, viewportOrigin, viewportSize, camera, outPivotScreenPosition)
+            && TryWorldPointToViewport(xAxisWorldEnd, viewportOrigin, viewportSize, camera, outXAxisEnd)
+            && TryWorldPointToViewport(yAxisWorldEnd, viewportOrigin, viewportSize, camera, outYAxisEnd)
+            && TryWorldPointToViewport(zAxisWorldEnd, viewportOrigin, viewportSize, camera, outZAxisEnd);
+    }
+
+    bool TryGetRayFromViewportPoint(
+        const ImVec2& mousePosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        XMVECTOR& outRayOrigin,
+        XMVECTOR& outRayDirection)
+    {
+        if (viewportSize.x <= 1.0f || viewportSize.y <= 1.0f)
+        {
+            return false;
+        }
+
+        const float normalizedX = ((mousePosition.x - viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f;
+        const float normalizedY = 1.0f - (((mousePosition.y - viewportOrigin.y) / viewportSize.y) * 2.0f);
+        const XMVECTOR nearPoint = XMVectorSet(normalizedX, normalizedY, 0.0f, 1.0f);
+        const XMVECTOR farPoint = XMVectorSet(normalizedX, normalizedY, 1.0f, 1.0f);
+
+        const XMMATRIX inverseViewProjection = XMMatrixInverse(nullptr, camera.GetViewMatrixZUp() * camera.GetProjectionMatrix());
+        outRayOrigin = XMVector3TransformCoord(nearPoint, inverseViewProjection);
+        const XMVECTOR rayFar = XMVector3TransformCoord(farPoint, inverseViewProjection);
+        outRayDirection = XMVector3Normalize(XMVectorSubtract(rayFar, outRayOrigin));
+        return true;
+    }
+
+    bool TryIntersectRayWithPlane(
+        const XMVECTOR& rayOrigin,
+        const XMVECTOR& rayDirection,
+        const XMVECTOR& planePoint,
+        const XMVECTOR& planeNormal,
+        XMVECTOR& outHitPoint)
+    {
+        const float denominator = XMVectorGetX(XMVector3Dot(rayDirection, planeNormal));
+        if (std::abs(denominator) < 0.0001f)
+        {
+            return false;
+        }
+
+        const float hitDistance = XMVectorGetX(XMVector3Dot(XMVectorSubtract(planePoint, rayOrigin), planeNormal)) / denominator;
+        if (hitDistance < 0.0f)
+        {
+            return false;
+        }
+
+        outHitPoint = XMVectorAdd(rayOrigin, XMVectorScale(rayDirection, hitDistance));
+        return true;
+    }
+
+    XMVECTOR GetPlaneNormalForHandle(const Editor::ManualGizmoHandle handle)
+    {
+        switch (handle)
+        {
+        case Editor::ManualGizmoHandle::TranslateXYPlane:
+            return XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        case Editor::ManualGizmoHandle::TranslateXZPlane:
+            return XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        case Editor::ManualGizmoHandle::TranslateYZPlane:
+            return XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        default:
+            return XMVectorZero();
+        }
+    }
+
+    XMVECTOR GetAxisDirectionForHandle(const Editor::ManualGizmoHandle handle)
+    {
+        switch (handle)
+        {
+        case Editor::ManualGizmoHandle::TranslateXAxis:
+        case Editor::ManualGizmoHandle::ScaleXAxis:
+            return XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        case Editor::ManualGizmoHandle::TranslateYAxis:
+        case Editor::ManualGizmoHandle::ScaleYAxis:
+            return XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        case Editor::ManualGizmoHandle::TranslateZAxis:
+        case Editor::ManualGizmoHandle::ScaleZAxis:
+            return XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        default:
+            return XMVectorZero();
+        }
+    }
+
+    float DistanceSquaredToSegment(const ImVec2& point, const ImVec2& segmentStart, const ImVec2& segmentEnd)
+    {
+        const ImVec2 segmentDelta(segmentEnd.x - segmentStart.x, segmentEnd.y - segmentStart.y);
+        const float segmentLengthSquared = (segmentDelta.x * segmentDelta.x) + (segmentDelta.y * segmentDelta.y);
+        if (segmentLengthSquared <= 0.0001f)
+        {
+            const float pointDeltaX = point.x - segmentStart.x;
+            const float pointDeltaY = point.y - segmentStart.y;
+            return (pointDeltaX * pointDeltaX) + (pointDeltaY * pointDeltaY);
+        }
+
+        const float projection = ((point.x - segmentStart.x) * segmentDelta.x + (point.y - segmentStart.y) * segmentDelta.y) / segmentLengthSquared;
+        const float clampedProjection = (std::clamp)(projection, 0.0f, 1.0f);
+        const ImVec2 closestPoint(segmentStart.x + (segmentDelta.x * clampedProjection), segmentStart.y + (segmentDelta.y * clampedProjection));
+        const float pointDeltaX = point.x - closestPoint.x;
+        const float pointDeltaY = point.y - closestPoint.y;
+        return (pointDeltaX * pointDeltaX) + (pointDeltaY * pointDeltaY);
+    }
+
+    float DistanceSquared(const ImVec2& a, const ImVec2& b)
+    {
+        const float deltaX = a.x - b.x;
+        const float deltaY = a.y - b.y;
+        return (deltaX * deltaX) + (deltaY * deltaY);
+    }
+
+    ImVec2 NormalizeImVec2(const ImVec2& value)
+    {
+        const float lengthSquared = (value.x * value.x) + (value.y * value.y);
+        if (lengthSquared <= 0.0001f)
+        {
+            return ImVec2(0.0f, 0.0f);
+        }
+
+        const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+        return ImVec2(value.x * inverseLength, value.y * inverseLength);
+    }
+
+    void DrawProjectedRotationRing(
+        ImDrawList* drawList,
+        const XMFLOAT3& pivotWorldPosition,
+        const XMVECTOR& axisDirection,
+        float radiusWorldUnits,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        ImU32 color,
+        float thickness)
+    {
+        if (drawList == nullptr)
+        {
+            return;
+        }
+
+        const XMVECTOR normalizedAxis = XMVector3Normalize(axisDirection);
+        const XMVECTOR upReference = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        const XMVECTOR fallbackReference = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        const float axisAlignment = std::abs(XMVectorGetX(XMVector3Dot(normalizedAxis, upReference)));
+        const XMVECTOR tangentReference = axisAlignment > 0.95f ? fallbackReference : upReference;
+
+        XMVECTOR tangent = XMVector3Normalize(XMVector3Cross(normalizedAxis, tangentReference));
+        XMVECTOR bitangent = XMVector3Normalize(XMVector3Cross(normalizedAxis, tangent));
+        const XMVECTOR pivot = XMVectorSet(pivotWorldPosition.x, pivotWorldPosition.y, pivotWorldPosition.z, 1.0f);
+
+        constexpr int ringSegmentCount = 64;
+        ImVec2 previousPoint{};
+        bool hasPreviousPoint = false;
+
+        // Project a real 3D circle around the selected axis so the fallback rotate gizmo reads like a standard editor ring.
+        for (int segmentIndex = 0; segmentIndex <= ringSegmentCount; ++segmentIndex)
+        {
+            const float angle = (XM_2PI * static_cast<float>(segmentIndex)) / static_cast<float>(ringSegmentCount);
+            const XMVECTOR ringOffset = XMVectorAdd(
+                XMVectorScale(tangent, std::cos(angle) * radiusWorldUnits),
+                XMVectorScale(bitangent, std::sin(angle) * radiusWorldUnits));
+
+            ImVec2 projectedPoint{};
+            const bool projected = TryWorldPointToViewport(
+                XMVectorAdd(pivot, ringOffset),
+                viewportOrigin,
+                viewportSize,
+                camera,
+                projectedPoint);
+
+            if (projected)
+            {
+                if (hasPreviousPoint)
+                {
+                    drawList->AddLine(previousPoint, projectedPoint, color, thickness);
+                }
+
+                previousPoint = projectedPoint;
+                hasPreviousPoint = true;
+            }
+            else
+            {
+                hasPreviousPoint = false;
+            }
+        }
+    }
+
+}
+
+Editor::Editor()
+{
+    const std::filesystem::path screenshotDirectory = GetDefaultScreenshotDirectory();
+    std::error_code errorCode;
+    std::filesystem::create_directories(screenshotDirectory, errorCode);
+    mScreenshotOutputFolder = screenshotDirectory.string();
+
+    UINT renderWidth = 0;
+    UINT renderHeight = 0;
+    if (DX12Context_GetRenderSize(&renderWidth, &renderHeight) && renderWidth > 0 && renderHeight > 0)
+    {
+        mViewportResolutionWidth = static_cast<int>(renderWidth);
+        mViewportResolutionHeight = static_cast<int>(renderHeight);
+    }
+}
+
+bool Editor::CanCopySelectedEntity() const
+{
+    return !mGeometryPrototypeSelected
+        && mSelectedEntityIndex >= 0
+        && mSelectedEntityIndex < static_cast<int>(mEntities.size());
+}
+
+bool Editor::CanPasteEntity() const
+{
+    return mCopiedEntity.has_value();
+}
+
+bool Editor::CanDeleteSelectedEntity() const
+{
+    return CanCopySelectedEntity();
+}
+
+bool Editor::CopySelectedEntity()
+{
+    if (!CanCopySelectedEntity())
+    {
+        return false;
+    }
+
+    mCopiedEntity = mEntities[static_cast<size_t>(mSelectedEntityIndex)];
+    mLastSceneStatusMessage = std::string("Copied ") + mCopiedEntity->Name;
+    return true;
+}
+
+bool Editor::PasteCopiedEntity()
+{
+    if (!mCopiedEntity.has_value())
+    {
+        return false;
+    }
+
+    Entity pastedEntity = *mCopiedEntity;
+    pastedEntity.Name = std::string("Geometry ") + std::to_string(mNextGeometryInstanceId++);
+    pastedEntity.Transform.Position.x += 1.0f;
+    pastedEntity.Transform.Position.y += 1.0f;
+
+    mEntities.push_back(std::move(pastedEntity));
+    mGeometryPrototypeSelected = false;
+    mPointLightPrototypeSelected = false;
+    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+    mLastSceneStatusMessage = std::string("Pasted ") + mEntities.back().Name;
+    return true;
+}
+
+bool Editor::DeleteSelectedEntity()
+{
+    if (!CanDeleteSelectedEntity())
+    {
+        return false;
+    }
+
+    const std::string deletedEntityName = mEntities[static_cast<size_t>(mSelectedEntityIndex)].Name;
+    mEntities.erase(mEntities.begin() + mSelectedEntityIndex);
+    mSelectedEntityIndex = -1;
+    mGeometryPrototypeSelected = false;
+    mPointLightPrototypeSelected = false;
+    mLastSceneStatusMessage = std::string("Deleted ") + deletedEntityName;
+    return true;
+}
+
+bool Editor::SaveSceneToFile(const std::string& filepath)
+{
+    Scene scene{ &mEntities, mTimeOfDaySettings, mTaaSettings, mRtgiSettings, mRtaoSettings, mGtaoSettings, mAgxSettings, mVolumetricFogSettings, mBloomSettings };
+    SceneSerializer serializer(&scene);
+    serializer.Serialize(filepath);
+
+    mCurrentSceneFilePath = filepath;
+    mLastSceneStatusMessage = std::string("Saved scene to ") + filepath;
+    return true;
+}
+
+bool Editor::LoadSceneFromFile(const std::string& filepath)
+{
+    Scene scene{ &mEntities, mTimeOfDaySettings, mTaaSettings, mRtgiSettings, mRtaoSettings, mGtaoSettings, mAgxSettings, mVolumetricFogSettings, mBloomSettings };
+    SceneSerializer serializer(&scene);
+    if (!serializer.Deserialize(filepath))
+    {
+        mLastSceneStatusMessage = std::string("Failed to load scene from ") + filepath;
+        return false;
+    }
+
+    mCurrentSceneFilePath = filepath;
+    mLastSceneStatusMessage = std::string("Loaded scene from ") + filepath;
+    mGeometryPrototypeSelected = false;
+    mPointLightPrototypeSelected = false;
+    mSelectedEntityIndex = mEntities.empty() ? -1 : 0;
+    return true;
+}
+
+bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    if (mGeometryIconLoadAttempted)
+    {
+        return true;
+    }
+
+    mGeometryIconLoadAttempted = true;
+
+    const bool geometryIconLoaded = LoadGeometryIcon(commandList);
+    LoadIconTexture(L"Select.png", mSelectIcon, nullptr, commandList);
+    LoadIconTexture(L"Move.png", mMoveIcon, nullptr, commandList);
+    LoadIconTexture(L"Rotate.png", mRotateIcon, nullptr, commandList);
+    LoadIconTexture(L"Scale.png", mScaleIcon, nullptr, commandList);
+    return geometryIconLoaded;
+}
+
+void Editor::Shutdown()
+{
+    ReleaseIconTexture(mGeometryIcon);
+    ReleaseIconTexture(mSelectIcon);
+    ReleaseIconTexture(mMoveIcon);
+    ReleaseIconTexture(mRotateIcon);
+    ReleaseIconTexture(mScaleIcon);
+    mGeometryIconLoadAttempted = false;
+    mGeometryIconStatus.clear();
+}
+
+void Editor::Draw(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    bool showStatistics)
+{
+    mSceneStatusMessage = sceneStatusMessage;
+    mViewportStatisticsText = statisticsText;
+    mShowViewportStatistics = showStatistics;
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(mainViewport->WorkPos.x, mainViewport->WorkPos.y),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(mainViewport->WorkSize.x, mainViewport->WorkSize.y),
+        ImGuiCond_Always);
+    DrawViewport(sceneTextureHandle, camera, GetSelectedEntity());
+
+    if (mShowComponentsPanel)
+    {
+        DrawComponentsPanel();
+    }
+
+    if (mShowLevelExplorerPanel)
+    {
+        DrawLevelExplorerPanel();
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(270.0f, 30.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(120.0f, 36.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    {
+        // Fall back to the geometry icon only if one of the dedicated toolbar icons is unavailable.
+        DrawToolbar(
+            mSelectIcon.GpuHandle.ptr != 0 ? mSelectIcon.GpuHandle : mGeometryIcon.GpuHandle,
+            mMoveIcon.GpuHandle.ptr != 0 ? mMoveIcon.GpuHandle : mGeometryIcon.GpuHandle,
+            mRotateIcon.GpuHandle.ptr != 0 ? mRotateIcon.GpuHandle : mGeometryIcon.GpuHandle,
+            mScaleIcon.GpuHandle.ptr != 0 ? mScaleIcon.GpuHandle : mGeometryIcon.GpuHandle);
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(1200.0f, 30.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 480.0f), ImGuiCond_FirstUseEver);
+    if (mShowPropertiesPanel)
+    {
+        DrawPropertiesPanel(GetSelectedEntity());
+    }
+}
+
+void Editor::DrawToolbar(
+    D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon)
+{
+    const ImVec2 buttonSize(20.0f, 20.0f);
+    const ImVec4 highlightedButtonColor(0.95f, 0.55f, 0.12f, 1.0f);
+    const ImVec4 highlightedHoveredColor(1.00f, 0.65f, 0.20f, 1.0f);
+    const ImVec4 highlightedActiveColor(0.85f, 0.42f, 0.08f, 1.0f);
+
+    const auto drawToolButton = [this, buttonSize, highlightedButtonColor, highlightedHoveredColor, highlightedActiveColor](
+        const char* buttonId,
+        const char* fallbackLabel,
+        const char* tooltip,
+        D3D12_GPU_DESCRIPTOR_HANDLE iconHandle,
+        const GizmoType gizmoType)
+    {
+        const bool isActive = mActiveGizmo == gizmoType;
+        if (isActive)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, highlightedButtonColor);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, highlightedHoveredColor);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, highlightedActiveColor);
+        }
+
+        if (ImGui::ImageButton(buttonId, TextureIdFromHandle(iconHandle), buttonSize))
+        {
+            // Match the palette behavior by letting the active tool toggle itself off when clicked again.
+            mActiveGizmo = isActive ? GizmoType::None : gizmoType;
+        }
+
+        if (iconHandle.ptr == 0)
+        {
+            const ImVec2 rectMin = ImGui::GetItemRectMin();
+            const ImVec2 rectMax = ImGui::GetItemRectMax();
+            const ImVec2 labelSize = ImGui::CalcTextSize(fallbackLabel);
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(
+                    rectMin.x + ((rectMax.x - rectMin.x) - labelSize.x) * 0.5f,
+                    rectMin.y + ((rectMax.y - rectMin.y) - labelSize.y) * 0.5f),
+                IM_COL32(240, 240, 240, 255),
+                fallbackLabel);
+        }
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", tooltip);
+        }
+
+        if (isActive)
+        {
+            ImGui::PopStyleColor(3);
+        }
+    };
+
+    drawToolButton("##ToolbarSelect", "S", "Select", selectIcon, GizmoType::None);
+    ImGui::SameLine();
+    drawToolButton("##ToolbarMove", "T", "Translate", moveIcon, GizmoType::Translate);
+    ImGui::SameLine();
+    drawToolButton("##ToolbarRotate", "R", "Rotate", rotateIcon, GizmoType::Rotate);
+    ImGui::SameLine();
+    drawToolButton("##ToolbarScale", "Sc", "Scale", scaleIcon, GizmoType::Scale);
+}
+
+void Editor::DrawPropertiesPanel(Entity* selectedEntity)
+{
+    if (!ImGui::Begin("Properties", &mShowPropertiesPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (selectedEntity == nullptr)
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("Entity: %s", selectedEntity->Name.c_str());
+    ImGui::Separator();
+
+    // Editable name field so the user can rename the entity directly from the properties panel.
+    {
+        char nameBuf[256] = {};
+        const std::size_t copyLen = (std::min)(selectedEntity->Name.size(), std::size(nameBuf) - 1);
+        std::memcpy(nameBuf, selectedEntity->Name.c_str(), copyLen);
+        if (ImGui::InputText("Name", nameBuf, IM_ARRAYSIZE(nameBuf)))
+        {
+            selectedEntity->Name = nameBuf;
+        }
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::CollapsingHeader("TransformComponent", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        // DragFloat3 keeps the component editing path lightweight while still exposing precise transform tweaks.
+        ImGui::DragFloat3("Position", &selectedEntity->Transform.Position.x, 0.1f);
+
+        // Rotation is stored internally in radians; convert to degrees for display and back on edit.
+        XMFLOAT3 rotDeg{
+            XMConvertToDegrees(selectedEntity->Transform.Rotation.x),
+            XMConvertToDegrees(selectedEntity->Transform.Rotation.y),
+            XMConvertToDegrees(selectedEntity->Transform.Rotation.z)
+        };
+        if (ImGui::DragFloat3("Rotation", &rotDeg.x, 1.0f))
+        {
+            selectedEntity->Transform.Rotation.x = XMConvertToRadians(rotDeg.x);
+            selectedEntity->Transform.Rotation.y = XMConvertToRadians(rotDeg.y);
+            selectedEntity->Transform.Rotation.z = XMConvertToRadians(rotDeg.z);
+        }
+
+        ImGui::DragFloat3("Scale", &selectedEntity->Transform.Scale.x, 0.05f);
+    }
+
+    // Only show mesh and material assignment for entities that have (or could have) a mesh.
+    // Point light entities don't use a mesh, so we skip this section for them.
+    if (!selectedEntity->HasPointLightComponent())
+    {
+    if (ImGui::CollapsingHeader("Mesh & Material", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        // Ensure the entity has a MeshComponent so we can write into it.
+        MeshComponent& meshComp = selectedEntity->AddMeshComponent();
+
+        // --- Mesh path ---
+        ImGui::TextUnformatted("Mesh");
+
+        // Editable input box so the user can type or paste a path directly without using the file dialog.
+        // Refresh the local buffers whenever the selected entity changes.
+        static Entity* lastEntityForPaths = nullptr;
+        static char meshPathBuf[MAX_PATH] = {};
+        static char matPathBuf[MAX_PATH] = {};
+        if (selectedEntity != lastEntityForPaths)
+        {
+            lastEntityForPaths = selectedEntity;
+            strncpy_s(meshPathBuf, meshComp.MeshPath.c_str(), MAX_PATH - 1);
+            strncpy_s(matPathBuf, meshComp.MaterialPath.c_str(), MAX_PATH - 1);
+        }
+
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##MeshPath", meshPathBuf, MAX_PATH))
+        {
+            meshComp.MeshPath = meshPathBuf;
+            meshComp.MeshAsset.reset();
+        }
+
+        if (ImGui::Button("Browse Mesh..."))
+        {
+            // Open a file dialog limited to .fbx and .ptero files inside the Data directory.
+            char filePathBuffer[MAX_PATH] = {};
+            OPENFILENAMEA openFileName{};
+            openFileName.lStructSize = sizeof(openFileName);
+            openFileName.hwndOwner = GetActiveWindow();
+            openFileName.lpstrTitle = "Select Mesh (FBX)";
+            openFileName.lpstrFilter = "FBX / Ptero Mesh\0*.fbx;*.ptero\0All Files\0*.*\0";
+            openFileName.lpstrFile = filePathBuffer;
+            openFileName.nMaxFile = static_cast<DWORD>(std::size(filePathBuffer));
+            openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+
+            if (GetOpenFileNameA(&openFileName))
+            {
+                meshComp.MeshPath = filePathBuffer;
+                strncpy_s(meshPathBuf, filePathBuffer, MAX_PATH - 1);
+                // Clear the cached asset so it will be reloaded on next use.
+                meshComp.MeshAsset.reset();
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Mesh"))
+        {
+            meshComp.MeshPath.clear();
+            meshComp.MeshAsset.reset();
+            meshPathBuf[0] = '\0';
+        }
+
+        ImGui::Spacing();
+
+        // --- Material path ---
+        ImGui::TextUnformatted("Material");
+
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##MaterialPath", matPathBuf, MAX_PATH))
+        {
+            meshComp.MaterialPath = matPathBuf;
+        }
+
+        if (ImGui::Button("Browse Material..."))
+        {
+            char filePathBuffer[MAX_PATH] = {};
+            OPENFILENAMEA openFileName{};
+            openFileName.lStructSize = sizeof(openFileName);
+            openFileName.hwndOwner = GetActiveWindow();
+            openFileName.lpstrTitle = "Select Material or Multi-Material (JSON)";
+            openFileName.lpstrFilter = "Material JSON\0*.json\0All Files\0*.*\0";
+            openFileName.lpstrFile = filePathBuffer;
+            openFileName.nMaxFile = static_cast<DWORD>(std::size(filePathBuffer));
+            openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+
+            if (GetOpenFileNameA(&openFileName))
+            {
+                meshComp.MaterialPath = filePathBuffer;
+                strncpy_s(matPathBuf, filePathBuffer, MAX_PATH - 1);
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Material"))
+        {
+            meshComp.MaterialPath.clear();
+            matPathBuf[0] = '\0';
+        }
+    }
+    } // end !HasPointLightComponent()
+
+    // Point light properties – only shown when this entity has a PointLightComponent.
+    if (selectedEntity->HasPointLightComponent())
+    {
+        if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            PointLightComponent& pl = *selectedEntity->PointLight;
+
+            // Luminous flux in lumens; 800 lm ≈ 60W incandescent.
+            ImGui::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f, "%.1f lm");
+
+            // Influence radius in world units.
+            ImGui::DragFloat("Radius", &pl.Radius, 0.1f, 0.0f, 10000.0f, "%.2f");
+
+            // Physical source size; non-zero produces soft area-light shadows.
+            ImGui::DragFloat("Source Radius", &pl.SourceRadius, 0.01f, 0.0f, 100.0f, "%.3f");
+
+            // Falloff exponent: 2 = inverse-square (physically correct), lower = softer.
+            ImGui::DragFloat("Falloff Exponent", &pl.FalloffExponent, 0.05f, 0.5f, 8.0f, "%.2f");
+
+            ImGui::Checkbox("Cast Shadows", &pl.CastShadows);
+
+            ImGui::Separator();
+
+            // Toggle between RGB color and blackbody temperature.
+            ImGui::Checkbox("Use Temperature", &pl.UseTemperature);
+
+            if (pl.UseTemperature)
+            {
+                // Color temperature in Kelvin; 6500 K ≈ daylight white.
+                ImGui::DragFloat("Temperature (K)", &pl.TemperatureKelvin, 50.0f, 1000.0f, 20000.0f, "%.0f K");
+            }
+            else
+            {
+                // Linear HDR RGB color picker.
+                float color[3] = { pl.ColorR, pl.ColorG, pl.ColorB };
+                if (ImGui::ColorEdit3("Color", color, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                {
+                    pl.ColorR = color[0];
+                    pl.ColorG = color[1];
+                    pl.ColorB = color[2];
+                }
+            }
+        }
+    }
+
+    ImGui::End();
+}
+
+void Editor::DrawViewport(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    Entity* selectedEntity)
+{
+    // Keep the main viewport static so the scene remains anchored while the tool panels can move around it.
+    if (!ImGui::Begin(
+        "Viewport",
+        nullptr,
+        ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoBringToFrontOnFocus
+        | ImGuiWindowFlags_MenuBar))
+    {
+        ImGui::End();
+        return;
+    }
+
+    // Add menu bar for viewport controls
+    if (ImGui::BeginMenuBar())
+    {
+        if (ImGui::BeginMenu("Options"))
+        {
+            if (ImGui::MenuItem("Resolution..."))
+            {
+                mShowViewportResolutionDialog = true;
+            }
+
+            if (ImGui::MenuItem("Screenshot..."))
+            {
+                mShowScreenshotDialog = true;
+            }
+
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
+
+    const ImVec2 viewportOrigin = ImGui::GetCursorScreenPos();
+    const ImVec2 viewportSize = ImGui::GetContentRegionAvail();
+    bool viewportHovered = false;
+    if (sceneTextureHandle.ptr != 0 && viewportSize.x > 1.0f && viewportSize.y > 1.0f)
+    {
+        ImGui::Image(TextureIdFromHandle(sceneTextureHandle), viewportSize);
+        viewportHovered = ImGui::IsItemHovered();
+        DrawViewportStatisticsOverlay();
+
+        DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
+        DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+
+        HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
+        HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
+    }
+    else
+    {
+        ImGui::TextUnformatted("Scene render target is not ready yet.");
+        if (mSceneStatusMessage != nullptr && mSceneStatusMessage[0] != '\0')
+        {
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", mSceneStatusMessage);
+        }
+    }
+
+    if (PT_EDITOR_HAS_IMGUIZMO && selectedEntity != nullptr && mActiveGizmo != GizmoType::None && viewportSize.x > 1.0f && viewportSize.y > 1.0f)
+    {
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(viewportOrigin.x, viewportOrigin.y, viewportSize.x, viewportSize.y);
+
+        XMFLOAT4X4 viewMatrix{};
+        XMFLOAT4X4 projectionMatrix{};
+        XMFLOAT4X4 worldMatrix{};
+
+        // ImGuizmo expects float arrays, so the DirectXMath matrices are copied into float4x4 storage before editing.
+        XMStoreFloat4x4(&viewMatrix, XMMatrixTranspose(camera.GetViewMatrixZUp()));
+        XMStoreFloat4x4(&projectionMatrix, XMMatrixTranspose(camera.GetProjectionMatrix()));
+        XMStoreFloat4x4(&worldMatrix, XMMatrixTranspose(selectedEntity->Transform.GetTransform()));
+
+        ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+        switch (mActiveGizmo)
+        {
+        case GizmoType::Translate:
+            operation = ImGuizmo::TRANSLATE;
+            break;
+        case GizmoType::Rotate:
+            operation = ImGuizmo::ROTATE;
+            break;
+        case GizmoType::Scale:
+            operation = ImGuizmo::SCALE;
+            break;
+        case GizmoType::None:
+        default:
+            break;
+        }
+
+        ImGuizmo::Manipulate(
+            &viewMatrix.m[0][0],
+            &projectionMatrix.m[0][0],
+            operation,
+            ImGuizmo::WORLD,
+            &worldMatrix.m[0][0]);
+
+        if (ImGuizmo::IsUsing())
+        {
+            const XMMATRIX manipulatedWorld = XMMatrixTranspose(XMLoadFloat4x4(&worldMatrix));
+            XMVECTOR scale{};
+            XMVECTOR rotationQuaternion{};
+            XMVECTOR translation{};
+            if (XMMatrixDecompose(&scale, &rotationQuaternion, &translation, manipulatedWorld))
+            {
+                XMStoreFloat3(&selectedEntity->Transform.Position, translation);
+                XMStoreFloat3(&selectedEntity->Transform.Scale, scale);
+                selectedEntity->Transform.Rotation = QuaternionToEulerRadians(rotationQuaternion);
+            }
+        }
+    }
+
+    // Resolution change dialog
+    if (mShowViewportResolutionDialog)
+    {
+        ImGui::OpenPopup("Viewport Resolution");
+        mShowViewportResolutionDialog = false;
+    }
+
+    if (ImGui::BeginPopupModal("Viewport Resolution", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Set viewport render resolution:");
+        ImGui::Separator();
+
+        ImGui::InputInt("Width", &mViewportResolutionWidth);
+        ImGui::InputInt("Height", &mViewportResolutionHeight);
+
+        mViewportResolutionWidth = (std::max)(1, mViewportResolutionWidth);
+        mViewportResolutionHeight = (std::max)(1, mViewportResolutionHeight);
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Common Resolutions"))
+        {
+            ImGui::OpenPopup("ResolutionPresets");
+        }
+
+        if (ImGui::BeginPopup("ResolutionPresets"))
+        {
+            if (ImGui::MenuItem("1920 x 1080 (Full HD)")) { mViewportResolutionWidth = 1920; mViewportResolutionHeight = 1080; }
+            if (ImGui::MenuItem("2560 x 1440 (2K)")) { mViewportResolutionWidth = 2560; mViewportResolutionHeight = 1440; }
+            if (ImGui::MenuItem("3840 x 2160 (4K)")) { mViewportResolutionWidth = 3840; mViewportResolutionHeight = 2160; }
+            if (ImGui::MenuItem("1280 x 720 (HD)")) { mViewportResolutionWidth = 1280; mViewportResolutionHeight = 720; }
+            if (ImGui::MenuItem("1600 x 900")) { mViewportResolutionWidth = 1600; mViewportResolutionHeight = 900; }
+            ImGui::EndPopup();
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Apply", ImVec2(120, 0)))
+        {
+            mRequestViewportResolutionChange = true;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // Screenshot dialog
+    if (mShowScreenshotDialog)
+    {
+        ImGui::OpenPopup("Take Screenshot");
+        mShowScreenshotDialog = false;
+    }
+
+    if (ImGui::BeginPopupModal("Take Screenshot", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Screenshot will be saved as PNG with auto-generated filename.");
+        ImGui::Separator();
+
+        static char screenshotFolderBuffer[MAX_PATH] = {};
+        static std::string lastLoadedScreenshotFolder;
+        if (lastLoadedScreenshotFolder != mScreenshotOutputFolder)
+        {
+            lastLoadedScreenshotFolder = mScreenshotOutputFolder;
+            screenshotFolderBuffer[0] = '\0';
+            strncpy_s(screenshotFolderBuffer, mScreenshotOutputFolder.c_str(), MAX_PATH - 1);
+        }
+
+        ImGui::InputText("Output Folder", screenshotFolderBuffer, MAX_PATH);
+
+        const std::string effectiveScreenshotFolder = screenshotFolderBuffer[0] != '\0'
+            ? std::string(screenshotFolderBuffer)
+            : mScreenshotOutputFolder;
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Browse..."))
+        {
+            // Use SHBrowseForFolder for folder selection
+            BROWSEINFOA bi{};
+            bi.hwndOwner = GetActiveWindow();
+            bi.lpszTitle = "Select Screenshot Output Folder";
+            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+
+            LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+            if (pidl != nullptr)
+            {
+                if (SHGetPathFromIDListA(pidl, screenshotFolderBuffer))
+                {
+                    mScreenshotOutputFolder = screenshotFolderBuffer;
+                }
+                CoTaskMemFree(pidl);
+            }
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Take Screenshot", ImVec2(150, 0)))
+        {
+            if (!effectiveScreenshotFolder.empty() && EnsureDirectoryExists(effectiveScreenshotFolder))
+            {
+                mScreenshotOutputFolder = effectiveScreenshotFolder;
+                strncpy_s(screenshotFolderBuffer, mScreenshotOutputFolder.c_str(), MAX_PATH - 1);
+                mRequestScreenshot = true;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel", ImVec2(150, 0)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    ImGui::End();
+}
+
+void Editor::DrawManualGizmoPivot(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const
+{
+#if PT_EDITOR_HAS_IMGUIZMO
+    UNREFERENCED_PARAMETER(viewportOrigin);
+    UNREFERENCED_PARAMETER(viewportSize);
+    UNREFERENCED_PARAMETER(camera);
+    UNREFERENCED_PARAMETER(selectedEntity);
+#else
+    if (selectedEntity == nullptr || mActiveGizmo == GizmoType::None)
+    {
+        return;
+    }
+
+    ImVec2 pivotScreenPosition{};
+    if (!TryProjectWorldToViewport(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, pivotScreenPosition))
+    {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float axisThickness = 4.0f;
+    const float centerRadius = 8.0f;
+    const float planeHandleHalfExtent = 6.0f;
+    const float axisArrowHalfSize = 5.0f;
+    const float rotationRadius = 24.0f;
+    const float scaleHandleHalfExtent = 7.0f;
+    const ImU32 xAxisColor = IM_COL32(220, 80, 80, 255);
+    const ImU32 yAxisColor = IM_COL32(80, 220, 120, 255);
+    const ImU32 zAxisColor = IM_COL32(80, 150, 255, 255);
+    const ImU32 pivotColor = IM_COL32(250, 220, 110, 255);
+    const ImU32 planeHandleColor = IM_COL32(245, 170, 60, 230);
+    const ImU32 rotationColor = IM_COL32(110, 180, 255, 255);
+
+    ImVec2 xAxisEnd{};
+    ImVec2 yAxisEnd{};
+    ImVec2 zAxisEnd{};
+    if (!TryGetManualGizmoScreenGeometry(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, pivotScreenPosition, xAxisEnd, yAxisEnd, zAxisEnd))
+    {
+        return;
+    }
+
+    const ImVec2 xAxisDirection = NormalizeImVec2(ImVec2(xAxisEnd.x - pivotScreenPosition.x, xAxisEnd.y - pivotScreenPosition.y));
+    const ImVec2 yAxisDirection = NormalizeImVec2(ImVec2(yAxisEnd.x - pivotScreenPosition.x, yAxisEnd.y - pivotScreenPosition.y));
+    const ImVec2 zAxisDirection = NormalizeImVec2(ImVec2(zAxisEnd.x - pivotScreenPosition.x, zAxisEnd.y - pivotScreenPosition.y));
+    const ImVec2 xyPlaneCenter(
+        pivotScreenPosition.x + ((xAxisDirection.x + yAxisDirection.x) * 11.0f),
+        pivotScreenPosition.y + ((xAxisDirection.y + yAxisDirection.y) * 11.0f));
+    const ImVec2 xzPlaneCenter(
+        pivotScreenPosition.x + ((xAxisDirection.x + zAxisDirection.x) * 11.0f),
+        pivotScreenPosition.y + ((xAxisDirection.y + zAxisDirection.y) * 11.0f));
+    const ImVec2 yzPlaneCenter(
+        pivotScreenPosition.x + ((yAxisDirection.x + zAxisDirection.x) * 11.0f),
+        pivotScreenPosition.y + ((yAxisDirection.y + zAxisDirection.y) * 11.0f));
+
+    if (mActiveGizmo == GizmoType::Translate)
+    {
+        // Draw only translate handles so switching tools does not leave the move pivot visually active.
+        drawList->AddLine(pivotScreenPosition, xAxisEnd, xAxisColor, axisThickness);
+        drawList->AddTriangleFilled(
+            ImVec2(xAxisEnd.x + (xAxisDirection.x * axisArrowHalfSize), xAxisEnd.y + (xAxisDirection.y * axisArrowHalfSize)),
+            ImVec2(xAxisEnd.x - (xAxisDirection.x * axisArrowHalfSize) - (xAxisDirection.y * axisArrowHalfSize), xAxisEnd.y - (xAxisDirection.y * axisArrowHalfSize) + (xAxisDirection.x * axisArrowHalfSize)),
+            ImVec2(xAxisEnd.x - (xAxisDirection.x * axisArrowHalfSize) + (xAxisDirection.y * axisArrowHalfSize), xAxisEnd.y - (xAxisDirection.y * axisArrowHalfSize) - (xAxisDirection.x * axisArrowHalfSize)),
+            xAxisColor);
+
+        drawList->AddLine(pivotScreenPosition, zAxisEnd, zAxisColor, axisThickness);
+        drawList->AddTriangleFilled(
+            ImVec2(zAxisEnd.x + (zAxisDirection.x * axisArrowHalfSize), zAxisEnd.y + (zAxisDirection.y * axisArrowHalfSize)),
+            ImVec2(zAxisEnd.x - (zAxisDirection.x * axisArrowHalfSize) - (zAxisDirection.y * axisArrowHalfSize), zAxisEnd.y - (zAxisDirection.y * axisArrowHalfSize) + (zAxisDirection.x * axisArrowHalfSize)),
+            ImVec2(zAxisEnd.x - (zAxisDirection.x * axisArrowHalfSize) + (zAxisDirection.y * axisArrowHalfSize), zAxisEnd.y - (zAxisDirection.y * axisArrowHalfSize) - (zAxisDirection.x * axisArrowHalfSize)),
+            zAxisColor);
+
+        drawList->AddLine(pivotScreenPosition, yAxisEnd, yAxisColor, axisThickness);
+        drawList->AddTriangleFilled(
+            ImVec2(yAxisEnd.x + (yAxisDirection.x * axisArrowHalfSize), yAxisEnd.y + (yAxisDirection.y * axisArrowHalfSize)),
+            ImVec2(yAxisEnd.x - (yAxisDirection.x * axisArrowHalfSize) - (yAxisDirection.y * axisArrowHalfSize), yAxisEnd.y - (yAxisDirection.y * axisArrowHalfSize) + (yAxisDirection.x * axisArrowHalfSize)),
+            ImVec2(yAxisEnd.x - (yAxisDirection.x * axisArrowHalfSize) + (yAxisDirection.y * axisArrowHalfSize), yAxisEnd.y - (yAxisDirection.y * axisArrowHalfSize) - (yAxisDirection.x * axisArrowHalfSize)),
+            yAxisColor);
+
+        drawList->AddRectFilled(ImVec2(xyPlaneCenter.x - planeHandleHalfExtent, xyPlaneCenter.y - planeHandleHalfExtent), ImVec2(xyPlaneCenter.x + planeHandleHalfExtent, xyPlaneCenter.y + planeHandleHalfExtent), planeHandleColor, 2.0f);
+        drawList->AddRectFilled(ImVec2(xzPlaneCenter.x - planeHandleHalfExtent, xzPlaneCenter.y - planeHandleHalfExtent), ImVec2(xzPlaneCenter.x + planeHandleHalfExtent, xzPlaneCenter.y + planeHandleHalfExtent), IM_COL32(245, 170, 60, 180), 2.0f);
+        drawList->AddRectFilled(ImVec2(yzPlaneCenter.x - planeHandleHalfExtent, yzPlaneCenter.y - planeHandleHalfExtent), ImVec2(yzPlaneCenter.x + planeHandleHalfExtent, yzPlaneCenter.y + planeHandleHalfExtent), IM_COL32(245, 170, 60, 140), 2.0f);
+        drawList->AddCircleFilled(pivotScreenPosition, centerRadius, pivotColor);
+    }
+    else if (mActiveGizmo == GizmoType::Rotate)
+    {
+        // Draw only the rotate pivot so the tool matches the selected toolbar mode.
+        constexpr float rotationRingRadiusWorldUnits = 0.75f;
+
+        // Calculate distance-based scale factor to maintain consistent screen-space size
+        const XMVECTOR cameraPosition = XMLoadFloat3(&camera.GetPosition());
+        const XMVECTOR pivotWorld = XMVectorSet(selectedEntity->Transform.Position.x, selectedEntity->Transform.Position.y, selectedEntity->Transform.Position.z, 1.0f);
+        const XMVECTOR toPivot = XMVectorSubtract(pivotWorld, cameraPosition);
+        const float distanceToPivot = XMVectorGetX(XMVector3Length(toPivot));
+        constexpr float referenceDistance = 10.0f;
+        const float scaleFactor = distanceToPivot / referenceDistance;
+        const float adjustedRotationRadius = rotationRingRadiusWorldUnits * scaleFactor;
+
+        DrawProjectedRotationRing(drawList, selectedEntity->Transform.Position, XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f), adjustedRotationRadius, viewportOrigin, viewportSize, camera, xAxisColor, 3.0f);
+        DrawProjectedRotationRing(drawList, selectedEntity->Transform.Position, XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), adjustedRotationRadius, viewportOrigin, viewportSize, camera, yAxisColor, 3.0f);
+        DrawProjectedRotationRing(drawList, selectedEntity->Transform.Position, XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), adjustedRotationRadius, viewportOrigin, viewportSize, camera, zAxisColor, 3.0f);
+        drawList->AddCircleFilled(pivotScreenPosition, centerRadius - 2.0f, pivotColor);
+    }
+    else if (mActiveGizmo == GizmoType::Scale)
+    {
+        // Draw only scale handles so scaling uses a distinct pivot instead of reusing the move arrows.
+        drawList->AddLine(pivotScreenPosition, xAxisEnd, xAxisColor, axisThickness);
+        drawList->AddLine(pivotScreenPosition, yAxisEnd, yAxisColor, axisThickness);
+        drawList->AddLine(pivotScreenPosition, zAxisEnd, zAxisColor, axisThickness);
+        drawList->AddRectFilled(ImVec2(xAxisEnd.x - scaleHandleHalfExtent, xAxisEnd.y - scaleHandleHalfExtent), ImVec2(xAxisEnd.x + scaleHandleHalfExtent, xAxisEnd.y + scaleHandleHalfExtent), xAxisColor, 2.0f);
+        drawList->AddRectFilled(ImVec2(yAxisEnd.x - scaleHandleHalfExtent, yAxisEnd.y - scaleHandleHalfExtent), ImVec2(yAxisEnd.x + scaleHandleHalfExtent, yAxisEnd.y + scaleHandleHalfExtent), yAxisColor, 2.0f);
+        drawList->AddRectFilled(ImVec2(zAxisEnd.x - scaleHandleHalfExtent, zAxisEnd.y - scaleHandleHalfExtent), ImVec2(zAxisEnd.x + scaleHandleHalfExtent, zAxisEnd.y + scaleHandleHalfExtent), zAxisColor, 2.0f);
+        drawList->AddRect(ImVec2(pivotScreenPosition.x - 6.0f, pivotScreenPosition.y - 6.0f), ImVec2(pivotScreenPosition.x + 6.0f, pivotScreenPosition.y + 6.0f), pivotColor, 0.0f, 0, 2.0f);
+    }
+#endif
+}
+
+void Editor::DrawViewportPlacementIcons(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera) const
+{
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if (mShowViewportPlacementIcons && mGeometryIcon.GpuHandle.ptr != 0)
+    {
+        const float iconHalfExtent = 10.0f;
+        for (size_t entityIndex = 0; entityIndex < mEntities.size(); ++entityIndex)
+        {
+            ImVec2 screenPosition{};
+            if (!TryProjectWorldToViewport(mEntities[entityIndex].Transform.Position, viewportOrigin, viewportSize, camera, screenPosition))
+            {
+                continue;
+            }
+
+            const ImVec2 iconMin(screenPosition.x - iconHalfExtent, screenPosition.y - iconHalfExtent);
+            const ImVec2 iconMax(screenPosition.x + iconHalfExtent, screenPosition.y + iconHalfExtent);
+            drawList->AddImage(TextureIdFromHandle(mGeometryIcon.GpuHandle), iconMin, iconMax);
+
+            if (!mGeometryPrototypeSelected && mSelectedEntityIndex == static_cast<int>(entityIndex))
+            {
+                // Outline the selected placement marker so the current transform target is obvious in the viewport.
+                drawList->AddRect(iconMin, iconMax, IM_COL32(77, 144, 255, 255), 3.0f, 0, 2.0f);
+            }
+        }
+    }
+
+    if (mViewportSelection.IsDragging)
+    {
+        const SelectionRect selectionRect = MakeSelectionRect(mViewportSelection.Start, mViewportSelection.Current);
+        drawList->AddRectFilled(selectionRect.Min, selectionRect.Max, IM_COL32(77, 144, 255, 40));
+        drawList->AddRect(selectionRect.Min, selectionRect.Max, IM_COL32(77, 144, 255, 220), 0.0f, 0, 1.5f);
+    }
+}
+
+bool Editor::TryProjectWorldToViewport(
+    const XMFLOAT3& worldPosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    ImVec2& outScreenPosition) const
+{
+    const XMVECTOR world = XMVectorSet(worldPosition.x, worldPosition.y, worldPosition.z, 1.0f);
+    const XMMATRIX viewProjection = camera.GetViewMatrixZUp() * camera.GetProjectionMatrix();
+    const XMVECTOR projected = XMVector4Transform(world, viewProjection);
+    const float clipW = XMVectorGetW(projected);
+    if (clipW <= 0.0f)
+    {
+        return false;
+    }
+
+    const XMVECTOR ndc = XMVectorScale(projected, 1.0f / clipW);
+    const float ndcX = XMVectorGetX(ndc);
+    const float ndcY = XMVectorGetY(ndc);
+    const float ndcZ = XMVectorGetZ(ndc);
+    if (ndcZ < 0.0f || ndcZ > 1.0f)
+    {
+        return false;
+    }
+
+    outScreenPosition.x = viewportOrigin.x + ((ndcX * 0.5f) + 0.5f) * viewportSize.x;
+    outScreenPosition.y = viewportOrigin.y + ((-ndcY * 0.5f) + 0.5f) * viewportSize.y;
+    return true;
+}
+
+bool Editor::TryGetViewportWorldPositionOnGrid(
+    const ImVec2& mousePosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    XMFLOAT3& outWorldPosition) const
+{
+    if (viewportSize.x <= 1.0f || viewportSize.y <= 1.0f)
+    {
+        return false;
+    }
+
+    const float normalizedX = ((mousePosition.x - viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f;
+    const float normalizedY = 1.0f - (((mousePosition.y - viewportOrigin.y) / viewportSize.y) * 2.0f);
+    const XMVECTOR nearPoint = XMVectorSet(normalizedX, normalizedY, 0.0f, 1.0f);
+    const XMVECTOR farPoint = XMVectorSet(normalizedX, normalizedY, 1.0f, 1.0f);
+
+    const XMMATRIX inverseViewProjection = XMMatrixInverse(nullptr, camera.GetViewMatrixZUp() * camera.GetProjectionMatrix());
+    const XMVECTOR worldNear = XMVector3TransformCoord(nearPoint, inverseViewProjection);
+    const XMVECTOR worldFar = XMVector3TransformCoord(farPoint, inverseViewProjection);
+    const XMVECTOR rayDirection = XMVector3Normalize(XMVectorSubtract(worldFar, worldNear));
+
+    const float directionZ = XMVectorGetZ(rayDirection);
+    if (std::abs(directionZ) < 0.0001f)
+    {
+        return false;
+    }
+
+    const float hitDistance = -XMVectorGetZ(worldNear) / directionZ;
+    if (hitDistance < 0.0f)
+    {
+        return false;
+    }
+
+    const XMVECTOR worldHit = XMVectorAdd(worldNear, XMVectorScale(rayDirection, hitDistance));
+    XMStoreFloat3(&outWorldPosition, worldHit);
+    outWorldPosition.z = 0.0f;
+    return true;
+}
+
+void Editor::HandleViewportInteraction(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    bool viewportHovered)
+{
+    ImGuiIO& io = ImGui::GetIO();
+
+    const bool isCtrlPressed = io.KeyCtrl;
+    if (isCtrlPressed && ImGui::IsKeyPressed(ImGuiKey_C, false))
+    {
+        CopySelectedEntity();
+    }
+
+    if (isCtrlPressed && ImGui::IsKeyPressed(ImGuiKey_V, false))
+    {
+        PasteCopiedEntity();
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+    {
+        DeleteSelectedEntity();
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_1, false))
+    {
+        mActiveGizmo = GizmoType::None;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_2, false))
+    {
+        mActiveGizmo = GizmoType::Translate;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_3, false))
+    {
+        mActiveGizmo = GizmoType::Rotate;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_4, false))
+    {
+        mActiveGizmo = GizmoType::Scale;
+    }
+
+    if (mGeometryPrototypeSelected)
+    {
+        if (viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing())
+        {
+            XMFLOAT3 worldPosition{};
+            if (TryGetViewportWorldPositionOnGrid(io.MousePos, viewportOrigin, viewportSize, camera, worldPosition))
+            {
+                // Geometry palette placement always snaps the new component onto the ground plane by forcing Z to the grid height.
+                CreateGeometryInstanceAt(worldPosition);
+            }
+        }
+
+        return;
+    }
+
+    if (mPointLightPrototypeSelected)
+    {
+        if (viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing())
+        {
+            XMFLOAT3 worldPosition{};
+            if (TryGetViewportWorldPositionOnGrid(io.MousePos, viewportOrigin, viewportSize, camera, worldPosition))
+            {
+                // Place a new point light entity at the clicked world position.
+                Entity lightEntity;
+                lightEntity.Name = std::string("Point Light ") + std::to_string(mNextGeometryInstanceId++);
+                lightEntity.Transform.Position = worldPosition;
+                lightEntity.AddPointLightComponent();
+                mEntities.push_back(std::move(lightEntity));
+            }
+        }
+
+        return;
+    }
+
+    if (mActiveGizmo != GizmoType::None)
+    {
+        return;
+    }
+
+    if (viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing())
+    {
+        mViewportSelection.IsDragging = true;
+        mViewportSelection.Start = io.MousePos;
+        mViewportSelection.Current = io.MousePos;
+    }
+
+    if (mViewportSelection.IsDragging)
+    {
+        mViewportSelection.Current = io.MousePos;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            FinishViewportSelection(viewportOrigin, viewportSize, camera);
+        }
+    }
+}
+
+void Editor::HandleManualGizmoInteraction(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    bool viewportHovered,
+    Entity* selectedEntity)
+{
+#if PT_EDITOR_HAS_IMGUIZMO
+    UNREFERENCED_PARAMETER(viewportOrigin);
+    UNREFERENCED_PARAMETER(viewportSize);
+    UNREFERENCED_PARAMETER(camera);
+    UNREFERENCED_PARAMETER(viewportHovered);
+    UNREFERENCED_PARAMETER(selectedEntity);
+#else
+    if (selectedEntity == nullptr || mActiveGizmo == GizmoType::None)
+    {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            mManualGizmo = {};
+        }
+
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 selectedEntityScreenPosition{};
+    const bool hasProjectedSelection = TryProjectWorldToViewport(
+        selectedEntity->Transform.Position,
+        viewportOrigin,
+        viewportSize,
+        camera,
+        selectedEntityScreenPosition);
+
+    if (!mManualGizmo.IsActive)
+    {
+        if (viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hasProjectedSelection)
+        {
+            ImVec2 xAxisEnd{};
+            ImVec2 yAxisEnd{};
+            ImVec2 zAxisEnd{};
+            if (!TryGetManualGizmoScreenGeometry(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, selectedEntityScreenPosition, xAxisEnd, yAxisEnd, zAxisEnd))
+            {
+                return;
+            }
+
+            const ImVec2 xAxisDirection = NormalizeImVec2(ImVec2(xAxisEnd.x - selectedEntityScreenPosition.x, xAxisEnd.y - selectedEntityScreenPosition.y));
+            const ImVec2 yAxisDirection = NormalizeImVec2(ImVec2(yAxisEnd.x - selectedEntityScreenPosition.x, yAxisEnd.y - selectedEntityScreenPosition.y));
+            const ImVec2 zAxisDirection = NormalizeImVec2(ImVec2(zAxisEnd.x - selectedEntityScreenPosition.x, zAxisEnd.y - selectedEntityScreenPosition.y));
+            const ImVec2 xyPlaneCenter(
+                selectedEntityScreenPosition.x + ((xAxisDirection.x + yAxisDirection.x) * 11.0f),
+                selectedEntityScreenPosition.y + ((xAxisDirection.y + yAxisDirection.y) * 11.0f));
+            const ImVec2 xzPlaneCenter(
+                selectedEntityScreenPosition.x + ((xAxisDirection.x + zAxisDirection.x) * 11.0f),
+                selectedEntityScreenPosition.y + ((xAxisDirection.y + zAxisDirection.y) * 11.0f));
+            const ImVec2 yzPlaneCenter(
+                selectedEntityScreenPosition.x + ((yAxisDirection.x + zAxisDirection.x) * 11.0f),
+                selectedEntityScreenPosition.y + ((yAxisDirection.y + zAxisDirection.y) * 11.0f));
+
+            ManualGizmoHandle activeHandle = ManualGizmoHandle::None;
+            if (mActiveGizmo == GizmoType::Translate)
+            {
+                const bool withinXAxisHandle = DistanceSquaredToSegment(io.MousePos, selectedEntityScreenPosition, xAxisEnd) <= (8.0f * 8.0f);
+                const bool withinYAxisHandle = DistanceSquaredToSegment(io.MousePos, selectedEntityScreenPosition, yAxisEnd) <= (8.0f * 8.0f);
+                const bool withinZAxisHandle = DistanceSquaredToSegment(io.MousePos, selectedEntityScreenPosition, zAxisEnd) <= (8.0f * 8.0f);
+                const bool withinXYPlaneHandle = DistanceSquared(io.MousePos, xyPlaneCenter) <= (10.0f * 10.0f);
+                const bool withinXZPlaneHandle = DistanceSquared(io.MousePos, xzPlaneCenter) <= (10.0f * 10.0f);
+                const bool withinYZPlaneHandle = DistanceSquared(io.MousePos, yzPlaneCenter) <= (10.0f * 10.0f);
+
+                if (withinXYPlaneHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateXYPlane;
+                }
+                else if (withinXZPlaneHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateXZPlane;
+                }
+                else if (withinYZPlaneHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateYZPlane;
+                }
+                else if (withinXAxisHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateXAxis;
+                }
+                else if (withinYAxisHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateYAxis;
+                }
+                else if (withinZAxisHandle)
+                {
+                    activeHandle = ManualGizmoHandle::TranslateZAxis;
+                }
+            }
+            else if (mActiveGizmo == GizmoType::Rotate)
+            {
+                const float distanceFromPivot = std::sqrt(DistanceSquared(io.MousePos, selectedEntityScreenPosition));
+                if (distanceFromPivot >= 10.0f && distanceFromPivot <= 28.0f)
+                {
+                    activeHandle = ManualGizmoHandle::Rotate;
+                }
+            }
+            else if (mActiveGizmo == GizmoType::Scale)
+            {
+                const bool withinScaleXHandle = DistanceSquared(io.MousePos, xAxisEnd) <= (10.0f * 10.0f);
+                const bool withinScaleYHandle = DistanceSquared(io.MousePos, yAxisEnd) <= (10.0f * 10.0f);
+                const bool withinScaleZHandle = DistanceSquared(io.MousePos, zAxisEnd) <= (10.0f * 10.0f);
+                if (withinScaleXHandle)
+                {
+                    activeHandle = ManualGizmoHandle::ScaleXAxis;
+                }
+                else if (withinScaleYHandle)
+                {
+                    activeHandle = ManualGizmoHandle::ScaleYAxis;
+                }
+                else if (withinScaleZHandle)
+                {
+                    activeHandle = ManualGizmoHandle::ScaleZAxis;
+                }
+            }
+
+            if (activeHandle != ManualGizmoHandle::None)
+            {
+                // The fallback manipulator uses the visible pivot handle as its grab point so transforms remain usable without ImGuizmo.
+                mManualGizmo.IsActive = true;
+                mManualGizmo.ActiveHandle = activeHandle;
+                mManualGizmo.StartMouse = io.MousePos;
+                mManualGizmo.StartPosition = selectedEntity->Transform.Position;
+                mManualGizmo.StartRotation = selectedEntity->Transform.Rotation;
+                mManualGizmo.StartScale = selectedEntity->Transform.Scale;
+                mManualGizmo.StartAngle = std::atan2(io.MousePos.y - selectedEntityScreenPosition.y, io.MousePos.x - selectedEntityScreenPosition.x);
+
+                const XMVECTOR axisDirection = GetAxisDirectionForHandle(activeHandle);
+                XMStoreFloat3(&mManualGizmo.AxisWorldDirection, axisDirection);
+
+                const XMVECTOR planeNormal = GetPlaneNormalForHandle(activeHandle);
+                XMStoreFloat3(&mManualGizmo.PlaneNormal, planeNormal);
+
+                mManualGizmo.AxisScreenDirection = ImVec2(0.0f, 0.0f);
+                mManualGizmo.PixelsPerWorldUnit = 1.0f;
+
+                if (activeHandle == ManualGizmoHandle::TranslateXAxis || activeHandle == ManualGizmoHandle::ScaleXAxis)
+                {
+                    mManualGizmo.AxisScreenDirection = xAxisDirection;
+                    mManualGizmo.PixelsPerWorldUnit = (std::max)(1.0f, std::sqrt(DistanceSquared(selectedEntityScreenPosition, xAxisEnd)) / ManualGizmoAxisLengthWorldUnits);
+                }
+                else if (activeHandle == ManualGizmoHandle::TranslateYAxis || activeHandle == ManualGizmoHandle::ScaleYAxis)
+                {
+                    mManualGizmo.AxisScreenDirection = yAxisDirection;
+                    mManualGizmo.PixelsPerWorldUnit = (std::max)(1.0f, std::sqrt(DistanceSquared(selectedEntityScreenPosition, yAxisEnd)) / ManualGizmoAxisLengthWorldUnits);
+                }
+                else if (activeHandle == ManualGizmoHandle::TranslateZAxis || activeHandle == ManualGizmoHandle::ScaleZAxis)
+                {
+                    mManualGizmo.AxisScreenDirection = zAxisDirection;
+                    mManualGizmo.PixelsPerWorldUnit = (std::max)(1.0f, std::sqrt(DistanceSquared(selectedEntityScreenPosition, zAxisEnd)) / ManualGizmoAxisLengthWorldUnits);
+                }
+                else if (activeHandle == ManualGizmoHandle::TranslateXYPlane
+                    || activeHandle == ManualGizmoHandle::TranslateXZPlane
+                    || activeHandle == ManualGizmoHandle::TranslateYZPlane)
+                {
+                    XMVECTOR rayOrigin{};
+                    XMVECTOR rayDirection{};
+                    const XMVECTOR pivot = XMVectorSet(selectedEntity->Transform.Position.x, selectedEntity->Transform.Position.y, selectedEntity->Transform.Position.z, 1.0f);
+                    XMVECTOR planeHitPoint{};
+                    if (TryGetRayFromViewportPoint(io.MousePos, viewportOrigin, viewportSize, camera, rayOrigin, rayDirection)
+                        && TryIntersectRayWithPlane(rayOrigin, rayDirection, pivot, planeNormal, planeHitPoint))
+                    {
+                        XMStoreFloat3(&mManualGizmo.StartPlaneHit, planeHitPoint);
+                    }
+                }
+            }
+        }
+
+        return;
+    }
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        mManualGizmo = {};
+        return;
+    }
+
+    switch (mManualGizmo.ActiveHandle)
+    {
+    case ManualGizmoHandle::TranslateXYPlane:
+    case ManualGizmoHandle::TranslateXZPlane:
+    case ManualGizmoHandle::TranslateYZPlane:
+    {
+        XMVECTOR rayOrigin{};
+        XMVECTOR rayDirection{};
+        const XMVECTOR planeNormal = XMLoadFloat3(&mManualGizmo.PlaneNormal);
+        const XMVECTOR planePoint = XMVectorSet(mManualGizmo.StartPosition.x, mManualGizmo.StartPosition.y, mManualGizmo.StartPosition.z, 1.0f);
+        XMVECTOR planeHitPoint{};
+        if (TryGetRayFromViewportPoint(io.MousePos, viewportOrigin, viewportSize, camera, rayOrigin, rayDirection)
+            && TryIntersectRayWithPlane(rayOrigin, rayDirection, planePoint, planeNormal, planeHitPoint))
+        {
+            const XMVECTOR startPlaneHit = XMLoadFloat3(&mManualGizmo.StartPlaneHit);
+            const XMVECTOR planeDelta = XMVectorSubtract(planeHitPoint, startPlaneHit);
+            XMVECTOR newPosition = XMVectorAdd(XMLoadFloat3(&mManualGizmo.StartPosition), planeDelta);
+
+            if (mManualGizmo.ActiveHandle == ManualGizmoHandle::TranslateXYPlane)
+            {
+                newPosition = XMVectorSetZ(newPosition, mManualGizmo.StartPosition.z);
+            }
+            else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::TranslateXZPlane)
+            {
+                newPosition = XMVectorSetY(newPosition, mManualGizmo.StartPosition.y);
+            }
+            else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::TranslateYZPlane)
+            {
+                newPosition = XMVectorSetX(newPosition, mManualGizmo.StartPosition.x);
+            }
+
+            XMStoreFloat3(&selectedEntity->Transform.Position, newPosition);
+        }
+        break;
+    }
+    case ManualGizmoHandle::TranslateXAxis:
+    case ManualGizmoHandle::TranslateYAxis:
+    case ManualGizmoHandle::TranslateZAxis:
+    {
+        const ImVec2 mouseDelta(io.MousePos.x - mManualGizmo.StartMouse.x, io.MousePos.y - mManualGizmo.StartMouse.y);
+        const float projectedPixels = (mouseDelta.x * mManualGizmo.AxisScreenDirection.x) + (mouseDelta.y * mManualGizmo.AxisScreenDirection.y);
+        const float worldDelta = projectedPixels / (std::max)(1.0f, mManualGizmo.PixelsPerWorldUnit);
+        XMVECTOR newPosition = XMLoadFloat3(&mManualGizmo.StartPosition);
+        newPosition = XMVectorAdd(newPosition, XMVectorScale(XMLoadFloat3(&mManualGizmo.AxisWorldDirection), worldDelta));
+        XMStoreFloat3(&selectedEntity->Transform.Position, newPosition);
+        break;
+    }
+    case ManualGizmoHandle::Rotate:
+    {
+        const float currentAngle = std::atan2(io.MousePos.y - selectedEntityScreenPosition.y, io.MousePos.x - selectedEntityScreenPosition.x);
+        selectedEntity->Transform.Rotation.z = mManualGizmo.StartRotation.z + (currentAngle - mManualGizmo.StartAngle);
+        break;
+    }
+    case ManualGizmoHandle::ScaleXAxis:
+    case ManualGizmoHandle::ScaleYAxis:
+    case ManualGizmoHandle::ScaleZAxis:
+    {
+        const ImVec2 mouseDelta(io.MousePos.x - mManualGizmo.StartMouse.x, io.MousePos.y - mManualGizmo.StartMouse.y);
+        const float projectedPixels = (mouseDelta.x * mManualGizmo.AxisScreenDirection.x) + (mouseDelta.y * mManualGizmo.AxisScreenDirection.y);
+        const float scaleDelta = projectedPixels / ((std::max)(1.0f, mManualGizmo.PixelsPerWorldUnit) * 2.0f);
+        XMFLOAT3 updatedScale = mManualGizmo.StartScale;
+
+        if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleXAxis)
+        {
+            updatedScale.x = (std::max)(0.1f, mManualGizmo.StartScale.x + scaleDelta);
+        }
+        else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleYAxis)
+        {
+            updatedScale.y = (std::max)(0.1f, mManualGizmo.StartScale.y + scaleDelta);
+        }
+        else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleZAxis)
+        {
+            updatedScale.z = (std::max)(0.1f, mManualGizmo.StartScale.z + scaleDelta);
+        }
+
+        selectedEntity->Transform.Scale = updatedScale;
+        break;
+    }
+    case ManualGizmoHandle::Scale:
+    {
+        const float mouseDeltaX = io.MousePos.x - mManualGizmo.StartMouse.x;
+        const float uniformScale = (std::max)(0.1f, mManualGizmo.StartScale.x + (mouseDeltaX * 0.02f));
+        selectedEntity->Transform.Scale = XMFLOAT3(uniformScale, uniformScale, uniformScale);
+        break;
+    }
+    case ManualGizmoHandle::None:
+    default:
+        break;
+    }
+#endif
+}
+
+void Editor::FinishViewportSelection(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera)
+{
+    const SelectionRect selectionRect = MakeSelectionRect(mViewportSelection.Start, mViewportSelection.Current);
+    const float dragDistanceX = mViewportSelection.Current.x - mViewportSelection.Start.x;
+    const float dragDistanceY = mViewportSelection.Current.y - mViewportSelection.Start.y;
+    const bool isClickSelection = (dragDistanceX * dragDistanceX) + (dragDistanceY * dragDistanceY) < 16.0f;
+
+    int matchedEntityIndex = -1;
+    float bestDistanceMetric = FLT_MAX;
+    for (size_t entityIndex = 0; entityIndex < mEntities.size(); ++entityIndex)
+    {
+        ImVec2 screenPosition{};
+        if (!TryProjectWorldToViewport(mEntities[entityIndex].Transform.Position, viewportOrigin, viewportSize, camera, screenPosition))
+        {
+            continue;
+        }
+
+        if (isClickSelection)
+        {
+            const float deltaX = screenPosition.x - mViewportSelection.Current.x;
+            const float deltaY = screenPosition.y - mViewportSelection.Current.y;
+            const float distanceSquared = (deltaX * deltaX) + (deltaY * deltaY);
+            if (distanceSquared <= 400.0f && distanceSquared < bestDistanceMetric)
+            {
+                bestDistanceMetric = distanceSquared;
+                matchedEntityIndex = static_cast<int>(entityIndex);
+            }
+        }
+        else if (selectionRect.Contains(screenPosition))
+        {
+            const float deltaX = screenPosition.x - ((selectionRect.Min.x + selectionRect.Max.x) * 0.5f);
+            const float deltaY = screenPosition.y - ((selectionRect.Min.y + selectionRect.Max.y) * 0.5f);
+            const float distanceSquared = (deltaX * deltaX) + (deltaY * deltaY);
+            if (distanceSquared < bestDistanceMetric)
+            {
+                // Keep single-selection semantics by choosing the icon closest to the marquee center.
+                bestDistanceMetric = distanceSquared;
+                matchedEntityIndex = static_cast<int>(entityIndex);
+            }
+        }
+    }
+
+    if (matchedEntityIndex >= 0)
+    {
+        // Clicking the currently selected entity again clears it, matching the toggle behavior used elsewhere in the editor.
+        if (isClickSelection && matchedEntityIndex == mSelectedEntityIndex)
+        {
+            matchedEntityIndex = -1;
+        }
+    }
+
+    mGeometryPrototypeSelected = false;
+    mPointLightPrototypeSelected = false;
+    mSelectedEntityIndex = matchedEntityIndex;
+
+    mViewportSelection = {};
+}
+
+void Editor::CreateGeometryInstanceAt(const XMFLOAT3& worldPosition)
+{
+    Entity geometryEntity;
+    geometryEntity.Name = std::string("Geometry ") + std::to_string(mNextGeometryInstanceId++);
+    geometryEntity.Transform.Position = worldPosition;
+    geometryEntity.Transform.Scale = XMFLOAT3(1.0f, 1.0f, 1.0f);
+
+    mEntities.push_back(std::move(geometryEntity));
+}
+
+Entity* Editor::GetSelectedEntity()
+{
+    if (mGeometryPrototypeSelected)
+    {
+        return nullptr;
+    }
+
+    if (mSelectedEntityIndex < 0 || mSelectedEntityIndex >= static_cast<int>(mEntities.size()))
+    {
+        return nullptr;
+    }
+
+    return &mEntities[static_cast<size_t>(mSelectedEntityIndex)];
+}
+
+void Editor::DrawComponentsPanel()
+{
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 30.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(250.0f, 170.0f), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("Components", &mShowComponentsPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    const bool geometryPaletteSelected = mGeometryPrototypeSelected;
+    if (ImGui::Selectable("Geometry", geometryPaletteSelected))
+    {
+        // The geometry palette entry behaves like a tool: clicking it again deselects placement mode.
+        if (geometryPaletteSelected)
+        {
+            mGeometryPrototypeSelected = false;
+        }
+        else
+        {
+            mGeometryPrototypeSelected = true;
+            // Entering geometry placement mode cancels any other active prototype.
+            mPointLightPrototypeSelected = false;
+        }
+
+        mSelectedEntityIndex = -1;
+    }
+
+    // Point light palette entry: click to enter placement mode, click again to cancel.
+    const bool pointLightPaletteSelected = mPointLightPrototypeSelected;
+    if (ImGui::Selectable("Point Light", pointLightPaletteSelected))
+    {
+        if (pointLightPaletteSelected)
+        {
+            mPointLightPrototypeSelected = false;
+        }
+        else
+        {
+            mPointLightPrototypeSelected = true;
+            // Entering point light placement mode cancels any other active prototype.
+            mGeometryPrototypeSelected = false;
+        }
+
+        mSelectedEntityIndex = -1;
+    }
+
+    ImGui::Separator();
+
+    ImGui::End();
+}
+
+void Editor::DrawLevelExplorerPanel()
+{
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 210.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(250.0f, 400.0f), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("Level Explorer", &mShowLevelExplorerPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (mEntities.empty())
+    {
+        ImGui::TextDisabled("No placed components yet.");
+        ImGui::End();
+        return;
+    }
+
+    for (size_t entityIndex = 0; entityIndex < mEntities.size(); ++entityIndex)
+    {
+        Entity& entity = mEntities[entityIndex];
+        ImGui::PushID(static_cast<int>(entityIndex));
+
+        if (mGeometryIcon.GpuHandle.ptr != 0)
+        {
+            ImGui::Image(TextureIdFromHandle(mGeometryIcon.GpuHandle), ImVec2(18.0f, 18.0f));
+            ImGui::SameLine();
+        }
+
+        const bool isSelected = !mGeometryPrototypeSelected && mSelectedEntityIndex == static_cast<int>(entityIndex);
+        if (ImGui::Selectable(entity.Name.c_str(), isSelected))
+        {
+            // Mirroring the toolbar toggle behavior lets the user clear the current entity selection by clicking it again.
+            if (isSelected)
+            {
+                mSelectedEntityIndex = -1;
+            }
+            else
+            {
+                mSelectedEntityIndex = static_cast<int>(entityIndex);
+            }
+
+            mGeometryPrototypeSelected = false;
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::End();
+}
+
+bool Editor::LoadGeometryIcon(ID3D12GraphicsCommandList* commandList)
+{
+    return LoadIconTexture(L"Geometry.png", mGeometryIcon, &mGeometryIconStatus, commandList);
+}
+
+bool Editor::LoadIconTexture(
+    const wchar_t* fileName,
+    IconTexture& iconTexture,
+    std::string* statusMessage,
+    ID3D12GraphicsCommandList* commandList)
+{
+    const std::string iconFileName = std::filesystem::path(fileName).filename().string();
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!(device && commandList))
+    {
+        if (statusMessage != nullptr)
+        {
+            *statusMessage = iconFileName + " will load after the DX12 device and command list are ready.";
+        }
+        return false;
+    }
+
+    const std::filesystem::path iconPath = FindIconFile(fileName);
+    if (iconPath.empty())
+    {
+        if (statusMessage != nullptr)
+        {
+            *statusMessage = "Could not find " + iconFileName + " in the workspace.";
+        }
+        return false;
+    }
+
+    DecodedImageData imageData;
+    std::string imageLoadStatus;
+    if (!LoadDecodedImage(iconPath, imageData, imageLoadStatus))
+    {
+        if (statusMessage != nullptr)
+        {
+            *statusMessage = imageLoadStatus;
+        }
+        return false;
+    }
+
+    if (!DX12Context_AllocateSrvDescriptor(&iconTexture.CpuHandle, &iconTexture.GpuHandle))
+    {
+        if (statusMessage != nullptr)
+        {
+            *statusMessage = "Failed to allocate a shader-visible descriptor for the requested icon texture.";
+        }
+        return false;
+    }
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Alignment = 0;
+    textureDesc.Width = imageData.Width;
+    textureDesc.Height = imageData.Height;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.SampleDesc.Quality = 0;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    D3D12_HEAP_PROPERTIES defaultHeapProperties{};
+    defaultHeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeapProperties.CreationNodeMask = 1;
+    defaultHeapProperties.VisibleNodeMask = 1;
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &textureDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&iconTexture.Texture)));
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT placedSubresourceFootprint{};
+    UINT numRows = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 uploadBufferSize = 0;
+    device->GetCopyableFootprints(
+        &textureDesc,
+        0,
+        1,
+        0,
+        &placedSubresourceFootprint,
+        &numRows,
+        &rowSizeInBytes,
+        &uploadBufferSize);
+
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeapProperties.CreationNodeMask = 1;
+    uploadHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC uploadBufferDesc{};
+    uploadBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    uploadBufferDesc.Alignment = 0;
+    uploadBufferDesc.Width = uploadBufferSize;
+    uploadBufferDesc.Height = 1;
+    uploadBufferDesc.DepthOrArraySize = 1;
+    uploadBufferDesc.MipLevels = 1;
+    uploadBufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uploadBufferDesc.SampleDesc.Count = 1;
+    uploadBufferDesc.SampleDesc.Quality = 0;
+    uploadBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    uploadBufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&iconTexture.Upload)));
+
+    void* mappedTextureData = nullptr;
+    DX12_THROW_IF_FAILED(iconTexture.Upload->Map(0, nullptr, &mappedTextureData));
+
+    const UINT sourceRowPitch = imageData.Width * 4u;
+    for (UINT rowIndex = 0; rowIndex < numRows; ++rowIndex)
+    {
+        std::memcpy(
+            static_cast<std::uint8_t*>(mappedTextureData)
+                + placedSubresourceFootprint.Offset
+                + (static_cast<size_t>(rowIndex) * static_cast<size_t>(placedSubresourceFootprint.Footprint.RowPitch)),
+            imageData.Pixels.data() + (static_cast<size_t>(rowIndex) * static_cast<size_t>(sourceRowPitch)),
+            sourceRowPitch);
+    }
+
+    iconTexture.Upload->Unmap(0, nullptr);
+
+    D3D12_TEXTURE_COPY_LOCATION destinationLocation{};
+    destinationLocation.pResource = iconTexture.Texture.Get();
+    destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    destinationLocation.SubresourceIndex = 0;
+
+    D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
+    sourceLocation.pResource = iconTexture.Upload.Get();
+    sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    sourceLocation.PlacedFootprint = placedSubresourceFootprint;
+    commandList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+
+    const auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+        iconTexture.Texture.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toShaderResource);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(iconTexture.Texture.Get(), &srvDesc, iconTexture.CpuHandle);
+
+    if (statusMessage != nullptr)
+    {
+        *statusMessage = std::string("Loaded ") + iconPath.filename().string() + " from " + iconPath.string();
+    }
+
+    return true;
+}
+
+void Editor::ReleaseIconTexture(IconTexture& iconTexture)
+{
+    iconTexture.Texture.Reset();
+    iconTexture.Upload.Reset();
+    iconTexture.CpuHandle = {};
+    iconTexture.GpuHandle = {};
+}
+
+void Editor::DrawViewportStatisticsOverlay() const
+{
+    if (!(mShowViewportStatistics && mViewportStatisticsText != nullptr && mViewportStatisticsText[0] != '\0'))
+    {
+        return;
+    }
+
+    const ImVec2 textSize = ImGui::CalcTextSize(mViewportStatisticsText);
+    const ImVec2 textPadding(10.0f, 8.0f);
+    const ImVec2 overlayMin(ImGui::GetItemRectMin().x + 12.0f, ImGui::GetItemRectMin().y + 12.0f);
+    const ImVec2 overlayMax(
+        overlayMin.x + textSize.x + (textPadding.x * 2.0f),
+        overlayMin.y + textSize.y + (textPadding.y * 2.0f));
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(overlayMin, overlayMax, IM_COL32(12, 18, 28, 210), 6.0f);
+    drawList->AddText(
+        ImVec2(overlayMin.x + textPadding.x, overlayMin.y + textPadding.y),
+        IM_COL32(235, 240, 248, 255),
+        mViewportStatisticsText);
+}
+
+ImTextureID Editor::TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+{
+    return handle.ptr == 0 ? ImTextureID_Invalid : (ImTextureID)(handle.ptr);
+}

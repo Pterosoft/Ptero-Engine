@@ -1,0 +1,39 @@
+﻿// MeshEntity.hlsl
+// Simple per-entity mesh shader.  Each draw call uploads a pre-transposed MVP
+// matrix via a root CBV so no descriptor heap binding is required.
+
+cbuffer EntityConstants : register(b0)
+{
+    float4x4 gMVP;      // pre-transposed model-view-projection
+};
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+struct PSInput
+{
+    float4 Position : SV_Position;
+    float4 Color    : COLOR;
+};
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    // Row-vector multiply against the pre-transposed matrix mirrors the grid shader convention.
+    output.Position = mul(float4(input.Position, 1.0f), gMVP);
+    // Tint the vertex colour with a simple N·L diffuse so geometry has visible shading.
+    float3 lightDir  = normalize(float3(0.5f, 0.5f, -1.0f));
+    float  diffuse   = saturate(dot(normalize(input.Normal), -lightDir)) * 0.6f + 0.4f;
+    output.Color     = float4(input.Color.rgb * diffuse, input.Color.a);
+    return output;
+}
+
+float4 PSMain(PSInput input) : SV_Target
+{
+    return input.Color;
+}

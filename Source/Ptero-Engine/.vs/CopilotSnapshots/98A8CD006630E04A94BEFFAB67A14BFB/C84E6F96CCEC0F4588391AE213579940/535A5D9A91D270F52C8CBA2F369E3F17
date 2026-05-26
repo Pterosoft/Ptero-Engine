@@ -1,0 +1,123 @@
+﻿#pragma once
+
+#include <string>
+#include <vector>
+#include <filesystem>
+
+// Forward-declare FMOD types so callers do not need to include fmod headers.
+namespace FMOD { namespace Studio { class System; class EventInstance; class Bank; } }
+
+#ifdef AUDIO_EXPORTS
+#define AUDIO_API __declspec(dllexport)
+#else
+#define AUDIO_API __declspec(dllimport)
+#endif
+
+// ----------------------------------------------------------------------------
+// AudioEvent
+//   Represents a single FMOD Studio event path and its active instance.
+// ----------------------------------------------------------------------------
+#pragma warning(push)
+#pragma warning(disable: 4251)
+struct AUDIO_API AudioEvent
+{
+    std::string Path;         // e.g. "event:/Music/MainTheme"
+    bool        IsPlaying = false;
+};
+#pragma warning(pop)
+
+// ----------------------------------------------------------------------------
+// AudioManager
+//   Wraps the FMOD Studio System.  Call Initialize() once at startup,
+//   Shutdown() at exit, and Update() every frame.
+//
+//   Bank files are loaded from the directory returned by GetAudioDataPath().
+//   The engine looks for *.bank files inside <exe-dir>\Data\Audio (or up the
+//   directory tree until found).
+// ----------------------------------------------------------------------------
+class AUDIO_API AudioManager
+{
+public:
+    struct EmitterHandle
+    {
+        int Value = -1;
+
+        bool IsValid() const { return Value >= 0; }
+    };
+
+    AudioManager();
+    ~AudioManager();
+
+    // Initialise the FMOD Studio system and load all banks found in Data/Audio.
+    // Returns false and fills outError on failure.
+    bool Initialize(std::string& outError);
+
+    // Must be called once per frame to pump FMOD Studio.
+    void Update();
+
+    // Release all FMOD resources.
+    void Shutdown();
+
+    // Enumerate all events discovered in the loaded banks.
+    // The list is populated after Initialize().
+    const std::vector<AudioEvent>& GetEvents() const { return m_events; }
+    const std::filesystem::path& GetAudioDataPath() const { return m_audioDataPath; }
+    const std::vector<std::string>& GetLoadedBanks() const { return m_loadedBanks; }
+    const std::vector<std::string>& GetBankLoadFailures() const { return m_bankLoadFailures; }
+    const std::string& GetLastStatus() const { return m_lastStatus; }
+
+    // Play the event at the given index.  Starts a new one-shot instance.
+    // Returns false if the index is out of range or FMOD fails.
+    bool PlayEvent(int index);
+    bool PlayEventByPath(const std::string& eventPath);
+
+    // Stop the currently playing instance for the event at the given index.
+    bool StopEvent(int index);
+
+    // Stop every active event instance.
+    void StopAll();
+
+    void SetListenerTransform(
+        float positionX,
+        float positionY,
+        float positionZ,
+        float forwardX,
+        float forwardY,
+        float forwardZ,
+        float upX,
+        float upY,
+        float upZ);
+
+    EmitterHandle RegisterEmitter();
+    void UnregisterEmitter(EmitterHandle handle);
+    bool SetEmitterEventPath(EmitterHandle handle, const std::string& eventPath);
+    bool SetEmitterTransform(EmitterHandle handle, float positionX, float positionY, float positionZ);
+    bool PlayEmitter(EmitterHandle handle);
+    bool StopEmitter(EmitterHandle handle);
+
+    // Returns true when the system was successfully initialised.
+    bool IsInitialized() const { return m_initialized; }
+
+private:
+    struct EmitterState;
+
+    // Resolve the Data/Audio directory relative to the running executable.
+    static std::filesystem::path ResolveAudioDataPath();
+
+    // Refresh m_events from all loaded banks.
+    void RefreshEventList();
+
+    #pragma warning(push)
+    #pragma warning(disable: 4251)
+        FMOD::Studio::System*  m_studioSystem = nullptr;
+        std::vector<FMOD::Studio::Bank*>          m_banks;
+        std::vector<FMOD::Studio::EventInstance*> m_instances; // one per m_events slot (nullptr = not playing)
+        std::vector<AudioEvent>                   m_events;
+        std::filesystem::path                     m_audioDataPath;
+        std::vector<std::string>                  m_loadedBanks;
+        std::vector<std::string>                  m_bankLoadFailures;
+        std::string                               m_lastStatus;
+        std::vector<EmitterState>                 m_emitters;
+        bool                                      m_initialized = false;
+    #pragma warning(pop)
+};

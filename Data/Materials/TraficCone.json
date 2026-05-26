@@ -1,0 +1,35 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "heightScale": 0.05000000074505806,
+    "metallicFactor": 0.0,
+    "name": "TraficCone",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "roughnessFactor": 1.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "Geometry/traffic_cone_vhvpabi/Traffic_Cone_vhvpabi_High_4K_BaseColor.dds",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Geometry/traffic_cone_vhvpabi/Traffic_Cone_vhvpabi_High_4K_Normal.dds",
+        "opacity": "",
+        "roughness": "Geometry/traffic_cone_vhvpabi/Traffic_Cone_vhvpabi_High_4K_Roughness.dds"
+    },
+    "useAlphaCutout": false,
+    "useTransparentBlend": false
+}

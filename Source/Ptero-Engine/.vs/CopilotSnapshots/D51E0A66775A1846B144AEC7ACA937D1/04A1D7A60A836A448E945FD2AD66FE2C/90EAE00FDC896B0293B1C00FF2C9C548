@@ -1,0 +1,928 @@
+﻿#include "pch.h"
+#include "EditorMainMenu.h"
+
+#include "..\System\MaterialEditor.h"
+#include "..\System\include\System\SystemAssetApi.h"
+
+#include "imgui.h"
+
+#include <commdlg.h>
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <iterator>
+#include <string>
+#include <system_error>
+#include <vector>
+
+namespace
+{
+    // Keep the menu-specific UI state in this file so the renderer API stays focused on frame orchestration.
+    bool gShowImGuiDemoWindow = false;
+    bool gShowAboutWindow = false;
+    bool gShowSceneSettingsWindow = false;
+    bool gShowAssetBrowserWindow = false;
+    bool gShowMaterialEditorWindow = false;
+    bool gLastAssetActionSucceeded = false;
+    bool gHasAssetActionResult = false;
+    bool gOpenRenamePopup = false;
+    bool gOpenNewFolderPopup = false;
+    bool gClipboardHasValue = false;
+    std::string gClipboardRelativePath;
+    std::string gAssetStatusMessage = "Use the Asset Browser toolbar to import FBX files and manage Data content.";
+    std::string gDataDirectoryDisplay = "Data folder not found yet.";
+    std::string gSelectedFolderRelativePath;
+    std::string gSelectedAssetRelativePath;
+    MaterialEditor gMaterialEditor;
+    char gRenameBuffer[MAX_PATH] = {};
+    char gNewFolderBuffer[MAX_PATH] = {};
+    char gMaterialNameBuffer[256] = {};
+
+    void RefreshMaterialNameBuffer()
+    {
+        strcpy_s(gMaterialNameBuffer, gMaterialEditor.GetCurrentMaterial().Name.c_str());
+    }
+
+    struct AssetBrowserItem
+    {
+        std::string Name;
+        std::string RelativePath;
+        bool IsDirectory = false;
+    };
+
+    using SystemImportFbxToDataFn = decltype(&System_ImportFbxToData);
+
+    std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath)
+    {
+        const std::filesystem::path normalizedPath = relativePath.lexically_normal();
+        return (normalizedPath.empty() || normalizedPath == ".") ? std::string{} : normalizedPath.generic_string();
+    }
+
+    bool IsPathInsideRoot(const std::filesystem::path& rootPath, const std::filesystem::path& candidatePath)
+    {
+        const std::filesystem::path normalizedRootPath = rootPath.lexically_normal();
+        const std::filesystem::path normalizedCandidatePath = candidatePath.lexically_normal();
+
+        auto rootIterator = normalizedRootPath.begin();
+        auto candidateIterator = normalizedCandidatePath.begin();
+        for (; rootIterator != normalizedRootPath.end(); ++rootIterator, ++candidateIterator)
+        {
+            if (candidateIterator == normalizedCandidatePath.end() || *rootIterator != *candidateIterator)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::filesystem::path FindProjectDataDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+        {
+            return {};
+        }
+
+        // Walk upward from the editor executable until the repository Data folder is found.
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path dataDirectory = currentPath / "Data";
+            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
+            {
+                return dataDirectory;
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    std::filesystem::path GetAbsoluteDataPath(const std::string& relativePath)
+    {
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        return relativePath.empty()
+            ? dataDirectory
+            : (dataDirectory / std::filesystem::path(relativePath)).lexically_normal();
+    }
+
+    void SetAssetBrowserStatus(const bool succeeded, const std::string& statusMessage)
+    {
+        gLastAssetActionSucceeded = succeeded;
+        gHasAssetActionResult = true;
+        gAssetStatusMessage = statusMessage;
+    }
+
+    void RefreshAssetBrowserState()
+    {
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        if (dataDirectory.empty())
+        {
+            gDataDirectoryDisplay = "Failed to locate the repository Data folder.";
+            gSelectedFolderRelativePath.clear();
+            gSelectedAssetRelativePath.clear();
+            return;
+        }
+
+        gDataDirectoryDisplay = dataDirectory.string();
+
+        const std::filesystem::path selectedFolderPath = GetAbsoluteDataPath(gSelectedFolderRelativePath);
+        if (!gSelectedFolderRelativePath.empty() && !std::filesystem::exists(selectedFolderPath))
+        {
+            gSelectedFolderRelativePath.clear();
+        }
+
+        const std::filesystem::path selectedAssetPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        if (!gSelectedAssetRelativePath.empty() && !std::filesystem::exists(selectedAssetPath))
+        {
+            gSelectedAssetRelativePath.clear();
+        }
+    }
+
+    std::vector<std::string> GetChildFolderRelativePaths(const std::string& parentFolderRelativePath)
+    {
+        std::vector<std::string> childFolders;
+
+        const std::filesystem::path absoluteFolderPath = GetAbsoluteDataPath(parentFolderRelativePath);
+        if (absoluteFolderPath.empty())
+        {
+            return childFolders;
+        }
+
+        std::error_code iteratorError;
+        for (std::filesystem::directory_iterator it(absoluteFolderPath, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            std::error_code statusError;
+            if (!it->is_directory(statusError) || statusError)
+            {
+                continue;
+            }
+
+            childFolders.push_back(NormalizeRelativeDataPath(std::filesystem::relative(it->path(), FindProjectDataDirectory())));
+        }
+
+        std::sort(childFolders.begin(), childFolders.end());
+        return childFolders;
+    }
+
+    std::vector<AssetBrowserItem> CollectFolderItems(const std::string& folderRelativePath)
+    {
+        std::vector<AssetBrowserItem> items;
+
+        const std::filesystem::path absoluteFolderPath = GetAbsoluteDataPath(folderRelativePath);
+        if (absoluteFolderPath.empty())
+        {
+            return items;
+        }
+
+        std::error_code iteratorError;
+        for (std::filesystem::directory_iterator it(absoluteFolderPath, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            std::error_code statusError;
+            const bool isDirectory = it->is_directory(statusError);
+            const bool isRegularFile = it->is_regular_file(statusError);
+            if (statusError || (!isDirectory && !isRegularFile))
+            {
+                continue;
+            }
+
+            AssetBrowserItem item;
+            item.Name = it->path().filename().string();
+            item.RelativePath = NormalizeRelativeDataPath(std::filesystem::relative(it->path(), FindProjectDataDirectory()));
+            item.IsDirectory = isDirectory;
+            items.push_back(item);
+        }
+
+        std::sort(
+            items.begin(),
+            items.end(),
+            [](const AssetBrowserItem& leftItem, const AssetBrowserItem& rightItem)
+            {
+                if (leftItem.IsDirectory != rightItem.IsDirectory)
+                {
+                    return leftItem.IsDirectory > rightItem.IsDirectory;
+                }
+
+                return _stricmp(leftItem.Name.c_str(), rightItem.Name.c_str()) < 0;
+            });
+
+        return items;
+    }
+
+    std::filesystem::path BuildUniqueDuplicatePath(const std::filesystem::path& sourcePath, const std::filesystem::path& destinationDirectory)
+    {
+        const std::string baseName = sourcePath.stem().string().empty()
+            ? sourcePath.filename().string()
+            : sourcePath.stem().string();
+        const std::string extension = sourcePath.has_extension() ? sourcePath.extension().string() : std::string{};
+
+        std::filesystem::path candidatePath = destinationDirectory / (baseName + "_Copy" + extension);
+        int copyIndex = 2;
+        while (std::filesystem::exists(candidatePath))
+        {
+            candidatePath = destinationDirectory / (baseName + "_Copy" + std::to_string(copyIndex) + extension);
+            ++copyIndex;
+        }
+
+        return candidatePath;
+    }
+
+    HMODULE EnsureSystemModuleLoaded(char* statusMessage, const int statusMessageCapacity)
+    {
+        // The renderer resolves the System DLL on demand so the editor UI can stay responsive even if the DLL is missing.
+        HMODULE systemModule = GetModuleHandleW(L"System.dll");
+        if (systemModule == nullptr)
+        {
+            systemModule = LoadLibraryW(L"System.dll");
+        }
+
+        if (systemModule == nullptr && statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            _snprintf_s(
+                statusMessage,
+                static_cast<size_t>(statusMessageCapacity),
+                _TRUNCATE,
+                "Failed to load System.dll. Win32 error: %lu",
+                GetLastError());
+        }
+
+        return systemModule;
+    }
+
+    bool ImportFbxIntoDataFromSystem(
+        const char* sourceFbxPath,
+        const char* targetDirectoryRelativeToData,
+        char* statusMessage,
+        const int statusMessageCapacity)
+    {
+        if (statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            statusMessage[0] = '\0';
+        }
+
+        HMODULE systemModule = EnsureSystemModuleLoaded(statusMessage, statusMessageCapacity);
+        if (systemModule == nullptr)
+        {
+            return false;
+        }
+
+        const auto importFbx = reinterpret_cast<SystemImportFbxToDataFn>(GetProcAddress(systemModule, "System_ImportFbxToData"));
+        if (importFbx == nullptr)
+        {
+            if (statusMessage != nullptr && statusMessageCapacity > 0)
+            {
+                _snprintf_s(
+                    statusMessage,
+                    static_cast<size_t>(statusMessageCapacity),
+                    _TRUNCATE,
+                    "System.dll is missing the System_ImportFbxToData export. Win32 error: %lu",
+                    GetLastError());
+            }
+
+            return false;
+        }
+
+        return importFbx(sourceFbxPath, targetDirectoryRelativeToData, statusMessage, statusMessageCapacity);
+    }
+
+    bool PromptForAndImportFbx(HWND windowHandle, const std::string& targetFolderRelativePath)
+    {
+        char selectedFilePath[MAX_PATH] = {};
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = windowHandle;
+        openFileName.lpstrFilter = "FBX Files\0*.fbx\0All Files\0*.*\0";
+        openFileName.lpstrFile = selectedFilePath;
+        openFileName.nMaxFile = static_cast<DWORD>(std::size(selectedFilePath));
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+
+        if (!GetOpenFileNameA(&openFileName))
+        {
+            return false;
+        }
+
+        char importStatusMessage[512] = {};
+        SetAssetBrowserStatus(
+            ImportFbxIntoDataFromSystem(
+                selectedFilePath,
+                targetFolderRelativePath.c_str(),
+                importStatusMessage,
+                static_cast<int>(std::size(importStatusMessage))),
+            importStatusMessage);
+        return true;
+    }
+
+    void CopySelectedAssetToClipboard()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            return;
+        }
+
+        gClipboardRelativePath = gSelectedAssetRelativePath;
+        gClipboardHasValue = true;
+        SetAssetBrowserStatus(true, "Copied asset selection to the browser clipboard.");
+    }
+
+    bool PasteClipboardIntoSelectedFolder()
+    {
+        if (!gClipboardHasValue || gClipboardRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Copy a file or folder before using Paste.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path sourcePath = GetAbsoluteDataPath(gClipboardRelativePath);
+        const std::filesystem::path destinationDirectory = GetAbsoluteDataPath(gSelectedFolderRelativePath);
+        if (dataDirectory.empty() || !std::filesystem::exists(sourcePath) || !std::filesystem::exists(destinationDirectory))
+        {
+            SetAssetBrowserStatus(false, "The source or destination path is no longer available inside Data.");
+            return false;
+        }
+
+        const std::filesystem::path destinationPath = BuildUniqueDuplicatePath(sourcePath, destinationDirectory);
+        if (!IsPathInsideRoot(dataDirectory, destinationPath))
+        {
+            SetAssetBrowserStatus(false, "Paste must stay inside the Data directory.");
+            return false;
+        }
+
+        // Prevent recursive folder duplication by blocking paste operations into the copied folder or one of its children.
+        if (std::filesystem::is_directory(sourcePath) && IsPathInsideRoot(sourcePath, destinationDirectory))
+        {
+            SetAssetBrowserStatus(false, "Cannot paste a folder into itself or one of its children.");
+            return false;
+        }
+
+        std::error_code copyError;
+        if (std::filesystem::is_directory(sourcePath))
+        {
+            std::filesystem::copy(sourcePath, destinationPath, std::filesystem::copy_options::recursive, copyError);
+        }
+        else
+        {
+            std::filesystem::copy_file(sourcePath, destinationPath, std::filesystem::copy_options::overwrite_existing, copyError);
+        }
+
+        if (copyError)
+        {
+            SetAssetBrowserStatus(false, std::string("Paste failed: ") + copyError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(destinationPath, dataDirectory));
+        SetAssetBrowserStatus(true, "Pasted asset into the selected folder.");
+        return true;
+    }
+
+    bool DeleteSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before removing it.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path selectedPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        if (dataDirectory.empty() || !std::filesystem::exists(selectedPath) || !IsPathInsideRoot(dataDirectory, selectedPath))
+        {
+            SetAssetBrowserStatus(false, "The selected asset is no longer available inside Data.");
+            return false;
+        }
+
+        std::error_code removeError;
+        if (std::filesystem::is_directory(selectedPath))
+        {
+            std::filesystem::remove_all(selectedPath, removeError);
+        }
+        else
+        {
+            std::filesystem::remove(selectedPath, removeError);
+        }
+
+        if (removeError)
+        {
+            SetAssetBrowserStatus(false, std::string("Remove failed: ") + removeError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath.clear();
+        SetAssetBrowserStatus(true, "Removed asset from the Data folder.");
+        return true;
+    }
+
+    bool RenameSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before renaming it.");
+            return false;
+        }
+
+        const std::string requestedName = gRenameBuffer;
+        if (requestedName.empty() || requestedName.find_first_of("\\/") != std::string::npos)
+        {
+            SetAssetBrowserStatus(false, "Enter a valid file or folder name.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path selectedPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        const std::filesystem::path renamedPath = selectedPath.parent_path() / requestedName;
+        if (dataDirectory.empty() || !std::filesystem::exists(selectedPath) || !IsPathInsideRoot(dataDirectory, renamedPath))
+        {
+            SetAssetBrowserStatus(false, "The selected asset cannot be renamed outside the Data directory.");
+            return false;
+        }
+
+        if (std::filesystem::exists(renamedPath))
+        {
+            SetAssetBrowserStatus(false, "An asset with that name already exists in the selected folder.");
+            return false;
+        }
+
+        std::error_code renameError;
+        std::filesystem::rename(selectedPath, renamedPath, renameError);
+        if (renameError)
+        {
+            SetAssetBrowserStatus(false, std::string("Rename failed: ") + renameError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(renamedPath, dataDirectory));
+        SetAssetBrowserStatus(true, "Renamed asset successfully.");
+        return true;
+    }
+
+    bool CreateFolderInSelectedFolder()
+    {
+        const std::string requestedFolderName = gNewFolderBuffer;
+        if (requestedFolderName.empty() || requestedFolderName.find_first_of("\\/") != std::string::npos)
+        {
+            SetAssetBrowserStatus(false, "Enter a valid folder name.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path newFolderPath = GetAbsoluteDataPath(gSelectedFolderRelativePath) / requestedFolderName;
+        if (dataDirectory.empty() || !IsPathInsideRoot(dataDirectory, newFolderPath))
+        {
+            SetAssetBrowserStatus(false, "New folders must stay inside the Data directory.");
+            return false;
+        }
+
+        std::error_code createError;
+        if (!std::filesystem::create_directory(newFolderPath, createError) || createError)
+        {
+            SetAssetBrowserStatus(false, createError ? std::string("Create folder failed: ") + createError.message() : "A folder with that name already exists.");
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(newFolderPath, dataDirectory));
+        SetAssetBrowserStatus(true, "Created a new folder inside the selected directory.");
+        return true;
+    }
+
+    void BeginRenameSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before renaming it.");
+            return;
+        }
+
+        const std::filesystem::path selectedPath(gSelectedAssetRelativePath);
+        strcpy_s(gRenameBuffer, selectedPath.filename().string().c_str());
+        gOpenRenamePopup = true;
+    }
+
+    void BeginCreateFolder()
+    {
+        gNewFolderBuffer[0] = '\0';
+        gOpenNewFolderPopup = true;
+    }
+
+    void SelectFolder(const std::string& folderRelativePath)
+    {
+        gSelectedFolderRelativePath = folderRelativePath;
+        gSelectedAssetRelativePath.clear();
+    }
+
+    void RenderFolderTreeNode(const std::string& folderRelativePath)
+    {
+        const std::filesystem::path folderPath = folderRelativePath.empty()
+            ? std::filesystem::path("Data")
+            : std::filesystem::path(folderRelativePath).filename();
+        const std::vector<std::string> childFolders = GetChildFolderRelativePaths(folderRelativePath);
+        const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow
+            | ImGuiTreeNodeFlags_OpenOnDoubleClick
+            | (childFolders.empty() ? ImGuiTreeNodeFlags_Leaf : 0)
+            | (gSelectedFolderRelativePath == folderRelativePath ? ImGuiTreeNodeFlags_Selected : 0);
+
+        const bool isOpen = ImGui::TreeNodeEx(folderRelativePath.empty() ? "DataRoot" : folderRelativePath.c_str(), nodeFlags, "%s", folderPath.string().c_str());
+        if (ImGui::IsItemClicked())
+        {
+            SelectFolder(folderRelativePath);
+        }
+
+        if (ImGui::BeginPopupContextItem())
+        {
+            if (ImGui::MenuItem("Import FBX Here..."))
+            {
+                PromptForAndImportFbx(GetActiveWindow(), folderRelativePath);
+                RefreshAssetBrowserState();
+            }
+
+            if (ImGui::MenuItem("New Folder"))
+            {
+                SelectFolder(folderRelativePath);
+                BeginCreateFolder();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (isOpen)
+        {
+            for (const std::string& childFolderRelativePath : childFolders)
+            {
+                RenderFolderTreeNode(childFolderRelativePath);
+            }
+
+            ImGui::TreePop();
+        }
+    }
+}
+
+void RenderEditorMainMenu(
+    HWND windowHandle,
+    ImTextureID sceneTextureId,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    float* cameraSpeed,
+    bool* gridEnabled,
+    bool* showStatistics,
+    bool* showViewportPlacementIcons,
+    bool* showComponentsPanel,
+    bool* showLevelExplorerPanel,
+    bool* showPropertiesPanel)
+{
+    UNREFERENCED_PARAMETER(sceneTextureId);
+    UNREFERENCED_PARAMETER(sceneStatusMessage);
+    UNREFERENCED_PARAMETER(statisticsText);
+
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Exit"))
+            {
+                PostMessage(windowHandle, WM_CLOSE, 0, 0);
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Windows"))
+        {
+            if (ImGui::MenuItem("Scene Settings..."))
+            {
+                gShowSceneSettingsWindow = true;
+            }
+
+            if (showComponentsPanel != nullptr)
+            {
+                ImGui::MenuItem("Components", nullptr, showComponentsPanel);
+            }
+
+            if (showLevelExplorerPanel != nullptr)
+            {
+                ImGui::MenuItem("Level Explorer", nullptr, showLevelExplorerPanel);
+            }
+
+            if (showPropertiesPanel != nullptr)
+            {
+                ImGui::MenuItem("Properties", nullptr, showPropertiesPanel);
+            }
+
+            if (ImGui::MenuItem("Asset Browser..."))
+            {
+                gShowAssetBrowserWindow = true;
+                RefreshAssetBrowserState();
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Help"))
+        {
+            if (ImGui::MenuItem("About Ptero Editor"))
+            {
+                gShowAboutWindow = true;
+            }
+
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    if (gShowImGuiDemoWindow)
+    {
+        ImGui::ShowDemoWindow(&gShowImGuiDemoWindow);
+    }
+
+    if (gShowSceneSettingsWindow)
+    {
+        ImGui::Begin("Scene Settings", &gShowSceneSettingsWindow, ImGuiWindowFlags_AlwaysAutoResize);
+
+        if (cameraSpeed != nullptr)
+        {
+            // Expose the camera speed directly in the editor so movement tuning does not require a rebuild.
+            ImGui::SliderFloat("Camera Speed", cameraSpeed, 0.0f, 50.0f, "%.2f");
+        }
+
+        if (gridEnabled != nullptr)
+        {
+            // Let the user hide the reference grid without changing the renderer's geometry setup.
+            ImGui::Checkbox("Show Grid", gridEnabled);
+        }
+
+        if (showStatistics != nullptr)
+        {
+            // Keep the statistics toggle in scene settings so the viewport overlay can be disabled without code changes.
+            ImGui::Checkbox("Show Renderer Statistics", showStatistics);
+        }
+
+        if (showViewportPlacementIcons != nullptr)
+        {
+            // Let the user hide the placement markers when they want an unobstructed view of the scene.
+            ImGui::Checkbox("Show Geometry Placement Icons", showViewportPlacementIcons);
+        }
+
+        ImGui::End();
+    }
+
+    if (gShowAssetBrowserWindow)
+    {
+        RefreshAssetBrowserState();
+        ImGui::Begin("Asset Browser", &gShowAssetBrowserWindow, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        if (gOpenRenamePopup)
+        {
+            ImGui::OpenPopup("Rename Asset");
+            gOpenRenamePopup = false;
+        }
+
+        if (gOpenNewFolderPopup)
+        {
+            ImGui::OpenPopup("Create Folder");
+            gOpenNewFolderPopup = false;
+        }
+
+        const bool hasSelectedAsset = !gSelectedAssetRelativePath.empty();
+        const bool canPaste = gClipboardHasValue;
+
+        // The toolbar keeps common content-browser actions visible, similar to the asset views used by large game editors.
+        if (ImGui::Button("Import FBX"))
+        {
+            if (PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath))
+            {
+                RefreshAssetBrowserState();
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("New Folder"))
+        {
+            BeginCreateFolder();
+        }
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Rename"))
+        {
+            BeginRenameSelectedAsset();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Copy"))
+        {
+            CopySelectedAssetToClipboard();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canPaste);
+        if (ImGui::Button("Paste"))
+        {
+            PasteClipboardIntoSelectedFolder();
+            RefreshAssetBrowserState();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Remove"))
+        {
+            DeleteSelectedAsset();
+            RefreshAssetBrowserState();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh"))
+        {
+            RefreshAssetBrowserState();
+        }
+
+        ImGui::Separator();
+        ImGui::TextWrapped("Data Folder: %s", gDataDirectoryDisplay.c_str());
+        ImGui::TextWrapped(
+            "Current Folder: %s",
+            gSelectedFolderRelativePath.empty() ? "Data" : gSelectedFolderRelativePath.c_str());
+        ImGui::Separator();
+
+        if (gHasAssetActionResult)
+        {
+            const ImVec4 statusColor = gLastAssetActionSucceeded
+                ? ImVec4(0.35f, 0.85f, 0.45f, 1.0f)
+                : ImVec4(0.90f, 0.45f, 0.35f, 1.0f);
+            ImGui::TextColored(statusColor, "%s", gAssetStatusMessage.c_str());
+        }
+        else
+        {
+            ImGui::TextWrapped("%s", gAssetStatusMessage.c_str());
+        }
+
+        if (ImGui::BeginPopupModal("Rename Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::InputText("New Name", gRenameBuffer, IM_ARRAYSIZE(gRenameBuffer));
+
+            if (ImGui::Button("Apply"))
+            {
+                if (RenameSelectedAsset())
+                {
+                    RefreshAssetBrowserState();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::BeginPopupModal("Create Folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::InputText("Folder Name", gNewFolderBuffer, IM_ARRAYSIZE(gNewFolderBuffer));
+
+            if (ImGui::Button("Create"))
+            {
+                if (CreateFolderInSelectedFolder())
+                {
+                    RefreshAssetBrowserState();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        ImGui::Separator();
+
+        const float folderPaneWidth = 240.0f;
+        if (ImGui::BeginChild("AssetFolders", ImVec2(folderPaneWidth, 0.0f), true))
+        {
+            RenderFolderTreeNode({});
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        if (ImGui::BeginChild("AssetContents", ImVec2(0.0f, 0.0f), true))
+        {
+            const std::vector<AssetBrowserItem> items = CollectFolderItems(gSelectedFolderRelativePath);
+            if (items.empty())
+            {
+                ImGui::TextUnformatted("This folder is empty.");
+            }
+            else
+            {
+                for (const AssetBrowserItem& item : items)
+                {
+                    const std::string itemLabel = std::string(item.IsDirectory ? "[Folder] " : "[File] ") + item.Name;
+                    if (ImGui::Selectable(itemLabel.c_str(), gSelectedAssetRelativePath == item.RelativePath))
+                    {
+                        gSelectedAssetRelativePath = item.RelativePath;
+                    }
+
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && item.IsDirectory)
+                    {
+                        SelectFolder(item.RelativePath);
+                    }
+
+                    if (ImGui::BeginPopupContextItem(item.RelativePath.c_str()))
+                    {
+                        gSelectedAssetRelativePath = item.RelativePath;
+
+                        if (item.IsDirectory && ImGui::MenuItem("Open"))
+                        {
+                            SelectFolder(item.RelativePath);
+                        }
+
+                        if (item.IsDirectory && ImGui::MenuItem("Import FBX Here..."))
+                        {
+                            SelectFolder(item.RelativePath);
+                            PromptForAndImportFbx(windowHandle, item.RelativePath);
+                            RefreshAssetBrowserState();
+                        }
+
+                        if (ImGui::MenuItem("Rename"))
+                        {
+                            BeginRenameSelectedAsset();
+                        }
+
+                        if (ImGui::MenuItem("Copy"))
+                        {
+                            CopySelectedAssetToClipboard();
+                        }
+
+                        if (ImGui::MenuItem("Remove"))
+                        {
+                            DeleteSelectedAsset();
+                            RefreshAssetBrowserState();
+                        }
+
+                        ImGui::EndPopup();
+                    }
+                }
+            }
+
+            if (ImGui::BeginPopupContextWindow("AssetBrowserBackgroundContext", ImGuiPopupFlags_NoOpenOverItems | ImGuiPopupFlags_MouseButtonRight))
+            {
+                if (ImGui::MenuItem("Import FBX Here..."))
+                {
+                    PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath);
+                    RefreshAssetBrowserState();
+                }
+
+                if (ImGui::MenuItem("New Folder"))
+                {
+                    BeginCreateFolder();
+                }
+
+                ImGui::BeginDisabled(!canPaste);
+                if (ImGui::MenuItem("Paste"))
+                {
+                    PasteClipboardIntoSelectedFolder();
+                    RefreshAssetBrowserState();
+                }
+                ImGui::EndDisabled();
+
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+    if (gShowAboutWindow)
+    {
+        ImGui::Begin("About Ptero Editor", &gShowAboutWindow, ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::TextUnformatted("Ptero Editor");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Rendering backend: Dear ImGui + DirectX 12");
+        ImGui::TextUnformatted("Menu implementation is split into its own source file.");
+        ImGui::End();
+    }
+}

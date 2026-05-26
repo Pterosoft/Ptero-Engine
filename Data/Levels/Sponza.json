@@ -1,0 +1,274 @@
+{
+    "AgxTonemapSettings": {
+        "Enabled": true,
+        "Ev100Max": 16.0,
+        "Ev100Min": -2.499999761581421,
+        "Exposure": 0.0,
+        "Global": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Highlights": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Midtones": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": -0.05000000074505806,
+                "Green": 0.0,
+                "Red": -0.05000000074505806,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": -0.05000000074505806,
+                "Green": 0.0,
+                "Red": -0.05000000074505806,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Shadows": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "ShoulderStrength": 1.0499999523162842,
+        "ToeStrength": 0.949999988079071
+    },
+    "BloomSettings": {
+        "Enabled": true,
+        "Intensity": 0.029999999329447746,
+        "Knee": 0.3499999940395355,
+        "MipLevels": 6,
+        "Radius": 1.0,
+        "Threshold": 0.8999999761581421
+    },
+    "Entities": [
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\Sponza_Simple\\Sponza.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\Sponza_Simple\\Sponza.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Sponza"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -0.3247927129268646,
+                    "y": -0.9071812629699707,
+                    "z": 0.09902766346931458
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        }
+    ],
+    "GTAOSettings": {
+        "DebugView": 0,
+        "DenoisePasses": 0,
+        "DepthMIPSamplingOffset": 3.299999952316284,
+        "Enabled": true,
+        "FalloffRange": 0.8500000238418579,
+        "FinalValuePower": 1.4600000381469727,
+        "Intensity": 1.0,
+        "QualityLevel": 3,
+        "Radius": 0.10000000149011612,
+        "RadiusMultiplier": 1.3270000219345093,
+        "SampleDistributionPower": 3.0,
+        "ThinOccluderCompensation": 0.0
+    },
+    "RtAOSettings": {
+        "AOPower": 1.5,
+        "DebugView": 0,
+        "Enabled": false,
+        "Intensity": 1.0,
+        "MaxRayLength": 1.0,
+        "RayBias": 0.004999999888241291,
+        "RaysPerPixel": 16
+    },
+    "RtGISettings": {
+        "AccumulationBlend": 1.0,
+        "ColorLeakIntensity": 2.5299999713897705,
+        "DebugView": 0,
+        "Enabled": true,
+        "GiIntensity": 4.0,
+        "MaxBounces": 2,
+        "NextEventEstimation": true,
+        "NrdAtrousIterations": 5,
+        "NrdDisocclusionThreshold": 0.20000000298023224,
+        "NrdMaxAccumulationTime": 0.3499999940395355,
+        "NrdSharpenAmount": 0.3499999940395355,
+        "RadianceClamp": 9.999999046325684,
+        "RaysPerPixel": 1,
+        "UseNrdDenoiser": true
+    },
+    "TaaSettings": {
+        "BlendFactor": 0.5,
+        "Enabled": true,
+        "JitterScale": 1.0,
+        "SharpeningStrength": 0.20000000298023224,
+        "UseSharpening": false
+    },
+    "TimeOfDaySettings": {
+        "GroundAlbedo": 0.10000000149011612,
+        "OverrideSkyColor": true,
+        "OverrideSunColor": false,
+        "SkyColorB": 1.0,
+        "SkyColorG": 0.44999998807907104,
+        "SkyColorR": 0.25,
+        "SkyIntensityLux": 25000.0,
+        "SunColorB": 0.800000011920929,
+        "SunColorG": 0.949999988079071,
+        "SunColorR": 1.0,
+        "SunIntensityLux": 120000.0,
+        "TimeOfDay": 12.0,
+        "Turbidity": 2.5
+    },
+    "VolumetricFogSettings": {
+        "Anisotropy": 0.5,
+        "BaseHeight": 0.0,
+        "ColorB": 1.0,
+        "ColorG": 1.0,
+        "ColorR": 1.0,
+        "DebugView": 0,
+        "Density": 0.10000000149011612,
+        "DepthSlices": 64,
+        "EmissiveColorB": 1.0,
+        "EmissiveColorG": 1.0,
+        "EmissiveColorR": 1.0,
+        "EmissiveIntensity": 0.0,
+        "Enabled": true,
+        "FroxelTileSize": 8,
+        "HeightFalloff": 0.0,
+        "MaxDistance": 100.0,
+        "StartDistance": 0.10000000149011612
+    }
+}

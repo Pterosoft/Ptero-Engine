@@ -1,0 +1,219 @@
+﻿// DeferredLighting.hlsl
+// Fullscreen lighting-resolve pass for the deferred renderer.
+// Reads the three G-Buffer textures (albedo, normal, material) plus the
+// depth buffer, reconstructs world-space position, then evaluates the
+// Hosek-Wilkie sun/sky directional light, PCF shadows, and all dynamic
+// point lights to produce the final HDR colour.
+
+// -------------------------------------------------------------------------
+// Constant buffers
+// -------------------------------------------------------------------------
+
+// Per-frame camera and inverse-projection data used to reconstruct world
+// position from the G-Buffer depth value.
+cbuffer CameraConstants : register(b0)
+{
+    float4x4 gInvViewProj;  // inverse of viewProjection (row-major pre-transposed)
+    float3   gCameraPos;    // world-space camera position
+    float    _CamPad;
+};
+
+// Scene lighting – mirrors the layout in the former forward MeshEntity.hlsl.
+#define MAX_POINT_LIGHTS 16
+
+struct PointLightData
+{
+    float3 Position;    // world-space position
+    float  Radius;
+    float3 Color;       // pre-multiplied HDR colour (intensity baked in)
+    float  InvRadiusSq; // 1 / (Radius^2)
+};
+
+cbuffer SceneLighting : register(b1)
+{
+    float3 gSunDirection;   // world-space direction FROM sun TOWARD scene (normalised)
+    float  _LightPad0;
+    float3 gSunColor;
+    float  _LightPad1;
+    float3 gSkyAmbient;
+    float  _LightPad2;
+    int    gNumPointLights;
+    float  gGiIntensity;    // 0 = GI disabled; >0 blends GI contribution
+    float2 _LightPad3;
+    PointLightData gPointLights[MAX_POINT_LIGHTS];
+};
+
+// Shadow constants – same layout as ShadowData in the old MeshEntity.hlsl.
+cbuffer ShadowData : register(b2)
+{
+    float4x4 gLightViewProj;
+    float    gShadowMapSize;
+    float    gShadowBias;
+    float2   _ShadowPad;
+};
+
+// -------------------------------------------------------------------------
+// Textures / samplers
+// -------------------------------------------------------------------------
+Texture2D    gGBufferAlbedo   : register(t0); // RT0: albedo (RGB) + unused (A)
+Texture2D    gGBufferNormal   : register(t1); // RT1: encoded world normal
+Texture2D    gGBufferMaterial : register(t2); // RT2: roughness/metallic/AO
+Texture2D    gDepthBuffer     : register(t3); // scene depth (R32_FLOAT or D32_FLOAT read via SRV)
+Texture2D    gShadowMap       : register(t4); // sun shadow map
+Texture2D    gGiAccumulation  : register(t5); // DXR GI accumulation buffer (RG11B10 HDR)
+
+SamplerState             gPointSampler   : register(s0); // point-clamp for G-buffer reads
+SamplerComparisonState   gShadowSampler  : register(s1); // PCF comparison sampler
+
+// -------------------------------------------------------------------------
+// Vertex / pixel structs
+// -------------------------------------------------------------------------
+struct VSInput
+{
+    uint VertexId : SV_VertexID;
+};
+
+struct PSInput
+{
+    float4 Position : SV_Position;
+    float2 TexCoord : TEXCOORD0;
+};
+
+// -------------------------------------------------------------------------
+// Fullscreen triangle vertex shader
+// Generates a single triangle that covers the entire viewport from three
+// vertex IDs without needing a vertex buffer.
+// -------------------------------------------------------------------------
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    // Correct fullscreen triangle: NDC Y=+1 is top, UV Y=0 is top – must match.
+    // Vertex 0 (id=0): NDC=(-1, 1), UV=(0,0) – top-left
+    // Vertex 1 (id=1): NDC=(-1,-3), UV=(0,2) – off-screen bottom
+    // Vertex 2 (id=2): NDC=( 3, 1), UV=(2,0) – off-screen right
+    float2 ndc;
+    ndc.x = (input.VertexId == 2) ?  3.0f : -1.0f;
+    ndc.y = (input.VertexId == 1) ? -3.0f :  1.0f; // Y=+1 at top so UV and G-buffer align
+    output.Position = float4(ndc, 0.0f, 1.0f);
+    output.TexCoord.x = (input.VertexId == 2) ? 2.0f : 0.0f;
+    output.TexCoord.y = (input.VertexId == 1) ? 2.0f : 0.0f;
+    return output;
+}
+
+// -------------------------------------------------------------------------
+// Helpers
+// -------------------------------------------------------------------------
+
+// Reconstruct world-space position from a depth buffer sample.
+// gInvViewProj is stored as Transpose(inv(viewProj)) so HLSL mul(row, M) works correctly.
+float3 ReconstructWorldPosition(float2 uv, float depth)
+{
+    // UV (0,0) = top-left matches NDC (+x right, +y up).
+    // u in [0,1] -> NDC x in [-1,+1]; v in [0,1] -> NDC y in [+1,-1] (flip Y)
+    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 worldPos = mul(ndc, gInvViewProj);
+    return worldPos.xyz / worldPos.w;
+}
+
+// 3x3 PCF shadow factor; 1 = fully lit, 0 = fully shadowed.
+float SampleShadowPCF(float3 worldPos)
+{
+    float4 lightClip  = mul(float4(worldPos, 1.0f), gLightViewProj);
+    float3 projCoords = lightClip.xyz / lightClip.w;
+
+    float2 uv;
+    uv.x =  projCoords.x * 0.5f + 0.5f;
+    uv.y = -projCoords.y * 0.5f + 0.5f;
+
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f ||
+        projCoords.z < 0.0f || projCoords.z > 1.0f)
+        return 1.0f;
+
+    const float depth     = projCoords.z - gShadowBias;
+    const float texelSize = 1.0f / gShadowMapSize;
+
+    float shadow = 0.0f;
+    [unroll]
+    for (int x = -1; x <= 1; ++x)
+    {
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            float2 offset = float2((float)x, (float)y) * texelSize;
+            shadow += gShadowMap.SampleCmpLevelZero(gShadowSampler, uv + offset, depth);
+        }
+    }
+    return shadow / 9.0f;
+}
+
+// -------------------------------------------------------------------------
+// Pixel shader
+// -------------------------------------------------------------------------
+float4 PSMain(PSInput input) : SV_Target
+{
+    float2 uv = input.TexCoord;
+
+    // Read G-Buffer.
+    float4 albedoSample   = gGBufferAlbedo.Sample(gPointSampler, uv);
+    float4 normalSample   = gGBufferNormal.Sample(gPointSampler, uv);
+    float4 materialSample = gGBufferMaterial.Sample(gPointSampler, uv);
+    float  rawDepth       = gDepthBuffer.Sample(gPointSampler, uv).r;
+
+    // Sky / skybox pixels have depth == 1.0 after clear; skip lighting for those.
+    // The sky is already in the scene colour target; return alpha=0 to preserve it.
+    [branch]
+    if (rawDepth >= 1.0f)
+    {
+        return float4(0.0f, 0.0f, 0.0f, 0.0f); // alpha=0 -> INV_SRC_ALPHA blend keeps sky
+    }
+
+    // Decode G-Buffer values.
+    float3 albedo    = albedoSample.rgb;
+    float3 N         = normalize(normalSample.rgb * 2.0f - 1.0f);
+    float  roughness = materialSample.r;
+
+    // Reconstruct world-space position.
+    float3 worldPos = ReconstructWorldPosition(uv, rawDepth);
+
+    // ---- Sun directional light ----
+    float  shadowFactor = SampleShadowPCF(worldPos);
+    float3 L     = normalize(-gSunDirection);
+    float  NdotL = saturate(dot(N, L));
+    float3 diffuse = gSunColor * NdotL * shadowFactor;
+
+    // Sky ambient hemisphere term, attenuated by shadow like the forward pass.
+    float  skyWeight = saturate(N.z * 0.5f + 0.5f);
+    float3 ambient   = gSkyAmbient * skyWeight * shadowFactor;
+
+    // ---- Point lights ----
+    float3 pointSum = float3(0.0f, 0.0f, 0.0f);
+    [unroll]
+    for (int i = 0; i < MAX_POINT_LIGHTS; ++i)
+    {
+        float active = (i < gNumPointLights) ? 1.0f : 0.0f;
+
+        float3 toLight    = gPointLights[i].Position - worldPos;
+        float  distSq     = dot(toLight, toLight);
+        float3 L_pt       = normalize(toLight);
+        float  NdotL_pt   = saturate(dot(N, L_pt));
+
+        float  normDistSq = saturate(distSq * gPointLights[i].InvRadiusSq);
+        float  falloff    = (1.0f - normDistSq) * (1.0f - normDistSq);
+
+        pointSum += gPointLights[i].Color * NdotL_pt * falloff * active;
+    }
+
+    // ---- Final composite ----
+    float3 lit = (diffuse + ambient + pointSum) * albedo;
+
+    // Add DXR global illumination contribution when GI is active.
+    // gGiAccumulation stores indirect radiance already pre-multiplied by the
+    // hit-surface albedo in ShadeHit; do NOT multiply by primary albedo again.
+    if (gGiIntensity > 0.0f)
+    {
+        float3 giIrradiance = gGiAccumulation.Sample(gPointSampler, uv).rgb;
+        lit += giIrradiance * gGiIntensity;
+    }
+
+    return float4(lit, 1.0f); // alpha=1 -> SRC_ALPHA blend fully replaces geometry pixels
+}

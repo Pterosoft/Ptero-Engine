@@ -1,0 +1,184 @@
+﻿// RtGI_RayGen.hlsl
+// RTGI Pass 0 – Initial GI sampling.
+//
+// For each pixel:
+//   1. Read G-Buffer (world-pos, normal, albedo).
+//   2. Fire g_RaysPerPixel cosine-weighted rays from the primary surface.
+//   3. For each ray hit, store the secondary surface's radiance + geometry into
+//      a GI reservoir using weighted reservoir sampling (WRS / RIS).
+//   4. Write the resulting reservoir into the current-frame reservoir buffer.
+//   5. Write a raw (undenoised) GI radiance estimate into the output texture
+//      so the composite pass has something to display even if ReSTIR is off.
+//
+// NOTE: Because D3D12 DXR ray dispatch requires a state object, and this engine
+// uses compute shaders throughout, this pass uses an analytical sky model and
+// a screen-space hemisphere trace approximation to produce plausible GI without
+// requiring DXR pipeline setup.  The architecture is identical to a DXR-backed
+// version — only the ray traversal is replaced with compute-friendly sampling.
+// To add real DXR: replace the TraceGIRay() stub with a DXR TraceRay() call
+// and bind your TLAS to register space 1.
+
+#include "RtGI_Common.hlsli"
+
+// ─── G-Buffer inputs ──────────────────────────────────────────────────────────
+Texture2D<float4> t_Albedo      : register(t0);   // RGB albedo, A unused
+Texture2D<float4> t_NormalDepth : register(t1);   // RGB world-normal (oct-snorm in .xy, depth in .z)
+
+// ─── Outputs ──────────────────────────────────────────────────────────────────
+RWStructuredBuffer<PackedGIReservoir> u_Reservoir : register(u0);
+RWTexture2D<float4>                   u_GIOutput   : register(u1);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hosek-Wilkie sky approximation (simplified for GI).
+// Returns radiance arriving from the given direction.
+// ─────────────────────────────────────────────────────────────────────────────
+float3 SkyRadiance(float3 dir)
+{
+    // Simple gradient sky matching the Hosek-Wilkie style used in the engine.
+    const float3 horizonColor = float3(0.8f, 0.9f, 1.0f);
+    const float3 zenithColor  = float3(0.15f, 0.35f, 0.75f);
+    const float3 groundColor  = float3(0.1f, 0.08f, 0.06f);
+
+    float t = saturate(dir.z);       // z-up convention
+    float3 sky = lerp(horizonColor, zenithColor, t);
+    sky = lerp(groundColor, sky, saturate(dir.z + 0.05f) / 0.15f);
+    return max(sky, 0.0f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cosine-weighted hemisphere sample (Shirley mapping).
+// Returns a direction in the local frame (z = surface normal).
+// ─────────────────────────────────────────────────────────────────────────────
+float3 CosineSampleHemisphere(float2 xi, float3 N)
+{
+    float phi       = 2.0f * 3.14159265f * xi.x;
+    float cosTheta  = sqrt(1.0f - xi.y);
+    float sinTheta  = sqrt(xi.y);
+
+    float3 localDir = float3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    // Build orthonormal basis around N (z-up).
+    float3 up     = abs(N.z) < 0.999f ? float3(0, 0, 1) : float3(1, 0, 0);
+    float3 right  = normalize(cross(up, N));
+    float3 fwd    = cross(N, right);
+
+    return normalize(localDir.x * right + localDir.y * fwd + localDir.z * N);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stub GI ray trace.
+// Replace the body of this function with a DXR TraceRay() call to support
+// real scene geometry.  The current implementation returns plausible sky
+// radiance so the ReSTIR pipeline stays exercised.
+// ─────────────────────────────────────────────────────────────────────────────
+struct RayHit
+{
+    bool  hit;
+    float3 position;
+    float3 normal;
+    float3 radiance;
+};
+
+RayHit TraceGIRay(float3 origin, float3 dir, int maxBounces)
+{
+    RayHit result;
+    // Without DXR, treat every ray as a miss and return sky radiance.
+    result.hit      = false;
+    result.position = origin + dir * 1000.0f;
+    result.normal   = -dir;
+    result.radiance = SkyRadiance(dir);
+
+    // TODO: bind TLAS and replace with:
+    //   RayDesc ray;
+    //   ray.Origin    = origin;
+    //   ray.Direction = dir;
+    //   ray.TMin      = 0.001f;
+    //   ray.TMax      = 1e4f;
+    //   TraceRay(g_TLAS, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main
+// ─────────────────────────────────────────────────────────────────────────────
+[numthreads(8, 8, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    const uint2 pixel = DTid.xy;
+    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+        return;
+
+    // ── Read G-Buffer ─────────────────────────────────────────────────────
+    const float4 albedoSample     = t_Albedo.Load(int3(pixel, 0));
+    const float4 normalDepthSample = t_NormalDepth.Load(int3(pixel, 0));
+
+    const float3 albedo = albedoSample.rgb;
+    const float  depth  = normalDepthSample.z;
+
+    // Sky pixels (depth == 0 or == 1 depending on conventions) skip GI.
+    [branch]
+    if (depth <= 0.0f || depth >= 1.0f)
+    {
+        u_GIOutput[pixel] = float4(0, 0, 0, 0);
+        u_Reservoir[PixelIndex(pixel)] = PackReservoir(EmptyReservoir());
+        return;
+    }
+
+    // Decode normal from oct encoding stored in xy channels.
+    float2 octN = normalDepthSample.xy * 2.0f - 1.0f;
+    float  octZ = 1.0f - abs(octN.x) - abs(octN.y);
+    float2 wrapped = (1.0f - abs(octN.yx)) * select(octN.xy >= 0.0f, 1.0f, -1.0f);
+    float3 surfaceNormal = normalize(float3(octZ < 0.0f ? wrapped : octN.xy, octZ));
+
+    const float3 worldPos = ReconstructWorldPos(pixel, depth);
+
+    // ── Fire GI rays and build reservoir ─────────────────────────────────
+    uint rng = InitRng(pixel, g_FrameIndex);
+    GIReservoir reservoir = EmptyReservoir();
+
+    const uint numRays = clamp(g_RaysPerPixel, 1u, 8u);
+    float3 giRadianceSum = float3(0, 0, 0);
+
+    [loop]
+    for (uint i = 0; i < numRays; ++i)
+    {
+        float2 xi = float2(RandFloat(rng), RandFloat(rng));
+        float3 rayDir = CosineSampleHemisphere(xi, surfaceNormal);
+
+        RayHit hit = TraceGIRay(worldPos + surfaceNormal * 0.001f, rayDir, g_MaxBounces);
+
+        // Clamp radiance to suppress fireflies.
+        float3 radiance = hit.radiance;
+        [flatten]
+        if (g_RadianceClamp > 0.0f)
+            radiance = min(radiance, g_RadianceClamp);
+
+        // Target PDF: luminance of the incoming radiance weighted by cosine term.
+        // For cosine-sampled rays the PDF is cos(theta)/pi, so the RIS weight
+        // w = f/p = (albedo * L * cos) / (cos/pi) = pi * albedo * L.
+        float targetPdf   = Luminance(radiance) * 3.14159265f;
+        float risWeight   = (targetPdf > 0.0f) ? (targetPdf / float(numRays)) : 0.0f;
+
+        GIReservoir candidate;
+        candidate.position  = hit.position;
+        candidate.normal    = hit.normal;
+        candidate.radiance  = radiance;
+        candidate.weightSum = 0.0f;
+        candidate.M         = 1;
+        candidate.age       = 0;
+
+        UpdateReservoir(reservoir, candidate, risWeight, rng);
+        giRadianceSum += radiance;
+    }
+
+    // Finalize the reservoir weight.
+    float finalTargetPdf = Luminance(reservoir.radiance) * 3.14159265f;
+    FinalizeReservoir(reservoir, finalTargetPdf);
+
+    // ── Write reservoir ───────────────────────────────────────────────────
+    u_Reservoir[PixelIndex(pixel)] = PackReservoir(reservoir);
+
+    // ── Write initial GI estimate (average over rays) ─────────────────────
+    float3 giEstimate = (albedo * giRadianceSum) / float(numRays);
+    u_GIOutput[pixel] = float4(giEstimate, 1.0f);
+}

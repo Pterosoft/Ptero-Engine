@@ -1,0 +1,35 @@
+﻿#pragma once
+
+#include <string>
+
+// Shared renderer-facing abstractions live in the editor project so the editor owns
+// the contracts and the platform renderer DLL only provides the implementation.
+enum class ShaderStage
+{
+    Vertex,
+    Pixel
+};
+
+struct ShaderCompileRequest
+{
+    std::wstring FilePath;
+    std::wstring EntryPoint;
+    std::wstring TargetProfile;
+    ShaderStage Stage = ShaderStage::Vertex;
+};
+
+class IShader
+{
+public:
+    virtual ~IShader() = default;
+
+    virtual const wchar_t* GetSourcePath() const = 0;
+};
+
+class IPipeline
+{
+public:
+    virtual ~IPipeline() = default;
+
+    virtual const wchar_t* GetDebugName() const = 0;
+};

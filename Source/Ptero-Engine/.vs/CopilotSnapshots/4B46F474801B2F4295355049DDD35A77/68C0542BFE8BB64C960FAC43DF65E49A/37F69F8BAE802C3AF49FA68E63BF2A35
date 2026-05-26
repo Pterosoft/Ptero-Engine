@@ -1,0 +1,90 @@
+﻿// RtGI.hlsl - DXR Global Illumination shader library (lib_6_3).
+struct PointLightGpu { float3 Position; float Radius; float3 Color; float InvRadiusSq; };
+cbuffer GiConstants : register(b0)
+{
+    float4x4 gInvViewProj;
+    float3 gCameraPos; float _c0;
+    float3 gSunDir;    float _c1;
+    float3 gSunColor;  float _c2;
+    float3 gSkyAmbient; float _c3;
+    float gMaxRayDist; int gBounceCount; int gRaysPerPixel; float gAccumAlpha;
+    int gFrameIndex; int gSkylightOnMiss; int gNumPointLights; int gResetAccumulation;
+    PointLightGpu gPointLights[16];
+};
+Texture2D<float4> gGBufferNormal : register(t0);
+Texture2D<float>  gDepthBuffer   : register(t1);
+Texture2D<float4> gHistory       : register(t2);
+RaytracingAccelerationStructure gTlas : register(t3);
+RWTexture2D<float4> gRawOutput   : register(u0);
+RWTexture2D<float4> gAccumOutput : register(u1);
+struct GiPayload { float3 Radiance; float3 HitAlbedo; float3 HitNormal; float3 HitWorldPos; uint Hit; };
+struct TriAttributes { float2 Barycentrics; };
+float3 ReconstructWorldPos(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x*2.0f-1.0f, 1.0f-uv.y*2.0f, depth, 1.0f);
+    float4 w = mul(ndc, gInvViewProj);
+    return w.xyz / w.w;
+}
+uint WangHash(uint s) { s=(s^61u)^(s>>16u); s*=9u; s^=(s>>4u); s*=0x27D4EB2Du; s^=(s>>15u); return s; }
+float UintToFloat01(uint x) { return (float)(x&0x00FFFFFFu)*(1.0f/(float)0x01000000u); }
+float3 CosineSampleHemisphere(float3 N, float2 xi)
+{
+    float3 up=(abs(N.z)<0.999f)?float3(0,0,1):float3(1,0,0);
+    float3 T=normalize(cross(up,N)); float3 B=cross(N,T);
+    float r=sqrt(xi.x); float phi=6.28318530718f*xi.y;
+    return normalize(T*(r*cos(phi))+B*(r*sin(phi))+N*sqrt(max(0.0f,1.0f-xi.x)));
+}
+[shader("closesthit")]
+void ClosestHit(inout GiPayload p, in TriAttributes a)
+{
+    p.Hit=1; p.HitAlbedo=float3(0.7f,0.7f,0.7f);
+    float3x4 otw=ObjectToWorld3x4();
+    float3 n=normalize(float3(otw[0].z,otw[1].z,otw[2].z));
+    if(dot(n,WorldRayDirection())>0.0f) n=-n;
+    p.HitNormal=n;
+    p.HitWorldPos=WorldRayOrigin()+WorldRayDirection()*RayTCurrent();
+}
+[shader("miss")]
+void Miss(inout GiPayload p)
+{ p.Hit=0; p.Radiance=float3(0,0,0); p.HitAlbedo=float3(0,0,0); p.HitNormal=float3(0,0,1); p.HitWorldPos=float3(0,0,0); }
+float3 ShadeHit(float3 pos, float3 N, float3 albedo)
+{
+    float3 irr=float3(0,0,0);
+    irr+=gSunColor*saturate(dot(N,normalize(-gSunDir)));
+    irr+=gSkyAmbient*saturate(N.z*0.5f+0.5f);
+    int i; for(i=0;i<gNumPointLights;++i){
+        float3 tl=gPointLights[i].Position-pos; float d2=dot(tl,tl);
+        float NdL=saturate(dot(N,tl*rsqrt(d2)));
+        float at=saturate(1.0f-(d2*gPointLights[i].InvRadiusSq)*(d2*gPointLights[i].InvRadiusSq));
+        irr+=gPointLights[i].Color*NdL*(at*at/max(d2,0.0001f));
+    }
+    return albedo*irr;
+}
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 idx=DispatchRaysIndex().xy; uint2 dim=DispatchRaysDimensions().xy;
+    float2 uv=(float2(idx)+0.5f)/float2(dim);
+    float depth=gDepthBuffer[idx].r;
+    if(depth>=1.0f){ gRawOutput[idx]=float4(0,0,0,1); gAccumOutput[idx]=float4(0,0,0,1); return; }
+    float3 N=normalize(gGBufferNormal[idx].rgb*2.0f-1.0f);
+    float3 ro=ReconstructWorldPos(uv,depth)+N*0.005f;
+    float3 total=float3(0,0,0);
+    int ri; for(ri=0;ri<gRaysPerPixel;++ri){
+        uint s0=WangHash((idx.x*1973u+idx.y*9277u+(uint)gFrameIndex*26699u)^0x5678ABCDu+(uint)ri*8191u);
+        uint s1=WangHash(s0^0xDEADBEEFu);
+        float3 rd=CosineSampleHemisphere(N,float2(UintToFloat01(s0),UintToFloat01(s1)));
+        RayDesc ray; ray.Origin=ro; ray.Direction=rd; ray.TMin=0.001f; ray.TMax=gMaxRayDist;
+        GiPayload pl; pl.Radiance=float3(0,0,0); pl.HitAlbedo=float3(0,0,0); pl.HitNormal=float3(0,0,1); pl.HitWorldPos=float3(0,0,0); pl.Hit=0;
+        TraceRay(gTlas,RAY_FLAG_CULL_BACK_FACING_TRIANGLES,0xFF,0,1,0,ray,pl);
+        float3 rad;
+        if(pl.Hit==1) rad=ShadeHit(pl.HitWorldPos,pl.HitNormal,pl.HitAlbedo);
+        else if(gSkylightOnMiss) rad=gSkyAmbient*max(0.0f,rd.z);
+        else rad=float3(0,0,0);
+        total+=rad;
+    }
+    total/=(float)max(gRaysPerPixel,1);
+    gRawOutput[idx]=float4(total,1.0f);
+    float alpha=gResetAccumulation?1.0f:gAccumAlpha;
+    gAccumOutput[idx]=lerp(gHistory[idx],float4(total,1.0f),alpha);
+}

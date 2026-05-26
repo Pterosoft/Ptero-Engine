@@ -1,0 +1,44 @@
+﻿param()
+$dst = "K:\Ptero-Engine\Source\Audio\Audio.vcxproj"
+[xml]$xml = Get-Content $dst
+$nsmgr = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+$nsmgr.AddNamespace("p", "http://schemas.microsoft.com/developer/msbuild/2003")
+$msbNs = "http://schemas.microsoft.com/developer/msbuild/2003"
+
+# Fix PostBuildEvent commands - remove Win32 ones, fix x64
+$pbeNodes = $xml.SelectNodes("//p:PostBuildEvent", $nsmgr)
+foreach ($pbe in @($pbeNodes)) {
+    $cond = $pbe.ParentNode.GetAttribute("Condition")
+    if ($cond -match "x64") {
+        $cmdNode = $pbe.SelectSingleNode("p:Command", $nsmgr)
+        if ($cmdNode) {
+            $cmdNode.InnerText = 'xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\core\lib\x64\fmod.dll" "$(OutDir)" && xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\studio\lib\x64\fmodstudio.dll" "$(OutDir)"'
+        }
+    } else {
+        $pbe.ParentNode.RemoveChild($pbe) | Out-Null
+    }
+}
+
+# Remove all existing ItemGroup elements
+$igs = $xml.SelectNodes("//p:ItemGroup", $nsmgr)
+foreach ($ig in @($igs)) {
+    $ig.ParentNode.RemoveChild($ig) | Out-Null
+}
+
+# Add correct ItemGroups
+$proj = $xml.Project
+
+$igInc = $xml.CreateElement("ItemGroup", $msbNs)
+$clInc = $xml.CreateElement("ClInclude", $msbNs)
+$clInc.SetAttribute("Include", "AudioManager.h")
+$igInc.AppendChild($clInc) | Out-Null
+$proj.AppendChild($igInc) | Out-Null
+
+$igSrc = $xml.CreateElement("ItemGroup", $msbNs)
+$clSrc = $xml.CreateElement("ClCompile", $msbNs)
+$clSrc.SetAttribute("Include", "AudioManager.cpp")
+$igSrc.AppendChild($clSrc) | Out-Null
+$proj.AppendChild($igSrc) | Out-Null
+
+$xml.Save($dst)
+Write-Output "Done"

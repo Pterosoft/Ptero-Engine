@@ -1,0 +1,701 @@
+﻿#include "pch.h"
+#include "BloomRenderer.h"
+
+#include <algorithm>
+#include <cstring>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    UINT __stdcall DX12Context_GetSrvDescriptorSize();
+}
+
+// -------------------------------------------------------------------------
+// Initialize / Shutdown
+// -------------------------------------------------------------------------
+
+bool BloomRenderer::Initialize(UINT width, UINT height)
+{
+    if (mIsInitialized && mWidth == width && mHeight == height)
+        return true;
+
+    Shutdown();
+
+    mWidth  = width;
+    mHeight = height;
+    mLastError.clear();
+
+    if (!CreatePipelines())
+        return false;
+
+    if (!CreateTextures(width, height))
+        return false;
+
+    mIsInitialized = true;
+    return true;
+}
+
+void BloomRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedCb != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedCb = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mDownsamplePso.Reset();
+    mUpsamplePso.Reset();
+    mCompositePso.Reset();
+    mRootSignature.Reset();
+
+    for (auto& mip : mMips)
+        mip = {};
+    mNumMips = 0;
+
+    mOutputTexture.Reset();
+    mNsUavHeap.Reset();
+    mComputeHeap.Reset();
+
+    mOutputUavCpu               = {};
+    mOutputUavShaderVisibleCpu  = {};
+    mOutputUavShaderVisibleGpu  = {};
+
+    mDescriptorsAllocated = false;
+    mIsInitialized        = false;
+}
+
+// -------------------------------------------------------------------------
+// Apply
+// -------------------------------------------------------------------------
+
+void BloomRenderer::Apply(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource*            sourceResource,
+    D3D12_CPU_DESCRIPTOR_HANDLE sourceCpuSrv,
+    const BloomSettings&       settings)
+{
+    if (!mIsInitialized || commandList == nullptr || sourceResource == nullptr)
+        return;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return;
+
+    const int numMips = std::clamp(settings.MipLevels, 2, std::min(mNumMips, kMaxMips));
+
+    // -----------------------------------------------------------------------
+    // Rebuild the private compute heap each frame (cheap – just 1 descriptor
+    // heap, slots are re-written below via CopyDescriptors).
+    // Layout per dispatch (3 slots): [0] SRV src, [1] UAV dst (unused as SRV), [2] UAV dst (shader-visible)
+    // We pack slots linearly: each dispatch needs 1 SRV slot + 1 UAV slot.
+    // Slots: [0..numMips-1] = per-downsample UAV, [numMips..2*numMips-2] = per-upsample UAV,
+    //        [2*numMips-1] = composite UAV
+    // We bake SRVs and UAVs into the private heap so the root signature can use descriptor tables.
+    // -----------------------------------------------------------------------
+
+    // Re-populate per-frame compute heap with fresh copies of descriptors.
+    // Heap layout per downsample[i]: slot 2*i = SRV src, slot 2*i+1 = UAV dst
+    // Per upsample[i]:               slot 2*(numMips + i) = SRV src, slot 2*(numMips+i)+1 = UAV dst
+    // Composite:                     slot 2*(2*numMips) = SRV bloom, slot 2*(2*numMips)+1 = SRV source, slot 2*(2*numMips)+2 = UAV output
+    // Total = 2*(2*numMips) + 3 = 4*numMips + 3
+
+    const UINT stride = mComputeHeapStride;
+    const UINT slotsNeeded = 4u * static_cast<UINT>(numMips) + 3u;
+    if (slotsNeeded > mComputeHeapSlots)
+    {
+        // Should not happen if Initialize was called correctly; bail gracefully.
+        return;
+    }
+
+    // Helper: get compute heap CPU handle at slot index.
+    auto heapCpu = [&](UINT slot) -> D3D12_CPU_DESCRIPTOR_HANDLE
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE h = mComputeHeap->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += static_cast<SIZE_T>(slot) * stride;
+        return h;
+    };
+    auto heapGpu = [&](UINT slot) -> D3D12_GPU_DESCRIPTOR_HANDLE
+    {
+        D3D12_GPU_DESCRIPTOR_HANDLE h = mComputeHeap->GetGPUDescriptorHandleForHeapStart();
+        h.ptr += static_cast<UINT64>(slot) * stride;
+        return h;
+    };
+
+    // -----------------------------------------------------------------------
+    // Write the constant buffer for each dispatch slot.
+    // CB layout: kMaxCbSlots slots of BloomCbData, each 256-byte aligned.
+    // Slot 0 = prefilter+downsample mip0 (source -> mMips[0])
+    // Slot i (1..numMips-1) = downsample mMips[i-1] -> mMips[i]
+    // Slot numMips + i (0..numMips-2) = upsample mMips[numMips-1-i] -> mMips[numMips-2-i]
+    // Slot 2*numMips - 1 = composite mMips[0] -> output
+    // -----------------------------------------------------------------------
+    const UINT64 cbStride = 256ull;
+    auto writeCb = [&](int slot, UINT srcW, UINT srcH, UINT dstW, UINT dstH,
+                       int mipLevel, float threshold, float knee, float intensity, float radius)
+    {
+        if (!mMappedCb) return;
+        BloomCbData cb{};
+        cb.Threshold  = threshold;
+        cb.Knee       = knee;
+        cb.Intensity  = intensity;
+        cb.Radius     = radius;
+        cb.SrcWidth   = srcW;
+        cb.SrcHeight  = srcH;
+        cb.DstWidth   = dstW;
+        cb.DstHeight  = dstH;
+        cb.MipLevel   = mipLevel;
+        cb.MaxMips    = numMips;
+        std::memcpy(static_cast<char*>(mMappedCb) + slot * cbStride, &cb, sizeof(BloomCbData));
+    };
+
+    // Slot 0: prefilter (source full-res -> mMips[0] half-res)
+    writeCb(0, mWidth, mHeight, mMips[0].Width, mMips[0].Height,
+            0, settings.Threshold, settings.Knee, settings.Intensity, settings.Radius);
+    // Slots 1..numMips-1: subsequent downsamples
+    for (int i = 1; i < numMips; ++i)
+    {
+        writeCb(i, mMips[i-1].Width, mMips[i-1].Height, mMips[i].Width, mMips[i].Height,
+                i, settings.Threshold, settings.Knee, settings.Intensity, settings.Radius);
+    }
+    // Upsample slots: numMips .. 2*numMips-2
+    for (int i = 0; i < numMips - 1; ++i)
+    {
+        int src = numMips - 1 - i;      // from smallest up
+        int dst = src - 1;
+        writeCb(numMips + i,
+                mMips[src].Width, mMips[src].Height, mMips[dst].Width, mMips[dst].Height,
+                i, settings.Threshold, settings.Knee, settings.Intensity, settings.Radius);
+    }
+    // Composite slot: 2*numMips-1
+    writeCb(2 * numMips - 1,
+            mMips[0].Width, mMips[0].Height, mWidth, mHeight,
+            0, settings.Threshold, settings.Knee, settings.Intensity, settings.Radius);
+
+    // -----------------------------------------------------------------------
+    // Copy descriptors into private compute heap for each dispatch.
+    // Layout: each dispatch takes 2 consecutive slots: [SRV src] [UAV dst]
+    // For composite we need 3 slots: [SRV bloom] [SRV original] [UAV output]
+    // -----------------------------------------------------------------------
+    DXGI_FORMAT texFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    auto makeTexSrv = [&](ID3D12Resource* res, D3D12_CPU_DESCRIPTOR_HANDLE dst)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format                        = texFmt;
+        srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels           = 1;
+        device->CreateShaderResourceView(res, &srvDesc, dst);
+    };
+
+    auto makeTexUav = [&](ID3D12Resource* res, D3D12_CPU_DESCRIPTOR_HANDLE dst)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format             = texFmt;
+        uavDesc.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE2D;
+        uavDesc.Texture2D.MipSlice = 0;
+        device->CreateUnorderedAccessView(res, nullptr, &uavDesc, dst);
+    };
+
+    // Downsample dispatches: slot 2*i = SRV, slot 2*i+1 = UAV
+    // Slot 0: source (full-res scene) -> mMips[0]
+    makeTexSrv(sourceResource,     heapCpu(0));
+    makeTexUav(mMips[0].Texture.Get(), heapCpu(1));
+    // Slots 2..2*(numMips-1)+1
+    for (int i = 1; i < numMips; ++i)
+    {
+        makeTexSrv(mMips[i-1].Texture.Get(), heapCpu(static_cast<UINT>(2*i)));
+        makeTexUav(mMips[i].Texture.Get(),   heapCpu(static_cast<UINT>(2*i + 1)));
+    }
+
+    // Upsample dispatches start at heap slot 2*numMips
+    UINT upBase = static_cast<UINT>(2 * numMips);
+    for (int i = 0; i < numMips - 1; ++i)
+    {
+        int src = numMips - 1 - i;
+        int dst = src - 1;
+        makeTexSrv(mMips[src].Texture.Get(), heapCpu(upBase + static_cast<UINT>(2*i)));
+        makeTexUav(mMips[dst].Texture.Get(), heapCpu(upBase + static_cast<UINT>(2*i + 1)));
+    }
+
+    // Composite: 3 slots after upsample slots
+    UINT compBase = upBase + static_cast<UINT>(2 * (numMips - 1));
+    makeTexSrv(mMips[0].Texture.Get(), heapCpu(compBase));        // bloom result
+    makeTexSrv(sourceResource,         heapCpu(compBase + 1));    // original HDR
+    makeTexUav(mOutputTexture.Get(),   heapCpu(compBase + 2));    // output UAV
+
+    // -----------------------------------------------------------------------
+    // Set compute descriptor heap.
+    // -----------------------------------------------------------------------
+    ID3D12DescriptorHeap* heaps[] = { mComputeHeap.Get() };
+    commandList->SetDescriptorHeaps(1, heaps);
+
+    commandList->SetComputeRootSignature(mRootSignature.Get());
+
+    // Root signature layout:
+    //   [0] CBV  b0  (inline root CBV – GPU VA changes each dispatch)
+    //   [1] SRV  t0  descriptor table size 1
+    //   [2] UAV  u0  descriptor table size 1
+
+    // -----------------------------------------------------------------------
+    // PASS 1 – Downsample chain (prefilter on first level)
+    // -----------------------------------------------------------------------
+    commandList->SetPipelineState(mDownsamplePso.Get());
+
+    // Transition all mip textures to UAV for writing.
+    {
+        D3D12_RESOURCE_BARRIER barriers[kMaxMips];
+        for (int i = 0; i < numMips; ++i)
+        {
+            barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mMips[i].Texture.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
+        commandList->ResourceBarrier(static_cast<UINT>(numMips), barriers);
+    }
+
+    for (int i = 0; i < numMips; ++i)
+    {
+        const UINT64 cbOffset = static_cast<UINT64>(i) * cbStride;
+        commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+        commandList->SetComputeRootDescriptorTable(1, heapGpu(static_cast<UINT>(2*i)));      // SRV src
+        commandList->SetComputeRootDescriptorTable(2, heapGpu(static_cast<UINT>(2*i + 1)));  // UAV dst
+
+        const UINT gx = (mMips[i].Width  + 7) / 8;
+        const UINT gy = (mMips[i].Height + 7) / 8;
+        commandList->Dispatch(gx, gy, 1);
+
+        // Transition written mip from UAV -> SRV so the next level can read it.
+        // (Last mip stays in UAV until upsample starts reading it.)
+        if (i < numMips - 1)
+        {
+            const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+                mMips[i].Texture.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &bar);
+        }
+    }
+
+    // Transition the deepest mip from UAV -> SRV for the first upsample read.
+    {
+        const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            mMips[numMips - 1].Texture.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &bar);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 2 – Upsample chain
+    // -----------------------------------------------------------------------
+    commandList->SetPipelineState(mUpsamplePso.Get());
+
+    for (int i = 0; i < numMips - 1; ++i)
+    {
+        int dst = numMips - 2 - i; // destination mip index (going back up)
+
+        // Transition the destination mip to UAV.
+        {
+            const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+                mMips[dst].Texture.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commandList->ResourceBarrier(1, &bar);
+        }
+
+        const UINT cbSlot = static_cast<UINT>(numMips + i);
+        const UINT64 cbOffset = static_cast<UINT64>(cbSlot) * cbStride;
+        commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+        commandList->SetComputeRootDescriptorTable(1, heapGpu(upBase + static_cast<UINT>(2*i)));
+        commandList->SetComputeRootDescriptorTable(2, heapGpu(upBase + static_cast<UINT>(2*i + 1)));
+
+        const UINT gx = (mMips[dst].Width  + 7) / 8;
+        const UINT gy = (mMips[dst].Height + 7) / 8;
+        commandList->Dispatch(gx, gy, 1);
+
+        // Transition destination back to SRV for the next upsample step.
+        {
+            const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+                mMips[dst].Texture.Get(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &bar);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 3 – Composite bloom onto the original HDR source.
+    // -----------------------------------------------------------------------
+    commandList->SetPipelineState(mCompositePso.Get());
+
+    // Transition output texture to UAV.
+    {
+        const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputTexture.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        commandList->ResourceBarrier(1, &bar);
+    }
+
+    // For composite we use a different root parameter layout (2 SRVs + 1 UAV).
+    // We reuse slot [1] for bloom SRV and need an additional SRV for the original.
+    // Root sig has only 1 SRV table, so we pack the original SRV into slot [2]
+    // which normally holds the UAV, and shift the UAV to slot [3].
+    // To avoid a second root sig, the composite shader reads both from t0 and t1
+    // via two descriptor table entries – but our root sig only exposes t0 and u0.
+    // Solution: composite shader takes bloom at t0 (table slot 1) and original at t1
+    // via a second SRV table at root param [3] (add a 4th param to root sig).
+    // We already build a 4-param root sig below in CreatePipelines.
+    {
+        const UINT64 cbOffset = static_cast<UINT64>(2 * numMips - 1) * cbStride;
+        commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+        commandList->SetComputeRootDescriptorTable(1, heapGpu(compBase));       // t0: bloom
+        commandList->SetComputeRootDescriptorTable(2, heapGpu(compBase + 1));   // t1: original
+        commandList->SetComputeRootDescriptorTable(3, heapGpu(compBase + 2));   // u0: output
+
+        const UINT gx = (mWidth  + 7) / 8;
+        const UINT gy = (mHeight + 7) / 8;
+        commandList->Dispatch(gx, gy, 1);
+    }
+
+    // Transition output back to SRV for display / tonemap input.
+    {
+        const auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputTexture.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &bar);
+    }
+
+    // Restore shared heap for ImGui.
+    ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+    commandList->SetDescriptorHeaps(1, sharedHeaps);
+}
+
+// -------------------------------------------------------------------------
+// CreatePipelines
+// -------------------------------------------------------------------------
+
+bool BloomRenderer::CreatePipelines()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "BloomRenderer: DX12 device is null.";
+        return false;
+    }
+
+    // Compile shaders.
+    const ShaderCompileRequest dsReq{ L"Shaders\\BloomDownsample.hlsl", L"CSMain", L"cs_5_0", ShaderStage::Compute };
+    if (!mDownsampleShader.Compile(dsReq))
+    {
+        mLastError = std::string("BloomRenderer: Downsample shader failed: ")
+            + (mDownsampleShader.GetLastErrorMessage() ? mDownsampleShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+
+    const ShaderCompileRequest usReq{ L"Shaders\\BloomUpsample.hlsl", L"CSMain", L"cs_5_0", ShaderStage::Compute };
+    if (!mUpsampleShader.Compile(usReq))
+    {
+        mLastError = std::string("BloomRenderer: Upsample shader failed: ")
+            + (mUpsampleShader.GetLastErrorMessage() ? mUpsampleShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+
+    const ShaderCompileRequest compReq{ L"Shaders\\BloomComposite.hlsl", L"CSMain", L"cs_5_0", ShaderStage::Compute };
+    if (!mCompositeShader.Compile(compReq))
+    {
+        mLastError = std::string("BloomRenderer: Composite shader failed: ")
+            + (mCompositeShader.GetLastErrorMessage() ? mCompositeShader.GetLastErrorMessage() : "unknown");
+        return false;
+    }
+
+    // Root signature:
+    //   [0] CBV  b0  (inline root CBV)
+    //   [1] SRV  t0  – source texture (or bloom for composite)
+    //   [2] SRV  t1  – original HDR (composite only; unused in down/upsample)
+    //   [3] UAV  u0  – output texture
+
+    D3D12_DESCRIPTOR_RANGE rangeSrv0{};
+    rangeSrv0.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rangeSrv0.NumDescriptors                    = 1;
+    rangeSrv0.BaseShaderRegister                = 0; // t0
+    rangeSrv0.RegisterSpace                     = 0;
+    rangeSrv0.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE rangeSrv1{};
+    rangeSrv1.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rangeSrv1.NumDescriptors                    = 1;
+    rangeSrv1.BaseShaderRegister                = 1; // t1
+    rangeSrv1.RegisterSpace                     = 0;
+    rangeSrv1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_DESCRIPTOR_RANGE rangeUav{};
+    rangeUav.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    rangeUav.NumDescriptors                    = 1;
+    rangeUav.BaseShaderRegister                = 0; // u0
+    rangeUav.RegisterSpace                     = 0;
+    rangeUav.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[4]{};
+
+    params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].Descriptor.RegisterSpace  = 0;
+    params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &rangeSrv0;
+    params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges   = &rangeSrv1;
+    params[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges   = &rangeUav;
+    params[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter           = D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MipLODBias       = 0.0f;
+    sampler.MaxAnisotropy    = 1;
+    sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
+    sampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+    sampler.MinLOD           = 0.0f;
+    sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister   = 0;
+    sampler.RegisterSpace    = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters     = 4;
+    rsDesc.pParameters       = params;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers   = &sampler;
+    rsDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errors;
+    HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors);
+    if (FAILED(hr))
+    {
+        mLastError = "BloomRenderer: D3D12SerializeRootSignature failed.";
+        return false;
+    }
+    hr = device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&mRootSignature));
+    if (FAILED(hr))
+    {
+        mLastError = "BloomRenderer: CreateRootSignature failed.";
+        return false;
+    }
+
+    auto makePso = [&](DX12Shader& shader, ComPtr<ID3D12PipelineState>& pso) -> bool
+    {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = mRootSignature.Get();
+        psoDesc.CS             = shader.GetBytecode();
+        HRESULT hres = device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&pso));
+        return SUCCEEDED(hres);
+    };
+
+    if (!makePso(mDownsampleShader, mDownsamplePso))
+    {
+        mLastError = "BloomRenderer: CreateComputePipelineState (downsample) failed.";
+        return false;
+    }
+    if (!makePso(mUpsampleShader, mUpsamplePso))
+    {
+        mLastError = "BloomRenderer: CreateComputePipelineState (upsample) failed.";
+        return false;
+    }
+    if (!makePso(mCompositeShader, mCompositePso))
+    {
+        mLastError = "BloomRenderer: CreateComputePipelineState (composite) failed.";
+        return false;
+    }
+
+    // Constant buffer: kMaxCbSlots * 256 bytes.
+    const UINT64 cbSize = static_cast<UINT64>(kMaxCbSlots) * 256ull;
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeap.CreationNodeMask     = 1;
+    uploadHeap.VisibleNodeMask      = 1;
+    auto cbDesc = CD3DX12_RESOURCE_DESC::Buffer(cbSize);
+    hr = device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mConstantBuffer));
+    if (FAILED(hr))
+    {
+        mLastError = "BloomRenderer: Failed to create constant buffer.";
+        return false;
+    }
+    hr = mConstantBuffer->Map(0, nullptr, &mMappedCb);
+    if (FAILED(hr))
+    {
+        mLastError = "BloomRenderer: Failed to map constant buffer.";
+        return false;
+    }
+
+    return true;
+}
+
+// -------------------------------------------------------------------------
+// CreateTextures
+// -------------------------------------------------------------------------
+
+bool BloomRenderer::CreateTextures(UINT width, UINT height)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "BloomRenderer: DX12 device is null (CreateTextures).";
+        return false;
+    }
+
+    constexpr DXGI_FORMAT TexFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type                 = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeap.CreationNodeMask     = 1;
+    defaultHeap.VisibleNodeMask      = 1;
+
+    // Compute mip dimensions and create textures.
+    mNumMips = 0;
+    UINT mw = width  / 2;
+    UINT mh = height / 2;
+    for (int i = 0; i < kMaxMips && mw >= 2 && mh >= 2; ++i)
+    {
+        mMips[i].Width  = mw;
+        mMips[i].Height = mh;
+
+        D3D12_RESOURCE_DESC texDesc{};
+        texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texDesc.Alignment        = 0;
+        texDesc.Width            = mw;
+        texDesc.Height           = mh;
+        texDesc.DepthOrArraySize = 1;
+        texDesc.MipLevels        = 1;
+        texDesc.Format           = TexFormat;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        texDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        HRESULT hr = device->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            nullptr, IID_PPV_ARGS(&mMips[i].Texture));
+        if (FAILED(hr))
+        {
+            mLastError = "BloomRenderer: Failed to create mip texture.";
+            return false;
+        }
+
+        mNumMips++;
+        mw = std::max(1u, mw / 2);
+        mh = std::max(1u, mh / 2);
+    }
+
+    if (mNumMips < 2)
+    {
+        mLastError = "BloomRenderer: Resolution too small for bloom mip chain.";
+        return false;
+    }
+
+    // Output texture (same size as source, UAV + SRV).
+    {
+        D3D12_RESOURCE_DESC texDesc{};
+        texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texDesc.Width            = width;
+        texDesc.Height           = height;
+        texDesc.DepthOrArraySize = 1;
+        texDesc.MipLevels        = 1;
+        texDesc.Format           = TexFormat;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        texDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        HRESULT hr = device->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            nullptr, IID_PPV_ARGS(&mOutputTexture));
+        if (FAILED(hr))
+        {
+            mLastError = "BloomRenderer: Failed to create output texture.";
+            return false;
+        }
+    }
+
+    // Allocate shared-context ImGui SRV slot once.
+    if (!mImGuiSlotAllocated)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputImGuiSrvCpu, &mOutputImGuiSrvGpu))
+        {
+            mLastError = "BloomRenderer: Failed to allocate ImGui SRV descriptor.";
+            return false;
+        }
+        mImGuiSlotAllocated = true;
+    }
+
+    // Write ImGui SRV.
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format                        = TexFormat;
+        srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels           = 1;
+        device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputImGuiSrvCpu);
+    }
+
+    mOutputTextureId = static_cast<ImTextureID>(mOutputImGuiSrvGpu.ptr);
+
+    // Non-shader-visible heap for output UAV.
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.NumDescriptors = 1;
+        heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mNsUavHeap));
+        mOutputUavCpu = mNsUavHeap->GetCPUDescriptorHandleForHeapStart();
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format             = TexFormat;
+        uavDesc.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(mOutputTexture.Get(), nullptr, &uavDesc, mOutputUavCpu);
+    }
+
+    // Private compute heap: 4*kMaxMips + 3 slots for worst-case dispatch count.
+    mComputeHeapStride = DX12Context_GetSrvDescriptorSize();
+    mComputeHeapSlots  = 4u * static_cast<UINT>(kMaxMips) + 3u;
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.NumDescriptors = mComputeHeapSlots;
+        heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        HRESULT hr = device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mComputeHeap));
+        if (FAILED(hr))
+        {
+            mLastError = "BloomRenderer: Failed to create compute descriptor heap.";
+            return false;
+        }
+    }
+
+    return true;
+}

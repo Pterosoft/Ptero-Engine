@@ -1,0 +1,112 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "TaaSettings.h"
+
+#include <string>
+
+// TAARenderer owns all GPU resources and pipeline state for the TAA resolve pass.
+// It is driven by DX12SceneRenderer: after the scene has been rendered into the scene
+// colour target, DX12SceneRenderer calls Resolve() to blend that frame with the
+// history buffer and write the stabilised result into the output texture.
+// The output SRV is then displayed in the ImGui viewport instead of the raw scene colour.
+class TAARenderer
+{
+public:
+    // Allocate TAA resources for a given render resolution.
+    // Must be called (or re-called) whenever the viewport is resized.
+    bool Initialize(UINT width, UINT height);
+
+    // Release all GPU resources.
+    void Shutdown();
+
+    // Run the TAA resolve compute dispatch.
+    // currentFrameSrv  – SRV handle for the freshly rendered scene colour texture.
+    // currentFrameResource – the underlying ID3D12Resource (used for UAV barriers).
+    void Resolve(
+        ID3D12GraphicsCommandList* commandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE currentFrameCpuSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE currentFrameGpuSrv,
+        ID3D12Resource* currentFrameResource,
+        const TaaSettings& settings);
+
+    // GPU handle of the resolved output SRV – use this as the viewport texture when TAA is enabled.
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv() const { return mOutputSrvGpu; }
+    ImTextureID                 GetOutputTextureId() const { return mOutputTextureId; }
+
+    UINT GetWidth()  const { return mWidth; }
+    UINT GetHeight() const { return mHeight; }
+
+    bool IsInitialized() const { return mIsInitialized; }
+
+    const char* GetLastErrorMessage() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+private:
+    bool CreatePipeline();
+    bool CreateTextures();
+
+    // -----------------------------------------------------------------------
+    // GPU resources
+    // -----------------------------------------------------------------------
+
+    // History buffer – the resolved result from the previous frame.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mHistoryBuffer;
+
+    // The TAA output texture – what is shown in the viewport.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mOutputBuffer;
+
+    // Separate non-shader-visible RTV/DSV-equivalent heap is not needed for compute;
+    // instead we keep one CPU-side descriptor heap with one UAV for the output.
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mNonShaderVisibleUavHeap;
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUavCpu{};
+
+    // Constant buffer (upload heap, persistently mapped).
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    void* mMappedCb = nullptr;
+
+    // Shader-visible SRV/UAV descriptor slots allocated from the shared context heap.
+    // Layout (3 consecutive slots):
+    //   [0] history SRV   (t1)
+    //   [1] output  SRV   (t0 for ImGui display, u0 for compute)
+    //   [2] output  UAV   (u0) – we allocate a separate non-shader-visible heap for the actual clear/compute
+    // We actually allocate 3 slots from the shared heap:
+    //   slot 0 -> history SRV
+    //   slot 1 -> output  SRV  (ImGui)
+    //   slot 2 -> output  UAV  (compute, shader-visible)
+    D3D12_CPU_DESCRIPTOR_HANDLE mHistorySrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mHistorySrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUavShaderVisibleCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputUavShaderVisibleGpu{};
+
+    ImTextureID mOutputTextureId = ImTextureID_Invalid;
+
+    // Pipeline
+    DX12Shader mComputeShader;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    UINT mWidth  = 0;
+    UINT mHeight = 0;
+    bool mIsInitialized = false;
+    bool mDescriptorsAllocated = false;
+
+    std::string mLastError;
+
+    struct alignas(256) TaaConstantBufferData
+    {
+        float BlendFactor;
+        float SharpeningStrength;
+        int   ApplySharpening;
+        float Pad0;
+        UINT  FrameWidth;
+        UINT  FrameHeight;
+        float Pad1;
+        float Pad2;
+    };
+};

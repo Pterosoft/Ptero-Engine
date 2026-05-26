@@ -1,0 +1,2481 @@
+﻿#include "pch.h"
+#include "EditorMainMenu.h"
+
+#include "Editor.h"
+#include "TimeOfDaySettings.h"
+#include "..\System\MaterialEditor.h"
+#include "..\System\include\System\SystemAssetApi.h"
+
+#include "imgui.h"
+
+#include <commdlg.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <iterator>
+#include <mutex>
+#include <string>
+#include <system_error>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+namespace
+{
+    bool SliderFloatWithInput(const char* label, float* value, float minValue, float maxValue, const char* format, float inputStep = 0.1f, float inputStepFast = 1.0f)
+    {
+        bool changed = false;
+        ImGui::PushID(label);
+        ImGui::BeginGroup();
+        changed |= ImGui::SliderFloat("##Slider", value, minValue, maxValue, format);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        changed |= ImGui::InputFloat(label, value, inputStep, inputStepFast, format);
+        *value = std::clamp(*value, minValue, maxValue);
+        ImGui::EndGroup();
+        ImGui::PopID();
+        return changed;
+    }
+
+    bool SliderIntWithInput(const char* label, int* value, int minValue, int maxValue, const char* format = "%d")
+    {
+        bool changed = false;
+        ImGui::PushID(label);
+        ImGui::BeginGroup();
+        changed |= ImGui::SliderInt("##Slider", value, minValue, maxValue, format);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        changed |= ImGui::InputInt(label, value);
+        *value = std::clamp(*value, minValue, maxValue);
+        ImGui::EndGroup();
+        ImGui::PopID();
+        return changed;
+    }
+
+    // Keep the menu-specific UI state in this file so the renderer API stays focused on frame orchestration.
+    bool gShowImGuiDemoWindow = false;
+    bool gShowAboutWindow = false;
+    bool gShowAudioWindow = false;
+    bool gShowSceneSettingsWindow = false;
+    bool gShowGraphicsSettingsWindow = false;
+    bool gShowAssetBrowserWindow = false;
+    bool gShowMaterialEditorWindow = false;
+    bool gShowTimeOfDayWindow = false;
+    bool gShowGBufferDebugWindow = false;
+    bool gLastAssetActionSucceeded = false;
+    bool gHasAssetActionResult = false;
+    bool gOpenRenamePopup = false;
+    bool gOpenNewFolderPopup = false;
+    bool gClipboardHasValue = false;
+    std::string gClipboardRelativePath;
+    std::string gAssetStatusMessage = "Use the Asset Browser toolbar to import FBX files and manage Data content.";
+    std::string gDataDirectoryDisplay = "Data folder not found yet.";
+    std::string gSelectedFolderRelativePath;
+    std::string gSelectedAssetRelativePath;
+    MaterialEditor gMaterialEditor;
+    char gRenameBuffer[MAX_PATH] = {};
+    char gNewFolderBuffer[MAX_PATH] = {};
+    char gMaterialNameBuffer[256] = {};
+    char gMultiMaterialNameBuffer[256] = {};
+    char gSceneFileBuffer[MAX_PATH] = {};
+    // Index of the sub-material currently selected in the multi-material editor (-1 = none).
+    int gSelectedSubMaterialIndex = -1;
+
+    // -----------------------------------------------------------------------
+    // Texture batch import progress state.
+    // Import runs on a background thread so the UI stays responsive.
+    // -----------------------------------------------------------------------
+    struct TextureImportProgress
+    {
+        std::atomic<int>  Total{ 0 };      // total files queued
+        std::atomic<int>  Done{ 0 };       // files completed (success or fail)
+        std::atomic<bool> Running{ false };// background thread is active
+        std::mutex        LogMutex;
+        std::vector<std::string> Log;      // per-file result messages (guarded by LogMutex)
+        std::string CurrentFile;           // file currently being imported (guarded by LogMutex)
+        std::string TargetFolder;          // destination folder (set before thread launch)
+    };
+    TextureImportProgress gTextureImport;
+
+    void RefreshMaterialNameBuffer()
+    {
+        strcpy_s(gMaterialNameBuffer, gMaterialEditor.GetCurrentMaterial().Name.c_str());
+    }
+
+    void RefreshMultiMaterialNameBuffer()
+    {
+        strcpy_s(gMultiMaterialNameBuffer, gMaterialEditor.GetCurrentMultiMaterial().Name.c_str());
+    }
+
+    bool PromptForSceneOpenPath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
+    {
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = ownerWindowHandle;
+        openFileName.lpstrTitle = "Open Scene";
+        openFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        openFileName.lpstrFile = sceneFileBuffer;
+        openFileName.nMaxFile = sceneFileBufferSize;
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        return GetOpenFileNameA(&openFileName) == TRUE;
+    }
+
+    bool PromptForSceneSavePath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
+    {
+        OPENFILENAMEA saveFileName{};
+        saveFileName.lStructSize = sizeof(saveFileName);
+        saveFileName.hwndOwner = ownerWindowHandle;
+        saveFileName.lpstrTitle = "Save Scene";
+        saveFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        saveFileName.lpstrFile = sceneFileBuffer;
+        saveFileName.nMaxFile = sceneFileBufferSize;
+        saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        saveFileName.lpstrDefExt = "json";
+        return GetSaveFileNameA(&saveFileName) == TRUE;
+    }
+
+    struct AssetBrowserItem
+    {
+        std::string Name;
+        std::string RelativePath;
+        bool IsDirectory = false;
+    };
+
+    std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath);
+    std::filesystem::path FindProjectDataDirectory();
+
+    std::filesystem::path gCachedDataDirectory;
+    bool gHasCachedDataDirectory = false;
+    std::unordered_map<std::string, std::vector<std::string>> gCachedChildFolders;
+    std::unordered_map<std::string, std::vector<AssetBrowserItem>> gCachedFolderItems;
+
+    void InvalidateAssetBrowserDirectoryCache()
+    {
+        gCachedChildFolders.clear();
+        gCachedFolderItems.clear();
+    }
+
+    const std::filesystem::path& GetProjectDataDirectoryCached()
+    {
+        if (!gHasCachedDataDirectory)
+        {
+            gCachedDataDirectory = FindProjectDataDirectory();
+            gHasCachedDataDirectory = true;
+        }
+
+        return gCachedDataDirectory;
+    }
+
+    std::string BuildChildRelativePath(const std::string& parentFolderRelativePath, const std::filesystem::path& childName)
+    {
+        return NormalizeRelativeDataPath(
+            parentFolderRelativePath.empty()
+            ? childName
+            : (std::filesystem::path(parentFolderRelativePath) / childName));
+    }
+
+    using SystemImportFbxToDataFn = decltype(&System_ImportFbxToData);
+    using SystemImportTextureToDataFn = decltype(&System_ImportTextureToData);
+
+    std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath)
+    {
+        const std::filesystem::path normalizedPath = relativePath.lexically_normal();
+        return (normalizedPath.empty() || normalizedPath == ".") ? std::string{} : normalizedPath.generic_string();
+    }
+
+    bool IsPathInsideRoot(const std::filesystem::path& rootPath, const std::filesystem::path& candidatePath)
+    {
+        const std::filesystem::path normalizedRootPath = rootPath.lexically_normal();
+        const std::filesystem::path normalizedCandidatePath = candidatePath.lexically_normal();
+
+        auto rootIterator = normalizedRootPath.begin();
+        auto candidateIterator = normalizedCandidatePath.begin();
+        for (; rootIterator != normalizedRootPath.end(); ++rootIterator, ++candidateIterator)
+        {
+            if (candidateIterator == normalizedCandidatePath.end() || *rootIterator != *candidateIterator)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::filesystem::path FindProjectDataDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+        {
+            return {};
+        }
+
+        // Walk upward from the editor executable until the repository Data folder is found.
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path dataDirectory = currentPath / "Data";
+            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
+            {
+                return dataDirectory;
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    std::filesystem::path GetAbsoluteDataPath(const std::string& relativePath)
+    {
+        const std::filesystem::path& dataDirectory = GetProjectDataDirectoryCached();
+        return relativePath.empty()
+            ? dataDirectory
+            : (dataDirectory / std::filesystem::path(relativePath)).lexically_normal();
+    }
+
+    void SetAssetBrowserStatus(const bool succeeded, const std::string& statusMessage)
+    {
+        gLastAssetActionSucceeded = succeeded;
+        gHasAssetActionResult = true;
+        gAssetStatusMessage = statusMessage;
+    }
+
+    void RefreshAssetBrowserState()
+    {
+        const std::filesystem::path& dataDirectory = GetProjectDataDirectoryCached();
+        if (dataDirectory.empty())
+        {
+            gDataDirectoryDisplay = "Failed to locate the repository Data folder.";
+            gSelectedFolderRelativePath.clear();
+            gSelectedAssetRelativePath.clear();
+            return;
+        }
+
+        gDataDirectoryDisplay = dataDirectory.string();
+
+        const std::filesystem::path selectedFolderPath = GetAbsoluteDataPath(gSelectedFolderRelativePath);
+        if (!gSelectedFolderRelativePath.empty() && !std::filesystem::exists(selectedFolderPath))
+        {
+            gSelectedFolderRelativePath.clear();
+        }
+
+        const std::filesystem::path selectedAssetPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        if (!gSelectedAssetRelativePath.empty() && !std::filesystem::exists(selectedAssetPath))
+        {
+            gSelectedAssetRelativePath.clear();
+        }
+    }
+
+    const std::vector<std::string>& GetChildFolderRelativePaths(const std::string& parentFolderRelativePath)
+    {
+        static const std::vector<std::string> emptyChildFolders;
+
+        const auto cachedFolders = gCachedChildFolders.find(parentFolderRelativePath);
+        if (cachedFolders != gCachedChildFolders.end())
+        {
+            return cachedFolders->second;
+        }
+
+        std::vector<std::string> childFolders;
+
+        const std::filesystem::path absoluteFolderPath = GetAbsoluteDataPath(parentFolderRelativePath);
+        if (absoluteFolderPath.empty())
+        {
+            return emptyChildFolders;
+        }
+
+        std::error_code iteratorError;
+        for (std::filesystem::directory_iterator it(absoluteFolderPath, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            std::error_code statusError;
+            if (!it->is_directory(statusError) || statusError)
+            {
+                continue;
+            }
+
+            childFolders.push_back(BuildChildRelativePath(parentFolderRelativePath, it->path().filename()));
+        }
+
+        std::sort(childFolders.begin(), childFolders.end());
+        return gCachedChildFolders.emplace(parentFolderRelativePath, std::move(childFolders)).first->second;
+    }
+
+    const std::vector<AssetBrowserItem>& CollectFolderItems(const std::string& folderRelativePath)
+    {
+        static const std::vector<AssetBrowserItem> emptyItems;
+
+        const auto cachedItems = gCachedFolderItems.find(folderRelativePath);
+        if (cachedItems != gCachedFolderItems.end())
+        {
+            return cachedItems->second;
+        }
+
+        std::vector<AssetBrowserItem> items;
+
+        const std::filesystem::path absoluteFolderPath = GetAbsoluteDataPath(folderRelativePath);
+        if (absoluteFolderPath.empty())
+        {
+            return emptyItems;
+        }
+
+        std::error_code iteratorError;
+        for (std::filesystem::directory_iterator it(absoluteFolderPath, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            std::error_code statusError;
+            const bool isDirectory = it->is_directory(statusError);
+            const bool isRegularFile = it->is_regular_file(statusError);
+            if (statusError || (!isDirectory && !isRegularFile))
+            {
+                continue;
+            }
+
+            AssetBrowserItem item;
+            item.Name = it->path().filename().string();
+            item.RelativePath = BuildChildRelativePath(folderRelativePath, it->path().filename());
+            item.IsDirectory = isDirectory;
+            items.push_back(item);
+        }
+
+        std::sort(
+            items.begin(),
+            items.end(),
+            [](const AssetBrowserItem& leftItem, const AssetBrowserItem& rightItem)
+            {
+                if (leftItem.IsDirectory != rightItem.IsDirectory)
+                {
+                    return leftItem.IsDirectory > rightItem.IsDirectory;
+                }
+
+                return _stricmp(leftItem.Name.c_str(), rightItem.Name.c_str()) < 0;
+            });
+
+        return gCachedFolderItems.emplace(folderRelativePath, std::move(items)).first->second;
+    }
+
+    std::filesystem::path BuildUniqueDuplicatePath(const std::filesystem::path& sourcePath, const std::filesystem::path& destinationDirectory)
+    {
+        const std::string baseName = sourcePath.stem().string().empty()
+            ? sourcePath.filename().string()
+            : sourcePath.stem().string();
+        const std::string extension = sourcePath.has_extension() ? sourcePath.extension().string() : std::string{};
+
+        std::filesystem::path candidatePath = destinationDirectory / (baseName + "_Copy" + extension);
+        int copyIndex = 2;
+        while (std::filesystem::exists(candidatePath))
+        {
+            candidatePath = destinationDirectory / (baseName + "_Copy" + std::to_string(copyIndex) + extension);
+            ++copyIndex;
+        }
+
+        return candidatePath;
+    }
+
+    HMODULE EnsureSystemModuleLoaded(char* statusMessage, const int statusMessageCapacity)
+    {
+        // The renderer resolves the System DLL on demand so the editor UI can stay responsive even if the DLL is missing.
+        HMODULE systemModule = GetModuleHandleW(L"System.dll");
+        if (systemModule == nullptr)
+        {
+            systemModule = LoadLibraryW(L"System.dll");
+        }
+
+        if (systemModule == nullptr && statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            _snprintf_s(
+                statusMessage,
+                static_cast<size_t>(statusMessageCapacity),
+                _TRUNCATE,
+                "Failed to load System.dll. Win32 error: %lu",
+                GetLastError());
+        }
+
+        return systemModule;
+    }
+
+    bool ImportFbxIntoDataFromSystem(
+        const char* sourceFbxPath,
+        const char* targetDirectoryRelativeToData,
+        char* statusMessage,
+        const int statusMessageCapacity)
+    {
+        if (statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            statusMessage[0] = '\0';
+        }
+
+        HMODULE systemModule = EnsureSystemModuleLoaded(statusMessage, statusMessageCapacity);
+        if (systemModule == nullptr)
+        {
+            return false;
+        }
+
+        const auto importFbx = reinterpret_cast<SystemImportFbxToDataFn>(GetProcAddress(systemModule, "System_ImportFbxToData"));
+        if (importFbx == nullptr)
+        {
+            if (statusMessage != nullptr && statusMessageCapacity > 0)
+            {
+                _snprintf_s(
+                    statusMessage,
+                    static_cast<size_t>(statusMessageCapacity),
+                    _TRUNCATE,
+                    "System.dll is missing the System_ImportFbxToData export. Win32 error: %lu",
+                    GetLastError());
+            }
+
+            return false;
+        }
+
+        return importFbx(sourceFbxPath, targetDirectoryRelativeToData, statusMessage, statusMessageCapacity);
+    }
+
+    bool ImportTextureIntoDataFromSystem(
+        const char* sourceTexturePath,
+        const char* targetDirectoryRelativeToData,
+        char* statusMessage,
+        const int statusMessageCapacity)
+    {
+        if (statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            statusMessage[0] = '\0';
+        }
+
+        HMODULE systemModule = EnsureSystemModuleLoaded(statusMessage, statusMessageCapacity);
+        if (systemModule == nullptr)
+        {
+            return false;
+        }
+
+        const auto importTexture = reinterpret_cast<SystemImportTextureToDataFn>(GetProcAddress(systemModule, "System_ImportTextureToData"));
+        if (importTexture == nullptr)
+        {
+            if (statusMessage != nullptr && statusMessageCapacity > 0)
+            {
+                _snprintf_s(
+                    statusMessage,
+                    static_cast<size_t>(statusMessageCapacity),
+                    _TRUNCATE,
+                    "System.dll is missing the System_ImportTextureToData export. Win32 error: %lu",
+                    GetLastError());
+            }
+
+            return false;
+        }
+
+        return importTexture(sourceTexturePath, targetDirectoryRelativeToData, statusMessage, statusMessageCapacity);
+    }
+
+    bool PromptForAndImportFbx(HWND windowHandle, const std::string& targetFolderRelativePath)
+    {
+        char selectedFilePath[MAX_PATH] = {};
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = windowHandle;
+        openFileName.lpstrFilter = "FBX Files\0*.fbx\0All Files\0*.*\0";
+        openFileName.lpstrFile = selectedFilePath;
+        openFileName.nMaxFile = static_cast<DWORD>(std::size(selectedFilePath));
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+
+        if (!GetOpenFileNameA(&openFileName))
+        {
+            return false;
+        }
+
+        char importStatusMessage[512] = {};
+        SetAssetBrowserStatus(
+            ImportFbxIntoDataFromSystem(
+                selectedFilePath,
+                targetFolderRelativePath.c_str(),
+                importStatusMessage,
+                static_cast<int>(std::size(importStatusMessage))),
+            importStatusMessage);
+        if (gLastAssetActionSucceeded)
+        {
+            InvalidateAssetBrowserDirectoryCache();
+        }
+        return true;
+    }
+
+    bool PromptForAndImportTexture(HWND windowHandle, const std::string& targetFolderRelativePath)
+    {
+        // Use a large buffer so Windows can pack multiple selected paths.
+        // Format: "dir\0file1\0file2\0...\0\0"  (or just "full\path\0\0" for single selection)
+        constexpr DWORD kMultiSelectBufferSize = 32768;
+        std::vector<char> fileBuffer(kMultiSelectBufferSize, '\0');
+
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize  = sizeof(openFileName);
+        openFileName.hwndOwner    = windowHandle;
+        openFileName.lpstrFilter  = "Texture Files\0*.png;*.jpg;*.jpeg;*.tga;*.dds;*.bmp;*.hdr\0All Files\0*.*\0";
+        openFileName.lpstrFile    = fileBuffer.data();
+        openFileName.nMaxFile     = kMultiSelectBufferSize;
+        openFileName.Flags        = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+
+        if (!GetOpenFileNameA(&openFileName))
+        {
+            return false;
+        }
+
+        // Parse the multi-select result buffer.
+        // Single selection: the buffer is just the full path (no embedded nulls after the name).
+        // Multi selection:  buffer = "directory\0name1\0name2\0...\0\0"
+        std::vector<std::string> sourcePaths;
+        const char* p = fileBuffer.data();
+        std::string directory = p;
+        p += directory.size() + 1;
+
+        if (*p == '\0')
+        {
+            // Single file – the whole string is the full path.
+            sourcePaths.push_back(directory);
+        }
+        else
+        {
+            // Multiple files – prepend directory to each name.
+            while (*p != '\0')
+            {
+                std::string name = p;
+                sourcePaths.push_back(directory + "\\" + name);
+                p += name.size() + 1;
+            }
+        }
+
+        if (sourcePaths.empty())
+        {
+            return false;
+        }
+
+        // If another import is still running, ignore this request.
+        if (gTextureImport.Running.load())
+        {
+            SetAssetBrowserStatus(false, "A texture import is already in progress.");
+            return false;
+        }
+
+        // Reset progress state and launch the background import thread.
+        {
+            std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+            gTextureImport.Log.clear();
+            gTextureImport.CurrentFile.clear();
+        }
+        gTextureImport.Total.store(static_cast<int>(sourcePaths.size()));
+        gTextureImport.Done.store(0);
+        gTextureImport.TargetFolder = targetFolderRelativePath;
+        gTextureImport.Running.store(true);
+
+        std::thread([paths = std::move(sourcePaths), targetFolder = targetFolderRelativePath]()
+        {
+            for (const std::string& sourcePath : paths)
+            {
+                const std::string fileName = std::filesystem::path(sourcePath).filename().string();
+                {
+                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                    gTextureImport.CurrentFile = fileName;
+                }
+
+                char statusMsg[512] = {};
+                const bool ok = ImportTextureIntoDataFromSystem(
+                    sourcePath.c_str(),
+                    targetFolder.c_str(),
+                    statusMsg,
+                    static_cast<int>(std::size(statusMsg)));
+
+                std::string logLine = ok
+                    ? (std::string("OK  ") + fileName)
+                    : (std::string("ERR ") + fileName + ": " + statusMsg);
+
+                if (ok)
+                {
+                    InvalidateAssetBrowserDirectoryCache();
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                    gTextureImport.Log.push_back(std::move(logLine));
+                }
+                gTextureImport.Done.fetch_add(1);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                gTextureImport.CurrentFile.clear();
+            }
+            gTextureImport.Running.store(false);
+        }).detach();
+
+        return true;
+    }
+
+    void CopySelectedAssetToClipboard()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            return;
+        }
+
+        gClipboardRelativePath = gSelectedAssetRelativePath;
+        gClipboardHasValue = true;
+        SetAssetBrowserStatus(true, "Copied asset selection to the browser clipboard.");
+    }
+
+    bool PasteClipboardIntoSelectedFolder()
+    {
+        if (!gClipboardHasValue || gClipboardRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Copy a file or folder before using Paste.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path sourcePath = GetAbsoluteDataPath(gClipboardRelativePath);
+        const std::filesystem::path destinationDirectory = GetAbsoluteDataPath(gSelectedFolderRelativePath);
+        if (dataDirectory.empty() || !std::filesystem::exists(sourcePath) || !std::filesystem::exists(destinationDirectory))
+        {
+            SetAssetBrowserStatus(false, "The source or destination path is no longer available inside Data.");
+            return false;
+        }
+
+        const std::filesystem::path destinationPath = BuildUniqueDuplicatePath(sourcePath, destinationDirectory);
+        if (!IsPathInsideRoot(dataDirectory, destinationPath))
+        {
+            SetAssetBrowserStatus(false, "Paste must stay inside the Data directory.");
+            return false;
+        }
+
+        // Prevent recursive folder duplication by blocking paste operations into the copied folder or one of its children.
+        if (std::filesystem::is_directory(sourcePath) && IsPathInsideRoot(sourcePath, destinationDirectory))
+        {
+            SetAssetBrowserStatus(false, "Cannot paste a folder into itself or one of its children.");
+            return false;
+        }
+
+        std::error_code copyError;
+        if (std::filesystem::is_directory(sourcePath))
+        {
+            std::filesystem::copy(sourcePath, destinationPath, std::filesystem::copy_options::recursive, copyError);
+        }
+        else
+        {
+            std::filesystem::copy_file(sourcePath, destinationPath, std::filesystem::copy_options::overwrite_existing, copyError);
+        }
+
+        if (copyError)
+        {
+            SetAssetBrowserStatus(false, std::string("Paste failed: ") + copyError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(destinationPath, dataDirectory));
+        InvalidateAssetBrowserDirectoryCache();
+        SetAssetBrowserStatus(true, "Pasted asset into the selected folder.");
+        return true;
+    }
+
+    bool DeleteSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before removing it.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path selectedPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        if (dataDirectory.empty() || !std::filesystem::exists(selectedPath) || !IsPathInsideRoot(dataDirectory, selectedPath))
+        {
+            SetAssetBrowserStatus(false, "The selected asset is no longer available inside Data.");
+            return false;
+        }
+
+        std::error_code removeError;
+        if (std::filesystem::is_directory(selectedPath))
+        {
+            std::filesystem::remove_all(selectedPath, removeError);
+        }
+        else
+        {
+            std::filesystem::remove(selectedPath, removeError);
+        }
+
+        if (removeError)
+        {
+            SetAssetBrowserStatus(false, std::string("Remove failed: ") + removeError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath.clear();
+        InvalidateAssetBrowserDirectoryCache();
+        SetAssetBrowserStatus(true, "Removed asset from the Data folder.");
+        return true;
+    }
+
+    bool RenameSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before renaming it.");
+            return false;
+        }
+
+        const std::string requestedName = gRenameBuffer;
+        if (requestedName.empty() || requestedName.find_first_of("\\/") != std::string::npos)
+        {
+            SetAssetBrowserStatus(false, "Enter a valid file or folder name.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path selectedPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        const std::filesystem::path renamedPath = selectedPath.parent_path() / requestedName;
+        if (dataDirectory.empty() || !std::filesystem::exists(selectedPath) || !IsPathInsideRoot(dataDirectory, renamedPath))
+        {
+            SetAssetBrowserStatus(false, "The selected asset cannot be renamed outside the Data directory.");
+            return false;
+        }
+
+        if (std::filesystem::exists(renamedPath))
+        {
+            SetAssetBrowserStatus(false, "An asset with that name already exists in the selected folder.");
+            return false;
+        }
+
+        std::error_code renameError;
+        std::filesystem::rename(selectedPath, renamedPath, renameError);
+        if (renameError)
+        {
+            SetAssetBrowserStatus(false, std::string("Rename failed: ") + renameError.message());
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(renamedPath, dataDirectory));
+        InvalidateAssetBrowserDirectoryCache();
+        SetAssetBrowserStatus(true, "Renamed asset successfully.");
+        return true;
+    }
+
+    bool CreateFolderInSelectedFolder()
+    {
+        const std::string requestedFolderName = gNewFolderBuffer;
+        if (requestedFolderName.empty() || requestedFolderName.find_first_of("\\/") != std::string::npos)
+        {
+            SetAssetBrowserStatus(false, "Enter a valid folder name.");
+            return false;
+        }
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path newFolderPath = GetAbsoluteDataPath(gSelectedFolderRelativePath) / requestedFolderName;
+        if (dataDirectory.empty() || !IsPathInsideRoot(dataDirectory, newFolderPath))
+        {
+            SetAssetBrowserStatus(false, "New folders must stay inside the Data directory.");
+            return false;
+        }
+
+        std::error_code createError;
+        if (!std::filesystem::create_directory(newFolderPath, createError) || createError)
+        {
+            SetAssetBrowserStatus(false, createError ? std::string("Create folder failed: ") + createError.message() : "A folder with that name already exists.");
+            return false;
+        }
+
+        gSelectedAssetRelativePath = NormalizeRelativeDataPath(std::filesystem::relative(newFolderPath, dataDirectory));
+        InvalidateAssetBrowserDirectoryCache();
+        SetAssetBrowserStatus(true, "Created a new folder inside the selected directory.");
+        return true;
+    }
+
+    void BeginRenameSelectedAsset()
+    {
+        if (gSelectedAssetRelativePath.empty())
+        {
+            SetAssetBrowserStatus(false, "Select a file or folder before renaming it.");
+            return;
+        }
+
+        const std::filesystem::path selectedPath(gSelectedAssetRelativePath);
+        strcpy_s(gRenameBuffer, selectedPath.filename().string().c_str());
+        gOpenRenamePopup = true;
+    }
+
+    void BeginCreateFolder()
+    {
+        gNewFolderBuffer[0] = '\0';
+        gOpenNewFolderPopup = true;
+    }
+
+    void SelectFolder(const std::string& folderRelativePath)
+    {
+        gSelectedFolderRelativePath = folderRelativePath;
+        gSelectedAssetRelativePath.clear();
+    }
+
+    void RenderFolderTreeNode(const std::string& folderRelativePath)
+    {
+        const std::filesystem::path folderPath = folderRelativePath.empty()
+            ? std::filesystem::path("Data")
+            : std::filesystem::path(folderRelativePath).filename();
+        const std::vector<std::string> childFolders = GetChildFolderRelativePaths(folderRelativePath);
+        const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow
+            | ImGuiTreeNodeFlags_OpenOnDoubleClick
+            | (childFolders.empty() ? ImGuiTreeNodeFlags_Leaf : 0)
+            | (gSelectedFolderRelativePath == folderRelativePath ? ImGuiTreeNodeFlags_Selected : 0);
+
+        const bool isOpen = ImGui::TreeNodeEx(folderRelativePath.empty() ? "DataRoot" : folderRelativePath.c_str(), nodeFlags, "%s", folderPath.string().c_str());
+        if (ImGui::IsItemClicked())
+        {
+            SelectFolder(folderRelativePath);
+        }
+
+        if (ImGui::BeginPopupContextItem())
+        {
+            if (ImGui::MenuItem("Import FBX Here..."))
+            {
+                PromptForAndImportFbx(GetActiveWindow(), folderRelativePath);
+                RefreshAssetBrowserState();
+            }
+
+            if (ImGui::MenuItem("Import Texture Here..."))
+            {
+                PromptForAndImportTexture(GetActiveWindow(), folderRelativePath);
+                RefreshAssetBrowserState();
+            }
+
+            if (ImGui::MenuItem("New Folder"))
+            {
+                SelectFolder(folderRelativePath);
+                BeginCreateFolder();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (isOpen)
+        {
+            for (const std::string& childFolderRelativePath : childFolders)
+            {
+                RenderFolderTreeNode(childFolderRelativePath);
+            }
+
+            ImGui::TreePop();
+        }
+    }
+}
+
+void RenderEditorMainMenu(
+    HWND windowHandle,
+    void* editor,
+    ImTextureID sceneTextureId,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    float* cameraSpeed,
+    bool* gridEnabled,
+    bool* showStatistics,
+    bool* showViewportPlacementIcons,
+    bool* showComponentsPanel,
+    bool* showLevelExplorerPanel,
+    bool* showPropertiesPanel,
+    TaaSettings* taaSettings,
+    TimeOfDaySettings* timeOfDaySettings,
+    RtGISettings* rtgiSettings,
+    RadianceProbeSettings* probeSettings,
+    RtAOSettings* rtaoSettings,
+    GtaoSettings* gtaoSettings,
+    AgxTonemapSettings* agxSettings,
+    VolumetricFogSettings* volumetricFogSettings,
+    BloomSettings* bloomSettings,
+    const GBufferDebugTextureIds* gbufferTextureIds,
+    AudioManager* audioManager)
+{
+    UNREFERENCED_PARAMETER(sceneTextureId);
+    UNREFERENCED_PARAMETER(statisticsText);
+
+    Editor* editorInstance = static_cast<Editor*>(editor);
+
+    if (ImGui::BeginMainMenuBar())
+    {
+        const bool sceneLoading = editorInstance != nullptr && editorInstance->IsSceneLoading();
+
+        if (ImGui::BeginMenu("File"))
+        {
+            if (editorInstance != nullptr && ImGui::MenuItem("New", nullptr, false, !sceneLoading))
+            {
+                editorInstance->GetEntities().clear();
+                editorInstance->GetCurrentSceneFilePath().clear();
+            }
+
+            if (editorInstance != nullptr && ImGui::MenuItem("Open...", nullptr, false, !sceneLoading))
+            {
+                if (PromptForSceneOpenPath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
+                {
+                    editorInstance->BeginLoadSceneFromFile(gSceneFileBuffer);
+                }
+            }
+
+            if (editorInstance != nullptr && ImGui::MenuItem("Save", nullptr, false, !sceneLoading))
+            {
+                if (!editorInstance->GetCurrentSceneFilePath().empty())
+                {
+                    editorInstance->SaveSceneToFile(editorInstance->GetCurrentSceneFilePath());
+                }
+                else if (PromptForSceneSavePath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
+                {
+                    editorInstance->SaveSceneToFile(gSceneFileBuffer);
+                }
+            }
+
+            if (editorInstance != nullptr && ImGui::MenuItem("Save As...", nullptr, false, !sceneLoading))
+            {
+                if (!editorInstance->GetCurrentSceneFilePath().empty())
+                {
+                    strcpy_s(gSceneFileBuffer, editorInstance->GetCurrentSceneFilePath().c_str());
+                }
+
+                if (PromptForSceneSavePath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
+                {
+                    editorInstance->SaveSceneToFile(gSceneFileBuffer);
+                }
+            }
+
+            ImGui::Separator();
+            if (ImGui::MenuItem("Exit"))
+            {
+                PostMessage(windowHandle, WM_CLOSE, 0, 0);
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (editorInstance != nullptr && ImGui::BeginMenu("Edit"))
+        {
+            const bool canCopy = editorInstance->CanCopySelectedEntity();
+            const bool canPaste = editorInstance->CanPasteEntity();
+            const bool canDelete = editorInstance->CanDeleteSelectedEntity();
+
+            if (ImGui::MenuItem("Copy", "Ctrl+C", false, canCopy))
+            {
+                editorInstance->CopySelectedEntity();
+            }
+
+            if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPaste))
+            {
+                editorInstance->PasteCopiedEntity();
+            }
+
+            if (ImGui::MenuItem("Delete", "Delete", false, canDelete))
+            {
+                editorInstance->DeleteSelectedEntity();
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("View"))
+        {
+            if (ImGui::MenuItem("G-Buffer / RT Debug..."))
+                gShowGBufferDebugWindow = true;
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Windows"))
+        {
+            if (ImGui::MenuItem("Scene Settings..."))
+            {
+                gShowSceneSettingsWindow = true;
+            }
+
+            if (ImGui::MenuItem("Material Editor..."))
+            {
+                gShowMaterialEditorWindow = true;
+                RefreshMaterialNameBuffer();
+            }
+
+            if (showComponentsPanel != nullptr)
+            {
+                ImGui::MenuItem("Components", nullptr, showComponentsPanel);
+            }
+
+            if (showLevelExplorerPanel != nullptr)
+            {
+                ImGui::MenuItem("Level Explorer", nullptr, showLevelExplorerPanel);
+            }
+
+            if (showPropertiesPanel != nullptr)
+            {
+                ImGui::MenuItem("Properties", nullptr, showPropertiesPanel);
+            }
+
+            if (ImGui::MenuItem("Asset Browser..."))
+            {
+                gShowAssetBrowserWindow = true;
+                InvalidateAssetBrowserDirectoryCache();
+                RefreshAssetBrowserState();
+            }
+
+            ImGui::Separator();
+
+            if (ImGui::MenuItem("Time of Day..."))
+            {
+                gShowTimeOfDayWindow = true;
+            }
+
+            if (ImGui::MenuItem("Graphics Settings..."))
+            {
+                gShowGraphicsSettingsWindow = true;
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Help"))
+        {
+            if (ImGui::MenuItem("About Ptero Editor"))
+            {
+                gShowAboutWindow = true;
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (audioManager != nullptr && audioManager->IsInitialized() && ImGui::BeginMenu("Audio"))
+        {
+            if (ImGui::MenuItem("Audio Manager..."))
+                gShowAudioWindow = true;
+            if (ImGui::MenuItem("Stop All"))
+                audioManager->StopAll();
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    if (gShowImGuiDemoWindow)
+    {
+        ImGui::ShowDemoWindow(&gShowImGuiDemoWindow);
+    }
+
+    if (gShowSceneSettingsWindow)
+    {
+        ImGui::Begin("Scene Settings", &gShowSceneSettingsWindow, ImGuiWindowFlags_AlwaysAutoResize);
+
+        if (cameraSpeed != nullptr)
+        {
+            // Expose the camera speed directly in the editor so movement tuning does not require a rebuild.
+            ImGui::SliderFloat("Camera Speed", cameraSpeed, 0.0f, 50.0f, "%.2f");
+        }
+
+        if (gridEnabled != nullptr)
+        {
+            // Let the user hide the reference grid without changing the renderer's geometry setup.
+            ImGui::Checkbox("Show Grid", gridEnabled);
+        }
+
+        if (showStatistics != nullptr)
+        {
+            // Keep the statistics toggle in scene settings so the viewport overlay can be disabled without code changes.
+            ImGui::Checkbox("Show Renderer Statistics", showStatistics);
+        }
+
+        if (showViewportPlacementIcons != nullptr)
+        {
+            // Let the user hide the placement markers when they want an unobstructed view of the scene.
+            ImGui::Checkbox("Show Geometry Placement Icons", showViewportPlacementIcons);
+        }
+
+        ImGui::End();
+    }
+
+    if (gShowTimeOfDayWindow && timeOfDaySettings != nullptr)
+    {
+        const TimeOfDaySettings defaultTimeOfDaySettings{};
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Time of Day", &gShowTimeOfDayWindow, ImGuiWindowFlags_AlwaysAutoResize);
+        if (ImGui::Button("Revert All##timeofday"))
+        {
+            *timeOfDaySettings = defaultTimeOfDaySettings;
+        }
+
+        // ---- Time of day ------------------------------------------------
+        ImGui::SeparatorText("Time of Day");
+
+        // Display as HH:MM for readability.
+        int hours   = static_cast<int>(timeOfDaySettings->TimeOfDay);
+        int minutes = static_cast<int>((timeOfDaySettings->TimeOfDay - hours) * 60.0f);
+        ImGui::Text("  %02d:%02d", hours, minutes);
+        SliderFloatWithInput("Time Of Day", &timeOfDaySettings->TimeOfDay, 0.0f, 23.99f, "%.2f h", 0.05f, 1.0f);
+
+        ImGui::Spacing();
+        ImGui::SeparatorText("Atmosphere");
+        // Turbidity: 1 = pristine, 10 = heavy haze. Tooltip describes the range.
+        SliderFloatWithInput("Turbidity", &timeOfDaySettings->Turbidity, 1.0f, 10.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("1 = very clear sky, 10 = heavy haze / smog");
+        SliderFloatWithInput("Ground Albedo", &timeOfDaySettings->GroundAlbedo, 0.0f, 1.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Reflectivity of the ground (affects horizon brightness)");
+
+        // ---- Sun --------------------------------------------------------
+        ImGui::Spacing();
+        ImGui::SeparatorText("Sun");
+
+        SliderFloatWithInput("Sun Intensity (lux)", &timeOfDaySettings->SunIntensityLux,
+            0.0f, 200000.0f, "%.0f lx", 100.0f, 1000.0f);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Real-world noon sun: ~100 000 lx\nOvercast day: ~1 000 lx");
+
+        ImGui::Checkbox("Override Sun Color##sun", &timeOfDaySettings->OverrideSunColor);
+        if (timeOfDaySettings->OverrideSunColor)
+        {
+            float sunCol[3] = { timeOfDaySettings->SunColorR,
+                                timeOfDaySettings->SunColorG,
+                                timeOfDaySettings->SunColorB };
+            if (ImGui::ColorEdit3("Sun Color", sunCol, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+            {
+                timeOfDaySettings->SunColorR = sunCol[0];
+                timeOfDaySettings->SunColorG = sunCol[1];
+                timeOfDaySettings->SunColorB = sunCol[2];
+            }
+        }
+
+        // ---- Sky --------------------------------------------------------
+        ImGui::Spacing();
+        ImGui::SeparatorText("Sky");
+
+        SliderFloatWithInput("Sky Intensity (lux)", &timeOfDaySettings->SkyIntensityLux,
+            0.0f, 100000.0f, "%.0f lx", 100.0f, 1000.0f);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Clear blue sky: ~20 000 lx\nOvercast: ~10 000 lx");
+
+        ImGui::Checkbox("Override Sky Color##sky", &timeOfDaySettings->OverrideSkyColor);
+        if (timeOfDaySettings->OverrideSkyColor)
+        {
+            float skyCol[3] = { timeOfDaySettings->SkyColorR,
+                                timeOfDaySettings->SkyColorG,
+                                timeOfDaySettings->SkyColorB };
+            if (ImGui::ColorEdit3("Sky Color", skyCol, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+            {
+                timeOfDaySettings->SkyColorR = skyCol[0];
+                timeOfDaySettings->SkyColorG = skyCol[1];
+                timeOfDaySettings->SkyColorB = skyCol[2];
+            }
+        }
+
+        ImGui::End();
+    }
+
+    if (gShowGraphicsSettingsWindow)
+    {
+        const TaaSettings defaultTaaSettings{};
+        const RtGISettings defaultRtgiSettings{};
+        const RtAOSettings defaultRtaoSettings{};
+        const AgxTonemapSettings defaultAgxSettings{};
+        const VolumetricFogSettings defaultVolumetricFogSettings{};
+        ImGui::Begin("Graphics Settings", &gShowGraphicsSettingsWindow, ImGuiWindowFlags_AlwaysAutoResize);
+
+        if (taaSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("Temporal Anti-Aliasing (TAA)", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##taa"))
+                {
+                    *taaSettings = defaultTaaSettings;
+                }
+                ImGui::Checkbox("Enable TAA", &taaSettings->Enabled);
+
+                if (taaSettings->Enabled)
+                {
+                    // Higher blend factor = more current frame weight = less temporal smoothing but less ghosting.
+                    SliderFloatWithInput("Blend Factor", &taaSettings->BlendFactor, 0.05f, 1.0f, "%.2f");
+                    SliderFloatWithInput("Jitter Scale", &taaSettings->JitterScale, 0.0f, 2.0f, "%.2f");
+                    ImGui::Checkbox("Sharpening", &taaSettings->UseSharpening);
+                    if (taaSettings->UseSharpening)
+                    {
+                        SliderFloatWithInput("Sharpening Strength", &taaSettings->SharpeningStrength, 0.0f, 1.0f, "%.2f");
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // RTGI – ReSTIR Global Illumination
+        // -------------------------------------------------------------------
+        if (rtgiSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("Luna Global Illumination", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##rtgi"))
+                {
+                    *rtgiSettings = defaultRtgiSettings;
+                }
+                ImGui::Checkbox("Enable RTGI##rtgi", &rtgiSettings->Enabled);
+                ImGui::SetItemTooltip("Enable custom ReSTIR GI ray-traced global illumination.");
+
+                // Show any runtime error (e.g. shader compile failure) in red.
+                if (sceneStatusMessage && sceneStatusMessage[0] != '\0')
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                    ImGui::TextWrapped("Error: %s", sceneStatusMessage);
+                    ImGui::PopStyleColor();
+                }
+
+                if (rtgiSettings->Enabled)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Denoiser");
+
+                    ImGui::Checkbox("Use NVIDIA NRD##rtgi", &rtgiSettings->UseNrdDenoiser);
+                    ImGui::SetItemTooltip("Use NVIDIA NRD RELAX diffuse denoising for the RTGI result.");
+
+                    // --- Ray generation ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Ray Generation");
+
+                    SliderIntWithInput("Rays Per Pixel##rtgi", &rtgiSettings->RaysPerPixel, 1, 8);
+                    ImGui::SetItemTooltip("Number of GI rays fired per pixel each frame. Higher = better quality, lower performance.");
+                    SliderIntWithInput("Max Bounces##rtgi", &rtgiSettings->MaxBounces, 1, 4);
+                    ImGui::SetItemTooltip("Maximum indirect bounce depth for GI rays.");
+                    ImGui::Checkbox("Next Event Estimation##rtgi", &rtgiSettings->NextEventEstimation);
+                    ImGui::SetItemTooltip("Trace a shadow ray from the secondary hit toward the sun to explicitly estimate direct lighting in the GI path.");
+
+                    // --- Firefly suppression ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Firefly Suppression");
+
+                    SliderFloatWithInput("Radiance Clamp##rtgi", &rtgiSettings->RadianceClamp, 0.0f, 50.0f, "%.1f");
+                    ImGui::SetItemTooltip("Clamp incoming radiance to this value to suppress fireflies. Set to 0 to disable.");
+
+                    // --- Temporal accumulation denoiser ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Temporal Accumulation");
+
+                    SliderFloatWithInput("Accumulation Blend##rtgi", &rtgiSettings->AccumulationBlend, 0.01f, 1.0f, "%.2f");
+                    ImGui::SetItemTooltip("Blend factor between current frame (1.0) and accumulated history (0.0). Lower = smoother but ghosts on motion.");
+
+                    if (rtgiSettings->UseNrdDenoiser)
+                    {
+                        ImGui::Separator();
+                        ImGui::TextDisabled("NRD RELAX");
+
+                        SliderFloatWithInput("Max Accumulation Time##rtgi_nrd", &rtgiSettings->NrdMaxAccumulationTime, 0.01f, 5.0f, "%.2f s");
+                        ImGui::SetItemTooltip("How long NRD is allowed to accumulate diffuse history. Higher values can reduce motion artifacts but respond more slowly to lighting changes.");
+                        SliderFloatWithInput("Disocclusion Threshold##rtgi_nrd", &rtgiSettings->NrdDisocclusionThreshold, 0.001f, 0.5f, "%.3f", 0.001f, 0.01f);
+                        ImGui::SetItemTooltip("Depth-based history rejection threshold used by NRD. Higher values can stabilize camera motion but may preserve more history across edges.");
+                        SliderIntWithInput("A-Trous Iterations##rtgi_nrd", &rtgiSettings->NrdAtrousIterations, 2, 8);
+                        ImGui::SetItemTooltip("Number of RELAX wavelet filter iterations.");
+                        SliderFloatWithInput("Sharpen##rtgi_nrd", &rtgiSettings->NrdSharpenAmount, 0.0f, 1.5f, "%.2f");
+                        ImGui::SetItemTooltip("Applies a lightweight post-denoise sharpen to recover lost detail. Higher values can help with softness but may re-introduce noise halos.");
+                    }
+
+                    // --- Output ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Output");
+
+                    SliderFloatWithInput("GI Intensity##rtgi", &rtgiSettings->GiIntensity, 0.0f, 4.0f, "%.2f");
+                    ImGui::SetItemTooltip("Multiplier applied to the RTGI output before compositing. 1.0 = physically correct.");
+                    SliderFloatWithInput("Color Leak Intensity##rtgi", &rtgiSettings->ColorLeakIntensity, 0.0f, 16.0f, "%.2f");
+                    ImGui::SetItemTooltip("Boosts bounced material tinting for stronger color bleed. 1.0 = physically based transport.");
+
+                    // --- Specular Reflections ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Specular Reflections");
+
+                    ImGui::Checkbox("Enable Specular##rtgi", &rtgiSettings->SpecularEnabled);
+                    ImGui::SetItemTooltip("Ray-traced GGX specular reflections composited on top of the deferred lighting pass.");
+                    if (rtgiSettings->SpecularEnabled)
+                    {
+                        SliderFloatWithInput("Roughness Threshold##rtgi", &rtgiSettings->SpecularRoughnessThreshold, 0.0f, 1.0f, "%.2f");
+                        ImGui::SetItemTooltip("Surfaces with perceptual roughness above this value skip the specular ray.");
+                        SliderFloatWithInput("Specular Intensity##rtgi", &rtgiSettings->SpecularIntensity, 0.0f, 4.0f, "%.2f");
+                        ImGui::SetItemTooltip("Intensity multiplier for ray-traced specular reflections.");
+                    }
+
+                    // --- Debug ---
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Debug");
+
+                    const char* debugModes[] = { "Final Lit", "Raw GI Radiance", "GI Luminance", "Specular Reflections" };
+                    ImGui::Combo("Debug View##rtgi", &rtgiSettings->DebugView, debugModes, IM_ARRAYSIZE(debugModes));
+                    ImGui::SetItemTooltip("Overlay mode for inspecting intermediate RTGI data.");
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Radiance Probes – world-space irradiance SH probe grid
+        // -------------------------------------------------------------------
+        if (probeSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("Radiance Probes"))
+            {
+                static RadianceProbeSettings defaultProbeSettings{};
+                if (ImGui::Button("Revert All##probe"))
+                    *probeSettings = defaultProbeSettings;
+
+                ImGui::Checkbox("Enable Radiance Probes##probe", &probeSettings->Enabled);
+                ImGui::SetItemTooltip("Maintain a world-space grid of ray-traced SH irradiance probes.");
+
+                if (probeSettings->Enabled)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Grid");
+
+                    SliderIntWithInput("Grid X##probe", &probeSettings->GridX, 1, 32);
+                    SliderIntWithInput("Grid Y##probe", &probeSettings->GridY, 1, 16);
+                    SliderIntWithInput("Grid Z##probe", &probeSettings->GridZ, 1, 32);
+                    SliderFloatWithInput("Spacing (m)##probe", &probeSettings->Spacing, 0.5f, 10.0f, "%.2f");
+                    ImGui::Checkbox("Follow Camera##probe", &probeSettings->FollowCamera);
+                    ImGui::SetItemTooltip("Snaps the probe grid origin to the camera position each frame.");
+
+                    if (!probeSettings->FollowCamera)
+                    {
+                        SliderFloatWithInput("Origin X##probe", &probeSettings->OriginX, -200.0f, 200.0f, "%.1f");
+                        SliderFloatWithInput("Origin Y##probe", &probeSettings->OriginY, -50.0f, 50.0f,   "%.1f");
+                        SliderFloatWithInput("Origin Z##probe", &probeSettings->OriginZ, -200.0f, 200.0f, "%.1f");
+                    }
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Update");
+
+                    SliderIntWithInput("Rays Per Probe##probe", &probeSettings->RaysPerProbe, 16, 512);
+                    SliderFloatWithInput("Update Blend##probe", &probeSettings->UpdateBlend, 0.01f, 1.0f, "%.2f");
+                    ImGui::SetItemTooltip("Blend factor between old and new probe SH each frame. Lower = more temporal accumulation.");
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Debug");
+
+                    ImGui::Checkbox("Show Probe Spheres##probe", &probeSettings->DebugShowProbes);
+                    ImGui::SetItemTooltip("Overlay coloured spheres at each probe position visualising stored irradiance.");
+                    if (probeSettings->DebugShowProbes)
+                    {
+                        const char* probeDebugModes[] = { "Diffuse", "Specular" };
+                        ImGui::Combo("Lighting Mode##probe", &probeSettings->DebugLightingMode, probeDebugModes, IM_ARRAYSIZE(probeDebugModes));
+                        ImGui::SetItemTooltip("Choose whether debug spheres visualize diffuse probe irradiance or a specular-style directional response.");
+                        SliderFloatWithInput("Sphere Radius##probe", &probeSettings->DebugSphereRadius, 0.05f, 2.0f, "%.2f");
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // RTAO – Ray Traced Ambient Occlusion
+        // -------------------------------------------------------------------
+        if (rtaoSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("Ray Traced Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##rtao"))
+                {
+                    *rtaoSettings = defaultRtaoSettings;
+                }
+                ImGui::Checkbox("Enable RTAO (Experimental)##rtao", &rtaoSettings->Enabled);
+                ImGui::SetItemTooltip("Enable ray-traced ambient occlusion using DXR inline RayQuery.");
+
+                if (rtaoSettings->Enabled)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Ray Generation");
+
+                    SliderIntWithInput("Rays Per Pixel##rtao", &rtaoSettings->RaysPerPixel, 1, 16);
+                    ImGui::SetItemTooltip("Number of occlusion rays per pixel per frame. Higher = less noise, lower performance.");
+
+                    SliderFloatWithInput("Max Ray Length##rtao", &rtaoSettings->MaxRayLength, 0.01f, 10.0f, "%.3f", 0.01f, 0.1f);
+                    ImGui::SetItemTooltip("Maximum length (world units) of each occlusion ray.");
+
+                    SliderFloatWithInput("Ray Bias##rtao", &rtaoSettings->RayBias, 0.0001f, 0.05f, "%.4f", 0.0001f, 0.001f);
+                    ImGui::SetItemTooltip("Normal-direction offset applied to ray origins to avoid self-intersection.");
+
+                    SliderFloatWithInput("AO Power##rtao", &rtaoSettings->AOPower, 0.5f, 4.0f, "%.2f");
+                    ImGui::SetItemTooltip("Gamma exponent applied to the raw AO value. >1 darkens, <1 brightens.");
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Output");
+
+                    SliderFloatWithInput("AO Intensity##rtao", &rtaoSettings->Intensity, 0.0f, 1.0f, "%.2f");
+                    ImGui::SetItemTooltip("Blend weight of RTAO over the G-Buffer baked AO. 1.0 = full RTAO.");
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Debug");
+
+                    const char* aoDebugModes[] = { "Final AO", "Raw Noisy AO", "NRD AO" };
+                    ImGui::Combo("Debug View##rtao", &rtaoSettings->DebugView, aoDebugModes, IM_ARRAYSIZE(aoDebugModes));
+                    ImGui::SetItemTooltip("Overlay mode for inspecting raw versus NRD-denoised RTAO.");
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // XeGTAO – Screen-Space Ground Truth Ambient Occlusion
+        // -------------------------------------------------------------------
+        if (gtaoSettings != nullptr)
+        {
+            const GtaoSettings defaultGtaoSettings{};
+            if (ImGui::CollapsingHeader("XeGTAO (Screen-Space AO)"))
+            {
+                if (ImGui::Button("Revert All##gtao"))
+                {
+                    *gtaoSettings = defaultGtaoSettings;
+                }
+                ImGui::Checkbox("Enable XeGTAO##gtao", &gtaoSettings->Enabled);
+                ImGui::SetItemTooltip("Intel XeGTAO screen-space ambient occlusion. Runs in parallel with (or instead of) RTAO.");
+
+                if (gtaoSettings->Enabled)
+                {
+                    const char* qualityNames[] = { "Low", "Medium", "High", "Ultra" };
+                    ImGui::Combo("Quality Level##gtao", &gtaoSettings->QualityLevel, qualityNames, IM_ARRAYSIZE(qualityNames));
+                    ImGui::SetItemTooltip("Higher quality uses more samples per pixel.");
+
+                    SliderFloatWithInput("Radius##gtao",            &gtaoSettings->Radius,                   0.1f, 5.0f,  "%.2f");
+                    ImGui::SetItemTooltip("World-space maximum AO radius.");
+
+                    SliderFloatWithInput("Radius Multiplier##gtao", &gtaoSettings->RadiusMultiplier,         0.5f, 3.0f,  "%.3f");
+                    ImGui::SetItemTooltip("Scales the effective radius to counteract screen-space bias.");
+
+                    SliderFloatWithInput("Falloff Range##gtao",     &gtaoSettings->FalloffRange,             0.0f, 1.0f,  "%.3f");
+                    ImGui::SetItemTooltip("Fraction of the radius over which distant samples fade out.");
+
+                    SliderIntWithInput("Denoise Passes##gtao",      &gtaoSettings->DenoisePasses,            0,   2);
+                    ImGui::SetItemTooltip("0 = no spatial denoise, 1-2 = iterative bilateral blur.");
+
+                    SliderFloatWithInput("Final Value Power##gtao", &gtaoSettings->FinalValuePower,          0.5f, 5.0f,  "%.2f");
+                    ImGui::SetItemTooltip("Power curve applied to the final AO value.");
+
+                    SliderFloatWithInput("AO Intensity##gtao",      &gtaoSettings->Intensity,                0.0f, 1.0f,  "%.2f");
+                    ImGui::SetItemTooltip("Blend weight of XeGTAO over the G-Buffer baked AO. 1.0 = full GTAO.");
+
+                    SliderFloatWithInput("Sample Distribution Power##gtao", &gtaoSettings->SampleDistributionPower, 1.0f, 3.0f, "%.2f");
+                    ImGui::SetItemTooltip("Concentrates more samples toward small crevices.");
+
+                    SliderFloatWithInput("Thin Occluder Compensation##gtao", &gtaoSettings->ThinOccluderCompensation, 0.0f, 0.7f, "%.2f");
+                    ImGui::SetItemTooltip("Reduces over-occlusion on thin geometry.");
+
+                    SliderFloatWithInput("Depth MIP Sampling Offset##gtao", &gtaoSettings->DepthMIPSamplingOffset, 2.0f, 6.0f, "%.2f");
+                    ImGui::SetItemTooltip("Trade-off between performance (bandwidth) and quality.");
+
+                    const char* gtaoDebugModes[] = { "Disabled", "AO Only" };
+                    ImGui::Combo("Debug View##gtao", &gtaoSettings->DebugView, gtaoDebugModes, IM_ARRAYSIZE(gtaoDebugModes));
+                    ImGui::SetItemTooltip("Overlay the raw GTAO output for inspection.");
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // AgX Tonemapper
+        // -------------------------------------------------------------------
+        if (agxSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("AgX Tonemapper", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##agx"))
+                {
+                    *agxSettings = defaultAgxSettings;
+                }
+                ImGui::Checkbox("Enable AgX Tonemapper##agx", &agxSettings->Enabled);
+                ImGui::SetItemTooltip("Apply the AgX display transform to the final image.");
+
+                if (agxSettings->Enabled)
+                {
+                    auto drawGradeControl = [](const char* label, AgxColorGradeControl& control)
+                    {
+                        ImGui::PushID(label);
+                        if (ImGui::TreeNode(label))
+                        {
+                            SliderFloatWithInput("Total", &control.Total, -1.0f, 1.0f, "%.2f");
+                            SliderFloatWithInput("Red", &control.Red, -1.0f, 1.0f, "%.2f");
+                            SliderFloatWithInput("Green", &control.Green, -1.0f, 1.0f, "%.2f");
+                            SliderFloatWithInput("Blue", &control.Blue, -1.0f, 1.0f, "%.2f");
+                            SliderFloatWithInput("Yellow", &control.Yellow, -1.0f, 1.0f, "%.2f");
+                            ImGui::TreePop();
+                        }
+                        ImGui::PopID();
+                    };
+
+                    auto drawGradeRegion = [&drawGradeControl](const char* label, AgxColorGradeRegion& region)
+                    {
+                        ImGui::PushID(label);
+                        if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen))
+                        {
+                            drawGradeControl("Contrast", region.Contrast);
+                            drawGradeControl("Gamma", region.Gamma);
+                            drawGradeControl("Gain", region.Gain);
+                            drawGradeControl("Saturation", region.Saturation);
+                            drawGradeControl("Vibrance", region.Vibrance);
+                        }
+                        ImGui::PopID();
+                    };
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Exposure");
+
+                    SliderFloatWithInput("Exposure (EV)##agx", &agxSettings->Exposure, -5.0f, 5.0f, "%.2f");
+                    ImGui::SetItemTooltip("Exposure adjustment in EV stops. 0 = no change, positive = brighter.");
+
+                    SliderFloatWithInput("EV100 Min##agx", &agxSettings->Ev100Min, -6.0f, 16.0f, "%.2f");
+                    ImGui::SetItemTooltip("Lower AgX exposure bound. Typical targets: -6 starlight night, -3 full moon, 3 blue hour, 8 golden hour, 11 overcast, 16 clear midday.");
+
+                    SliderFloatWithInput("EV100 Max##agx", &agxSettings->Ev100Max, -6.0f, 16.0f, "%.2f");
+                    ImGui::SetItemTooltip("Upper AgX exposure bound. Typical targets: -6 starlight night, -3 full moon, 3 blue hour, 8 golden hour, 11 overcast, 16 clear midday.");
+
+                    if (agxSettings->Ev100Max <= agxSettings->Ev100Min)
+                    {
+                        agxSettings->Ev100Max = agxSettings->Ev100Min + 0.001f;
+                    }
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Curve");
+
+                    SliderFloatWithInput("Toe Strength##agx", &agxSettings->ToeStrength, 0.1f, 2.0f, "%.2f");
+                    ImGui::SetItemTooltip("Controls how quickly shadows roll off. 1.0 = default.");
+
+                    SliderFloatWithInput("Shoulder Strength##agx", &agxSettings->ShoulderStrength, 0.1f, 2.0f, "%.2f");
+                    ImGui::SetItemTooltip("Controls how quickly highlights compress. 1.0 = default.");
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Color Grading");
+
+                    drawGradeRegion("Global", agxSettings->Global);
+                    drawGradeRegion("Shadows", agxSettings->Shadows);
+                    drawGradeRegion("Midtones", agxSettings->Midtones);
+                    drawGradeRegion("Highlights", agxSettings->Highlights);
+                }
+            }
+        }
+
+        if (volumetricFogSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("Volumetric Fog", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##volfog"))
+                {
+                    *volumetricFogSettings = defaultVolumetricFogSettings;
+                }
+
+                ImGui::Checkbox("Enable Volumetric Fog", &volumetricFogSettings->Enabled);
+                ImGui::SetItemTooltip("Enable froxel-based volumetric fog with sun-light injection and deferred compositing.");
+
+                if (volumetricFogSettings->Enabled)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Froxel Grid");
+                    SliderIntWithInput("Froxel Tile Size##volfog", &volumetricFogSettings->FroxelTileSize, 4, 16);
+                    ImGui::SetItemTooltip("Screen-space froxel size in pixels. Lower = more detail and much higher cost. Very small values can create extremely large 3D fog volumes.");
+                    SliderIntWithInput("Depth Slices##volfog", &volumetricFogSettings->DepthSlices, 8, 128);
+                    ImGui::SetItemTooltip("Number of logarithmic depth slices in the froxel volume.");
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Medium");
+                    SliderFloatWithInput("Start Distance##volfog", &volumetricFogSettings->StartDistance, 0.0f, 50.0f, "%.2f m");
+                    SliderFloatWithInput("Max Distance##volfog", &volumetricFogSettings->MaxDistance, 1.0f, 500.0f, "%.1f m", 1.0f, 10.0f);
+                    if (volumetricFogSettings->MaxDistance <= volumetricFogSettings->StartDistance)
+                        volumetricFogSettings->MaxDistance = volumetricFogSettings->StartDistance + 0.001f;
+                    SliderFloatWithInput("Density##volfog", &volumetricFogSettings->Density, 0.0f, 0.10f, "%.4f", 0.001f, 0.01f);
+                    SliderFloatWithInput("Anisotropy##volfog", &volumetricFogSettings->Anisotropy, -0.95f, 0.95f, "%.2f", 0.01f, 0.1f);
+                    ImGui::SetItemTooltip("Positive values bias forward scattering for stronger god rays.");
+                    SliderFloatWithInput("Base Height##volfog", &volumetricFogSettings->BaseHeight, -100.0f, 1000.0f, "%.2f m", 0.1f, 1.0f);
+                    SliderFloatWithInput("Height Falloff##volfog", &volumetricFogSettings->HeightFalloff, 0.0f, 2.0f, "%.3f", 0.001f, 0.01f);
+
+                    float fogColor[3] =
+                    {
+                        volumetricFogSettings->ColorR,
+                        volumetricFogSettings->ColorG,
+                        volumetricFogSettings->ColorB
+                    };
+                    if (ImGui::ColorEdit3("Fog Color", fogColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                    {
+                        volumetricFogSettings->ColorR = fogColor[0];
+                        volumetricFogSettings->ColorG = fogColor[1];
+                        volumetricFogSettings->ColorB = fogColor[2];
+                    }
+
+                    float fogEmissiveColor[3] =
+                    {
+                        volumetricFogSettings->EmissiveColorR,
+                        volumetricFogSettings->EmissiveColorG,
+                        volumetricFogSettings->EmissiveColorB
+                    };
+                    if (ImGui::ColorEdit3("Emissive Color##volfog", fogEmissiveColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                    {
+                        volumetricFogSettings->EmissiveColorR = fogEmissiveColor[0];
+                        volumetricFogSettings->EmissiveColorG = fogEmissiveColor[1];
+                        volumetricFogSettings->EmissiveColorB = fogEmissiveColor[2];
+                    }
+                    SliderFloatWithInput("Emissive Intensity##volfog", &volumetricFogSettings->EmissiveIntensity, 0.0f, 50.0f, "%.2f", 0.1f, 1.0f);
+
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Debug");
+                    const char* fogDebugModes[] = { "Composite", "Scattering", "Transmittance" };
+                    ImGui::Combo("Debug View##volfog", &volumetricFogSettings->DebugView, fogDebugModes, IM_ARRAYSIZE(fogDebugModes));
+                }
+            }
+        }
+
+        if (bloomSettings != nullptr)
+        {
+            const BloomSettings defaultBloomSettings{};
+            if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##bloom"))
+                    *bloomSettings = defaultBloomSettings;
+
+                ImGui::Checkbox("Enable Bloom", &bloomSettings->Enabled);
+
+                if (bloomSettings->Enabled)
+                {
+                    ImGui::Separator();
+                    SliderFloatWithInput("Intensity##bloom",  &bloomSettings->Intensity,  0.0f,  1.0f,  "%.3f", 0.005f, 0.05f);
+                    SliderFloatWithInput("Threshold##bloom",  &bloomSettings->Threshold,  0.0f,  10.0f, "%.2f");
+                    SliderFloatWithInput("Knee##bloom",       &bloomSettings->Knee,       0.0f,  2.0f,  "%.2f");
+                    SliderFloatWithInput("Radius##bloom",     &bloomSettings->Radius,     0.1f,  4.0f,  "%.2f");
+                    SliderIntWithInput("Mip Levels##bloom",   &bloomSettings->MipLevels,  2,     8);
+                }
+            }
+        }
+
+        ImGui::End();
+    }
+
+    if (gShowMaterialEditorWindow)
+    {
+        ImGui::SetNextWindowSize(ImVec2(640.0f, 780.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Material Editor", &gShowMaterialEditorWindow))
+        {
+            // Tab bar splits the editor into single-material mode and the CryEngine-style multi-material mode.
+            if (ImGui::BeginTabBar("MaterialEditorTabs"))
+            {
+                // ----------------------------------------------------------------
+                // Tab 1: Single Material (original behaviour, unchanged)
+                // ----------------------------------------------------------------
+                if (ImGui::BeginTabItem("Single Material"))
+                {
+                    MaterialDefinition& materialDefinition = gMaterialEditor.GetCurrentMaterial();
+                    if (gMaterialNameBuffer[0] == '\0')
+                    {
+                        RefreshMaterialNameBuffer();
+                    }
+
+                    if (ImGui::Button("New"))
+                    {
+                        gMaterialEditor.NewMaterial();
+                        RefreshMaterialNameBuffer();
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Open..."))
+                    {
+                        if (gMaterialEditor.OpenMaterialWithDialog(windowHandle))
+                        {
+                            RefreshMaterialNameBuffer();
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Save"))
+                    {
+                        materialDefinition.Name = gMaterialNameBuffer;
+                        gMaterialEditor.SaveCurrentMaterial();
+                        RefreshMaterialNameBuffer();
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Save As..."))
+                    {
+                        materialDefinition.Name = gMaterialNameBuffer;
+                        if (gMaterialEditor.SaveMaterialWithDialog(windowHandle))
+                        {
+                            RefreshMaterialNameBuffer();
+                        }
+                    }
+
+                    ImGui::Separator();
+                    ImGui::InputText("Material Name", gMaterialNameBuffer, IM_ARRAYSIZE(gMaterialNameBuffer));
+                    materialDefinition.Name = gMaterialNameBuffer;
+
+                    ImGui::ColorEdit4("Base Color Tint", materialDefinition.BaseColorTint.data());
+                    ImGui::ColorEdit3("Emissive Color", materialDefinition.EmissiveColor.data());
+                    ImGui::SliderFloat("Metallic Factor", &materialDefinition.MetallicFactor, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Roughness Factor", &materialDefinition.RoughnessFactor, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Normal Scale", &materialDefinition.NormalScale, 0.0f, 4.0f);
+                    ImGui::SliderFloat("Ambient Occlusion Strength", &materialDefinition.AmbientOcclusionStrength, 0.0f, 4.0f);
+                    ImGui::SliderFloat("Height Scale", &materialDefinition.HeightScale, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Opacity", &materialDefinition.Opacity, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Alpha Cutoff", &materialDefinition.AlphaCutoff, 0.0f, 1.0f);
+                    ImGui::Checkbox("Double Sided", &materialDefinition.IsDoubleSided);
+                    ImGui::Checkbox("Use Alpha Cutout", &materialDefinition.UseAlphaCutout);
+                    ImGui::Checkbox("Use Transparent Blend", &materialDefinition.UseTransparentBlend);
+
+                    const auto drawTextureField = [&](const char* label, const MaterialTextureSlot textureSlot)
+                    {
+                        std::string& texturePath = materialDefinition.Textures.GetTexturePath(textureSlot);
+                        ImGui::PushID(label);
+                        ImGui::TextUnformatted(label);
+                        ImGui::SameLine(180.0f);
+                        ImGui::TextWrapped("%s", texturePath.empty() ? "<none>" : texturePath.c_str());
+                        if (ImGui::Button("Browse..."))
+                        {
+                            gMaterialEditor.BrowseForTexture(windowHandle, textureSlot);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Clear"))
+                        {
+                            texturePath.clear();
+                        }
+                        ImGui::PopID();
+                    };
+
+                    ImGui::Separator();
+                    ImGui::TextUnformatted("Textures");
+                    drawTextureField("Base Color", MaterialTextureSlot::BaseColor);
+                    drawTextureField("Normal", MaterialTextureSlot::Normal);
+                    drawTextureField("Metallic", MaterialTextureSlot::Metallic);
+                    drawTextureField("Roughness", MaterialTextureSlot::Roughness);
+                    drawTextureField("Metallic Roughness", MaterialTextureSlot::MetallicRoughness);
+                    drawTextureField("Ambient Occlusion", MaterialTextureSlot::AmbientOcclusion);
+                    drawTextureField("Emissive", MaterialTextureSlot::Emissive);
+                    drawTextureField("Height", MaterialTextureSlot::Height);
+                    drawTextureField("Opacity", MaterialTextureSlot::Opacity);
+
+                    ImGui::Separator();
+                    const std::vector<std::filesystem::path> availableMaterials = gMaterialEditor.FindAvailableMaterials();
+                    ImGui::TextUnformatted("Material Library");
+                    if (availableMaterials.empty())
+                    {
+                        ImGui::TextDisabled("No saved materials found under Data/Materials.");
+                    }
+                    else
+                    {
+                        if (ImGui::BeginChild("MaterialLibrary", ImVec2(0.0f, 150.0f), true))
+                        {
+                            for (const std::filesystem::path& materialPath : availableMaterials)
+                            {
+                                const std::string itemLabel = materialPath.filename().string();
+                                if (ImGui::Selectable(itemLabel.c_str(), gMaterialEditor.GetCurrentMaterialPath() == materialPath))
+                                {
+                                    if (gMaterialEditor.LoadMaterialFromFile(materialPath))
+                                    {
+                                        RefreshMaterialNameBuffer();
+                                    }
+                                }
+                            }
+                        }
+                        ImGui::EndChild();
+                    }
+
+                    if (!gMaterialEditor.GetCurrentMaterialPath().empty())
+                    {
+                        ImGui::TextWrapped("Current File: %s", gMaterialEditor.GetCurrentMaterialPath().string().c_str());
+                    }
+
+                    if (!gMaterialEditor.GetLastErrorMessage().empty())
+                    {
+                        ImGui::TextWrapped("Status: %s", gMaterialEditor.GetLastErrorMessage().c_str());
+                    }
+
+                    ImGui::EndTabItem();
+                }
+
+                // ----------------------------------------------------------------
+                // Tab 2: Multi-Material  (CryEngine-style parent + sub-materials)
+                // Each sub-material index == FBX material ID / mesh sub-mesh index.
+                // ----------------------------------------------------------------
+                if (ImGui::BeginTabItem("Multi-Material"))
+                {
+                    MultiMaterialDefinition& multiMat = gMaterialEditor.GetCurrentMultiMaterial();
+
+                    if (gMultiMaterialNameBuffer[0] == '\0')
+                    {
+                        RefreshMultiMaterialNameBuffer();
+                    }
+
+                    // --- Toolbar ---
+                    if (ImGui::Button("New##Multi"))
+                    {
+                        gMaterialEditor.NewMultiMaterial();
+                        gSelectedSubMaterialIndex = -1;
+                        RefreshMultiMaterialNameBuffer();
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Open...##Multi"))
+                    {
+                        if (gMaterialEditor.OpenMultiMaterialWithDialog(windowHandle))
+                        {
+                            gSelectedSubMaterialIndex = -1;
+                            RefreshMultiMaterialNameBuffer();
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Save##Multi"))
+                    {
+                        multiMat.Name = gMultiMaterialNameBuffer;
+                        gMaterialEditor.SaveCurrentMultiMaterial();
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Save As...##Multi"))
+                    {
+                        multiMat.Name = gMultiMaterialNameBuffer;
+                        gMaterialEditor.SaveMultiMaterialWithDialog(windowHandle);
+                    }
+
+                    ImGui::Separator();
+
+                    // Parent name field
+                    ImGui::InputText("Multi-Material Name", gMultiMaterialNameBuffer, IM_ARRAYSIZE(gMultiMaterialNameBuffer));
+                    multiMat.Name = gMultiMaterialNameBuffer;
+
+                    ImGui::Separator();
+
+                    // Two-column layout: sub-material list on the left, properties on the right
+                    const float subMatListWidth = 200.0f;
+                    ImGui::BeginGroup();
+
+                    ImGui::TextUnformatted("Sub-Materials");
+                    ImGui::SameLine();
+
+                    // Add button inserts a new sub-material at the next slot
+                    if (ImGui::SmallButton("+  Add"))
+                    {
+                        gMaterialEditor.AddSubMaterial();
+                        gSelectedSubMaterialIndex = static_cast<int>(multiMat.SubMaterials.size()) - 1;
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(gSelectedSubMaterialIndex < 0 ||
+                        gSelectedSubMaterialIndex >= static_cast<int>(multiMat.SubMaterials.size()));
+                    if (ImGui::SmallButton("-  Remove"))
+                    {
+                        gMaterialEditor.RemoveSubMaterial(gSelectedSubMaterialIndex);
+                        // Clamp selection to valid range after removal
+                        const int newCount = static_cast<int>(multiMat.SubMaterials.size());
+                        if (gSelectedSubMaterialIndex >= newCount)
+                        {
+                            gSelectedSubMaterialIndex = newCount - 1;
+                        }
+                    }
+                    ImGui::EndDisabled();
+
+                    // Sub-material list box – each row shows "Mat ID X – Name"
+                    if (ImGui::BeginChild("SubMatList", ImVec2(subMatListWidth, 0.0f), true))
+                    {
+                        for (int i = 0; i < static_cast<int>(multiMat.SubMaterials.size()); ++i)
+                        {
+                            char label[128];
+                            std::snprintf(label, sizeof(label), "ID %d – %s", i, multiMat.SubMaterials[i].Name.c_str());
+                            if (ImGui::Selectable(label, gSelectedSubMaterialIndex == i))
+                            {
+                                gSelectedSubMaterialIndex = i;
+                            }
+                        }
+
+                        if (multiMat.SubMaterials.empty())
+                        {
+                            ImGui::TextDisabled("No sub-materials.\nClick '+ Add'.");
+                        }
+                    }
+                    ImGui::EndChild();
+
+                    ImGui::EndGroup();
+
+                    ImGui::SameLine();
+
+                    // Right panel: properties of the selected sub-material
+                    ImGui::BeginGroup();
+                    if (gSelectedSubMaterialIndex >= 0 &&
+                        gSelectedSubMaterialIndex < static_cast<int>(multiMat.SubMaterials.size()))
+                    {
+                        MaterialDefinition& subMat = multiMat.SubMaterials[gSelectedSubMaterialIndex];
+
+                        ImGui::TextDisabled("Material ID: %d  (matches FBX material slot)", gSelectedSubMaterialIndex);
+
+                        // Sub-material name – use a per-index buffer via InputText with a PushID
+                        ImGui::PushID(gSelectedSubMaterialIndex);
+                        char subNameBuf[256];
+                        strcpy_s(subNameBuf, subMat.Name.c_str());
+                        if (ImGui::InputText("Sub-Material Name", subNameBuf, IM_ARRAYSIZE(subNameBuf)))
+                        {
+                            subMat.Name = subNameBuf;
+                        }
+
+                        ImGui::ColorEdit4("Base Color Tint", subMat.BaseColorTint.data());
+                        ImGui::ColorEdit3("Emissive Color", subMat.EmissiveColor.data());
+                        ImGui::SliderFloat("Metallic Factor", &subMat.MetallicFactor, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Roughness Factor", &subMat.RoughnessFactor, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Normal Scale", &subMat.NormalScale, 0.0f, 4.0f);
+                        ImGui::SliderFloat("AO Strength", &subMat.AmbientOcclusionStrength, 0.0f, 4.0f);
+                        ImGui::SliderFloat("Height Scale", &subMat.HeightScale, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Opacity", &subMat.Opacity, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Alpha Cutoff", &subMat.AlphaCutoff, 0.0f, 1.0f);
+                        ImGui::Checkbox("Double Sided", &subMat.IsDoubleSided);
+                        ImGui::Checkbox("Alpha Cutout", &subMat.UseAlphaCutout);
+                        ImGui::Checkbox("Transparent Blend", &subMat.UseTransparentBlend);
+
+                        const auto drawSubTexField = [&](const char* label, const MaterialTextureSlot slot)
+                        {
+                            std::string& path = subMat.Textures.GetTexturePath(slot);
+                            ImGui::PushID(label);
+                            ImGui::TextUnformatted(label);
+                            ImGui::SameLine(160.0f);
+                            ImGui::TextWrapped("%s", path.empty() ? "<none>" : path.c_str());
+                            if (ImGui::Button("Browse..."))
+                            {
+                                gMaterialEditor.BrowseForSubMaterialTexture(windowHandle, gSelectedSubMaterialIndex, slot);
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Clear"))
+                            {
+                                path.clear();
+                            }
+                            ImGui::PopID();
+                        };
+
+                        ImGui::Separator();
+                        ImGui::TextUnformatted("Textures");
+                        drawSubTexField("Base Color", MaterialTextureSlot::BaseColor);
+                        drawSubTexField("Normal", MaterialTextureSlot::Normal);
+                        drawSubTexField("Metallic", MaterialTextureSlot::Metallic);
+                        drawSubTexField("Roughness", MaterialTextureSlot::Roughness);
+                        drawSubTexField("Metallic Roughness", MaterialTextureSlot::MetallicRoughness);
+                        drawSubTexField("Ambient Occlusion", MaterialTextureSlot::AmbientOcclusion);
+                        drawSubTexField("Emissive", MaterialTextureSlot::Emissive);
+                        drawSubTexField("Height", MaterialTextureSlot::Height);
+                        drawSubTexField("Opacity", MaterialTextureSlot::Opacity);
+
+                        ImGui::PopID();
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("Select a sub-material from the list on the left,\nor click '+ Add' to create one.");
+                    }
+                    ImGui::EndGroup();
+
+                    ImGui::Separator();
+
+                    // Multi-material library list (Data/MultiMaterials/)
+                    const std::vector<std::filesystem::path> availableMultiMats = gMaterialEditor.FindAvailableMultiMaterials();
+                    ImGui::TextUnformatted("Multi-Material Library");
+                    if (availableMultiMats.empty())
+                    {
+                        ImGui::TextDisabled("No saved multi-materials found under Data/MultiMaterials.");
+                    }
+                    else
+                    {
+                        if (ImGui::BeginChild("MultiMatLibrary", ImVec2(0.0f, 100.0f), true))
+                        {
+                            for (const std::filesystem::path& mmPath : availableMultiMats)
+                            {
+                                const std::string itemLabel = mmPath.filename().string();
+                                if (ImGui::Selectable(itemLabel.c_str(), gMaterialEditor.GetCurrentMultiMaterialPath() == mmPath))
+                                {
+                                    if (gMaterialEditor.LoadMultiMaterialFromFile(mmPath))
+                                    {
+                                        gSelectedSubMaterialIndex = -1;
+                                        RefreshMultiMaterialNameBuffer();
+                                    }
+                                }
+                            }
+                        }
+                        ImGui::EndChild();
+                    }
+
+                    if (!gMaterialEditor.GetCurrentMultiMaterialPath().empty())
+                    {
+                        ImGui::TextWrapped("Current File: %s", gMaterialEditor.GetCurrentMultiMaterialPath().string().c_str());
+                    }
+
+                    if (!gMaterialEditor.GetLastErrorMessage().empty())
+                    {
+                        ImGui::TextWrapped("Status: %s", gMaterialEditor.GetLastErrorMessage().c_str());
+                    }
+
+                    ImGui::EndTabItem();
+                }
+
+                ImGui::EndTabBar();
+            }
+        }
+        ImGui::End();
+    }
+
+    if (gShowAssetBrowserWindow)
+    {
+        RefreshAssetBrowserState();
+        ImGui::Begin("Asset Browser", &gShowAssetBrowserWindow, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        if (gOpenRenamePopup)
+        {
+            ImGui::OpenPopup("Rename Asset");
+            gOpenRenamePopup = false;
+        }
+
+        if (gOpenNewFolderPopup)
+        {
+            ImGui::OpenPopup("Create Folder");
+            gOpenNewFolderPopup = false;
+        }
+
+        const bool hasSelectedAsset = !gSelectedAssetRelativePath.empty();
+        const bool canPaste = gClipboardHasValue;
+
+        // The toolbar keeps common content-browser actions visible, similar to the asset views used by large game editors.
+        if (ImGui::Button("Import FBX"))
+        {
+            if (PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath))
+            {
+                RefreshAssetBrowserState();
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Import Texture"))
+        {
+            if (PromptForAndImportTexture(windowHandle, gSelectedFolderRelativePath))
+            {
+                RefreshAssetBrowserState();
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("New Folder"))
+        {
+            BeginCreateFolder();
+        }
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Rename"))
+        {
+            BeginRenameSelectedAsset();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Copy"))
+        {
+            CopySelectedAssetToClipboard();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canPaste);
+        if (ImGui::Button("Paste"))
+        {
+            PasteClipboardIntoSelectedFolder();
+            RefreshAssetBrowserState();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!hasSelectedAsset);
+        if (ImGui::Button("Remove"))
+        {
+            DeleteSelectedAsset();
+            RefreshAssetBrowserState();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh"))
+        {
+            InvalidateAssetBrowserDirectoryCache();
+            RefreshAssetBrowserState();
+        }
+
+        ImGui::Separator();
+        ImGui::TextWrapped("Data Folder: %s", gDataDirectoryDisplay.c_str());
+        ImGui::TextWrapped(
+            "Current Folder: %s",
+            gSelectedFolderRelativePath.empty() ? "Data" : gSelectedFolderRelativePath.c_str());
+        ImGui::Separator();
+
+        if (gHasAssetActionResult)
+        {
+            const ImVec4 statusColor = gLastAssetActionSucceeded
+                ? ImVec4(0.35f, 0.85f, 0.45f, 1.0f)
+                : ImVec4(0.90f, 0.45f, 0.35f, 1.0f);
+            ImGui::TextColored(statusColor, "%s", gAssetStatusMessage.c_str());
+        }
+        else
+        {
+            ImGui::TextWrapped("%s", gAssetStatusMessage.c_str());
+        }
+
+        if (ImGui::BeginPopupModal("Rename Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::InputText("New Name", gRenameBuffer, IM_ARRAYSIZE(gRenameBuffer));
+
+            if (ImGui::Button("Apply"))
+            {
+                if (RenameSelectedAsset())
+                {
+                    RefreshAssetBrowserState();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::BeginPopupModal("Create Folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::InputText("Folder Name", gNewFolderBuffer, IM_ARRAYSIZE(gNewFolderBuffer));
+
+            if (ImGui::Button("Create"))
+            {
+                if (CreateFolderInSelectedFolder())
+                {
+                    RefreshAssetBrowserState();
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        // Open the import progress modal whenever a batch import starts.
+        if (gTextureImport.Running.load() || gTextureImport.Done.load() > 0)
+        {
+            ImGui::OpenPopup("Importing Textures...");
+        }
+
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 420.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(560.0f, 260.0f), ImVec2(FLT_MAX, FLT_MAX));
+        if (ImGui::BeginPopupModal("Importing Textures...", nullptr, ImGuiWindowFlags_None))
+        {
+            const int total = gTextureImport.Total.load();
+            const int done  = gTextureImport.Done.load();
+            const bool running = gTextureImport.Running.load();
+            std::string currentFile;
+            {
+                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                currentFile = gTextureImport.CurrentFile;
+            }
+
+            float fraction = (total > 0) ? (static_cast<float>(done) / static_cast<float>(total)) : 0.0f;
+            if (running && total > 0)
+            {
+                fraction = (std::max)(fraction, 0.02f);
+            }
+            char progressLabel[64];
+            _snprintf_s(progressLabel, _TRUNCATE, "%d / %d", done, total);
+            ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 0.0f), progressLabel);
+
+            if (running)
+            {
+                if (!currentFile.empty())
+                {
+                    ImGui::TextWrapped("Processing: %s", currentFile.c_str());
+                }
+                else
+                {
+                    ImGui::TextUnformatted("Preparing import...");
+                }
+
+                if (done == 0)
+                {
+                    ImGui::TextWrapped("The first texture is still being compressed. Large 4K imports can take a bit before the first file completes.");
+                }
+            }
+            else
+            {
+                ImGui::TextUnformatted("Import complete.");
+            }
+
+            // Scrollable log of per-file results.
+            ImGui::Separator();
+            const float footerHeight = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+            ImGui::BeginChild("ImportLog", ImVec2(0.0f, -footerHeight), true);
+            {
+                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                for (const std::string& line : gTextureImport.Log)
+                {
+                    const bool isError = line.size() >= 3 && line.substr(0, 3) == "ERR";
+                    if (isError)
+                    {
+                        ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.3f, 1.0f), "%s", line.c_str());
+                    }
+                    else
+                    {
+                        ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.45f, 1.0f), "%s", line.c_str());
+                    }
+                }
+                // Auto-scroll to the bottom.
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+                {
+                    ImGui::SetScrollHereY(1.0f);
+                }
+            }
+            ImGui::EndChild();
+
+            // Only allow closing once the thread is done.
+            ImGui::BeginDisabled(running);
+            if (ImGui::Button("Close"))
+            {
+                // Reset so the modal won't reopen next frame.
+                gTextureImport.Total.store(0);
+                gTextureImport.Done.store(0);
+                {
+                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
+                    gTextureImport.Log.clear();
+                    gTextureImport.CurrentFile.clear();
+                }
+                RefreshAssetBrowserState();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+
+            ImGui::EndPopup();
+        }
+
+        ImGui::Separator();
+
+        const float folderPaneWidth = 240.0f;
+        if (ImGui::BeginChild("AssetFolders", ImVec2(folderPaneWidth, 0.0f), true))
+        {
+            RenderFolderTreeNode({});
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        if (ImGui::BeginChild("AssetContents", ImVec2(0.0f, 0.0f), true))
+        {
+            const std::vector<AssetBrowserItem>& items = CollectFolderItems(gSelectedFolderRelativePath);
+            if (items.empty())
+            {
+                ImGui::TextUnformatted("This folder is empty.");
+            }
+            else
+            {
+                for (const AssetBrowserItem& item : items)
+                {
+                    const std::string itemLabel = std::string(item.IsDirectory ? "[Folder] " : "[File] ") + item.Name;
+                    if (ImGui::Selectable(itemLabel.c_str(), gSelectedAssetRelativePath == item.RelativePath))
+                    {
+                        gSelectedAssetRelativePath = item.RelativePath;
+                    }
+
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && item.IsDirectory)
+                    {
+                        SelectFolder(item.RelativePath);
+                    }
+
+                    if (ImGui::BeginPopupContextItem(item.RelativePath.c_str()))
+                    {
+                        gSelectedAssetRelativePath = item.RelativePath;
+
+                        if (item.IsDirectory && ImGui::MenuItem("Open"))
+                        {
+                            SelectFolder(item.RelativePath);
+                        }
+
+                        if (item.IsDirectory && ImGui::MenuItem("Import FBX Here..."))
+                        {
+                            SelectFolder(item.RelativePath);
+                            PromptForAndImportFbx(windowHandle, item.RelativePath);
+                            RefreshAssetBrowserState();
+                        }
+
+                        if (item.IsDirectory && ImGui::MenuItem("Import Texture Here..."))
+                        {
+                            SelectFolder(item.RelativePath);
+                            PromptForAndImportTexture(windowHandle, item.RelativePath);
+                            RefreshAssetBrowserState();
+                        }
+
+                        if (ImGui::MenuItem("Rename"))
+                        {
+                            BeginRenameSelectedAsset();
+                        }
+
+                        if (ImGui::MenuItem("Copy"))
+                        {
+                            CopySelectedAssetToClipboard();
+                        }
+
+                        if (ImGui::MenuItem("Remove"))
+                        {
+                            DeleteSelectedAsset();
+                            RefreshAssetBrowserState();
+                        }
+
+                        ImGui::EndPopup();
+                    }
+                }
+            }
+
+            if (ImGui::BeginPopupContextWindow("AssetBrowserBackgroundContext", ImGuiPopupFlags_NoOpenOverItems | ImGuiPopupFlags_MouseButtonRight))
+            {
+                if (ImGui::MenuItem("Import FBX Here..."))
+                {
+                    PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath);
+                    RefreshAssetBrowserState();
+                }
+
+                if (ImGui::MenuItem("Import Texture Here..."))
+                {
+                    PromptForAndImportTexture(windowHandle, gSelectedFolderRelativePath);
+                    RefreshAssetBrowserState();
+                }
+
+                if (ImGui::MenuItem("New Folder"))
+                {
+                    BeginCreateFolder();
+                }
+
+                ImGui::BeginDisabled(!canPaste);
+                if (ImGui::MenuItem("Paste"))
+                {
+                    PasteClipboardIntoSelectedFolder();
+                    RefreshAssetBrowserState();
+                }
+                ImGui::EndDisabled();
+
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+    if (gShowAboutWindow)
+    {
+        ImGui::Begin("About Ptero Editor", &gShowAboutWindow, ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::TextUnformatted("Ptero Editor");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Rendering backend: Dear ImGui + DirectX 12");
+        ImGui::TextUnformatted("Menu implementation is split into its own source file.");
+        ImGui::End();
+    }
+
+    // -----------------------------------------------------------------------
+    // G-Buffer / RT Debug window
+    // Displays each G-Buffer layer and the RT GI accumulation texture as a
+    // tiled image grid so rendering issues can be diagnosed visually.
+    // -----------------------------------------------------------------------
+    if (gShowGBufferDebugWindow && gbufferTextureIds != nullptr)
+    {
+        // Force the window large enough for all 5 tiles every time it is opened
+        // so that stale imgui.ini sizes from earlier sessions don't cut off tiles.
+        ImGui::SetNextWindowSize(ImVec2(900.0f, 980.0f), ImGuiCond_Appearing);
+        if (ImGui::Begin("G-Buffer / RT Debug", &gShowGBufferDebugWindow))
+        {
+            // Each tile shows a label, then the texture scaled to fit two columns.
+            const float padding    = 8.0f;
+            const float tileWidth  = (ImGui::GetContentRegionAvail().x - padding) * 0.5f;
+            const float tileHeight = tileWidth * (9.0f / 16.0f); // 16:9 aspect
+
+            // Order tiles so the most diagnostic ones appear first (top-left).
+            struct Tile { const char* label; ImTextureID id; };
+            Tile tiles[] =
+            {
+                { "RT GI Accumulation (RGB)",              gbufferTextureIds->GiAccum  },
+                { "Albedo (RGB)",                          gbufferTextureIds->Albedo   },
+                { "World Normal (RGB)",                    gbufferTextureIds->Normal   },
+                { "Material (R=Roughness, G=Metallic, B=AO)", gbufferTextureIds->Material },
+                { "Depth (reversed preview of scene depth)",  gbufferTextureIds->Depth    },
+            };
+
+            for (int i = 0; i < static_cast<int>(std::size(tiles)); ++i)
+            {
+                // Two columns: even indices go left, odd indices go right (SameLine).
+                if (i > 0 && (i % 2) == 1)
+                    ImGui::SameLine(tileWidth + padding);
+
+                ImGui::BeginGroup();
+                ImGui::TextUnformatted(tiles[i].label);
+                if (tiles[i].id != ImTextureID_Invalid)
+                    ImGui::Image(tiles[i].id, ImVec2(tileWidth, tileHeight));
+                else
+                    ImGui::TextDisabled("(not available)");
+                ImGui::EndGroup();
+            }
+        }
+        ImGui::End();
+    }
+
+    if (gShowAudioWindow && audioManager != nullptr)
+    {
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 400.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Audio Manager", &gShowAudioWindow);
+
+        if (!audioManager->IsInitialized())
+        {
+            ImGui::TextDisabled("Audio system is not initialized.");
+        }
+        else
+        {
+            const auto& events = audioManager->GetEvents();
+            if (events.empty())
+            {
+                ImGui::TextDisabled("No events found. Place FMOD Studio .bank files in Data/Audio.");
+            }
+            else
+            {
+                ImGui::Text("Events loaded: %d", static_cast<int>(events.size()));
+                ImGui::Separator();
+
+                if (ImGui::Button("Stop All"))
+                    audioManager->StopAll();
+
+                ImGui::Separator();
+
+                ImGui::BeginChild("EventList", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
+                for (int i = 0; i < static_cast<int>(events.size()); ++i)
+                {
+                    const AudioEvent& ev = events[static_cast<size_t>(i)];
+                    ImGui::PushID(i);
+
+                    const bool playing = ev.IsPlaying;
+                    if (playing)
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+
+                    ImGui::TextUnformatted(ev.Path.c_str());
+
+                    if (playing)
+                        ImGui::PopStyleColor();
+
+                    ImGui::SameLine();
+                    if (playing)
+                    {
+                        if (ImGui::SmallButton("Stop"))
+                            audioManager->StopEvent(i);
+                    }
+                    else
+                    {
+                        if (ImGui::SmallButton("Play"))
+                            audioManager->PlayEvent(i);
+                    }
+
+                    ImGui::PopID();
+                }
+                ImGui::EndChild();
+            }
+        }
+        ImGui::End();
+    }
+}

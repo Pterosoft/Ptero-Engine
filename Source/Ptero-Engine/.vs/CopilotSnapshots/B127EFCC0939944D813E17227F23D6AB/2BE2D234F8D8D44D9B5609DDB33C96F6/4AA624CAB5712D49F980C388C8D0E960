@@ -1,0 +1,350 @@
+﻿// SharcCommon.h
+// Self-contained HLSL implementation of the NVIDIA SHARC (Spatial Hash Radiance Cache)
+// data structures and algorithms, compatible with the API expected by the RTXGI Pathtracer sample.
+//
+// SHARC stores world-space radiance in a compact hash grid.  Each voxel in the grid
+// accumulates incident radiance across multiple frames.  A separate resolve pass ages
+// entries and makes them available as GI queries on subsequent frames.
+//
+// Grid layout: the scene is divided into logarithmically-spaced voxels anchored at the
+// camera position.  Each voxel is addressed by a 64-bit hash key derived from its integer
+// grid coordinate.
+
+#ifndef SHARC_COMMON_H
+#define SHARC_COMMON_H
+
+// ---------------------------------------------------------------------------
+// Compile-time constants (may be overridden before including this header)
+// ---------------------------------------------------------------------------
+#ifndef SHARC_GRID_LOGARITHM_BASE
+#define SHARC_GRID_LOGARITHM_BASE       2.0f
+#endif
+
+#ifndef SHARC_GRID_LEVEL_BIAS
+#define SHARC_GRID_LEVEL_BIAS           0
+#endif
+
+#ifndef SHARC_RADIANCE_SCALE
+// Scale factor applied when storing / reading radiance so the int32 accumulator
+// does not overflow on high-energy HDR values.
+#define SHARC_RADIANCE_SCALE            1e3f
+#endif
+
+#ifndef SHARC_CAPACITY_LOG2
+// log2 of the total number of hash buckets.  2^20 = 1 048 576 entries.
+#define SHARC_CAPACITY_LOG2             20
+#endif
+
+// ---------------------------------------------------------------------------
+// Data structures
+// ---------------------------------------------------------------------------
+
+// Per-voxel accumulator: 3 * int32 for RGB sum + 1 * uint32 for sample count.
+// Stored as a struct so the compiler can alias it to a StructuredBuffer.
+struct SharcAccumulationData
+{
+    int   RadianceR;    // sum of (radiance.r * SHARC_RADIANCE_SCALE) as fixed-point int
+    int   RadianceG;
+    int   RadianceB;
+    uint  SampleCount;  // total samples accumulated into this voxel
+};
+
+// Packed resolved (previous-frame) radiance for GI queries (3 x float16 stored as uint).
+struct SharcPackedData
+{
+    uint  RadiancePacked; // R11G11B10_FLOAT encoding of resolved average radiance
+    uint  Pad;
+};
+
+// Grid parameters that define the logarithmic voxel layout.
+struct SharcGridParameters
+{
+    float3 cameraPosition;  // world-space camera position (grid anchor)
+    float  sceneScale;      // world units per base voxel at the finest level
+    float  logarithmBase;   // base for the log-scale voxel sizing (default: 2)
+    int    levelBias;       // added to the computed mip level (default: 0)
+};
+
+// Hash-map descriptor passed to all SHARC functions.
+struct SharcHashMapData
+{
+    uint                           capacity;           // total number of hash entries
+    RWStructuredBuffer<uint64_t>   hashEntriesBuffer;  // parallel array of 64-bit keys
+};
+
+// Full SHARC parameter block.
+struct SharcParameters
+{
+    SharcGridParameters              gridParameters;
+    SharcHashMapData                 hashMapData;
+    RWStructuredBuffer<SharcAccumulationData> accumulationBuffer;
+    RWStructuredBuffer<SharcPackedData>       resolvedBuffer;
+    float                            radianceScale;
+};
+
+// Parameters for the resolve/age pass.
+struct SharcResolveParameters
+{
+    int    accumulationFrameNum;   // target samples per voxel before averaging
+    int    staleFrameNumMax;       // frames after which an unvisited voxel is evicted
+    float3 cameraPositionPrev;     // previous frame camera position (for grid shift detection)
+    uint   frameIndex;             // global frame counter (used for stale eviction)
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Pack float3 radiance into a compact uint (R11G11B10_FLOAT-like packing).
+uint SharcPackRadiance(float3 radiance)
+{
+    // Clamp to avoid NaN/Inf
+    radiance = clamp(radiance, 0.0f, 65504.0f);
+    // Simple R11G11B10 packing
+    uint r = f32tof16(radiance.r) & 0x7FF0u;
+    uint g = f32tof16(radiance.g) & 0x7FF0u;
+    uint b = f32tof16(radiance.b) & 0x7FE0u;
+    return (r << 21) | (g << 10) | (b >> 1);
+}
+
+float3 SharcUnpackRadiance(uint packed)
+{
+    float r = f16tof32(((packed >> 21) & 0x7FFu) << 0u | 0x0u);
+    float g = f16tof32(((packed >> 10) & 0x7FFu) << 0u | 0x0u);
+    float b = f16tof32(((packed >>  1) & 0x3FFu) << 1u | 0x0u);
+    return float3(r, g, b);
+}
+
+// Better packing: store full float16 per channel
+uint SharcPackRadianceFull(float3 radiance)
+{
+    radiance = clamp(radiance, 0.0f, 65504.0f);
+    uint rh = f32tof16(radiance.r);
+    uint gh = f32tof16(radiance.g);
+    // Pack R and G as two float16s; B is stored separately in Pad or averaged.
+    // For simplicity store R16G16 and lose blue precision — use a different approach:
+    // store as two RGBA8 words or use the accumulation buffer directly.
+    return (rh & 0xFFFFu) | ((gh & 0xFFFFu) << 16u);
+}
+
+// Overload: pack two floats using float16 encoding
+uint SharcPackRadianceFull(float2 v)
+{
+    v = clamp(v, 0.0f, 65504.0f);
+    return (f32tof16(v.x) & 0xFFFFu) | ((f32tof16(v.y) & 0xFFFFu) << 16u);
+}
+
+float2 SharcUnpackRG(uint packed)
+{
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32((packed >> 16u) & 0xFFFFu));
+}
+
+// ---------------------------------------------------------------------------
+// Grid address computation
+// ---------------------------------------------------------------------------
+
+// Returns the logarithmic mip level for a given world distance from the camera.
+int SharcComputeLevel(float distance, float sceneScale, float logBase)
+{
+    if (distance <= sceneScale) return 0;
+    return (int)floor(log(distance / sceneScale) / log(logBase));
+}
+
+// Returns the voxel size at a given level.
+float SharcVoxelSize(int level, float sceneScale, float logBase)
+{
+    return sceneScale * pow(logBase, (float)level);
+}
+
+// Returns an integer grid coordinate for a world position at a given level.
+int3 SharcWorldToGrid(float3 worldPos, int level, float sceneScale, float logBase)
+{
+    float voxelSize = SharcVoxelSize(level, sceneScale, logBase);
+    return (int3)floor(worldPos / voxelSize);
+}
+
+// Returns the grid level that best represents a world position given the camera.
+int SharcGetLevel(float3 worldPos, SharcGridParameters gridParams)
+{
+    float dist = length(worldPos - gridParams.cameraPosition);
+    return max(0, SharcComputeLevel(dist, gridParams.sceneScale, gridParams.logarithmBase) + gridParams.levelBias);
+}
+
+// ---------------------------------------------------------------------------
+// Hash functions
+// ---------------------------------------------------------------------------
+
+uint64_t SharcHash64(int3 coord, int level)
+{
+    // Mix coordinate + level into a 64-bit hash using a FNV-1a-like scheme.
+    uint64_t h = 14695981039346656037ULL;
+    h ^= (uint64_t)(uint)coord.x; h *= 1099511628211ULL;
+    h ^= (uint64_t)(uint)coord.y; h *= 1099511628211ULL;
+    h ^= (uint64_t)(uint)coord.z; h *= 1099511628211ULL;
+    h ^= (uint64_t)(uint)level;   h *= 1099511628211ULL;
+    return h;
+}
+
+uint SharcHashToIndex(uint64_t hash, uint capacity)
+{
+    // Linear-probe entry index within [0, capacity).
+    return (uint)(hash % (uint64_t)capacity);
+}
+
+// ---------------------------------------------------------------------------
+// Cache update (called from the raygen/closesthit shader to add a sample)
+// ---------------------------------------------------------------------------
+
+// Try to insert or update a voxel entry.  Returns true if the sample was stored.
+bool SharcUpdateEntry(
+    float3 worldPos,
+    float3 radiance,
+    SharcParameters sharcParams)
+{
+    const SharcGridParameters gp = sharcParams.gridParameters;
+    int level = SharcGetLevel(worldPos, gp);
+    int3 grid = SharcWorldToGrid(worldPos, level, gp.sceneScale, gp.logarithmBase);
+    uint64_t key = SharcHash64(grid, level);
+    uint idx  = SharcHashToIndex(key, sharcParams.hashMapData.capacity);
+
+    // Open-addressing probe: try to claim an empty slot or find the matching key.
+    const uint kProbeCount = 8u;
+    for (uint probe = 0; probe < kProbeCount; ++probe)
+    {
+        uint slotIdx = (idx + probe) % sharcParams.hashMapData.capacity;
+        uint64_t existing = sharcParams.hashMapData.hashEntriesBuffer[slotIdx];
+
+        if (existing == 0ULL)
+        {
+            // Try to claim this empty slot with an atomic CAS.
+            uint64_t prev;
+            InterlockedCompareExchange(sharcParams.hashMapData.hashEntriesBuffer[slotIdx], 0ULL, key, prev);
+            if (prev == 0ULL || prev == key)
+            {
+                // Successfully claimed or matched — accumulate.
+                int scaledR = (int)(radiance.r * sharcParams.radianceScale);
+                int scaledG = (int)(radiance.g * sharcParams.radianceScale);
+                int scaledB = (int)(radiance.b * sharcParams.radianceScale);
+                InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceR, scaledR);
+                InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceG, scaledG);
+                InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceB, scaledB);
+                InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].SampleCount, 1u);
+                return true;
+            }
+        }
+        else if (existing == key)
+        {
+            // Found matching slot — accumulate.
+            int scaledR = (int)(radiance.r * sharcParams.radianceScale);
+            int scaledG = (int)(radiance.g * sharcParams.radianceScale);
+            int scaledB = (int)(radiance.b * sharcParams.radianceScale);
+            InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceR, scaledR);
+            InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceG, scaledG);
+            InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].RadianceB, scaledB);
+            InterlockedAdd(sharcParams.accumulationBuffer[slotIdx].SampleCount, 1u);
+            return true;
+        }
+    }
+    return false; // hash collision — slot not found in probe window
+}
+
+// ---------------------------------------------------------------------------
+// Cache query (called from the raygen/closesthit shader to look up a voxel)
+// ---------------------------------------------------------------------------
+
+bool SharcGetCachedRadiance(
+    float3          worldPos,
+    SharcParameters sharcParams,
+    out float3      outRadiance)
+{
+    outRadiance = float3(0, 0, 0);
+    const SharcGridParameters gp = sharcParams.gridParameters;
+    int level = SharcGetLevel(worldPos, gp);
+    int3 grid = SharcWorldToGrid(worldPos, level, gp.sceneScale, gp.logarithmBase);
+    uint64_t key = SharcHash64(grid, level);
+    uint idx = SharcHashToIndex(key, sharcParams.hashMapData.capacity);
+
+    const uint kProbeCount = 8u;
+    for (uint probe = 0; probe < kProbeCount; ++probe)
+    {
+        uint slotIdx = (idx + probe) % sharcParams.hashMapData.capacity;
+        uint64_t existing = sharcParams.hashMapData.hashEntriesBuffer[slotIdx];
+        if (existing == key)
+        {
+            // Read packed resolved radiance (written by the previous resolve pass).
+            SharcPackedData packed = sharcParams.resolvedBuffer[slotIdx];
+            float2 rg = SharcUnpackRG(packed.RadiancePacked);
+            float  b  = SharcUnpackRG(packed.Pad).x;
+            outRadiance = float3(rg.x, rg.y, b);
+            return true;
+        }
+        if (existing == 0ULL)
+            break; // empty slot — key not present
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Resolve entry (called from the compute resolve shader, one thread per slot)
+// ---------------------------------------------------------------------------
+
+void SharcResolveEntry(
+    uint                   slotIdx,
+    SharcParameters        sharcParams,
+    SharcResolveParameters resolveParams)
+{
+    if (slotIdx >= sharcParams.hashMapData.capacity)
+        return;
+
+    uint64_t key = sharcParams.hashMapData.hashEntriesBuffer[slotIdx];
+    if (key == 0ULL)
+        return; // empty slot — nothing to do
+
+    SharcAccumulationData acc = sharcParams.accumulationBuffer[slotIdx];
+
+    if (acc.SampleCount == 0u)
+    {
+        // Stale entry: no new samples this frame.
+        // For simplicity we keep the resolved radiance from the previous frame
+        // (the CPU-side stale eviction is handled by the lock-buffer scheme;
+        // here we just zero the accumulator for the next frame).
+        sharcParams.accumulationBuffer[slotIdx].RadianceR = 0;
+        sharcParams.accumulationBuffer[slotIdx].RadianceG = 0;
+        sharcParams.accumulationBuffer[slotIdx].RadianceB = 0;
+        sharcParams.accumulationBuffer[slotIdx].SampleCount = 0u;
+        return;
+    }
+
+    // Compute average radiance for this frame.
+    float invScale = 1.0f / sharcParams.radianceScale;
+    float invCount = 1.0f / (float)acc.SampleCount;
+    float3 currentRadiance = float3(
+        (float)acc.RadianceR * invScale * invCount,
+        (float)acc.RadianceG * invScale * invCount,
+        (float)acc.RadianceB * invScale * invCount
+    );
+
+    // Temporal blend with the existing resolved value.
+    SharcPackedData prevPacked = sharcParams.resolvedBuffer[slotIdx];
+    float2 prevRG = SharcUnpackRG(prevPacked.RadiancePacked);
+    float  prevB  = SharcUnpackRG(prevPacked.Pad).x;
+    float3 prevRadiance = float3(prevRG.x, prevRG.y, prevB);
+
+    // Blend factor: 1/accumulationFrameNum ensures we converge over N frames.
+    float alpha = 1.0f / (float)max(resolveParams.accumulationFrameNum, 1);
+    float3 blended = lerp(prevRadiance, currentRadiance, alpha);
+
+    // Write resolved output.
+    SharcPackedData result;
+    result.RadiancePacked = SharcPackRadianceFull(blended.rg);
+    result.Pad            = SharcPackRadianceFull(float2(blended.b, 0.0f));
+    sharcParams.resolvedBuffer[slotIdx] = result;
+
+    // Clear accumulator for the next frame.
+    sharcParams.accumulationBuffer[slotIdx].RadianceR = 0;
+    sharcParams.accumulationBuffer[slotIdx].RadianceG = 0;
+    sharcParams.accumulationBuffer[slotIdx].RadianceB = 0;
+    sharcParams.accumulationBuffer[slotIdx].SampleCount = 0u;
+}
+
+#endif // SHARC_COMMON_H

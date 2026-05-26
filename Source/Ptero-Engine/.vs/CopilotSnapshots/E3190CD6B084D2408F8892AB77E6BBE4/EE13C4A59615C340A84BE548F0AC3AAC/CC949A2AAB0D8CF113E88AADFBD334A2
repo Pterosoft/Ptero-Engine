@@ -1,0 +1,84 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <string>
+#include <vector>
+#include <wrl/client.h>
+
+static constexpr UINT kPointShadowMapSize = 1024;
+static constexpr DXGI_FORMAT kPointShadowDepthFormat = DXGI_FORMAT_D32_FLOAT;
+static constexpr DXGI_FORMAT kPointShadowTypelessFormat = DXGI_FORMAT_R32_TYPELESS;
+static constexpr DXGI_FORMAT kPointShadowResourceFormat = DXGI_FORMAT_R32_FLOAT;
+static constexpr UINT kMaxShadowCastingPointLights = 4;
+
+class PointShadowMapRenderer
+{
+public:
+    struct ShadowedPointLight
+    {
+        DirectX::XMFLOAT3 Position{};
+        float Radius = 1.0f;
+    };
+
+    struct alignas(256) PointShadowGlobalConstants
+    {
+        DirectX::XMFLOAT4X4 ViewProjection;
+        DirectX::XMFLOAT3 LightPosition{};
+        float FarPlane = 1.0f;
+        std::byte Padding[176]{};
+    };
+    static_assert(sizeof(PointShadowGlobalConstants) == 256);
+
+    bool Initialize();
+    void Shutdown();
+    bool IsInitialized() const { return mIsInitialized; }
+
+    void BeginFrame(const std::vector<ShadowedPointLight>& lights);
+    int GetActiveLightCount() const { return static_cast<int>(mLights.size()); }
+    const ShadowedPointLight* GetLight(int index) const;
+    const DirectX::XMFLOAT4X4& GetFaceViewProjection(int lightIndex, int faceIndex) const;
+    const DirectX::XMFLOAT3& GetLightPosition(int lightIndex) const;
+    float GetLightFarPlane(int lightIndex) const;
+    float GetShadowBias() const { return mShadowBias; }
+
+    void BeginShadowFacePass(ID3D12GraphicsCommandList* commandList, int lightIndex, int faceIndex);
+    void EndShadowFacePass(ID3D12GraphicsCommandList* commandList, int lightIndex, int faceIndex);
+
+    ID3D12RootSignature* GetRootSignature() const { return mRootSignature.Get(); }
+    ID3D12PipelineState* GetPipelineState() const { return mPipelineState.Get(); }
+    D3D12_GPU_DESCRIPTOR_HANDLE GetShadowTextureArraySrvGpuHandle() const { return mShadowSrvGpu; }
+    const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
+
+private:
+    static constexpr int kFacesPerLight = 6;
+    static constexpr int kTotalShadowFaces = kMaxShadowCastingPointLights * kFacesPerLight;
+
+    bool CreateResources();
+    bool CreatePipeline();
+    bool CreateConstantBuffer();
+    void UpdateFaceMatrices();
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShadowDepthTexture;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDsvHeap;
+    std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> mDsvHandles;
+    D3D12_CPU_DESCRIPTOR_HANDLE mShadowSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mShadowSrvGpu{};
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer;
+    PointShadowGlobalConstants* mMappedConstants = nullptr;
+
+    DX12Shader mVertexShader;
+    DX12Shader mPixelShader;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+
+    std::vector<ShadowedPointLight> mLights;
+    std::vector<DirectX::XMFLOAT4X4> mFaceViewProjections;
+    bool mIsInitialized = false;
+    float mShadowBias = 0.02f;
+    std::string mLastError;
+};

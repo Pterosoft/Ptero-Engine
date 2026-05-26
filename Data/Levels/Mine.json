@@ -1,0 +1,543 @@
+{
+    "AgxTonemapSettings": {
+        "Enabled": true,
+        "Ev100Max": 8.149999618530273,
+        "Ev100Min": 2.6500000953674316,
+        "Exposure": 0.0,
+        "Global": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": -0.20000000298023224,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Highlights": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Midtones": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": -0.10000000149011612,
+                "Green": 0.0,
+                "Red": -0.10000000149011612,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": -0.10000000149011612,
+                "Green": 0.0,
+                "Red": -0.10000000149011612,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Shadows": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "ShoulderStrength": 1.0499999523162842,
+        "ToeStrength": 0.949999988079071
+    },
+    "BloomSettings": {
+        "Enabled": true,
+        "Intensity": 0.15800000727176666,
+        "Knee": 0.3499999940395355,
+        "MipLevels": 6,
+        "Radius": 1.0,
+        "Threshold": 0.8999999761581421
+    },
+    "Entities": [
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\modular_mine_tunnel_kit\\modular_mine_tunnel_kit.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\modular_mine_tunnel_kit\\Modular_Mine_Tunnel_Kit_wcckeezdw_High.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 3"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 1.4924890995025635,
+                    "y": -1.0034081935882568,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 6"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 2.6896018981933594,
+                    "y": -1.801962971687317,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 2"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 2.7189464569091797,
+                    "y": -0.9406202435493469,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 3"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 2.981170177459717,
+                    "y": -0.151913583278656,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "NameComponent": {
+                "Name": "Point Light 4"
+            },
+            "PointLightComponent": {
+                "AffectVolumetricFog": true,
+                "CastShadows": true,
+                "ColorB": 0.4324324131011963,
+                "ColorG": 0.7479912042617798,
+                "ColorR": 1.0,
+                "FalloffExponent": 3.1500000953674316,
+                "IntensityLumens": 400.0,
+                "Radius": 10.600000381469727,
+                "SourceRadius": 0.0,
+                "TemperatureKelvin": 6500.0,
+                "UseTemperature": false
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 4.858053684234619,
+                    "y": -1.045705795288086,
+                    "z": 0.9551091194152832
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 5"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 1.4570984840393066,
+                    "y": 0.848086416721344,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 6"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.846636176109314,
+                    "y": 0.03557562828063965,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 7"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.5180720090866089,
+                    "y": -0.7738226652145386,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.3108556270599365,
+                    "y": -1.5757107734680176,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 9"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.21913516521453857,
+                    "y": -2.372174024581909,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\limestone_rubble_ubxbejw.json",
+                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\limestone_rubble_ubxbejw\\Limestone_Rubble_ubxbejwda_Mid.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry 10"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -0.0381467342376709,
+                    "y": 0.4052985906600952,
+                    "z": -0.038531433790922165
+                },
+                "Rotation": {
+                    "x": -1.5707963705062866,
+                    "y": 3.1415927410125732,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.10000000149011612,
+                    "y": 0.10000000149011612,
+                    "z": 0.10000000149011612
+                }
+            }
+        }
+    ],
+    "GTAOSettings": {
+        "DebugView": 0,
+        "DenoisePasses": 2,
+        "DepthMIPSamplingOffset": 6.0,
+        "Enabled": true,
+        "FalloffRange": 0.8320000171661377,
+        "FinalValuePower": 1.0299999713897705,
+        "Intensity": 1.0,
+        "QualityLevel": 3,
+        "Radius": 0.25999999046325684,
+        "RadiusMultiplier": 1.722000002861023,
+        "SampleDistributionPower": 2.0,
+        "ThinOccluderCompensation": 0.0
+    },
+    "RtAOSettings": {
+        "AOPower": 1.5,
+        "DebugView": 0,
+        "Enabled": false,
+        "Intensity": 1.0,
+        "MaxRayLength": 1.0,
+        "RayBias": 0.004999999888241291,
+        "RaysPerPixel": 16
+    },
+    "RtGISettings": {
+        "AccumulationBlend": 1.0,
+        "ColorLeakIntensity": 2.5299999713897705,
+        "DebugView": 0,
+        "Enabled": true,
+        "GiIntensity": 4.0,
+        "MaxBounces": 2,
+        "NextEventEstimation": false,
+        "NrdAtrousIterations": 5,
+        "NrdDisocclusionThreshold": 0.20000000298023224,
+        "NrdMaxAccumulationTime": 0.3499999940395355,
+        "NrdSharpenAmount": 0.3499999940395355,
+        "RadianceClamp": 10.0,
+        "RaysPerPixel": 1,
+        "UseNrdDenoiser": true
+    },
+    "TaaSettings": {
+        "BlendFactor": 0.5,
+        "Enabled": true,
+        "JitterScale": 1.0,
+        "SharpeningStrength": 0.25,
+        "UseSharpening": false
+    },
+    "TimeOfDaySettings": {
+        "GroundAlbedo": 0.10000000149011612,
+        "OverrideSkyColor": false,
+        "OverrideSunColor": false,
+        "SkyColorB": 1.0,
+        "SkyColorG": 0.44999998807907104,
+        "SkyColorR": 0.25,
+        "SkyIntensityLux": 7721.0,
+        "SunColorB": 0.800000011920929,
+        "SunColorG": 0.949999988079071,
+        "SunColorR": 1.0,
+        "SunIntensityLux": 0.0,
+        "TimeOfDay": 12.0,
+        "Turbidity": 2.5
+    },
+    "VolumetricFogSettings": {
+        "Anisotropy": 0.5,
+        "BaseHeight": 0.0,
+        "ColorB": 1.0,
+        "ColorG": 1.0,
+        "ColorR": 1.0,
+        "DebugView": 0,
+        "Density": 0.10000000149011612,
+        "DepthSlices": 128,
+        "EmissiveColorB": 1.0,
+        "EmissiveColorG": 1.0,
+        "EmissiveColorR": 1.0,
+        "EmissiveIntensity": 0.5199999213218689,
+        "Enabled": true,
+        "FroxelTileSize": 16,
+        "HeightFalloff": 0.0,
+        "MaxDistance": 100.0,
+        "StartDistance": 0.10000000149011612
+    }
+}

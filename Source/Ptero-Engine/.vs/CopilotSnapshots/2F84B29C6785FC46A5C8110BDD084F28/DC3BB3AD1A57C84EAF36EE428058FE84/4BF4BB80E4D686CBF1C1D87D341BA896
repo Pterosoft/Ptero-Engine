@@ -1,0 +1,21 @@
+﻿#pragma once
+
+#include <windows.h>
+
+#include "imgui.h"
+#include "TaaSettings.h"
+
+void RenderEditorMainMenu(
+    HWND windowHandle,
+    void* editor,
+    ImTextureID sceneTextureId,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    float* cameraSpeed,
+    bool* gridEnabled,
+    bool* showStatistics,
+    bool* showViewportPlacementIcons,
+    bool* showComponentsPanel,
+    bool* showLevelExplorerPanel,
+    bool* showPropertiesPanel,
+    TaaSettings* taaSettings);

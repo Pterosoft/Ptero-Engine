@@ -1,0 +1,48 @@
+﻿#pragma once
+
+// SharcGiSettings
+// All tunable parameters for the SHARC (Spatial Hash Radiance Cache) GI pass.
+// Exposed through the Graphics Settings window in the editor.
+struct SharcGiSettings
+{
+    // Master toggle – when false the GI pass is skipped entirely.
+    bool  Enabled               = false;
+
+    // Number of indirect rays per G-Buffer pixel per frame.
+    // Higher values = less noise but linearly higher cost.
+    int   RaysPerPixel          = 1;
+
+    // Maximum ray travel distance before a miss is declared.
+    float MaxRayDistance        = 100.0f;
+
+    // Diffuse bounce count (1 = single-bounce GI; SHARC cache handles deeper bounces).
+    int   BounceCount           = 1;
+
+    // Overall GI intensity multiplier applied by the deferred-lighting pass.
+    float Intensity             = 1.0f;
+
+    // Temporal accumulation blend factor (lower = more history, less noise, more lag).
+    float AccumulationAlpha     = 0.1f;
+
+    // Add sky ambient radiance to rays that escape the scene.
+    bool  SkylightOnMiss        = true;
+
+    // GI saturation multiplier (> 1 boosts color bleeding from colored surfaces).
+    float GiSaturation          = 1.0f;
+
+    // Debug: output raw first-hit albedo instead of radiance.
+    bool  DebugAlbedoOnly       = false;
+
+    // SHARC grid scale: world-space size of the finest voxel level.
+    // Smaller values = finer detail; larger values = coarser but cheaper.
+    float SharcSceneScale       = 0.5f;
+
+    // Number of frames the SHARC EMA converges over (higher = smoother, slower).
+    int   SharcAccumFrames      = 16;
+
+    // Roughness threshold below which SHARC GI is suppressed (glossy/specular surfaces).
+    float SharcRoughnessThreshold = 0.5f;
+
+    // Spatial downscale factor for the SHARC update pass (1 = full res, 2 = half res).
+    int   SharcDownscaleFactor  = 2;
+};

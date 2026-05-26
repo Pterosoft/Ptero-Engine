@@ -1,0 +1,284 @@
+﻿#include "pch.h"
+#include "DX12ShaderCompiler.h"
+
+#include <dxcapi.h>
+#include <d3dcompiler.h>
+#include <filesystem>
+#include <sstream>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+
+#pragma comment(lib, "d3dcompiler.lib")
+
+namespace
+{
+    using DxcCreateInstanceProc = HRESULT(WINAPI*)(REFCLSID, REFIID, LPVOID*);
+
+    HMODULE LoadDxCompilerModule()
+    {
+        static HMODULE dxCompilerModule = nullptr;
+        if (dxCompilerModule != nullptr)
+        {
+            return dxCompilerModule;
+        }
+
+        wchar_t moduleFilePath[MAX_PATH]{};
+        HMODULE currentModule = nullptr;
+        if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&LoadDxCompilerModule),
+            &currentModule))
+        {
+            if (GetModuleFileNameW(currentModule, moduleFilePath, static_cast<DWORD>(std::size(moduleFilePath))) > 0)
+            {
+                const std::filesystem::path moduleDirectory = std::filesystem::path(moduleFilePath).parent_path();
+                const std::filesystem::path localDxCompilerPath = moduleDirectory / L"dxcompiler.dll";
+                dxCompilerModule = LoadLibraryW(localDxCompilerPath.c_str());
+                if (dxCompilerModule != nullptr)
+                {
+                    return dxCompilerModule;
+                }
+            }
+        }
+
+        dxCompilerModule = LoadLibraryW(L"dxcompiler.dll");
+        return dxCompilerModule;
+    }
+
+    DxcCreateInstanceProc GetDxcCreateInstanceProc()
+    {
+        HMODULE dxCompilerModule = LoadDxCompilerModule();
+        if (dxCompilerModule == nullptr)
+        {
+            throw std::runtime_error("Failed to load dxcompiler.dll. Copy dxcompiler.dll next to Renderer_DX12.dll or add it to PATH.");
+        }
+
+        const auto dxcCreateInstance = reinterpret_cast<DxcCreateInstanceProc>(
+            GetProcAddress(dxCompilerModule, "DxcCreateInstance"));
+        if (dxcCreateInstance == nullptr)
+        {
+            throw std::runtime_error("dxcompiler.dll loaded but DxcCreateInstance was not exported.");
+        }
+
+        return dxcCreateInstance;
+    }
+
+    std::wstring ResolveShaderPath(const std::wstring& shaderPath)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path requestedPath(shaderPath);
+        const fs::path requestedFileName = requestedPath.filename();
+        if (requestedPath.is_absolute() && fs::exists(requestedPath))
+        {
+            return requestedPath.wstring();
+        }
+
+        wchar_t moduleFilePath[MAX_PATH]{};
+        HMODULE currentModule = nullptr;
+        if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&ResolveShaderPath),
+            &currentModule))
+        {
+            if (GetModuleFileNameW(currentModule, moduleFilePath, static_cast<DWORD>(std::size(moduleFilePath))) > 0)
+            {
+                const fs::path moduleDirectory = fs::path(moduleFilePath).parent_path();
+                const fs::path candidateInOutput = moduleDirectory / requestedPath;
+                if (fs::exists(candidateInOutput))
+                {
+                    return candidateInOutput.wstring();
+                }
+
+                // Prefer the shared project data directory so shaders are loaded from
+                // the runtime content location instead of the renderer source folder.
+                const fs::path candidateInDataShaders = moduleDirectory / L".." / L".." / L".." / L".." / L"Data" / L"Shaders" / requestedFileName;
+                if (fs::exists(candidateInDataShaders))
+                {
+                    return fs::weakly_canonical(candidateInDataShaders).wstring();
+                }
+
+                const fs::path candidateInSourceTree = moduleDirectory / L".." / L".." / L".." / L"Renderer_DX12" / requestedPath;
+                if (fs::exists(candidateInSourceTree))
+                {
+                    return fs::weakly_canonical(candidateInSourceTree).wstring();
+                }
+            }
+        }
+
+        const fs::path candidateFromWorkingDirectory = fs::current_path() / L"Data" / L"Shaders" / requestedFileName;
+        if (fs::exists(candidateFromWorkingDirectory))
+        {
+            return fs::weakly_canonical(candidateFromWorkingDirectory).wstring();
+        }
+
+        if (fs::exists(requestedPath))
+        {
+            return fs::weakly_canonical(requestedPath).wstring();
+        }
+
+        throw std::runtime_error("Failed to locate the requested HLSL shader source file.");
+    }
+
+    std::vector<std::uint8_t> CopyBlobBytes(const void* blobData, SIZE_T blobSize)
+    {
+        const auto* begin = static_cast<const std::uint8_t*>(blobData);
+        return std::vector<std::uint8_t>(begin, begin + blobSize);
+    }
+
+    std::string NarrowString(const std::wstring& value)
+    {
+        if (value.empty())
+        {
+            return {};
+        }
+
+        const int requiredSize = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (requiredSize <= 1)
+        {
+            return {};
+        }
+
+        std::string result(static_cast<size_t>(requiredSize - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), requiredSize, nullptr, nullptr);
+        return result;
+    }
+
+    std::vector<std::uint8_t> CompileShaderBlobWithDxc(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
+    {
+        ComPtr<IDxcUtils> dxcUtils;
+        ComPtr<IDxcCompiler3> dxcCompiler;
+        ComPtr<IDxcIncludeHandler> includeHandler;
+        const DxcCreateInstanceProc dxcCreateInstance = GetDxcCreateInstanceProc();
+
+        DX12_THROW_IF_FAILED(dxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils)));
+        DX12_THROW_IF_FAILED(dxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler)));
+        DX12_THROW_IF_FAILED(dxcUtils->CreateDefaultIncludeHandler(&includeHandler));
+
+        UINT32 sourceCodePage = DXC_CP_UTF8;
+        ComPtr<IDxcBlobEncoding> sourceBlob;
+        DX12_THROW_IF_FAILED(dxcUtils->LoadFile(resolvedPath.c_str(), &sourceCodePage, &sourceBlob));
+
+        DxcBuffer sourceBuffer{};
+        sourceBuffer.Ptr = sourceBlob->GetBufferPointer();
+        sourceBuffer.Size = sourceBlob->GetBufferSize();
+        sourceBuffer.Encoding = DXC_CP_UTF8;
+
+        std::vector<LPCWSTR> arguments =
+        {
+            resolvedPath.c_str(),
+            L"-E", request.EntryPoint.c_str(),
+            L"-T", request.TargetProfile.c_str(),
+            DXC_ARG_WARNINGS_ARE_ERRORS,
+            DXC_ARG_ALL_RESOURCES_BOUND,
+#if defined(_DEBUG)
+            DXC_ARG_DEBUG,
+            DXC_ARG_SKIP_OPTIMIZATIONS,
+#else
+            DXC_ARG_OPTIMIZATION_LEVEL3,
+#endif
+        };
+
+        ComPtr<IDxcResult> compilationResult;
+        DX12_THROW_IF_FAILED(dxcCompiler->Compile(
+            &sourceBuffer,
+            arguments.data(),
+            static_cast<UINT32>(arguments.size()),
+            includeHandler.Get(),
+            IID_PPV_ARGS(&compilationResult)));
+
+        ComPtr<IDxcBlobUtf8> errors;
+        DX12_THROW_IF_FAILED(compilationResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr));
+        if (errors && errors->GetStringLength() > 0)
+        {
+            OutputDebugStringA(errors->GetStringPointer());
+        }
+
+        HRESULT status = S_OK;
+        DX12_THROW_IF_FAILED(compilationResult->GetStatus(&status));
+        DX12_THROW_IF_FAILED(status);
+
+        ComPtr<IDxcBlob> shaderBlob;
+        DX12_THROW_IF_FAILED(compilationResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr));
+        return CopyBlobBytes(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
+    }
+
+    std::vector<std::uint8_t> CompileShaderBlobWithD3DCompile(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
+    {
+        UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined(_DEBUG)
+        compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+        compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+
+        ComPtr<ID3DBlob> shaderBlob;
+        ComPtr<ID3DBlob> errorBlob;
+        const HRESULT compileResult = D3DCompileFromFile(
+            resolvedPath.c_str(),
+            nullptr,
+            D3D_COMPILE_STANDARD_FILE_INCLUDE,
+            NarrowString(request.EntryPoint).c_str(),
+            NarrowString(request.TargetProfile).c_str(),
+            compileFlags,
+            0,
+            &shaderBlob,
+            &errorBlob);
+
+        if (errorBlob && errorBlob->GetBufferSize() > 0)
+        {
+            OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+        }
+
+        DX12_THROW_IF_FAILED(compileResult);
+        return CopyBlobBytes(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
+    }
+
+    bool UsesShaderModel5Profile(const std::wstring& targetProfile)
+    {
+        return targetProfile.find(L"_5_") != std::wstring::npos;
+    }
+
+    std::vector<std::uint8_t> CompileShaderBytecode(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
+    {
+        // The editor's test cube does not need Shader Model 6 features. Prefer the
+        // system compiler for Shader Model 5 targets so the scene renderer works on
+        // machines that do not ship the full DXC + DXIL runtime pair.
+        if (UsesShaderModel5Profile(request.TargetProfile))
+        {
+            return CompileShaderBlobWithD3DCompile(request, resolvedPath);
+        }
+
+        return CompileShaderBlobWithDxc(request, resolvedPath);
+    }
+}
+
+bool DX12Shader::Compile(const ShaderCompileRequest& request)
+{
+    try
+    {
+        mLastErrorMessage.clear();
+        mSourcePath = ResolveShaderPath(request.FilePath);
+        mBytecode = CompileShaderBytecode(request, mSourcePath);
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        mLastErrorMessage = exception.what();
+        OutputDebugStringA("DX12Shader::Compile failed: ");
+        OutputDebugStringA(mLastErrorMessage.c_str());
+        OutputDebugStringA("\n");
+        mSourcePath.clear();
+        mBytecode.clear();
+        return false;
+    }
+    catch (...)
+    {
+        mLastErrorMessage = "Shader compilation failed with an unknown error.";
+        OutputDebugStringA("DX12Shader::Compile failed with an unknown error.\n");
+        mSourcePath.clear();
+        mBytecode.clear();
+        return false;
+    }
+}
