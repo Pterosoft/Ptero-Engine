@@ -156,6 +156,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="EditorMain.h" />
     <ClInclude Include="GridGeometry.h" />
+    <ClInclude Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.h" />
     <ClInclude Include="RenderInterfaces.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="SceneTypes.h" />

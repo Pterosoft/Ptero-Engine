@@ -244,17 +244,33 @@ ImTextureID Editor::TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
 
 Editor::Editor() = default;
 
+void Editor::ReportProgress(const wchar_t* message) const
+{
+    if (mProgressCallback)
+        mProgressCallback(message);
+}
+
 bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
 {
+    if (mIsInitialized)
+    {
+        return true;
+    }
+
+    ReportProgress(L"Loading editor geometry icon...");
     LoadGeometryIcon(commandList);
     std::string iconStatus;
+    ReportProgress(L"Loading editor placement icons...");
     LoadIconTexture(L"Geometry.png", mGeometryIcon, &iconStatus, commandList);
     LoadIconTexture(L"PointLight.png", mPointLightIcon, &iconStatus, commandList);
     LoadIconTexture(L"AudioEmitter.png", mAudioEmitterIcon, &iconStatus, commandList);
+    ReportProgress(L"Loading editor toolbar icons...");
     LoadIconTexture(L"Select.png", mSelectIcon, &iconStatus, commandList);
     LoadIconTexture(L"Move.png", mMoveIcon, &iconStatus, commandList);
     LoadIconTexture(L"Rotate.png", mRotateIcon, &iconStatus, commandList);
     LoadIconTexture(L"Scale.png", mScaleIcon, &iconStatus, commandList);
+    ReportProgress(L"Editor UI assets ready.");
+    mIsInitialized = true;
     return true;
 }
 
@@ -267,6 +283,7 @@ void Editor::Shutdown()
     ReleaseIconTexture(mMoveIcon);
     ReleaseIconTexture(mRotateIcon);
     ReleaseIconTexture(mScaleIcon);
+    mIsInitialized = false;
 }
 
 // ---------------------------------------------------------------------------

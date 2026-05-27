@@ -44,6 +44,44 @@ bool gRendererEnteredRenderLoop = false;
 bool gRendererPresentedFirstFrame = false;
 HWND gMainWindowHandle = nullptr;
 
+void UpdateMainWindowTitle(const wchar_t* statusSuffix);
+void ReportRendererFailure(HWND hWnd, const char* fallbackMessage);
+void CleanupRenderer();
+
+void PrepareInitialMainWindowFrame(HWND hWnd)
+{
+    if (!gRendererReady || !gRendererRender || gRendererPresentedFirstFrame)
+    {
+        return;
+    }
+
+    SplashScreen::UpdateStatus(L"Preparing initial frame...");
+    UpdateMainWindowTitle(L"[preparing initial frame]");
+
+    // Make the editor window exist behind the splash screen so DXGI can bind the
+    // swap chain to the real HWND and the first frame can be presented before the
+    // splash closes.
+    ShowWindow(hWnd, SW_SHOWNOACTIVATE);
+    UpdateWindow(hWnd);
+    RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE);
+
+    gRendererEnteredRenderLoop = true;
+    gAudioManager.Update();
+    if (gRendererRender())
+    {
+        gRendererPresentedFirstFrame = true;
+        UpdateMainWindowTitle(L"[initial frame ready]");
+        SplashScreen::UpdateStatus(L"Editor ready.");
+        return;
+    }
+
+    ReportRendererFailure(hWnd, "Renderer failed while preparing the initial frame.");
+    SplashScreen::UpdateStatus(L"Failed to prepare initial frame.");
+    UpdateMainWindowTitle(L"[initial frame failed]");
+    ShowWindow(hWnd, SW_HIDE);
+    CleanupRenderer();
+}
+
 void UpdateMainWindowTitle(const wchar_t* statusSuffix)
 {
     if (gMainWindowHandle == nullptr)
@@ -325,6 +363,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
             }
        }
    }
+
+   PrepareInitialMainWindowFrame(hWnd);
 
    // Close the splash screen and show the main window now that startup is complete.
    SplashScreen::Close();

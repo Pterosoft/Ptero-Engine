@@ -65,6 +65,10 @@
     },
     {
       "AbsoluteMoniker": "D:0:0:{17DA5C78-328F-4FA3-8082-9B429693168B}|..\\Renderer_DX12\\Renderer_DX12.vcxproj|K:\\Ptero-Engine\\Source\\Renderer_DX12\\EntityMeshRenderer.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{11E5FFC0-782F-4B55-AB77-7EBD87354F9B}|Ptero-Engine.vcxproj|K:\\Ptero-Engine\\Source\\Ptero-Engine\\EditorMain.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{11E5FFC0-782F-4B55-AB77-7EBD87354F9B}|Ptero-Engine.vcxproj|solutionrelative:EditorMain.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
     }
   ],
   "DocumentGroupContainers": [
@@ -151,6 +155,19 @@
             },
             {
               "$type": "Document",
+              "DocumentIndex": 21,
+              "Title": "EditorMain.cpp",
+              "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Ptero-Engine\\EditorMain.cpp",
+              "RelativeDocumentMoniker": "EditorMain.cpp",
+              "ToolTip": "K:\\Ptero-Engine\\Source\\Ptero-Engine\\EditorMain.cpp",
+              "RelativeToolTip": "EditorMain.cpp",
+              "ViewState": "AgIAAC8AAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-05-27T14:26:39.21Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
               "DocumentIndex": 20,
               "Title": "EntityMeshRenderer.cpp",
               "DocumentMoniker": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\EntityMeshRenderer.cpp",
@@ -207,8 +224,7 @@
               "RelativeToolTip": ".github\\copilot-instructions.md",
               "ViewState": "AgIAAAIAAAAAAAAAAIBJwAQAAACMAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001818|",
-              "WhenOpened": "2026-05-26T19:19:25.774Z",
-              "EditorCaption": ""
+              "WhenOpened": "2026-05-26T19:19:25.774Z"
             },
             {
               "$type": "Document",
@@ -266,9 +282,10 @@
               "RelativeDocumentMoniker": "..\\Renderer_DX12\\Editor.h",
               "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\Editor.h",
               "RelativeToolTip": "..\\Renderer_DX12\\Editor.h",
-              "ViewState": "AgIAAAUAAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAACAAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-05-26T19:11:28.012Z"
+              "WhenOpened": "2026-05-26T19:11:28.012Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -290,9 +307,10 @@
               "RelativeDocumentMoniker": "..\\Renderer_DX12\\DX12SceneRenderer.cpp",
               "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12SceneRenderer.cpp",
               "RelativeToolTip": "..\\Renderer_DX12\\DX12SceneRenderer.cpp",
-              "ViewState": "AgIAAPwBAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAKEAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-05-26T19:05:42.67Z"
+              "WhenOpened": "2026-05-26T19:05:42.67Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -302,9 +320,10 @@
               "RelativeDocumentMoniker": "..\\Renderer_DX12\\DX12SceneRenderer.h",
               "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12SceneRenderer.h",
               "RelativeToolTip": "..\\Renderer_DX12\\DX12SceneRenderer.h",
-              "ViewState": "AgIAAIEAAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAEwAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-05-26T19:05:35.15Z"
+              "WhenOpened": "2026-05-26T19:05:35.15Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -314,9 +333,10 @@
               "RelativeDocumentMoniker": "..\\Renderer_DX12\\DX12RendererAPI.cpp",
               "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\DX12RendererAPI.cpp",
               "RelativeToolTip": "..\\Renderer_DX12\\DX12RendererAPI.cpp",
-              "ViewState": "AgIAAPMCAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAMcCAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-05-26T19:05:21.419Z"
+              "WhenOpened": "2026-05-26T19:05:21.419Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -338,7 +358,7 @@
               "RelativeDocumentMoniker": "..\\Renderer_DX12\\Editor.cpp",
               "ToolTip": "K:\\Ptero-Engine\\Source\\Renderer_DX12\\Editor.cpp",
               "RelativeToolTip": "..\\Renderer_DX12\\Editor.cpp",
-              "ViewState": "AgIAABgEAAAAAAAAAABBwAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAAPkAAAAAAAAAAIBJwAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2026-05-26T19:12:11.727Z",
               "EditorCaption": ""

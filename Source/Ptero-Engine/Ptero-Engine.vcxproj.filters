@@ -45,6 +45,9 @@
     <ClInclude Include="Source\Ptero-Engine\Source\Audio\_hrtf_h_new.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="EditorMain.cpp">

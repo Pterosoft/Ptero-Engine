@@ -74,6 +74,8 @@ private:
 class DX12SceneRenderer
 {
 public:
+    using ProgressCallback = void(__stdcall*)(const wchar_t* message);
+
     struct Vertex
     {
         DirectX::XMFLOAT3 Position;
@@ -96,6 +98,10 @@ public:
     void Shutdown();
     bool ResizeSceneTarget(UINT width, UINT height);
     void ClearCustomSceneResolution();
+    void SetProgressCallback(ProgressCallback callback)
+    {
+        mProgressCallback = callback;
+    }
 
     void SetCameraMovementSpeed(float movementSpeed)
     {
@@ -236,6 +242,7 @@ public:
     }
 
 private:
+    void ReportProgress(const wchar_t* message) const;
     bool CreatePipeline();
     bool CreateSceneTarget();
     bool EnsureSceneTargetMatchesWindowSize();
@@ -258,6 +265,7 @@ private:
     bool IsSceneContentDirtyForTemporal() const;
 
     bool mIsInitialized = false;
+    ProgressCallback mProgressCallback = nullptr;
 
     DX12Shader mVertexShader;
     DX12Shader mPixelShader;

@@ -156,6 +156,12 @@ bool DX12SceneRenderer::IsSceneContentDirtyForTemporal() const
     return mEntityMeshRenderer.IsSceneContentDirty();
 }
 
+void DX12SceneRenderer::ReportProgress(const wchar_t* message) const
+{
+    if (mProgressCallback)
+        mProgressCallback(message);
+}
+
 bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
 {
     try
@@ -170,6 +176,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        ReportProgress(L"Preparing depth debug resources...");
         if (!CreateDepthDebugResources())
         {
             mLastErrorMessage = "Failed to create the depth debug preview resources.";
@@ -182,6 +189,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         mCamera.SetPosition(0.0f, -6.0f, 1.5f);
         mCamera.LookAt(0.0f, 0.0f, 0.0f);
 
+        ReportProgress(L"Compiling scene shaders and pipeline...");
         if (!CreatePipeline())
         {
             mLastErrorMessage = "Failed to create the DX12 scene pipeline or compile the cube shaders.";
@@ -189,6 +197,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        ReportProgress(L"Creating scene render targets...");
         if (!EnsureSceneTargetMatchesWindowSize())
         {
             if (mLastErrorMessage.empty())
@@ -199,6 +208,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        ReportProgress(L"Uploading startup geometry buffers...");
         if (!CreateGeometry(commandList))
         {
             mLastErrorMessage = "Failed to upload cube vertex or index buffers to the GPU.";
@@ -206,6 +216,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        ReportProgress(L"Creating camera constant buffers...");
         if (!CreateConstantBuffer())
         {
             mLastErrorMessage = "Failed to create the camera constant buffer.";
@@ -213,6 +224,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        ReportProgress(L"Initializing motion vector renderer...");
         if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
         {
             OutputDebugStringA("DX12SceneRenderer: Motion vector renderer initialization failed.\n");
@@ -220,6 +232,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mMotionVectorRenderer.GetLastErrorMessage());
         }
 
+        ReportProgress(L"Initializing DLSS and Streamline...");
         if (DX12Context_StreamlineInitialize())
         {
             if (!mDlssRenderer.Initialize(mSceneWidth, mSceneHeight))
@@ -237,6 +250,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         UpdateSceneConstants();
 
         // Initialize the entity mesh renderer so it is ready to receive entities each frame.
+        ReportProgress(L"Initializing entity mesh renderer...");
         if (!mEntityMeshRenderer.Initialize(commandList))
         {
             mLastErrorMessage = "Failed to initialize the entity mesh renderer.";
@@ -246,6 +260,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
 
         // Initialize the TAA renderer.  Non-fatal if it fails – TAA is a quality feature
         // and the engine still renders correctly without it.
+        ReportProgress(L"Initializing temporal anti-aliasing...");
         if (!mTaaRenderer.Initialize(mSceneWidth, mSceneHeight))
         {
             OutputDebugStringA("DX12SceneRenderer: TAA initialization failed – TAA disabled.\n");
@@ -262,6 +277,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         }
 
         // Initialize the AgX tonemapper.  Non-fatal if it fails.
+        ReportProgress(L"Initializing AgX tonemapper...");
         if (!mAgxTonemapper.Initialize(mSceneWidth, mSceneHeight))
         {
             OutputDebugStringA("DX12SceneRenderer: AgX tonemapper initialization failed – tonemapping disabled.\n");
@@ -271,6 +287,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         }
 
         // Initialize the sky renderer.  Non-fatal if it fails.
+        ReportProgress(L"Initializing sky renderer...");
         if (!mSkyRenderer.Initialize(SceneColorFormat, SceneDepthFormat))
         {
             OutputDebugStringA("DX12SceneRenderer: Sky renderer initialization failed.\n");
@@ -280,6 +297,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
 
         // Initialize the shadow map renderer.  Non-fatal if it fails — meshes
         // will render without shadows until the next successful initialization.
+        ReportProgress(L"Initializing directional shadows...");
         if (!mShadowMapRenderer.Initialize())
         {
             OutputDebugStringA("DX12SceneRenderer: Shadow map renderer initialization failed.\n");
@@ -287,6 +305,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mShadowMapRenderer.GetLastError());
         }
 
+        ReportProgress(L"Initializing point light shadows...");
         mPointShadowMapRenderer.SetMapSize(static_cast<UINT>(mPointShadowSettings.MapSize));
         mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
         mPointShadowMapRenderer.SetSlopeScaledDepthBias(mPointShadowSettings.SlopeScaledDepthBias);
@@ -298,6 +317,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         }
 
         // Initialize the point light renderer (wireframe gizmo spheres).  Non-fatal.
+        ReportProgress(L"Initializing point light renderer...");
         if (!mPointLightRenderer.Initialize(commandList, SceneColorFormat, SceneDepthFormat))
         {
             OutputDebugStringA("DX12SceneRenderer: Point light renderer initialization failed.\n");
@@ -307,6 +327,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
 
         // Initialize the deferred lighting pass (G-Buffer RTs + fullscreen lighting resolve).
         // Non-fatal — the scene will be black if this fails but won't crash.
+        ReportProgress(L"Initializing deferred lighting...");
         if (!mDeferredLightingPass.Initialize(mSceneWidth, mSceneHeight, SceneDepthFormat))
         {
             OutputDebugStringA("DX12SceneRenderer: Deferred lighting pass initialization failed.\n");
@@ -314,6 +335,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mDeferredLightingPass.GetLastError());
         }
 
+        ReportProgress(L"Initializing volumetric fog...");
         if (!mVolumetricFogRenderer.Initialize(mSceneWidth, mSceneHeight))
         {
             OutputDebugStringA("DX12SceneRenderer: Volumetric fog initialization failed.\n");
@@ -322,6 +344,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         }
 
         // Initialize the bloom renderer. Non-fatal if it fails.
+        ReportProgress(L"Initializing bloom...");
         if (!mBloomRenderer.Initialize(mSceneWidth, mSceneHeight))
         {
             OutputDebugStringA("DX12SceneRenderer: Bloom initialization failed – bloom disabled.\n");
@@ -333,6 +356,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         // RTGI is lazily initialized on first use (waits for a valid render size).
         // We do not pre-initialize here so startup is fast even on non-DXR GPUs.
 
+        ReportProgress(L"Scene renderer ready.");
         mIsInitialized = true;
         return true;
     }

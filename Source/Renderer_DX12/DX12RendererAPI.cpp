@@ -708,6 +708,8 @@ extern "C"
         // Forward the same callback into the context layer so DX12 setup steps
         // are also surfaced on the splash screen.
         DX12Context_SetProgressCallback(gProgressCallback);
+        gSceneRenderer.SetProgressCallback(gProgressCallback);
+        gEditor.SetProgressCallback(gProgressCallback);
 
         if (!DX12Context_Initialize(windowHandle))
         {
@@ -781,6 +783,7 @@ extern "C"
             gEditor.ClearViewportResolutionChangeRequest();
         }
 
+        ReportProgress(L"Initializing scene renderer...");
         const bool sceneReady = gSceneRenderer.Initialize(commandList);
         if (sceneReady)
         {
@@ -884,10 +887,12 @@ extern "C"
             // Give the scene renderer an up-to-date view of the entity list every frame.
             gSceneRenderer.SetEntities(&gEditor.GetEntities());
 
+            ReportProgress(L"Rendering initial scene frame...");
             gSceneRenderer.Render(commandList);
             // Transition depth to PIXEL_SHADER_RESOURCE so the G-Buffer debug window
             // in ImGui can sample it.  Restored to DEPTH_WRITE after ImGui renders.
             gSceneRenderer.TransitionDepthForRead(commandList);
+            ReportProgress(L"Initializing editor UI assets...");
             gEditor.Initialize(commandList);
         }
 
@@ -1029,6 +1034,7 @@ extern "C"
             D3D12_RESOURCE_STATE_PRESENT);
         commandList->ResourceBarrier(1, &toPresent);
 
+        ReportProgress(L"Presenting initial frame...");
         if (!DX12Context_EndFrame(frameIndex))
         {
             const char* contextError = DX12Context_GetLastError();
@@ -1038,6 +1044,7 @@ extern "C"
             return false;
         }
 
+        ReportProgress(L"Initial frame presented.");
         gBackBufferHasBeenPresented[frameIndex] = true;
 
         return true;

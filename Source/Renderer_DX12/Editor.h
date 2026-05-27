@@ -30,6 +30,8 @@ class SceneSerializer;
 class Editor
 {
 public:
+    using ProgressCallback = void(__stdcall*)(const wchar_t* message);
+
     enum class ManualGizmoHandle
     {
         None,
@@ -58,6 +60,10 @@ public:
 
     bool Initialize(ID3D12GraphicsCommandList* commandList);
     void Shutdown();
+    void SetProgressCallback(ProgressCallback callback)
+    {
+        mProgressCallback = callback;
+    }
 
     void SetShowViewportPlacementIcons(bool shouldShow)
     {
@@ -204,6 +210,7 @@ public:
     }
 
 private:
+    void ReportProgress(const wchar_t* message) const;
     struct IconTexture
     {
         D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle{};
@@ -341,6 +348,7 @@ private:
     IconTexture mMoveIcon;
     IconTexture mRotateIcon;
     IconTexture mScaleIcon;
+    bool mIsInitialized = false;
     bool mGeometryIconLoadAttempted = false;
     std::string mGeometryIconStatus;
     std::string mCurrentSceneFilePath;
@@ -357,6 +365,7 @@ private:
     AgxTonemapSettings* mAgxSettings = nullptr;
     VolumetricFogSettings* mVolumetricFogSettings = nullptr;
     BloomSettings* mBloomSettings = nullptr;
+    ProgressCallback mProgressCallback = nullptr;
 
     const char* mSceneStatusMessage = nullptr;
     const char* mViewportStatisticsText = nullptr;
