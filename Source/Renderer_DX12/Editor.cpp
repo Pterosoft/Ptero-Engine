@@ -871,10 +871,10 @@ bool Editor::TryGetViewportWorldPositionOnGrid(
     farClip  = farClip  / XMVectorSplatW(farClip);
 
     XMVECTOR dir = XMVector3Normalize(farClip - nearClip);
-    float dirY = XMVectorGetY(dir);
-    if (std::abs(dirY) < 0.0001f) return false;
+    float dirZ = XMVectorGetZ(dir);
+    if (std::abs(dirZ) < 0.0001f) return false;
 
-    float t = -XMVectorGetY(nearClip) / dirY;
+    float t = -XMVectorGetZ(nearClip) / dirZ;
     if (t < 0.0f) return false;
 
     XMVECTOR hit = nearClip + dir * t;
@@ -943,6 +943,8 @@ void Editor::FinishViewportSelection(
         DirectX::XMFLOAT3 worldPosition{};
         if (TryGetViewportWorldPositionOnGrid(mViewportSelection.Current, viewportOrigin, viewportSize, camera, worldPosition))
         {
+            worldPosition.z = 0.0f;
+
             if (mGeometryPrototypeSelected)
             {
                 CreateGeometryInstanceAt(worldPosition);
@@ -1044,7 +1046,7 @@ void Editor::HandleManualGizmoInteraction(
     using namespace DirectX;
 
     const XMFLOAT3 origin = selectedEntity->Transform.Position;
-    const float axisLength = 0.75f;
+    constexpr float desiredAxisScreenLength = 72.0f;
 
     ImVec2 pivotScreen;
     ImVec2 xScreen;
@@ -1053,9 +1055,42 @@ void Editor::HandleManualGizmoInteraction(
     if (!TryProjectWorldToViewport(origin, viewportOrigin, viewportSize, camera, pivotScreen))
         return;
 
-    const bool hasXAxis = TryProjectWorldToViewport(XMFLOAT3(origin.x + axisLength, origin.y, origin.z), viewportOrigin, viewportSize, camera, xScreen);
-    const bool hasYAxis = TryProjectWorldToViewport(XMFLOAT3(origin.x, origin.y, origin.z + axisLength), viewportOrigin, viewportSize, camera, yScreen);
-    const bool hasZAxis = TryProjectWorldToViewport(XMFLOAT3(origin.x, origin.y + axisLength, origin.z), viewportOrigin, viewportSize, camera, zScreen);
+    auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, ImVec2& axisScreenEnd, float& axisWorldLength) -> bool
+    {
+        ImVec2 unitScreenEnd;
+        if (!TryProjectWorldToViewport(
+                XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
+                viewportOrigin,
+                viewportSize,
+                camera,
+                unitScreenEnd))
+        {
+            return false;
+        }
+
+        const ImVec2 unitScreenDirection(unitScreenEnd.x - pivotScreen.x, unitScreenEnd.y - pivotScreen.y);
+        const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
+        if (pixelsPerWorldUnit <= 0.0001f)
+            return false;
+
+        axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
+        return TryProjectWorldToViewport(
+            XMFLOAT3(
+                origin.x + axisWorldDirection.x * axisWorldLength,
+                origin.y + axisWorldDirection.y * axisWorldLength,
+                origin.z + axisWorldDirection.z * axisWorldLength),
+            viewportOrigin,
+            viewportSize,
+            camera,
+            axisScreenEnd);
+    };
+
+    float xAxisWorldLength = 0.0f;
+    float yAxisWorldLength = 0.0f;
+    float zAxisWorldLength = 0.0f;
+    const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
+    const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+    const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
 
     auto distanceToSegment = [](const ImVec2& point, const ImVec2& segmentStart, const ImVec2& segmentEnd) -> float
     {
@@ -1072,7 +1107,7 @@ void Editor::HandleManualGizmoInteraction(
         return std::sqrt(dx * dx + dy * dy);
     };
 
-    auto distanceToProjectedRing = [&](const XMFLOAT3& axisA, const XMFLOAT3& axisB) -> float
+    auto distanceToProjectedRing = [&](const XMFLOAT3& axisA, float axisALength, const XMFLOAT3& axisB, float axisBLength) -> float
     {
         constexpr int segmentCount = 48;
         float bestDistance = FLT_MAX;
@@ -1083,9 +1118,9 @@ void Editor::HandleManualGizmoInteraction(
         {
             const float angle = (XM_2PI * static_cast<float>(segmentIndex)) / static_cast<float>(segmentCount);
             const XMFLOAT3 ringPoint(
-                origin.x + (axisA.x * std::cos(angle) + axisB.x * std::sin(angle)) * axisLength,
-                origin.y + (axisA.y * std::cos(angle) + axisB.y * std::sin(angle)) * axisLength,
-                origin.z + (axisA.z * std::cos(angle) + axisB.z * std::sin(angle)) * axisLength);
+                origin.x + axisA.x * std::cos(angle) * axisALength + axisB.x * std::sin(angle) * axisBLength,
+                origin.y + axisA.y * std::cos(angle) * axisALength + axisB.y * std::sin(angle) * axisBLength,
+                origin.z + axisA.z * std::cos(angle) * axisALength + axisB.z * std::sin(angle) * axisBLength);
 
             ImVec2 projectedPoint;
             if (TryProjectWorldToViewport(ringPoint, viewportOrigin, viewportSize, camera, projectedPoint))
@@ -1105,7 +1140,7 @@ void Editor::HandleManualGizmoInteraction(
         return bestDistance;
     };
 
-    auto beginAxisDrag = [&](ManualGizmoHandle handle, const XMFLOAT3& axisWorldDirection, const ImVec2& axisScreenEnd)
+    auto beginAxisDrag = [&](ManualGizmoHandle handle, const XMFLOAT3& axisWorldDirection, const ImVec2& axisScreenEnd, float axisWorldLength)
     {
         const ImVec2 axisScreenDirection(axisScreenEnd.x - pivotScreen.x, axisScreenEnd.y - pivotScreen.y);
         const float axisScreenLength = std::sqrt(axisScreenDirection.x * axisScreenDirection.x + axisScreenDirection.y * axisScreenDirection.y);
@@ -1122,7 +1157,7 @@ void Editor::HandleManualGizmoInteraction(
         mManualGizmo.SecondaryAxisWorldDirection = XMFLOAT3(0.0f, 0.0f, 0.0f);
         mManualGizmo.AxisScreenDirection = ImVec2(axisScreenDirection.x / axisScreenLength, axisScreenDirection.y / axisScreenLength);
         mManualGizmo.SecondaryAxisScreenDirection = ImVec2(0.0f, 0.0f);
-        mManualGizmo.PixelsPerWorldUnit = axisScreenLength / axisLength;
+        mManualGizmo.PixelsPerWorldUnit = axisScreenLength / axisWorldLength;
         mManualGizmo.SecondaryPixelsPerWorldUnit = 1.0f;
         mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
         mBlockViewportSelection = true;
@@ -1131,8 +1166,10 @@ void Editor::HandleManualGizmoInteraction(
     auto beginPlaneDrag = [&](ManualGizmoHandle handle,
                               const XMFLOAT3& primaryAxisWorldDirection,
                               const ImVec2& primaryAxisScreenEnd,
+                              float primaryAxisWorldLength,
                               const XMFLOAT3& secondaryAxisWorldDirection,
-                              const ImVec2& secondaryAxisScreenEnd)
+                              const ImVec2& secondaryAxisScreenEnd,
+                              float secondaryAxisWorldLength)
     {
         const ImVec2 primaryAxisScreenDirection(primaryAxisScreenEnd.x - pivotScreen.x, primaryAxisScreenEnd.y - pivotScreen.y);
         const ImVec2 secondaryAxisScreenDirection(secondaryAxisScreenEnd.x - pivotScreen.x, secondaryAxisScreenEnd.y - pivotScreen.y);
@@ -1151,8 +1188,8 @@ void Editor::HandleManualGizmoInteraction(
         mManualGizmo.SecondaryAxisWorldDirection = secondaryAxisWorldDirection;
         mManualGizmo.AxisScreenDirection = ImVec2(primaryAxisScreenDirection.x / primaryAxisScreenLength, primaryAxisScreenDirection.y / primaryAxisScreenLength);
         mManualGizmo.SecondaryAxisScreenDirection = ImVec2(secondaryAxisScreenDirection.x / secondaryAxisScreenLength, secondaryAxisScreenDirection.y / secondaryAxisScreenLength);
-        mManualGizmo.PixelsPerWorldUnit = primaryAxisScreenLength / axisLength;
-        mManualGizmo.SecondaryPixelsPerWorldUnit = secondaryAxisScreenLength / axisLength;
+        mManualGizmo.PixelsPerWorldUnit = primaryAxisScreenLength / primaryAxisWorldLength;
+        mManualGizmo.SecondaryPixelsPerWorldUnit = secondaryAxisScreenLength / secondaryAxisWorldLength;
         mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
         mBlockViewportSelection = true;
     };
@@ -1182,8 +1219,8 @@ void Editor::HandleManualGizmoInteraction(
             if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xyCorner))
             {
                 beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXYPlane : ManualGizmoHandle::Scale,
-                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen,
-                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen);
+                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
+                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
                 return;
             }
         }
@@ -1195,8 +1232,8 @@ void Editor::HandleManualGizmoInteraction(
             if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xzCorner))
             {
                 beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXZPlane : ManualGizmoHandle::Scale,
-                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen,
-                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen);
+                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
+                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
                 return;
             }
         }
@@ -1208,36 +1245,36 @@ void Editor::HandleManualGizmoInteraction(
             if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (yScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (yScreen.y - pivotScreen.y) * 0.35f), yzCorner))
             {
                 beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYZPlane : ManualGizmoHandle::Scale,
-                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen,
-                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen);
+                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength,
+                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
                 return;
             }
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && distanceToSegment(io.MousePos, pivotScreen, xScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXAxis : ManualGizmoHandle::ScaleXAxis, XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen);
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXAxis : ManualGizmoHandle::ScaleXAxis, XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
             return;
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasYAxis && distanceToSegment(io.MousePos, pivotScreen, yScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYAxis : ManualGizmoHandle::ScaleYAxis, XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen);
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYAxis : ManualGizmoHandle::ScaleYAxis, XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
             return;
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasZAxis && distanceToSegment(io.MousePos, pivotScreen, zScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateZAxis : ManualGizmoHandle::ScaleZAxis, XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen);
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateZAxis : ManualGizmoHandle::ScaleZAxis, XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
             return;
         }
 
         if (mActiveGizmo == GizmoType::Rotate)
         {
             const float rotateHitThreshold = 10.0f;
-            const float redRingDistance = distanceToProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f));
-            const float greenRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, 0.0f, 1.0f));
-            const float blueRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, 1.0f, 0.0f));
+            const float redRingDistance = distanceToProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength);
+            const float greenRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength);
+            const float blueRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength);
 
             float bestRingDistance = redRingDistance;
             XMFLOAT3 rotationAxis(1.0f, 0.0f, 0.0f);
@@ -1349,6 +1386,7 @@ void Editor::CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition)
     Entity e;
     e.Name = "Geometry_" + std::to_string(mNextGeometryInstanceId++);
     e.Transform.Position = worldPosition;
+    e.Transform.Position.z = 0.0f;
     e.AddMeshComponent();
     mEntities.push_back(std::move(e));
     mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
@@ -1531,18 +1569,42 @@ void Editor::DrawManualGizmoPivot(
         dl->AddCircleFilled(screenPos, 6.0f, IM_COL32(255, 200, 0, 230));
         dl->AddCircle(screenPos, 6.0f, IM_COL32(0, 0, 0, 220), 0, 2.0f);
 
-        const float axisLength = 0.75f;
+        constexpr float desiredAxisScreenLength = 72.0f;
         const XMFLOAT3 origin = selectedEntity->Transform.Position;
-        const XMFLOAT3 xAxisEnd(origin.x + axisLength, origin.y, origin.z);
-        const XMFLOAT3 yAxisEnd(origin.x, origin.y, origin.z + axisLength);
-        const XMFLOAT3 zAxisEnd(origin.x, origin.y + axisLength, origin.z);
+
+        auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, ImVec2& axisScreenEnd, float& axisWorldLength) -> bool
+        {
+            ImVec2 unitScreenEnd;
+            if (!projectAxisPoint(
+                    XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
+                    unitScreenEnd))
+            {
+                return false;
+            }
+
+            const ImVec2 unitScreenDirection(unitScreenEnd.x - screenPos.x, unitScreenEnd.y - screenPos.y);
+            const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
+            if (pixelsPerWorldUnit <= 0.0001f)
+                return false;
+
+            axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
+            return projectAxisPoint(
+                XMFLOAT3(
+                    origin.x + axisWorldDirection.x * axisWorldLength,
+                    origin.y + axisWorldDirection.y * axisWorldLength,
+                    origin.z + axisWorldDirection.z * axisWorldLength),
+                axisScreenEnd);
+        };
 
         ImVec2 xAxisScreen;
         ImVec2 yAxisScreen;
         ImVec2 zAxisScreen;
-        const bool hasXAxis = projectAxisPoint(xAxisEnd, xAxisScreen);
-        const bool hasYAxis = projectAxisPoint(yAxisEnd, yAxisScreen);
-        const bool hasZAxis = projectAxisPoint(zAxisEnd, zAxisScreen);
+        float xAxisWorldLength = 0.0f;
+        float yAxisWorldLength = 0.0f;
+        float zAxisWorldLength = 0.0f;
+        const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisScreen, xAxisWorldLength);
+        const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisScreen, yAxisWorldLength);
+        const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisScreen, zAxisWorldLength);
 
         if (mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale)
         {
@@ -1609,7 +1671,7 @@ void Editor::DrawManualGizmoPivot(
 
         if (mActiveGizmo == GizmoType::Rotate)
         {
-            auto drawProjectedRing = [&](const XMFLOAT3& axisA, const XMFLOAT3& axisB, ImU32 color)
+            auto drawProjectedRing = [&](const XMFLOAT3& axisA, float axisALength, const XMFLOAT3& axisB, float axisBLength, ImU32 color)
             {
                 constexpr int segmentCount = 48;
                 ImVec2 previousPoint{};
@@ -1619,9 +1681,9 @@ void Editor::DrawManualGizmoPivot(
                 {
                     const float angle = (XM_2PI * static_cast<float>(segmentIndex)) / static_cast<float>(segmentCount);
                     XMFLOAT3 ringPoint(
-                        origin.x + (axisA.x * std::cos(angle) + axisB.x * std::sin(angle)) * axisLength,
-                        origin.y + (axisA.y * std::cos(angle) + axisB.y * std::sin(angle)) * axisLength,
-                        origin.z + (axisA.z * std::cos(angle) + axisB.z * std::sin(angle)) * axisLength);
+                        origin.x + axisA.x * std::cos(angle) * axisALength + axisB.x * std::sin(angle) * axisBLength,
+                        origin.y + axisA.y * std::cos(angle) * axisALength + axisB.y * std::sin(angle) * axisBLength,
+                        origin.z + axisA.z * std::cos(angle) * axisALength + axisB.z * std::sin(angle) * axisBLength);
 
                     ImVec2 projectedPoint;
                     if (projectAxisPoint(ringPoint, projectedPoint))
@@ -1639,9 +1701,9 @@ void Editor::DrawManualGizmoPivot(
                 }
             };
 
-            drawProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f), IM_COL32(220, 70, 70, 220));
-            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, 0.0f, 1.0f), IM_COL32(70, 220, 120, 220));
-            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), XMFLOAT3(0.0f, 1.0f, 0.0f), IM_COL32(80, 160, 255, 255));
+            drawProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, IM_COL32(220, 70, 70, 220));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, IM_COL32(70, 220, 120, 220));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, IM_COL32(80, 160, 255, 255));
         }
 
         if (mActiveGizmo == GizmoType::Scale)
