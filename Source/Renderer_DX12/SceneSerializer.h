@@ -3,6 +3,7 @@
 #include "Components.h"
 #include "TimeOfDaySettings.h"
 #include "TaaSettings.h"
+#include "DlssSettings.h"
 #include "RtGISettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
@@ -18,6 +19,7 @@ struct Scene
     std::vector<Entity>* Entities = nullptr;
     TimeOfDaySettings* TimeOfDay = nullptr;
     TaaSettings* Taa = nullptr;
+    DlssSettings* Dlss = nullptr;
     RtGISettings* Rtgi = nullptr;
     RtAOSettings* Rtao = nullptr;
     GtaoSettings* Gtao = nullptr;

@@ -886,6 +886,7 @@ void RenderEditorMainMenu(
     bool* showLevelExplorerPanel,
     bool* showPropertiesPanel,
     TaaSettings* taaSettings,
+    DlssSettings* dlssSettings,
     TimeOfDaySettings* timeOfDaySettings,
     RtGISettings* rtgiSettings,
     RadianceProbeSettings* probeSettings,
@@ -1178,6 +1179,7 @@ void RenderEditorMainMenu(
     if (gShowGraphicsSettingsWindow)
     {
         const TaaSettings defaultTaaSettings{};
+        const DlssSettings defaultDlssSettings{};
         const RtGISettings defaultRtgiSettings{};
         const RtAOSettings defaultRtaoSettings{};
         const AgxTonemapSettings defaultAgxSettings{};
@@ -1205,6 +1207,33 @@ void RenderEditorMainMenu(
                     {
                         SliderFloatWithInput("Sharpening Strength", &taaSettings->SharpeningStrength, 0.0f, 1.0f, "%.2f");
                     }
+                }
+            }
+        }
+
+        if (dlssSettings != nullptr)
+        {
+            if (ImGui::CollapsingHeader("DLSS Super Resolution", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::Button("Revert All##dlss"))
+                {
+                    *dlssSettings = defaultDlssSettings;
+                }
+
+                ImGui::Checkbox("Enable DLSS Super Resolution", &dlssSettings->Enabled);
+                if (dlssSettings->Enabled)
+                {
+                    const char* modes[] =
+                    {
+                        "Off",
+                        "Max Performance",
+                        "Balanced",
+                        "Max Quality",
+                        "Ultra Performance",
+                        "Ultra Quality",
+                        "DLAA"
+                    };
+                    ImGui::Combo("Mode##dlss", &dlssSettings->Mode, modes, IM_ARRAYSIZE(modes));
                 }
             }
         }

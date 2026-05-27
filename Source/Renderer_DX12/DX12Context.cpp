@@ -1,8 +1,15 @@
 #include "pch.h"
 #include "DX12Helper.h"
 
+#include "..\SDKs\Streamline\include\sl.h"
+
 #include <array>
 #include <exception>
+#include <filesystem>
+
+#pragma comment(lib, "..\\SDKs\\Streamline\\lib\\x64\\sl.interposer.lib")
+#pragma comment(lib, "delayimp.lib")
+#pragma comment(linker, "/DELAYLOAD:sl.interposer.dll")
 
 using Microsoft::WRL::ComPtr;
 
@@ -25,6 +32,23 @@ namespace
         gLastContextError = errorMessage;
         OutputDebugStringA(gLastContextError.c_str());
         OutputDebugStringA("\n");
+    }
+
+    std::string FormatDeviceStatus(HRESULT hr)
+    {
+        std::ostringstream stream;
+        stream << "HRESULT=" << hr;
+        if (hr == DXGI_ERROR_DEVICE_REMOVED)
+            stream << " (DXGI_ERROR_DEVICE_REMOVED)";
+        else if (hr == DXGI_ERROR_DEVICE_HUNG)
+            stream << " (DXGI_ERROR_DEVICE_HUNG)";
+        else if (hr == DXGI_ERROR_DEVICE_RESET)
+            stream << " (DXGI_ERROR_DEVICE_RESET)";
+        else if (hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+            stream << " (DXGI_ERROR_DRIVER_INTERNAL_ERROR)";
+        else if (hr == DXGI_ERROR_INVALID_CALL)
+            stream << " (DXGI_ERROR_INVALID_CALL)";
+        return stream.str();
     }
 
     void ThrowIfFailedWithContext(HRESULT hr, const char* operation)
@@ -60,13 +84,63 @@ namespace
         ComPtr<ID3D12Fence> Fence;
         std::array<UINT64, FrameCount> FenceValues{};
         HANDLE FenceEvent = nullptr;
+        UINT64 NextFenceValue = 1;
 
         UINT FrameIndex = 0;
+        bool StreamlineCoreInitialized = false;
+        bool StreamlineInitialized = false;
     };
 
     DX12ContextState g_Context;
+    HMODULE gStreamlineModule = nullptr;
+    bool gOwnsStreamlineModule = false;
 
-    bool WaitForGPU(DWORD timeoutMs)
+    std::string DescribeDeviceState(const char* prefix)
+    {
+        auto& ctx = g_Context;
+        if (!ctx.Device)
+        {
+            return std::string(prefix) + " No D3D12 device is available.";
+        }
+
+        const HRESULT removeReason = ctx.Device->GetDeviceRemovedReason();
+        if (SUCCEEDED(removeReason))
+        {
+            return std::string(prefix) + " Device is still reported as operational.";
+        }
+
+        return std::string(prefix) + " Device status: " + FormatDeviceStatus(removeReason) + ".";
+    }
+
+    bool WaitForFenceValue(UINT64 fenceValue, DWORD timeoutMs)
+    {
+        auto& ctx = g_Context;
+
+        if (!ctx.Fence || !ctx.FenceEvent)
+        {
+            return false;
+        }
+
+        if (ctx.Fence->GetCompletedValue() >= fenceValue)
+        {
+            return true;
+        }
+
+        if (FAILED(ctx.Fence->SetEventOnCompletion(fenceValue, ctx.FenceEvent)))
+        {
+            return false;
+        }
+
+        return WaitForSingleObject(ctx.FenceEvent, timeoutMs) == WAIT_OBJECT_0;
+    }
+
+    bool IsFenceValueCompleted(UINT64 fenceValue)
+    {
+        auto& ctx = g_Context;
+        return ctx.Fence && ctx.Fence->GetCompletedValue() >= fenceValue;
+    }
+
+    bool FlushGPU(DWORD timeoutMs)
     {
         auto& ctx = g_Context;
 
@@ -75,23 +149,13 @@ namespace
             return false;
         }
 
-        const UINT64 fenceToWaitFor = ++ctx.FenceValues[ctx.FrameIndex];
-        if (FAILED(ctx.CommandQueue->Signal(ctx.Fence.Get(), fenceToWaitFor)))
+        const UINT64 fenceValue = ctx.NextFenceValue++;
+        if (FAILED(ctx.CommandQueue->Signal(ctx.Fence.Get(), fenceValue)))
         {
             return false;
         }
 
-        if (ctx.Fence->GetCompletedValue() < fenceToWaitFor)
-        {
-            if (FAILED(ctx.Fence->SetEventOnCompletion(fenceToWaitFor, ctx.FenceEvent)))
-            {
-                return false;
-            }
-
-            return WaitForSingleObject(ctx.FenceEvent, timeoutMs) == WAIT_OBJECT_0;
-        }
-
-        return true;
+        return WaitForFenceValue(fenceValue, timeoutMs);
     }
 
     bool RecreateSwapChainRenderTargets()
@@ -115,6 +179,100 @@ namespace
             rtvHandle.ptr += ctx.RtvDescriptorSize;
         }
 
+        return true;
+    }
+
+    std::filesystem::path FindStreamlinePluginDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath))) == 0)
+        {
+            return {};
+        }
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path candidate = currentPath / "Source" / "SDKs" / "Streamline" / "bin" / "x64";
+            if (std::filesystem::exists(candidate) && std::filesystem::is_directory(candidate))
+            {
+                return candidate;
+            }
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+            {
+                break;
+            }
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    bool EnsureStreamlineCoreInitialized()
+    {
+        auto& ctx = g_Context;
+        if (ctx.StreamlineCoreInitialized)
+        {
+            return true;
+        }
+
+        const std::filesystem::path pluginDirectory = FindStreamlinePluginDirectory();
+        if (pluginDirectory.empty())
+        {
+            SetContextError("DX12Context_StreamlineInitialize failed to locate Source\\SDKs\\Streamline\\bin\\x64.");
+            return false;
+        }
+
+        if (gStreamlineModule == nullptr)
+        {
+            gStreamlineModule = GetModuleHandleW(L"sl.interposer.dll");
+            gOwnsStreamlineModule = false;
+
+            if (gStreamlineModule == nullptr)
+            {
+                const std::filesystem::path interposerPath = pluginDirectory / "sl.interposer.dll";
+                gStreamlineModule = LoadLibraryW(interposerPath.c_str());
+                if (gStreamlineModule == nullptr)
+                {
+                    SetContextError("DX12Context_StreamlineInitialize failed to load sl.interposer.dll from the Streamline SDK.");
+                    return false;
+                }
+
+                gOwnsStreamlineModule = true;
+            }
+        }
+
+        const sl::Feature featuresToLoad[] = { sl::kFeatureDLSS };
+        const wchar_t* pluginPaths[] = { pluginDirectory.c_str() };
+
+        sl::Preferences preferences{};
+        preferences.showConsole = false;
+        preferences.logLevel = sl::LogLevel::eOff;
+        preferences.pathsToPlugins = pluginPaths;
+        preferences.numPathsToPlugins = static_cast<uint32_t>(std::size(pluginPaths));
+        preferences.logMessageCallback = nullptr;
+        preferences.flags = sl::PreferenceFlags::eAllowOTA
+            | sl::PreferenceFlags::eLoadDownloadedPlugins
+            | sl::PreferenceFlags::eUseFrameBasedResourceTagging
+            | sl::PreferenceFlags::eUseDXGIFactoryProxy;
+        preferences.featuresToLoad = featuresToLoad;
+        preferences.numFeaturesToLoad = static_cast<uint32_t>(std::size(featuresToLoad));
+        preferences.engine = sl::EngineType::eCustom;
+        preferences.engineVersion = "Ptero-Engine";
+        preferences.projectId = "a0f57b54-1daf-4934-90ae-c4035c19df04";
+        preferences.renderAPI = sl::RenderAPI::eD3D12;
+
+        const sl::Result initResult = slInit(preferences);
+        if (initResult != sl::Result::eOk)
+        {
+            SetContextError("DX12Context_StreamlineInitialize failed to initialize Streamline.");
+            return false;
+        }
+
+        ctx.StreamlineCoreInitialized = true;
         return true;
     }
 }
@@ -146,6 +304,8 @@ extern "C"
             ctx.Height = static_cast<UINT>(rect.bottom - rect.top);
             if (ctx.Width == 0) ctx.Width = 1280;
             if (ctx.Height == 0) ctx.Height = 720;
+
+            EnsureStreamlineCoreInitialized();
 
             ReportContextProgress(L"Creating DXGI factory...");
             ThrowIfFailedWithContext(CreateDXGIFactory2(0, IID_PPV_ARGS(&ctx.Factory)), "CreateDXGIFactory2");
@@ -221,6 +381,7 @@ extern "C"
             ReportContextProgress(L"Creating GPU synchronization fence...");
             ThrowIfFailedWithContext(ctx.Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&ctx.Fence)), "CreateFence");
             ctx.FenceValues.fill(0);
+            ctx.NextFenceValue = 1;
             ctx.FenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
             if (ctx.FenceEvent == nullptr)
             {
@@ -264,8 +425,21 @@ extern "C"
                 return false;
             }
 
-            // Query and cache the initial back buffer index for per-frame resource lookup.
             ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
+
+            const UINT64 fenceValue = ctx.FenceValues[ctx.FrameIndex];
+            if (fenceValue != 0 && !IsFenceValueCompleted(fenceValue))
+            {
+                std::ostringstream stream;
+                stream << "Current frame resources are still in flight. targetFence=" << fenceValue;
+                if (ctx.Fence)
+                {
+                    stream << ", completedFence=" << ctx.Fence->GetCompletedValue();
+                }
+                stream << ".";
+                SetContextError(stream.str());
+                return false;
+            }
 
             ThrowIfFailedWithContext(ctx.CommandAllocators[ctx.FrameIndex]->Reset(), "ID3D12CommandAllocator::Reset");
             ThrowIfFailedWithContext(ctx.CommandList->Reset(ctx.CommandAllocators[ctx.FrameIndex].Get(), nullptr), "ID3D12GraphicsCommandList::Reset");
@@ -294,8 +468,6 @@ extern "C"
 
     __declspec(dllexport) bool __stdcall DX12Context_EndFrame(UINT frameIndex)
     {
-        UNREFERENCED_PARAMETER(frameIndex);
-
         try
         {
             auto& ctx = g_Context;
@@ -311,13 +483,21 @@ extern "C"
             ID3D12CommandList* commandLists[] = { ctx.CommandList.Get() };
             ctx.CommandQueue->ExecuteCommandLists(1, commandLists);
 
+            const HRESULT deviceStatusAfterExecute = ctx.Device ? ctx.Device->GetDeviceRemovedReason() : S_OK;
+            if (FAILED(deviceStatusAfterExecute))
+            {
+                SetContextError(std::string("DX12Context_EndFrame detected a device problem after command execution. ")
+                    + FormatDeviceStatus(deviceStatusAfterExecute));
+                return false;
+            }
+
             ThrowIfFailedWithContext(ctx.SwapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING), "IDXGISwapChain3::Present");
 
-            // Use a bounded GPU wait to avoid hanging editor shutdown.
-            if (!WaitForGPU(2000))
+            const UINT64 fenceValue = ctx.NextFenceValue++;
+            ThrowIfFailedWithContext(ctx.CommandQueue->Signal(ctx.Fence.Get(), fenceValue), "ID3D12CommandQueue::Signal");
+            if (frameIndex < FrameCount)
             {
-                SetContextError("WaitForGPU timed out or failed after presenting the frame.");
-                return false;
+                ctx.FenceValues[frameIndex] = fenceValue;
             }
 
             return true;
@@ -360,7 +540,7 @@ extern "C"
                 return true;
             }
 
-            if (!WaitForGPU(2000))
+            if (!FlushGPU(2000))
             {
                 SetContextError("WaitForGPU timed out before resizing the swap chain.");
                 return false;
@@ -378,6 +558,7 @@ extern "C"
             ctx.Width = width;
             ctx.Height = height;
             ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
+            ctx.FenceValues.fill(0);
             ThrowIfFailedWithContext(RecreateSwapChainRenderTargets() ? S_OK : E_FAIL, "RecreateSwapChainRenderTargets");
             return true;
         }
@@ -418,6 +599,61 @@ extern "C"
     __declspec(dllexport) ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue()
     {
         return g_Context.CommandQueue.Get();
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_StreamlineInitialize()
+    {
+        auto& ctx = g_Context;
+        if (ctx.StreamlineInitialized)
+        {
+            return true;
+        }
+
+        if (!EnsureStreamlineCoreInitialized())
+        {
+            return false;
+        }
+
+        if (ctx.Device == nullptr)
+        {
+            SetContextError("DX12Context_StreamlineInitialize called before the D3D12 device was created.");
+            return false;
+        }
+
+        const sl::Result deviceResult = slSetD3DDevice(ctx.Device.Get());
+        if (deviceResult != sl::Result::eOk)
+        {
+            if (ctx.StreamlineCoreInitialized)
+            {
+                slShutdown();
+                ctx.StreamlineCoreInitialized = false;
+            }
+            SetContextError("DX12Context_StreamlineInitialize failed to register the D3D12 device with Streamline.");
+            return false;
+        }
+
+        ctx.StreamlineInitialized = true;
+        return true;
+    }
+
+    __declspec(dllexport) void __stdcall DX12Context_StreamlineShutdown()
+    {
+        auto& ctx = g_Context;
+        if (!ctx.StreamlineInitialized)
+        {
+            return;
+        }
+
+        slShutdown();
+        ctx.StreamlineCoreInitialized = false;
+        ctx.StreamlineInitialized = false;
+        if (gStreamlineModule != nullptr && gOwnsStreamlineModule)
+        {
+            FreeLibrary(gStreamlineModule);
+        }
+
+        gStreamlineModule = nullptr;
+        gOwnsStreamlineModule = false;
     }
 
     __declspec(dllexport) ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap()
@@ -500,7 +736,7 @@ extern "C"
     {
         // Flush the GPU command queue and wait for all in-flight work to complete.
         // Called before releasing resources that may still be referenced by the GPU.
-        return WaitForGPU(2000);
+        return FlushGPU(2000);
     }
 
     __declspec(dllexport) void __stdcall DX12Context_Shutdown()
@@ -509,10 +745,15 @@ extern "C"
         {
             auto& ctx = g_Context;
 
+            if (ctx.StreamlineInitialized)
+            {
+                DX12Context_StreamlineShutdown();
+            }
+
             // Attempt a short flush; avoid blocking forever on application exit.
             if (ctx.CommandQueue && ctx.Fence)
             {
-                WaitForGPU(250);
+                FlushGPU(250);
             }
 
             if (ctx.FenceEvent)

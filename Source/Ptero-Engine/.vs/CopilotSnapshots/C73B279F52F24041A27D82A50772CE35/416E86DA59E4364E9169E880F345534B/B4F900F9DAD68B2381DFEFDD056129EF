@@ -1,0 +1,100 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DlssSettings.h"
+
+#include "imgui.h"
+
+#include <DirectXMath.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace sl
+{
+    struct Constants;
+    struct FrameToken;
+}
+
+class DlssRenderer
+{
+public:
+    struct CameraFrameData
+    {
+        DirectX::XMFLOAT4X4 View{};
+        DirectX::XMFLOAT4X4 Projection{};
+        DirectX::XMFLOAT4X4 PrevViewProjection{};
+        DirectX::XMFLOAT3   CameraPosition{};
+        DirectX::XMFLOAT3   CameraUp{};
+        DirectX::XMFLOAT3   CameraRight{};
+        DirectX::XMFLOAT3   CameraForward{};
+        float               JitterX = 0.0f;
+        float               JitterY = 0.0f;
+        bool                Reset = false;
+        float               NearPlane = 0.1f;
+        float               FarPlane = 100.0f;
+        float               FovY = DirectX::XM_PIDIV4;
+        float               AspectRatio = 16.0f / 9.0f;
+    };
+
+    bool Initialize(UINT outputWidth, UINT outputHeight);
+    void Shutdown();
+    bool EnsureSize(UINT renderWidth, UINT renderHeight, UINT outputWidth, UINT outputHeight);
+
+    void Evaluate(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12Resource* inputColor,
+        ID3D12Resource* depth,
+        ID3D12Resource* motionVectors,
+        const CameraFrameData& cameraData,
+        DlssSettings& settings,
+        UINT frameIndex);
+
+    bool IsAvailable() const { return mAvailable; }
+    bool IsInitialized() const { return mInitialized; }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv() const { return mOutputSrvGpu; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv() const { return mOutputSrvCpu; }
+    ID3D12Resource* GetOutputResource() const { return mOutputTexture.Get(); }
+    ImTextureID GetOutputTextureId() const { return mOutputTextureId; }
+
+    UINT GetRenderWidth() const { return mRenderWidth; }
+    UINT GetRenderHeight() const { return mRenderHeight; }
+    UINT GetOutputWidth() const { return mOutputWidth; }
+    UINT GetOutputHeight() const { return mOutputHeight; }
+
+    const char* GetLastErrorMessage() const
+    {
+        return mLastError.empty() ? nullptr : mLastError.c_str();
+    }
+
+    bool QueryOptimalRenderSize(UINT outputWidth, UINT outputHeight, DlssSettings& settings, UINT& outRenderWidth, UINT& outRenderHeight);
+
+private:
+    bool InitializeStreamline();
+    bool CreateOutputTexture(UINT outputWidth, UINT outputHeight);
+    bool EnsureOutputDescriptors();
+    bool SetOptions(const DlssSettings& settings, UINT outputWidth, UINT outputHeight);
+    bool SetConstants(const CameraFrameData& cameraData, UINT frameIndex);
+    bool EvaluateInternal(ID3D12GraphicsCommandList* commandList, ID3D12Resource* inputColor, ID3D12Resource* depth, ID3D12Resource* motionVectors, UINT frameIndex);
+    void UpdateAvailability();
+    static std::wstring FindStreamlinePluginDirectory();
+    static void LogStreamlineMessage(int type, const char* message);
+    static const wchar_t* GetLogDirectoryPath();
+
+    UINT mRenderWidth = 0;
+    UINT mRenderHeight = 0;
+    UINT mOutputWidth = 0;
+    UINT mOutputHeight = 0;
+    bool mInitialized = false;
+    bool mAvailable = false;
+    bool mStreamlineInitialized = false;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> mOutputTexture;
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu{};
+    ImTextureID mOutputTextureId = ImTextureID_Invalid;
+    bool mOutputSrvAllocated = false;
+
+    std::string mLastError;
+};

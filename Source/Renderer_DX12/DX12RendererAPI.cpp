@@ -42,6 +42,7 @@ extern "C"
     D3D12_CPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorCpuHandle();
     D3D12_GPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorGpuHandle();
     const char* __stdcall DX12Context_GetLastError();
+    bool __stdcall DX12Context_StreamlineInitialize();
     void __stdcall DX12Context_Shutdown();
     void __stdcall DX12Context_SetProgressCallback(void(__stdcall* callback)(const wchar_t*));
 }
@@ -717,6 +718,8 @@ extern "C"
             return false;
         }
 
+        DX12Context_StreamlineInitialize();
+
         ReportProgress(L"Initializing ImGui and editor UI...");
 
         if (!InitializeImGui())
@@ -745,6 +748,12 @@ extern "C"
         if (!DX12Context_BeginFrame(&commandList, &backBuffer, &rtvHandle, &frameIndex))
         {
             const char* contextError = DX12Context_GetLastError();
+            if (contextError != nullptr
+                && std::string_view(contextError).find("Current frame resources are still in flight.") == 0)
+            {
+                return true;
+            }
+
             SetRendererError(contextError != nullptr
                 ? std::string("RendererDX12_Render could not begin a frame: ") + contextError
                 : "RendererDX12_Render could not begin a frame.");
@@ -934,6 +943,7 @@ extern "C"
                 gEditor.GetShowLevelExplorerPanelPointer(),
                 gEditor.GetShowPropertiesPanelPointer(),
                 &gSceneRenderer.GetTaaSettings(),
+                &gSceneRenderer.GetDlssSettings(),
                 &gSceneRenderer.GetTimeOfDaySettings(),
                 &gSceneRenderer.GetRtgiSettings(),
                 &gSceneRenderer.GetProbeSettings(),
@@ -949,6 +959,7 @@ extern "C"
             gEditor.SetSceneSettings(
                 &gSceneRenderer.GetTimeOfDaySettings(),
                 &gSceneRenderer.GetTaaSettings(),
+                &gSceneRenderer.GetDlssSettings(),
                 &gSceneRenderer.GetRtgiSettings(),
                 &gSceneRenderer.GetRtaoSettings(),
                 &gSceneRenderer.GetGtaoSettings(),

@@ -1,0 +1,505 @@
+﻿#include "pch.h"
+#include "DlssRenderer.h"
+
+#include "..\SDKs\Streamline\include\sl.h"
+#include "..\SDKs\Streamline\include\sl_dlss.h"
+
+#include <DirectXMath.h>
+#include <cstring>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool __stdcall DX12Context_StreamlineInitialize();
+}
+
+namespace
+{
+    constexpr DXGI_FORMAT DlssOutputFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    constexpr bool BypassDlssEvaluation = false;
+
+    sl::ViewportHandle GetDlssViewport()
+    {
+        return sl::ViewportHandle(0);
+    }
+
+    ComPtr<ID3D12Resource> MakeTex2D(
+        ID3D12Device* device,
+        UINT width,
+        UINT height,
+        D3D12_RESOURCE_FLAGS flags,
+        D3D12_RESOURCE_STATES initialState)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DlssOutputFormat;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = flags;
+
+        ComPtr<ID3D12Resource> resource;
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            initialState,
+            nullptr,
+            IID_PPV_ARGS(&resource)));
+        return resource;
+    }
+
+    sl::DLSSMode ConvertDlssMode(int mode)
+    {
+        switch (mode)
+        {
+        case 1: return sl::DLSSMode::eMaxPerformance;
+        case 2: return sl::DLSSMode::eBalanced;
+        case 3: return sl::DLSSMode::eMaxQuality;
+        case 4: return sl::DLSSMode::eUltraPerformance;
+        case 5: return sl::DLSSMode::eUltraQuality;
+        case 6: return sl::DLSSMode::eDLAA;
+        default: return sl::DLSSMode::eOff;
+        }
+    }
+
+    void FillRowMajor(sl::float4x4& outMatrix, const XMFLOAT4X4& matrix)
+    {
+        outMatrix.row[0] = { matrix._11, matrix._12, matrix._13, matrix._14 };
+        outMatrix.row[1] = { matrix._21, matrix._22, matrix._23, matrix._24 };
+        outMatrix.row[2] = { matrix._31, matrix._32, matrix._33, matrix._34 };
+        outMatrix.row[3] = { matrix._41, matrix._42, matrix._43, matrix._44 };
+    }
+}
+
+bool DlssRenderer::IsEvaluationBypassed() const
+{
+    return BypassDlssEvaluation;
+}
+
+bool DlssRenderer::Initialize(UINT outputWidth, UINT outputHeight)
+{
+    mLastError.clear();
+
+    if (!InitializeStreamline())
+    {
+        return false;
+    }
+
+    if (!EnsureSize(outputWidth, outputHeight, outputWidth, outputHeight))
+    {
+        return false;
+    }
+
+    mInitialized = true;
+    return true;
+}
+
+void DlssRenderer::Shutdown()
+{
+    if (mAvailable)
+    {
+        slFreeResources(sl::kFeatureDLSS, GetDlssViewport());
+    }
+
+    mOutputTexture.Reset();
+    mRenderWidth = 0;
+    mRenderHeight = 0;
+    mOutputWidth = 0;
+    mOutputHeight = 0;
+    mOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    mOptionsDirty = true;
+    mLastAppliedMode = -1;
+    mLastAppliedOutputWidth = 0;
+    mLastAppliedOutputHeight = 0;
+    mHasCachedOptimalSettings = false;
+    mCachedOptimalMode = -1;
+    mCachedOptimalOutputWidth = 0;
+    mCachedOptimalOutputHeight = 0;
+    mCachedOptimalRenderWidth = 0;
+    mCachedOptimalRenderHeight = 0;
+    mInitialized = false;
+}
+
+bool DlssRenderer::EnsureSize(UINT renderWidth, UINT renderHeight, UINT outputWidth, UINT outputHeight)
+{
+    if (!mAvailable)
+    {
+        return false;
+    }
+
+    if (renderWidth == 0 || renderHeight == 0 || outputWidth == 0 || outputHeight == 0)
+    {
+        return false;
+    }
+
+    if (mOutputTexture && mRenderWidth == renderWidth && mRenderHeight == renderHeight && mOutputWidth == outputWidth && mOutputHeight == outputHeight)
+    {
+        return true;
+    }
+
+    slFreeResources(sl::kFeatureDLSS, GetDlssViewport());
+
+    if (!CreateOutputTexture(outputWidth, outputHeight))
+    {
+        return false;
+    }
+
+    mRenderWidth = renderWidth;
+    mRenderHeight = renderHeight;
+    mOutputWidth = outputWidth;
+    mOutputHeight = outputHeight;
+    mOptionsDirty = true;
+    return true;
+}
+
+bool DlssRenderer::QueryOptimalRenderSize(UINT outputWidth, UINT outputHeight, DlssSettings& settings, UINT& outRenderWidth, UINT& outRenderHeight)
+{
+    outRenderWidth = outputWidth;
+    outRenderHeight = outputHeight;
+
+    if (!mAvailable || !settings.Enabled)
+    {
+        return true;
+    }
+
+    if (mHasCachedOptimalSettings
+        && mCachedOptimalMode == settings.Mode
+        && mCachedOptimalOutputWidth == outputWidth
+        && mCachedOptimalOutputHeight == outputHeight)
+    {
+        outRenderWidth = mCachedOptimalRenderWidth;
+        outRenderHeight = mCachedOptimalRenderHeight;
+        return true;
+    }
+
+    sl::DLSSOptions options{};
+    options.mode = ConvertDlssMode(settings.Mode);
+    options.outputWidth = outputWidth;
+    options.outputHeight = outputHeight;
+    options.colorBuffersHDR = sl::Boolean::eTrue;
+    options.useAutoExposure = sl::Boolean::eTrue;
+    options.alphaUpscalingEnabled = sl::Boolean::eFalse;
+    options.dlaaPreset = sl::DLSSPreset::ePresetK;
+    options.qualityPreset = sl::DLSSPreset::ePresetK;
+    options.balancedPreset = sl::DLSSPreset::ePresetK;
+    options.performancePreset = sl::DLSSPreset::ePresetM;
+    options.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+    options.ultraQualityPreset = sl::DLSSPreset::ePresetK;
+
+    sl::DLSSOptimalSettings optimal{};
+    const sl::Result result = slDLSSGetOptimalSettings(options, optimal);
+    if (result != sl::Result::eOk)
+    {
+        return true;
+    }
+
+    outRenderWidth = optimal.optimalRenderWidth > 0 ? optimal.optimalRenderWidth : outputWidth;
+    outRenderHeight = optimal.optimalRenderHeight > 0 ? optimal.optimalRenderHeight : outputHeight;
+    mHasCachedOptimalSettings = true;
+    mCachedOptimalMode = settings.Mode;
+    mCachedOptimalOutputWidth = outputWidth;
+    mCachedOptimalOutputHeight = outputHeight;
+    mCachedOptimalRenderWidth = outRenderWidth;
+    mCachedOptimalRenderHeight = outRenderHeight;
+    return true;
+}
+
+void DlssRenderer::Evaluate(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource* inputColor,
+    ID3D12Resource* depth,
+    ID3D12Resource* motionVectors,
+    const CameraFrameData& cameraData,
+    DlssSettings& settings,
+    UINT frameIndex)
+{
+    mLastError.clear();
+
+    if (!(mAvailable && settings.Enabled && commandList && inputColor && depth && motionVectors && mOutputTexture))
+    {
+        return;
+    }
+
+    if (BypassDlssEvaluation)
+    {
+        settings.ResetHistory = false;
+        return;
+    }
+
+    sl::FrameToken* frameToken = nullptr;
+    const sl::Result tokenResult = slGetNewFrameToken(frameToken, &frameIndex);
+    if (tokenResult != sl::Result::eOk || frameToken == nullptr)
+    {
+        mLastError = "DLSS: failed to acquire a Streamline frame token.";
+        return;
+    }
+
+    if (!SetOptions(settings, mOutputWidth, mOutputHeight))
+    {
+        return;
+    }
+
+    if (!SetConstants(cameraData, *frameToken))
+    {
+        return;
+    }
+
+    if (!EvaluateInternal(commandList, inputColor, depth, motionVectors, *frameToken))
+    {
+        return;
+    }
+
+    settings.ResetHistory = false;
+}
+
+bool DlssRenderer::InitializeStreamline()
+{
+    if (mStreamlineInitialized)
+    {
+        UpdateAvailability();
+        return mAvailable;
+    }
+
+    if (!DX12Context_StreamlineInitialize())
+    {
+        mLastError = "DLSS: failed to initialize Streamline with the D3D12 context.";
+        mAvailable = false;
+        return false;
+    }
+
+    mStreamlineInitialized = true;
+    UpdateAvailability();
+    return mAvailable;
+}
+
+bool DlssRenderer::CreateOutputTexture(UINT outputWidth, UINT outputHeight)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+    {
+        mLastError = "DLSS: null D3D12 device.";
+        return false;
+    }
+
+    if (!EnsureOutputDescriptors())
+    {
+        return false;
+    }
+
+    mOutputTexture = MakeTex2D(
+        device,
+        outputWidth,
+        outputHeight,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    mOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = DlssOutputFormat;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputSrvCpu);
+    return true;
+}
+
+bool DlssRenderer::EnsureOutputDescriptors()
+{
+    if (mOutputSrvAllocated)
+    {
+        return true;
+    }
+
+    if (!DX12Context_AllocateSrvDescriptor(&mOutputSrvCpu, &mOutputSrvGpu))
+    {
+        mLastError = "DLSS: failed to allocate output SRV descriptor.";
+        return false;
+    }
+
+    mOutputTextureId = static_cast<ImTextureID>(mOutputSrvGpu.ptr);
+    mOutputSrvAllocated = true;
+    return true;
+}
+
+bool DlssRenderer::SetOptions(const DlssSettings& settings, UINT outputWidth, UINT outputHeight)
+{
+    if (!mOptionsDirty
+        && mLastAppliedMode == settings.Mode
+        && mLastAppliedOutputWidth == outputWidth
+        && mLastAppliedOutputHeight == outputHeight)
+    {
+        return true;
+    }
+
+    sl::DLSSOptions options{};
+    options.mode = ConvertDlssMode(settings.Mode);
+    options.outputWidth = outputWidth;
+    options.outputHeight = outputHeight;
+    options.colorBuffersHDR = sl::Boolean::eTrue;
+    options.useAutoExposure = sl::Boolean::eTrue;
+    options.alphaUpscalingEnabled = sl::Boolean::eFalse;
+    options.dlaaPreset = sl::DLSSPreset::ePresetK;
+    options.qualityPreset = sl::DLSSPreset::ePresetK;
+    options.balancedPreset = sl::DLSSPreset::ePresetK;
+    options.performancePreset = sl::DLSSPreset::ePresetM;
+    options.ultraPerformancePreset = sl::DLSSPreset::ePresetL;
+    options.ultraQualityPreset = sl::DLSSPreset::ePresetK;
+
+    const sl::Result result = slDLSSSetOptions(GetDlssViewport(), options);
+    if (result != sl::Result::eOk)
+    {
+        mLastError = "DLSS: failed to set DLSS options.";
+        return false;
+    }
+
+    mOptionsDirty = false;
+    mLastAppliedMode = settings.Mode;
+    mLastAppliedOutputWidth = outputWidth;
+    mLastAppliedOutputHeight = outputHeight;
+    return true;
+}
+
+bool DlssRenderer::SetConstants(const CameraFrameData& cameraData, const sl::FrameToken& frameToken)
+{
+    sl::Constants constants{};
+    FillRowMajor(constants.cameraViewToClip, cameraData.Projection);
+
+    XMMATRIX proj = XMLoadFloat4x4(&cameraData.Projection);
+    XMMATRIX projInv = XMMatrixInverse(nullptr, proj);
+    XMFLOAT4X4 clipToView{};
+    XMStoreFloat4x4(&clipToView, projInv);
+    FillRowMajor(constants.clipToCameraView, clipToView);
+
+    XMMATRIX currentView = XMLoadFloat4x4(&cameraData.View);
+    XMMATRIX currentProj = XMLoadFloat4x4(&cameraData.Projection);
+    XMMATRIX currentVP = currentView * currentProj;
+    XMMATRIX prevVP = XMLoadFloat4x4(&cameraData.PrevViewProjection);
+    XMMATRIX clipToPrevClip = XMMatrixInverse(nullptr, currentVP) * prevVP;
+    XMMATRIX prevClipToClip = XMMatrixInverse(nullptr, clipToPrevClip);
+    XMFLOAT4X4 clipToPrevClipF{};
+    XMFLOAT4X4 prevClipToClipF{};
+    XMStoreFloat4x4(&clipToPrevClipF, clipToPrevClip);
+    XMStoreFloat4x4(&prevClipToClipF, prevClipToClip);
+    FillRowMajor(constants.clipToPrevClip, clipToPrevClipF);
+    FillRowMajor(constants.prevClipToClip, prevClipToClipF);
+
+    constants.jitterOffset = { cameraData.JitterX, cameraData.JitterY };
+    constants.mvecScale = { 1.0f / static_cast<float>(mRenderWidth), 1.0f / static_cast<float>(mRenderHeight) };
+    constants.cameraPinholeOffset = { 0.0f, 0.0f };
+    constants.cameraPos = { cameraData.CameraPosition.x, cameraData.CameraPosition.y, cameraData.CameraPosition.z };
+    constants.cameraUp = { cameraData.CameraUp.x, cameraData.CameraUp.y, cameraData.CameraUp.z };
+    constants.cameraRight = { cameraData.CameraRight.x, cameraData.CameraRight.y, cameraData.CameraRight.z };
+    constants.cameraFwd = { cameraData.CameraForward.x, cameraData.CameraForward.y, cameraData.CameraForward.z };
+    constants.cameraNear = cameraData.NearPlane;
+    constants.cameraFar = cameraData.FarPlane;
+    constants.cameraFOV = cameraData.FovY;
+    constants.cameraAspectRatio = cameraData.AspectRatio;
+    constants.motionVectorsInvalidValue = 0.0f;
+    constants.depthInverted = sl::Boolean::eFalse;
+    constants.cameraMotionIncluded = sl::Boolean::eTrue;
+    constants.motionVectors3D = sl::Boolean::eFalse;
+    constants.reset = cameraData.Reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    constants.orthographicProjection = sl::Boolean::eFalse;
+    constants.motionVectorsDilated = sl::Boolean::eFalse;
+    constants.motionVectorsJittered = sl::Boolean::eFalse;
+
+    const sl::Result result = slSetConstants(constants, frameToken, GetDlssViewport());
+    if (result != sl::Result::eOk)
+    {
+        mLastError = "DLSS: failed to submit frame constants to Streamline.";
+        return false;
+    }
+
+    return true;
+}
+
+bool DlssRenderer::EvaluateInternal(ID3D12GraphicsCommandList* commandList, ID3D12Resource* inputColor, ID3D12Resource* depth, ID3D12Resource* motionVectors, const sl::FrameToken& frameToken)
+{
+    if (mOutputState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        const auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+            mOutputTexture.Get(),
+            mOutputState,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        commandList->ResourceBarrier(1, &toUav);
+        mOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    sl::Resource colorIn(sl::ResourceType::eTex2d, inputColor, static_cast<uint32_t>(D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE));
+    sl::Resource colorOut(sl::ResourceType::eTex2d, mOutputTexture.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+    sl::Resource depthRes(sl::ResourceType::eTex2d, depth, static_cast<uint32_t>(D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE));
+    sl::Resource motionRes(sl::ResourceType::eTex2d, motionVectors, static_cast<uint32_t>(D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE));
+
+    const sl::Extent renderExtent{ 0, 0, mRenderWidth, mRenderHeight };
+    const sl::Extent outputExtent{ 0, 0, mOutputWidth, mOutputHeight };
+
+    sl::ResourceTag tags[] =
+    {
+        sl::ResourceTag(&colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent),
+        sl::ResourceTag(&colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent),
+        sl::ResourceTag(&depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent),
+        sl::ResourceTag(&motionRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent),
+        sl::ResourceTag(&colorIn, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &renderExtent)
+    };
+
+    const sl::Result tagResult = slSetTagForFrame(frameToken, GetDlssViewport(), tags, static_cast<uint32_t>(std::size(tags)), commandList);
+    if (tagResult != sl::Result::eOk)
+    {
+        mLastError = "DLSS: failed to tag input resources for Streamline.";
+        return false;
+    }
+
+    const sl::ViewportHandle viewport = GetDlssViewport();
+    const sl::BaseStructure* inputs[] = { &viewport };
+    const sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, frameToken, inputs, static_cast<uint32_t>(std::size(inputs)), commandList);
+    if (evalResult != sl::Result::eOk)
+    {
+        mLastError = "DLSS: evaluation failed.";
+        return false;
+    }
+
+    const auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(mOutputTexture.Get());
+    commandList->ResourceBarrier(1, &uavBarrier);
+
+    const auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        mOutputTexture.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toSrv);
+    mOutputState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    return true;
+}
+
+void DlssRenderer::UpdateAvailability()
+{
+    sl::FeatureRequirements requirements{};
+    const sl::Result requirementsResult = slGetFeatureRequirements(sl::kFeatureDLSS, requirements);
+    if (requirementsResult != sl::Result::eOk)
+    {
+        mAvailable = false;
+        mLastError = "DLSS: Streamline loaded but the DLSS feature is unavailable on this system.";
+        return;
+    }
+
+    mAvailable = requirements.flags & sl::FeatureRequirementFlags::eD3D12Supported;
+    if (!mAvailable)
+    {
+        mLastError = "DLSS: the current system does not report D3D12 DLSS support.";
+    }
+}

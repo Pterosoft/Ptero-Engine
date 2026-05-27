@@ -4,6 +4,7 @@
 
 #include "imgui.h"
 #include "TaaSettings.h"
+#include "DlssSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RtAOSettings.h"
@@ -40,6 +41,7 @@ void RenderEditorMainMenu(
     bool* showLevelExplorerPanel,
     bool* showPropertiesPanel,
     TaaSettings* taaSettings,
+    DlssSettings* dlssSettings,
     TimeOfDaySettings* timeOfDaySettings,
     RtGISettings* rtgiSettings,
     RadianceProbeSettings* probeSettings,

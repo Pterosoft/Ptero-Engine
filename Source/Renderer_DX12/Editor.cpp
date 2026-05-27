@@ -552,6 +552,7 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.Entities          = &mEntities;
     scene.TimeOfDay         = mTimeOfDaySettings;
     scene.Taa               = mTaaSettings;
+    scene.Dlss              = mDlssSettings;
     scene.Rtgi              = mRtgiSettings;
     scene.Rtao              = mRtaoSettings;
     scene.Gtao              = mGtaoSettings;
@@ -581,6 +582,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.Entities      = &mEntities;
     scene.TimeOfDay     = mTimeOfDaySettings;
     scene.Taa           = mTaaSettings;
+    scene.Dlss          = mDlssSettings;
     scene.Rtgi          = mRtgiSettings;
     scene.Rtao          = mRtaoSettings;
     scene.Gtao          = mGtaoSettings;

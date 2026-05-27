@@ -940,6 +940,12 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
         return true;
     }
 
+    if (mConstantBuffer && !DX12Context_WaitForGPU())
+    {
+        mLastError = "EntityMeshRenderer: timed out while resizing the entity constant buffer.";
+        return false;
+    }
+
     // Unmap old buffer before releasing it.
     if (mConstantBuffer && mMappedCB != nullptr)
     {
@@ -1003,6 +1009,12 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
     if (requiredEntityCount <= mDepthPassCBCapacity)
     {
         return true;
+    }
+
+    if (mDepthPassConstantBuffer && !DX12Context_WaitForGPU())
+    {
+        mLastError = "EntityMeshRenderer: timed out while resizing the shadow-pass constant buffer.";
+        return false;
     }
 
     if (mDepthPassConstantBuffer && mMappedDepthPassCB != nullptr)
@@ -1262,6 +1274,12 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
 {
     if (requiredDrawCount <= mMatCBCapacity)
         return true;
+
+    if (mMaterialCB && !DX12Context_WaitForGPU())
+    {
+        mLastError = "EntityMeshRenderer: timed out while resizing the material constant buffer.";
+        return false;
+    }
 
     if (mMaterialCB && mMappedMatCB != nullptr)
     {

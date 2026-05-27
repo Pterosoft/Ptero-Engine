@@ -3,6 +3,7 @@
 #include "Components.h"
 #include "DX12Helper.h"
 #include "TaaSettings.h"
+#include "DlssSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RtAOSettings.h"
@@ -112,6 +113,7 @@ public:
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
+        DlssSettings* dlssSettings,
         RtGISettings* rtgiSettings,
         RtAOSettings* rtaoSettings,
         GtaoSettings* gtaoSettings,
@@ -121,6 +123,7 @@ public:
     {
         mTimeOfDaySettings = timeOfDaySettings;
         mTaaSettings = taaSettings;
+        mDlssSettings = dlssSettings;
         mRtgiSettings = rtgiSettings;
         mRtaoSettings = rtaoSettings;
         mGtaoSettings = gtaoSettings;
@@ -240,6 +243,7 @@ private:
         std::vector<Entity> Entities;
         TimeOfDaySettings TimeOfDay{};
         TaaSettings Taa{};
+        DlssSettings Dlss{};
         RtGISettings Rtgi{};
         RtAOSettings Rtao{};
         GtaoSettings Gtao{};
@@ -248,6 +252,7 @@ private:
         BloomSettings Bloom{};
         bool HasTimeOfDay = false;
         bool HasTaa = false;
+        bool HasDlss = false;
         bool HasRtgi = false;
         bool HasRtao = false;
         bool HasGtao = false;
@@ -345,6 +350,7 @@ private:
 
     TimeOfDaySettings* mTimeOfDaySettings = nullptr;
     TaaSettings* mTaaSettings = nullptr;
+    DlssSettings* mDlssSettings = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
     RtAOSettings* mRtaoSettings = nullptr;
     GtaoSettings* mGtaoSettings = nullptr;

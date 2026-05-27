@@ -29,6 +29,7 @@ extern "C"
     bool __stdcall DX12Context_AllocateSrvDescriptor(
         D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool __stdcall DX12Context_WaitForGPU();
 }
 
 class EntityMeshRenderer

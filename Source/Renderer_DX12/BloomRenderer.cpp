@@ -14,6 +14,7 @@ extern "C"
         D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
     ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
     UINT __stdcall DX12Context_GetSrvDescriptorSize();
+    bool __stdcall DX12Context_WaitForGPU();
 }
 
 // -------------------------------------------------------------------------
@@ -24,6 +25,12 @@ bool BloomRenderer::Initialize(UINT width, UINT height)
 {
     if (mIsInitialized && mWidth == width && mHeight == height)
         return true;
+
+    if (mIsInitialized && !DX12Context_WaitForGPU())
+    {
+        mLastError = "BloomRenderer: timed out while waiting to resize resources.";
+        return false;
+    }
 
     Shutdown();
 

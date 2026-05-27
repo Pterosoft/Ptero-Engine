@@ -119,6 +119,21 @@ namespace
         settings.ResetHistory = true;
     }
 
+    json SerializeDlssSettings(const DlssSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "Mode", settings.Mode }
+        };
+    }
+
+    void DeserializeDlssSettings(const json& settingsJson, DlssSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.Mode = settingsJson.value("Mode", settings.Mode);
+        settings.ResetHistory = true;
+    }
+
     json SerializeRtgiSettings(const RtGISettings& settings)
     {
         return json{
@@ -326,6 +341,8 @@ void SceneSerializer::Serialize(const std::string& filepath)
         sceneJson["TimeOfDaySettings"] = SerializeTimeOfDaySettings(*mScene->TimeOfDay);
     if (mScene->Taa != nullptr)
         sceneJson["TaaSettings"] = SerializeTaaSettings(*mScene->Taa);
+    if (mScene->Dlss != nullptr)
+        sceneJson["DlssSettings"] = SerializeDlssSettings(*mScene->Dlss);
     if (mScene->Rtgi != nullptr)
         sceneJson["RtGISettings"] = SerializeRtgiSettings(*mScene->Rtgi);
     if (mScene->Rtao != nullptr)
@@ -419,6 +436,8 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         DeserializeTimeOfDaySettings(sceneJson["TimeOfDaySettings"], *mScene->TimeOfDay);
     if (mScene->Taa != nullptr && sceneJson.contains("TaaSettings"))
         DeserializeTaaSettings(sceneJson["TaaSettings"], *mScene->Taa);
+    if (mScene->Dlss != nullptr && sceneJson.contains("DlssSettings"))
+        DeserializeDlssSettings(sceneJson["DlssSettings"], *mScene->Dlss);
     if (mScene->Rtgi != nullptr && sceneJson.contains("RtGISettings"))
         DeserializeRtgiSettings(sceneJson["RtGISettings"], *mScene->Rtgi);
     if (mScene->Rtao != nullptr && sceneJson.contains("RtAOSettings"))

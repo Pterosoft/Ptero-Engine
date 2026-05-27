@@ -24,6 +24,7 @@ extern "C"
         D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
     bool __stdcall DX12Context_WaitForGPU();
+    bool __stdcall DX12Context_StreamlineInitialize();
 }
 
     namespace
@@ -212,6 +213,27 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Motion vector renderer initialization failed.\n");
+            if (mMotionVectorRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mMotionVectorRenderer.GetLastErrorMessage());
+        }
+
+        if (DX12Context_StreamlineInitialize())
+        {
+            if (!mDlssRenderer.Initialize(mSceneWidth, mSceneHeight))
+            {
+                OutputDebugStringA("DX12SceneRenderer: DLSS initialization failed – DLSS disabled.\n");
+                if (mDlssRenderer.GetLastErrorMessage())
+                    OutputDebugStringA(mDlssRenderer.GetLastErrorMessage());
+            }
+        }
+        else
+        {
+            OutputDebugStringA("DX12SceneRenderer: Streamline initialization failed; DLSS unavailable.\n");
+        }
+
         UpdateSceneConstants();
 
         // Initialize the entity mesh renderer so it is ready to receive entities each frame.
@@ -339,6 +361,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     {
         return;
     }
+
+    const uint32_t renderFrameIndex = mRenderFrameIndex++;
 
     // Drive the editor camera once per frame so the constant buffer reflects live input.
     UpdateCamera();
@@ -477,6 +501,12 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
        const UINT desiredPointShadowMapSize = static_cast<UINT>((mPointShadowSettings.MapSize > 0) ? mPointShadowSettings.MapSize : 1);
         if (mPointShadowMapRenderer.GetMapSize() != desiredPointShadowMapSize)
         {
+            if (!DX12Context_WaitForGPU())
+            {
+                mLastErrorMessage = "Timed out while waiting to recreate point-shadow resources.";
+            }
+            else
+            {
             mPointShadowMapRenderer.Shutdown();
             mPointShadowMapRenderer.SetMapSize(desiredPointShadowMapSize);
             mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
@@ -486,6 +516,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA("DX12SceneRenderer: Point shadow map renderer reinitialization failed.\n");
                 if (mPointShadowMapRenderer.GetLastError())
                     OutputDebugStringA(mPointShadowMapRenderer.GetLastError());
+            }
             }
         }
 
@@ -1235,13 +1266,121 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     // PASS 7 – TAA resolve (optional)
     // -----------------------------------------------------------------------
-    if (!rtaoDebugViewActive && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+    const bool dlssWillEvaluate = !rtaoDebugViewActive
+        && mDlssSettings.Enabled
+        && mDlssRenderer.IsAvailable()
+        && mMotionVectorRenderer.GetOutputResource() != nullptr;
+
+    if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
     {
         mTaaRenderer.Resolve(
             commandList,
             mSceneColorTarget.Get(),
             mSceneSrvCpuHandle,
             mTaaSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 7.5 – Motion vectors + DLSS SR (optional)
+    // Runs after TAA so the temporal resolve can remain available when DLSS is off.
+    // Bloom and AgX then consume the DLSS output when enabled.
+    // -----------------------------------------------------------------------
+    if (dlssWillEvaluate)
+    {
+        if (mEntities != nullptr)
+        {
+            mMotionVectorRenderer.SetEntities(mEntities);
+            mMotionVectorRenderer.Render(
+                commandList,
+                mPreviousEntityTransforms,
+                mNonJitteredViewProjection,
+                mPreviousViewProjectionForRtgi,
+                mDlssSettings.ResetHistory);
+        }
+
+        DlssRenderer::CameraFrameData cameraData{};
+        cameraData.View = mNonJitteredViewMatrix;
+        cameraData.Projection = mNonJitteredProjectionMatrix;
+        cameraData.PrevViewProjection = mPreviousViewProjectionForRtgi;
+        cameraData.CameraPosition = mCamera.GetPosition();
+        cameraData.CameraUp = mCamera.GetUpVector();
+        cameraData.CameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
+        cameraData.CameraForward = mCamera.GetForwardVector();
+        cameraData.JitterX = mCurrentCameraJitter[0];
+        cameraData.JitterY = mCurrentCameraJitter[1];
+        cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
+        cameraData.NearPlane = 0.1f;
+        cameraData.FarPlane = 100.0f;
+        cameraData.FovY = XM_PIDIV4;
+        cameraData.AspectRatio = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(mSceneHeight, 1u));
+
+        ID3D12Resource* dlssInputResource = mSceneColorTarget.Get();
+        ID3D12Resource* motionVectorResource = mMotionVectorRenderer.GetOutputResource();
+        const D3D12_RESOURCE_STATES dlssReadState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
+        {
+            const auto colorToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                dlssInputResource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &colorToAllShaderRead);
+        }
+
+        if (mDepthBufferState != dlssReadState)
+        {
+            const auto depthToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                mDepthBufferState,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &depthToSrv);
+            mDepthBufferState = dlssReadState;
+        }
+
+        {
+            const auto motionVectorsToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                motionVectorResource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &motionVectorsToAllShaderRead);
+        }
+
+        mDlssRenderer.Evaluate(
+            commandList,
+            dlssInputResource,
+            mSceneDepthTarget.Get(),
+            motionVectorResource,
+            cameraData,
+            mDlssSettings,
+            renderFrameIndex);
+
+        {
+            const auto colorBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                dlssInputResource,
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &colorBackToPixelShaderRead);
+        }
+
+        {
+            const auto motionVectorsBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                motionVectorResource,
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &motionVectorsBackToPixelShaderRead);
+        }
+
+        if (mDepthBufferState == dlssReadState)
+        {
+            const auto depthBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &depthBackToPixelShaderRead);
+            mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -1260,6 +1399,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         {
             bloomInputResource = mTaaRenderer.GetOutputResource();
             bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+        }
+        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        {
+            bloomInputResource = mDlssRenderer.GetOutputResource();
+            bloomInputSrv = mDlssRenderer.GetOutputCpuSrv();
         }
 
         mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
@@ -1283,6 +1427,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             agxInputResource = mBloomRenderer.GetOutputResource();
             agxInputSrv      = mBloomRenderer.GetOutputCpuSrv();
         }
+        else if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        {
+            agxInputResource = mDlssRenderer.GetOutputResource();
+            agxInputSrv = mDlssRenderer.GetOutputCpuSrv();
+        }
         else if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             agxInputResource = mTaaRenderer.GetOutputResource();
@@ -1294,6 +1443,25 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
     }
+
+    if (mEntities != nullptr)
+    {
+        mPreviousEntityTransforms.clear();
+        for (std::size_t i = 0; i < mEntities->size(); ++i)
+        {
+            const Entity& entity = (*mEntities)[i];
+            if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            {
+                continue;
+            }
+
+            XMFLOAT4X4 model{};
+            XMStoreFloat4x4(&model, entity.Transform.GetTransform());
+            mPreviousEntityTransforms[i] = model;
+        }
+    }
+
+    mPreviousViewProjectionForRtgi = mNonJitteredViewProjection;
 }
 
 void DX12SceneRenderer::Shutdown()
@@ -1342,21 +1510,26 @@ void DX12SceneRenderer::Shutdown()
 
 bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
 {
-    UINT renderWidth = 0;
-    UINT renderHeight = 0;
+    UINT outputWidth = 0;
+    UINT outputHeight = 0;
+    if (!DX12Context_GetRenderSize(&outputWidth, &outputHeight))
+    {
+        mLastErrorMessage = "Failed to query the DX12 back-buffer size.";
+        return false;
+    }
 
-    if (mHasCustomSceneResolution)
+    UINT renderWidth = outputWidth;
+    UINT renderHeight = outputHeight;
+    const UINT previousSceneWidth = mSceneWidth;
+    const UINT previousSceneHeight = mSceneHeight;
+    if (mDlssSettings.Enabled && mDlssRenderer.IsAvailable())
+    {
+        mDlssRenderer.QueryOptimalRenderSize(outputWidth, outputHeight, mDlssSettings, renderWidth, renderHeight);
+    }
+    else if (mHasCustomSceneResolution)
     {
         renderWidth = mCustomSceneWidth;
         renderHeight = mCustomSceneHeight;
-    }
-    else
-    {
-        if (!DX12Context_GetRenderSize(&renderWidth, &renderHeight))
-        {
-            mLastErrorMessage = "Failed to query the DX12 back-buffer size.";
-            return false;
-        }
     }
 
     if (renderWidth == 0 || renderHeight == 0)
@@ -1364,8 +1537,37 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
         return true;
     }
 
-    if (mSceneColorTarget && renderWidth == mSceneWidth && renderHeight == mSceneHeight)
+    const bool outputSizeChanged = !mDlssRenderer.IsInitialized()
+        || outputWidth != mDlssRenderer.GetOutputWidth()
+        || outputHeight != mDlssRenderer.GetOutputHeight();
+    const bool renderSizeChanged = !mSceneColorTarget
+        || renderWidth != previousSceneWidth
+        || renderHeight != previousSceneHeight;
+
+    if (!renderSizeChanged && !outputSizeChanged)
     {
+        return true;
+    }
+
+    if (!renderSizeChanged && outputSizeChanged)
+    {
+        if (!mDlssRenderer.EnsureSize(renderWidth, renderHeight, outputWidth, outputHeight))
+        {
+            mLastErrorMessage = "Failed to resize the DLSS output resources.";
+            return false;
+        }
+
+        if (mBloomRenderer.IsInitialized())
+        {
+            mBloomRenderer.Initialize(outputWidth, outputHeight);
+        }
+
+        if (mAgxTonemapper.IsInitialized())
+        {
+            mAgxTonemapper.Initialize(outputWidth, outputHeight);
+        }
+
+        mDlssSettings.ResetHistory = true;
         return true;
     }
 
@@ -1375,6 +1577,12 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
 
 bool DX12SceneRenderer::ResizeSceneTarget(UINT width, UINT height)
 {
+    if (mDlssSettings.Enabled)
+    {
+        mHasCustomSceneResolution = false;
+        return EnsureSceneTargetMatchesWindowSize();
+    }
+
     if (width == 0 || height == 0)
     {
         return false;
@@ -1417,20 +1625,37 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
         mTaaSettings.ResetHistory = true;
     }
 
+    if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
+    {
+        OutputDebugStringA("DX12SceneRenderer: motion vector resize failed.\n");
+    }
+
+    UINT outputWidth = mSceneWidth;
+    UINT outputHeight = mSceneHeight;
+    if (DX12Context_GetRenderSize(&outputWidth, &outputHeight) && mDlssRenderer.IsAvailable())
+    {
+        mDlssRenderer.EnsureSize(mSceneWidth, mSceneHeight, outputWidth, outputHeight);
+    }
+
+    const UINT postProcessWidth = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputWidth : mSceneWidth;
+    const UINT postProcessHeight = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputHeight : mSceneHeight;
+
     if (mAgxTonemapper.IsInitialized())
     {
-        mAgxTonemapper.Initialize(mSceneWidth, mSceneHeight);
+        mAgxTonemapper.Initialize(postProcessWidth, postProcessHeight);
     }
 
     if (mBloomRenderer.IsInitialized())
     {
-        mBloomRenderer.Initialize(mSceneWidth, mSceneHeight);
+        mBloomRenderer.Initialize(postProcessWidth, postProcessHeight);
     }
 
     if (mVolumetricFogRenderer.IsInitialized())
     {
         mVolumetricFogRenderer.Initialize(mSceneWidth, mSceneHeight);
     }
+
+    mDlssSettings.ResetHistory = true;
 
     return true;
 }

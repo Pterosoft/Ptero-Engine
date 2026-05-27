@@ -27,6 +27,9 @@
 #include "GtaoSettings.h"
 #include "BloomRenderer.h"
 #include "BloomSettings.h"
+#include "DlssRenderer.h"
+#include "DlssSettings.h"
+#include "MotionVectorRenderer.h"
 #include "..\Ptero-Engine\EditorCamera.h"
 #include "..\Ptero-Engine\RenderInterfaces.h"
 
@@ -115,7 +118,7 @@ public:
     }
 
     // Returns the final scene output for display:
-    //   AgX tonemapped → Bloom composited → TAA resolved → raw scene colour (in priority order when enabled).
+    //   AgX tonemapped → Bloom composited → DLSS upscaled → TAA resolved → raw scene colour (in priority order when enabled).
     ImTextureID GetSceneTextureId() const
     {
         if (mRtaoSettings.DebugView > 0)
@@ -124,6 +127,8 @@ public:
             return mAgxTonemapper.GetOutputTextureId();
         if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
             return mBloomRenderer.GetOutputTextureId();
+        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+            return mDlssRenderer.GetOutputTextureId();
         if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
             return mTaaRenderer.GetOutputTextureId();
         return mSceneTextureId;
@@ -137,6 +142,8 @@ public:
             return mAgxTonemapper.GetOutputGpuSrv();
         if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
             return mBloomRenderer.GetOutputGpuSrv();
+        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+            return mDlssRenderer.GetOutputGpuSrv();
         if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
             return mTaaRenderer.GetOutputGpuSrv();
         return mSceneSrvGpuHandle;
@@ -171,6 +178,9 @@ public:
 
     PointShadowSettings& GetPointShadowSettings() { return mPointShadowSettings; }
     const PointShadowSettings& GetPointShadowSettings() const { return mPointShadowSettings; }
+
+    DlssSettings& GetDlssSettings() { return mDlssSettings; }
+    const DlssSettings& GetDlssSettings() const { return mDlssSettings; }
 
     ImTextureID GetPointShadowDebugTextureId() const
     {
@@ -214,6 +224,8 @@ public:
     ID3D12Resource* GetSceneColorTargetResource() const
     {
         // Return the final output texture based on which post-process is active
+        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+            return mDlssRenderer.GetOutputResource();
         if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
             return mAgxTonemapper.GetOutputResource();
         if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
@@ -297,6 +309,7 @@ private:
     DirectX::XMFLOAT4X4 mNonJitteredViewProjection{}; // VP without TAA jitter, used by RT GI
     DirectX::XMFLOAT4X4 mInvViewProjection{};         // Transpose(inv(jitteredVP)), for world-pos reconstruction
 
+    uint32_t mRenderFrameIndex = 0;
     uint32_t mProbeFrameIndex = 0; // monotonic counter passed to radiance probe update
 
     // Jittered projection matrix (without view) stored so the sky pass can be jittered
@@ -345,6 +358,9 @@ private:
     // Temporal Anti-Aliasing renderer and settings.
     TAARenderer mTaaRenderer;
     TaaSettings mTaaSettings;
+    DlssRenderer mDlssRenderer;
+    DlssSettings mDlssSettings;
+    MotionVectorRenderer mMotionVectorRenderer;
 
     // Sky rendering and time-of-day lighting.
     SkyRenderer          mSkyRenderer;
@@ -396,6 +412,7 @@ private:
     bool  mRtaoDebugViewWasActive = false;
     bool  mRtaoJitterSuppressedLastFrame = false;
     bool  mGtaoJitterSuppressedLastFrame = false;
+    std::unordered_map<std::size_t, DirectX::XMFLOAT4X4> mPreviousEntityTransforms;
 
     // Cache a conservative local-space bounding radius per mesh so the shadow frustum
     // can expand to fit large imported scenes without re-scanning every vertex each frame.
