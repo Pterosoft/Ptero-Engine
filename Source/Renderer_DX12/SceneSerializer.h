@@ -17,6 +17,10 @@
 struct Scene
 {
     std::vector<Entity>* Entities = nullptr;
+    DirectX::XMFLOAT3* CameraPosition = nullptr;
+    DirectX::XMFLOAT3* CameraRotation = nullptr;
+    bool* HasCameraPosition = nullptr;
+    bool* HasCameraRotation = nullptr;
     TimeOfDaySettings* TimeOfDay = nullptr;
     TaaSettings* Taa = nullptr;
     DlssSettings* Dlss = nullptr;
@@ -42,7 +46,7 @@ struct Scene
 class SceneSerializer
 {
 public:
-    using ProgressCallback = void(*)(float progress, const char* statusMessage, void* userData);
+    using ProgressCallback = bool(*)(float progress, const char* statusMessage, void* userData);
 
     explicit SceneSerializer(Scene* scene)
         : mScene(scene)

@@ -62,19 +62,22 @@
     <ClCompile Include="..\Renderer_DX12\SceneSerializer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_draw.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_tables.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Renderer_DX12\DX12RendererAPI.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

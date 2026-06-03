@@ -27,6 +27,22 @@
 
 class SceneSerializer;
 
+struct EngineResourceUsageEntry
+{
+    std::string Name;
+    float CpuUsagePercent = 0.0f;
+    float GpuUsagePercent = 0.0f;
+    float RamUsagePercent = 0.0f;
+};
+
+struct EngineResourceUsageSnapshot
+{
+    float TotalCpuUsagePercent = 0.0f;
+    float TotalGpuUsagePercent = 0.0f;
+    float TotalRamUsagePercent = 0.0f;
+    std::vector<EngineResourceUsageEntry> Entries;
+};
+
 class Editor
 {
 public:
@@ -103,6 +119,11 @@ public:
     bool* GetShowAudioManagerPanelPointer()
     {
         return &mShowAudioManagerPanel;
+    }
+
+    bool* GetShowResourceDebugPanelPointer()
+    {
+        return &mShowResourceDebugPanel;
     }
 
     bool SaveSceneToFile(const std::string& filepath);
@@ -184,6 +205,7 @@ public:
 
     void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
     void DrawAudioManagerWindow(AudioManager* audioManager);
+    void DrawResourceDebugWindow();
     void DrawViewportResolutionWindow();
     void DrawScreenshotWindow();
     void DrawViewport(
@@ -208,6 +230,11 @@ public:
         mViewportResolutionWidth = width;
         mViewportResolutionHeight = height;
     }
+    bool HasPendingCameraRestore() const { return mRequestCameraRestore; }
+    const DirectX::XMFLOAT3& GetPendingCameraRestorePosition() const { return mSavedCameraPosition; }
+    const DirectX::XMFLOAT3& GetPendingCameraRestoreRotation() const { return mSavedCameraRotation; }
+    void ConsumePendingCameraRestore() { mRequestCameraRestore = false; }
+    void SetResourceUsageSnapshot(const EngineResourceUsageSnapshot& snapshot) { mResourceUsageSnapshot = snapshot; }
 
 private:
     void ReportProgress(const wchar_t* message) const;
@@ -248,6 +275,8 @@ private:
     struct SceneLoadData
     {
         std::vector<Entity> Entities;
+        DirectX::XMFLOAT3 CameraPosition{};
+        DirectX::XMFLOAT3 CameraRotation{};
         TimeOfDaySettings TimeOfDay{};
         TaaSettings Taa{};
         DlssSettings Dlss{};
@@ -257,6 +286,8 @@ private:
         AgxTonemapSettings Agx{};
         VolumetricFogSettings VolumetricFog{};
         BloomSettings Bloom{};
+        bool HasCameraPosition = false;
+        bool HasCameraRotation = false;
         bool HasTimeOfDay = false;
         bool HasTaa = false;
         bool HasDlss = false;
@@ -272,6 +303,7 @@ private:
     {
         std::atomic<bool> InProgress{ false };
         std::atomic<bool> Completed{ false };
+        std::atomic<bool> CancelRequested{ false };
         std::atomic<float> Progress{ 0.0f };
         mutable std::mutex Mutex;
         std::string StatusMessage;
@@ -279,6 +311,9 @@ private:
         std::string ErrorMessage;
         std::optional<SceneLoadData> Result;
     };
+
+    DirectX::XMFLOAT3 mSavedCameraPosition = DirectX::XMFLOAT3(0.0f, -6.0f, 1.5f);
+    DirectX::XMFLOAT3 mSavedCameraRotation = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 
     void DrawComponentsPanel();
     void DrawLevelExplorerPanel();
@@ -321,7 +356,7 @@ private:
     void ResetScene();
     bool PromptToSaveUnsavedScene(HWND ownerWindowHandle);
     void SetSceneLoadProgress(float progress, const char* statusMessage);
-    static void SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData);
+    static bool SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData);
 
     static ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
 
@@ -339,6 +374,7 @@ private:
     bool mShowLevelExplorerPanel = false;
     bool mShowPropertiesPanel = true;
     bool mShowAudioManagerPanel = false;
+    bool mShowResourceDebugPanel = false;
     bool mBlockViewportSelection = false;
     int mNextGeometryInstanceId = 1;
     ViewportSelectionState mViewportSelection;
@@ -382,6 +418,9 @@ private:
     int mViewportResolutionHeight = 1080;
     bool mShowViewportResolutionDialog = false;
     bool mRequestViewportResolutionChange = false;
+    bool mRequestCameraRestore = false;
+
+    EngineResourceUsageSnapshot mResourceUsageSnapshot;
 
     // Screenshot functionality
     std::string mScreenshotOutputFolder;

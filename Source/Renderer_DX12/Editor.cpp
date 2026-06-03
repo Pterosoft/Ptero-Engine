@@ -277,6 +277,12 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
 
 void Editor::Shutdown()
 {
+    if (mSceneLoadWorker.joinable())
+    {
+        mSceneLoadState.CancelRequested.store(true);
+        mSceneLoadWorker.join();
+    }
+
     ReleaseIconTexture(mGeometryIcon);
     ReleaseIconTexture(mPointLightIcon);
     ReleaseIconTexture(mAudioEmitterIcon);
@@ -569,6 +575,8 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
 {
     Scene scene;
     scene.Entities          = &mEntities;
+    scene.CameraPosition    = &mSavedCameraPosition;
+    scene.CameraRotation    = &mSavedCameraRotation;
     scene.TimeOfDay         = mTimeOfDaySettings;
     scene.Taa               = mTaaSettings;
     scene.Dlss              = mDlssSettings;
@@ -599,6 +607,10 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
 {
     Scene scene;
     scene.Entities      = &mEntities;
+    scene.CameraPosition = &mSavedCameraPosition;
+    scene.CameraRotation = &mSavedCameraRotation;
+    scene.HasCameraPosition = nullptr;
+    scene.HasCameraRotation = nullptr;
     scene.TimeOfDay     = mTimeOfDaySettings;
     scene.Taa           = mTaaSettings;
     scene.Dlss          = mDlssSettings;
@@ -641,10 +653,16 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
 {
     if (IsSceneLoading()) return false;
 
+    if (mSceneLoadWorker.joinable())
+    {
+        mSceneLoadWorker.join();
+    }
+
     mSceneLoadState.Progress = 0.0f;
     mSceneLoadState.StatusMessage = "Loading...";
     mSceneLoadState.InProgress = true;
     mSceneLoadState.Completed = false;
+    mSceneLoadState.CancelRequested = false;
     mSceneLoadState.Result.reset();
 
     std::string fp = filepath;
@@ -653,6 +671,10 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         SceneLoadData data;
         Scene scene;
         scene.Entities      = &data.Entities;
+        scene.CameraPosition = &data.CameraPosition;
+        scene.CameraRotation = &data.CameraRotation;
+        scene.HasCameraPosition = &data.HasCameraPosition;
+        scene.HasCameraRotation = &data.HasCameraRotation;
         scene.TimeOfDay     = &data.TimeOfDay;
         scene.Taa           = &data.Taa;
         scene.Rtgi          = &data.Rtgi;
@@ -790,6 +812,12 @@ void Editor::UpdateSceneLoading()
         mSelectedEntityIndices.clear();
         mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
 
+        if (data.HasCameraPosition)
+            mSavedCameraPosition = data.CameraPosition;
+        if (data.HasCameraRotation)
+            mSavedCameraRotation = data.CameraRotation;
+        mRequestCameraRestore = data.HasCameraPosition || data.HasCameraRotation;
+
         if (mTimeOfDaySettings)       *mTimeOfDaySettings       = data.TimeOfDay;
         if (mTaaSettings)             *mTaaSettings             = data.Taa;
         if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
@@ -832,10 +860,19 @@ void Editor::SetSceneLoadProgress(float progress, const char* statusMessage)
         mSceneLoadState.StatusMessage = statusMessage;
 }
 
-void Editor::SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData)
+bool Editor::SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData)
 {
     if (auto* editor = static_cast<Editor*>(userData))
+    {
+        if (editor->mSceneLoadState.CancelRequested.load())
+        {
+            return false;
+        }
+
         editor->SetSceneLoadProgress(progress, statusMessage);
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1502,10 +1539,12 @@ void Editor::HandleKeyboardShortcuts()
 void Editor::DrawViewportStatisticsOverlay() const
 {
     if (!mShowViewportStatistics || !mViewportStatisticsText) return;
+    if (mLastViewportContentSize.x <= 1.0f || mLastViewportContentSize.y <= 1.0f) return;
 
     const ImGuiWindowFlags overlayFlags =
         ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMouseInputs;
 
     ImGui::SetNextWindowBgAlpha(0.45f);
@@ -1527,14 +1566,26 @@ void Editor::DrawSceneLoadingOverlay()
 {
     if (!IsSceneLoading()) return;
 
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImVec2 overlayCenter;
+    if (mLastViewportContentSize.x > 1.0f && mLastViewportContentSize.y > 1.0f)
+    {
+        overlayCenter = ImVec2(
+            mLastViewportContentOrigin.x + mLastViewportContentSize.x * 0.5f,
+            mLastViewportContentOrigin.y + mLastViewportContentSize.y * 0.5f);
+    }
+    else
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        overlayCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    }
+
+    ImGui::SetNextWindowPos(overlayCenter, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(360.0f, 80.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.85f);
     const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoDocking;
 
     if (ImGui::Begin("##loading_overlay", nullptr, flags))
     {
@@ -1542,6 +1593,56 @@ void Editor::DrawSceneLoadingOverlay()
         ImGui::ProgressBar(GetSceneLoadProgress(), ImVec2(-1.0f, 0.0f));
         ImGui::TextDisabled("%s", GetSceneLoadStatusMessage().c_str());
     }
+    ImGui::End();
+}
+
+void Editor::DrawResourceDebugWindow()
+{
+    if (!ImGui::Begin("Resource Debug", &mShowResourceDebugPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextDisabled(
+        "Total CPU: %.1f%%  |  Total GPU: %.1f%%  |  Total RAM: %.1f%%",
+        mResourceUsageSnapshot.TotalCpuUsagePercent,
+        mResourceUsageSnapshot.TotalGpuUsagePercent,
+        mResourceUsageSnapshot.TotalRamUsagePercent);
+    ImGui::Separator();
+
+    if (mResourceUsageSnapshot.Entries.empty())
+    {
+        ImGui::TextDisabled("No resource usage data available.");
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginTable("ResourceUsageTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Engine Element");
+        ImGui::TableSetupColumn("CPU %");
+        ImGui::TableSetupColumn("GPU %");
+        ImGui::TableSetupColumn("RAM %");
+        ImGui::TableHeadersRow();
+
+        for (const EngineResourceUsageEntry& entry : mResourceUsageSnapshot.Entries)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(entry.Name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.1f", entry.CpuUsagePercent);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%.1f", entry.GpuUsagePercent);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%.1f", entry.RamUsagePercent);
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::TextDisabled("Values are grouped runtime estimates for engine subsystems intended for debugging.");
     ImGui::End();
 }
 
@@ -1779,27 +1880,11 @@ void Editor::DrawToolbar(
     D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
     D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon)
 {
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const float toolbarWidth = 164.0f;
-    const float toolbarHeight = 70.0f;
-    ImVec2 anchorOrigin = mLastViewportContentOrigin;
-    ImVec2 anchorSize = mLastViewportContentSize;
-    if (anchorSize.x <= 1.0f || anchorSize.y <= 1.0f)
-    {
-        anchorOrigin = mainViewport->WorkPos;
-        anchorSize = mainViewport->WorkSize;
-    }
-
-    const ImVec2 toolbarPos(
-        anchorOrigin.x + (anchorSize.x * 0.5f) - (toolbarWidth * 0.5f),
-        anchorOrigin.y + 10.0f);
-
-    ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(toolbarWidth, toolbarHeight), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(220.0f, 56.0f), ImGuiCond_FirstUseEver);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(4, 4));
 
-    if (!ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoCollapse))
     {
         ImGui::End();
         ImGui::PopStyleVar(2);
@@ -1821,6 +1906,13 @@ void Editor::DrawToolbar(
         if (clicked) mActiveGizmo = active ? GizmoType::None : type;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
     };
+
+    const float totalButtonsWidth = btnSize.x * 4.0f + ImGui::GetStyle().ItemSpacing.x * 3.0f;
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    if (availableWidth > totalButtonsWidth)
+    {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - totalButtonsWidth) * 0.5f);
+    }
 
     ToolButton(selectIcon, GizmoType::None,      "Select  (Q)");
     ImGui::SameLine();
@@ -1844,18 +1936,13 @@ void Editor::DrawViewport(
     Entity* selectedEntity)
 {
     ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const ImVec2 workPos = mainViewport->WorkPos;
-    const ImVec2 workSize = mainViewport->WorkSize;
-    const ImVec2 viewportPos = workPos;
-    const ImVec2 viewportWindowSize = workSize;
-
-    ImGui::SetNextWindowPos(viewportPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(viewportWindowSize, ImGuiCond_Always);
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowSize(mainViewport->WorkSize, ImGuiCond_FirstUseEver);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("Viewport", nullptr,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_MenuBar);
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_MenuBar);
 
     if (ImGui::BeginMenuBar())
     {
@@ -2007,8 +2094,6 @@ void Editor::DrawLevelExplorerPanel()
 
 void Editor::DrawComponentsPanel()
 {
-    ImGui::SetNextWindowPos(ImVec2(32.0f, 210.0f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(250.0f, 280.0f), ImGuiCond_Appearing);
     if (!ImGui::Begin("Components", &mShowComponentsPanel,
         ImGuiWindowFlags_NoCollapse))
     {
@@ -2072,8 +2157,6 @@ void Editor::DrawComponentsPanel()
 
 void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager)
 {
-    ImGui::SetNextWindowPos(ImVec2(1060.0f, 210.0f), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(240.0f, 320.0f), ImGuiCond_Appearing);
     if (!ImGui::Begin("Properties", &mShowPropertiesPanel,
         ImGuiWindowFlags_NoCollapse))
     {
@@ -2635,6 +2718,8 @@ void Editor::Draw(
 {
     mSceneStatusMessage     = sceneStatusMessage;
     mViewportStatisticsText = statisticsText;
+    mSavedCameraPosition    = camera.GetPosition();
+    mSavedCameraRotation    = camera.GetRotation();
     if (!mViewportStatisticsInitialized)
     {
         mShowViewportStatistics = showStatistics;
@@ -2654,6 +2739,7 @@ void Editor::Draw(
     if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();
     if (mShowPropertiesPanel)    DrawPropertiesPanel(selectedEntity, audioManager);
     if (mShowAudioManagerPanel)  DrawAudioManagerWindow(audioManager);
+    if (mShowResourceDebugPanel) DrawResourceDebugWindow();
     DrawViewportResolutionWindow();
     DrawScreenshotWindow();
 

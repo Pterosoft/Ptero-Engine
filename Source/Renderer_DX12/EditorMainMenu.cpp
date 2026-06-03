@@ -885,6 +885,7 @@ void RenderEditorMainMenu(
     bool* showComponentsPanel,
     bool* showLevelExplorerPanel,
     bool* showPropertiesPanel,
+    bool* showResourceDebugPanel,
     TaaSettings* taaSettings,
     DlssSettings* dlssSettings,
     TimeOfDaySettings* timeOfDaySettings,
@@ -1025,6 +1026,11 @@ void RenderEditorMainMenu(
             if (showPropertiesPanel != nullptr)
             {
                 ImGui::MenuItem("Properties", nullptr, showPropertiesPanel);
+            }
+
+            if (showResourceDebugPanel != nullptr)
+            {
+                ImGui::MenuItem("Resource Debug", nullptr, showResourceDebugPanel);
             }
 
             if (ImGui::MenuItem("Asset Browser..."))

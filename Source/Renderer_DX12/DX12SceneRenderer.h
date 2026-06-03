@@ -115,6 +115,13 @@ public:
         return mCamera.GetMovementSpeed();
     }
 
+    void SetCameraTransform(const DirectX::XMFLOAT3& position, const DirectX::XMFLOAT3& rotation)
+    {
+        mCamera.SetPosition(position);
+        mCamera.SetRotation(rotation.x, rotation.y, rotation.z);
+        mTaaSettings.ResetHistory = true;
+    }
+
     void SetGridEnabled(bool isEnabled)
     {
         mGridEnabled = isEnabled;

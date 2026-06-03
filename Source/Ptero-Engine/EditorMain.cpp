@@ -44,6 +44,17 @@ bool gRendererEnteredRenderLoop = false;
 bool gRendererPresentedFirstFrame = false;
 HWND gMainWindowHandle = nullptr;
 
+void BeginApplicationShutdown(HWND hWnd)
+{
+    gIsClosing = true;
+
+    if (hWnd != nullptr)
+    {
+        ShowWindow(hWnd, SW_HIDE);
+        EnableWindow(hWnd, FALSE);
+    }
+}
+
 void UpdateMainWindowTitle(const wchar_t* statusSuffix);
 void ReportRendererFailure(HWND hWnd, const char* fallbackMessage);
 void CleanupRenderer();
@@ -219,10 +230,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
     }
 
-    // Safety net: if WM_DESTROY did not fully run, force renderer cleanup here.
-    CleanupRenderer();
+    if (gMainWindowHandle != nullptr && IsWindow(gMainWindowHandle))
+    {
+        DestroyWindow(gMainWindowHandle);
+        gMainWindowHandle = nullptr;
+    }
 
-    return (int) msg.wParam;
+    if (msg.message != WM_QUIT)
+    {
+        msg.wParam = 0;
+    }
+
+    // Use a hard process termination for application shutdown. Some third-party
+    // audio plugins raise a fatal-exit exception under the debugger during
+    // ExitProcess(), and renderer/audio teardown has proven to block for too long.
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(msg.wParam));
 }
 
 
@@ -395,6 +417,26 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    switch (message)
+    {
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_CLOSE)
+        {
+            BeginApplicationShutdown(hWnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        // Hide the window immediately so shutdown work does not appear as a frozen app.
+        BeginApplicationShutdown(hWnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        break;
+    }
+
     if (gRendererReady && gRendererHandleWindowMessage && gRendererHandleWindowMessage(hWnd, message, wParam, lParam))
     {
         return 1;
@@ -420,7 +462,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
                 break;
             case IDM_EXIT:
-                DestroyWindow(hWnd);
+                SendMessage(hWnd, WM_CLOSE, 0, 0);
                 break;
             default:
                 return DefWindowProc(hWnd, message, wParam, lParam);
@@ -449,20 +491,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             EndPaint(hWnd, &ps);
         }
-        break;
-    case WM_CLOSE:
-        // Stop continuous redraw before teardown to avoid shutdown races.
-        gIsClosing = true;
-        gAudioManager.Shutdown();
-
-        // Release DX12 resources before destroying the HWND so DXGI is not left
-        // holding onto the window during shutdown.
-        CleanupRenderer();
-
-        DestroyWindow(hWnd);
-        break;
-    case WM_DESTROY:
-        PostQuitMessage(0);
         break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);

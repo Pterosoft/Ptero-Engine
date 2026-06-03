@@ -10,7 +10,23 @@ using json = nlohmann::json;
 
 namespace
 {
-    void ReportDeserializeProgress(
+    json SerializeVector3(const DirectX::XMFLOAT3& value)
+    {
+        return json{
+            { "X", value.x },
+            { "Y", value.y },
+            { "Z", value.z }
+        };
+    }
+
+    void DeserializeVector3(const json& valueJson, DirectX::XMFLOAT3& value)
+    {
+        value.x = valueJson.value("X", value.x);
+        value.y = valueJson.value("Y", value.y);
+        value.z = valueJson.value("Z", value.z);
+    }
+
+    bool ReportDeserializeProgress(
         SceneSerializer::ProgressCallback progressCallback,
         void* userData,
         const float progress,
@@ -18,8 +34,10 @@ namespace
     {
         if (progressCallback != nullptr)
         {
-            progressCallback(progress, statusMessage, userData);
+            return progressCallback(progress, statusMessage, userData);
         }
+
+        return true;
     }
 
     json SerializeAgxGradeControl(const AgxColorGradeControl& control)
@@ -337,6 +355,11 @@ void SceneSerializer::Serialize(const std::string& filepath)
     json sceneJson;
     sceneJson["Entities"] = json::array();
 
+    if (mScene->CameraPosition != nullptr)
+        sceneJson["CameraPosition"] = SerializeVector3(*mScene->CameraPosition);
+    if (mScene->CameraRotation != nullptr)
+        sceneJson["CameraRotation"] = SerializeVector3(*mScene->CameraRotation);
+
     if (mScene->TimeOfDay != nullptr)
         sceneJson["TimeOfDaySettings"] = SerializeTimeOfDaySettings(*mScene->TimeOfDay);
     if (mScene->Taa != nullptr)
@@ -416,7 +439,10 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         return false;
     }
 
-    ReportDeserializeProgress(progressCallback, userData, 0.02f, "Opening scene file...");
+    if (!ReportDeserializeProgress(progressCallback, userData, 0.02f, "Opening scene file..."))
+    {
+        return false;
+    }
 
     std::ifstream inputStream(filepath);
     if (!inputStream)
@@ -427,7 +453,10 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
     json sceneJson;
     try
     {
-        ReportDeserializeProgress(progressCallback, userData, 0.08f, "Parsing scene file...");
+        if (!ReportDeserializeProgress(progressCallback, userData, 0.08f, "Parsing scene file..."))
+        {
+            return false;
+        }
         inputStream >> sceneJson;
     }
     catch (...)
@@ -440,7 +469,29 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         return false;
     }
 
-    ReportDeserializeProgress(progressCallback, userData, 0.15f, "Loading scene settings...");
+    if (!ReportDeserializeProgress(progressCallback, userData, 0.15f, "Loading scene settings..."))
+    {
+        return false;
+    }
+
+    if (mScene->HasCameraPosition != nullptr)
+        *mScene->HasCameraPosition = false;
+    if (mScene->HasCameraRotation != nullptr)
+        *mScene->HasCameraRotation = false;
+
+    if (mScene->CameraPosition != nullptr && sceneJson.contains("CameraPosition"))
+    {
+        DeserializeVector3(sceneJson["CameraPosition"], *mScene->CameraPosition);
+        if (mScene->HasCameraPosition != nullptr)
+            *mScene->HasCameraPosition = true;
+    }
+
+    if (mScene->CameraRotation != nullptr && sceneJson.contains("CameraRotation"))
+    {
+        DeserializeVector3(sceneJson["CameraRotation"], *mScene->CameraRotation);
+        if (mScene->HasCameraRotation != nullptr)
+            *mScene->HasCameraRotation = true;
+    }
 
     if (mScene->TimeOfDay != nullptr && sceneJson.contains("TimeOfDaySettings"))
         DeserializeTimeOfDaySettings(sceneJson["TimeOfDaySettings"], *mScene->TimeOfDay);
@@ -520,7 +571,10 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
 
             const float entityProgress = 0.15f + (0.85f * (static_cast<float>(entityIndex) / static_cast<float>(entityCount)));
             const std::string statusMessage = "Loading entities (" + std::to_string(entityIndex) + "/" + std::to_string(entityCount) + ")...";
-            ReportDeserializeProgress(progressCallback, userData, entityProgress, statusMessage.c_str());
+            if (!ReportDeserializeProgress(progressCallback, userData, entityProgress, statusMessage.c_str()))
+            {
+                return false;
+            }
         }
     }
     catch (...)

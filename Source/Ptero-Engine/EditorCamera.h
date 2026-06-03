@@ -97,6 +97,11 @@ public:
         mPosition = DirectX::XMFLOAT3(x, y, z);
     }
 
+    void SetPosition(const DirectX::XMFLOAT3& position)
+    {
+        mPosition = position;
+    }
+
     void LookAt(float targetX, float targetY, float targetZ)
     {
         const DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&mPosition);
@@ -124,6 +129,13 @@ public:
         mMovementSpeed = (std::max)(0.0f, movementSpeed);
     }
 
+    void SetRotation(float pitch, float yaw, float roll = 0.0f)
+    {
+        mPitch = std::clamp(pitch, -EditorCameraPitchLimit, EditorCameraPitchLimit);
+        mYaw = yaw;
+        (void)roll;
+    }
+
     float GetMovementSpeed() const
     {
         return mMovementSpeed;
@@ -132,6 +144,11 @@ public:
     const DirectX::XMFLOAT3& GetPosition() const
     {
         return mPosition;
+    }
+
+    DirectX::XMFLOAT3 GetRotation() const
+    {
+        return DirectX::XMFLOAT3(mPitch, mYaw, 0.0f);
     }
 
     DirectX::XMFLOAT3 GetForwardVector() const

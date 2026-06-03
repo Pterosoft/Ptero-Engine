@@ -185,13 +185,13 @@
     <ClCompile Include="EditorMainMenu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_demo.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_demo.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_draw.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_dx12.cpp">
@@ -200,10 +200,10 @@
     <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_win32.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_tables.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
       <Filter>Source Files\imgui</Filter>
     </ClCompile>
     <ClCompile Include="..\System\MaterialEditor.cpp">
@@ -413,3 +413,4 @@
     </None>
   </ItemGroup>
 </Project>
+

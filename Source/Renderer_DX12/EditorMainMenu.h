@@ -40,6 +40,7 @@ void RenderEditorMainMenu(
     bool* showComponentsPanel,
     bool* showLevelExplorerPanel,
     bool* showPropertiesPanel,
+    bool* showResourceDebugPanel,
     TaaSettings* taaSettings,
     DlssSettings* dlssSettings,
     TimeOfDaySettings* timeOfDaySettings,

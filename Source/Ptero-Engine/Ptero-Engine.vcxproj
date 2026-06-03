@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -81,7 +81,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -99,7 +99,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -115,7 +115,7 @@
       <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -139,7 +139,7 @@
       <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -168,21 +168,22 @@
     <ClCompile Include="..\Renderer_DX12\SceneSerializer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_draw.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_tables.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
+    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="EditorMain.cpp" />
     <ClCompile Include="GridGeometry.cpp" />
     <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.cpp" />
+    <ClCompile Include="Source\Renderer_DX12\DX12RendererAPI.cpp" />
     <ClCompile Include="SplashScreen.cpp" />
   </ItemGroup>
   <ItemGroup>

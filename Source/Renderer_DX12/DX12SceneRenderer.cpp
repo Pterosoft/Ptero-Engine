@@ -1657,6 +1657,7 @@ void DX12SceneRenderer::Shutdown()
     mProbeRenderer.Shutdown();
     mVolumetricFogRenderer.Shutdown();
     mRainRenderer.Shutdown();
+    mDlssRenderer.Shutdown();
     mTaaRenderer.Shutdown();
     mBloomRenderer.Shutdown();
     mAgxTonemapper.Shutdown();
