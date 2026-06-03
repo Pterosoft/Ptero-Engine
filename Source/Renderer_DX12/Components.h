@@ -38,6 +38,11 @@ struct MeshComponent
     std::string MeshPath;
     // Relative path (from Data/) of the assigned .json material or multi-material file.
     std::string MaterialPath;
+    // Multiplies the camera-distance heuristic used to pick lower LODs.
+    // Values above 1 switch to cheaper LODs sooner; values below 1 keep detail longer.
+    float LodUsageScale = 1.0f;
+    // -1 = automatic, otherwise force a specific LOD level for debugging.
+    int DebugForcedLod = -1;
 };
 
 struct NameComponent
@@ -260,13 +265,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(NameComponent, Name)
 // MeshComponent serialization only persists the file paths; the runtime asset handle is transient.
 inline void to_json(nlohmann::json& j, const MeshComponent& mc)
 {
-    j = nlohmann::json{ { "MeshPath", mc.MeshPath }, { "MaterialPath", mc.MaterialPath } };
+    j = nlohmann::json{
+        { "MeshPath", mc.MeshPath },
+        { "MaterialPath", mc.MaterialPath },
+        { "LodUsageScale", mc.LodUsageScale },
+        { "DebugForcedLod", mc.DebugForcedLod }
+    };
 }
 
 inline void from_json(const nlohmann::json& j, MeshComponent& mc)
 {
     mc.MeshPath    = j.value("MeshPath",    std::string{});
     mc.MaterialPath = j.value("MaterialPath", std::string{});
+    mc.LodUsageScale = j.value("LodUsageScale", 1.0f);
+    mc.DebugForcedLod = j.value("DebugForcedLod", -1);
 }
 
 // PointLightComponent – all fields are plain scalars so a single macro handles both directions.

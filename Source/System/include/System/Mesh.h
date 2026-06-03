@@ -2,6 +2,7 @@
 
 #include <DirectXMath.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -23,20 +24,33 @@ struct SubMesh
     std::uint32_t indexCount = 0;
 };
 
+struct MeshLod
+{
+    std::vector<Vertex> Vertices;
+    std::vector<std::uint32_t> Indices;
+    std::vector<SubMesh> SubMeshes;
+};
+
 class Mesh
 {
 public:
     Mesh(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)
-        : mVertices(std::move(vertices))
-        , mIndices(std::move(indices))
     {
+        mLods.push_back({ std::move(vertices), std::move(indices), {} });
     }
 
     Mesh(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices, std::vector<SubMesh> subMeshes)
-        : mVertices(std::move(vertices))
-        , mIndices(std::move(indices))
-        , mSubMeshes(std::move(subMeshes))
     {
+        mLods.push_back({ std::move(vertices), std::move(indices), std::move(subMeshes) });
+    }
+
+    explicit Mesh(std::vector<MeshLod> lods)
+        : mLods(std::move(lods))
+    {
+        if (mLods.empty())
+        {
+            mLods.push_back({});
+        }
     }
 
     bool UploadToGpu()
@@ -48,18 +62,38 @@ public:
 
     const std::vector<Vertex>& GetVertices() const
     {
-        return mVertices;
+        return mLods.front().Vertices;
     }
 
     const std::vector<std::uint32_t>& GetIndices() const
     {
-        return mIndices;
+        return mLods.front().Indices;
     }
 
     // Returns one SubMesh per FBX material slot.  When empty the whole index buffer belongs to material 0.
     const std::vector<SubMesh>& GetSubMeshes() const
     {
-        return mSubMeshes;
+        return mLods.front().SubMeshes;
+    }
+
+    const std::vector<MeshLod>& GetLods() const
+    {
+        return mLods;
+    }
+
+    const MeshLod& GetLod(std::size_t lodIndex) const
+    {
+        if (lodIndex >= mLods.size())
+        {
+            lodIndex = mLods.size() - 1;
+        }
+
+        return mLods[lodIndex];
+    }
+
+    std::size_t GetLodCount() const
+    {
+        return mLods.size();
     }
 
     bool IsUploadedToGpu() const
@@ -68,8 +102,6 @@ public:
     }
 
 private:
-    std::vector<Vertex> mVertices;
-    std::vector<std::uint32_t> mIndices;
-    std::vector<SubMesh> mSubMeshes;
+    std::vector<MeshLod> mLods;
     bool mIsUploadedToGpu = false;
 };

@@ -20,6 +20,11 @@ using namespace DirectX;
 // ---------------------------------------------------------------------------
 namespace
 {
+    std::uint64_t MakeEntityMeshCacheKey(std::size_t entityIndex, std::size_t lodIndex)
+    {
+        return (static_cast<std::uint64_t>(entityIndex) << 32) | static_cast<std::uint64_t>(lodIndex);
+    }
+
     // Vertex layout that matches System/Mesh.h :: Vertex
     struct GpuVertex
     {
@@ -152,6 +157,7 @@ void EntityMeshRenderer::SetEntities(std::vector<Entity>* entities)
 void EntityMeshRenderer::Render(
     ID3D12GraphicsCommandList* commandList,
     const XMMATRIX& viewProjection,
+    const XMFLOAT3& cameraPosition,
     DXGI_FORMAT albedoFormat,
     DXGI_FORMAT normalFormat,
     DXGI_FORMAT materialFormat,
@@ -229,19 +235,22 @@ void EntityMeshRenderer::Render(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
+        const std::size_t selectedLodIndex = SelectLodIndex(entity, *meshPtr, cameraPosition);
 
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, selectedLodIndex))
         {
             ++cbSlot;
             continue;
         }
 
-        EntityGpuMesh& gpuMesh = mGpuMeshes.at(i);
-        if (gpuMesh.IndexCount == 0)
+        EntityGpuMesh& selectedGpuMesh = mGpuMeshes.at(MakeEntityMeshCacheKey(i, selectedLodIndex));
+        if (selectedGpuMesh.IndexCount == 0)
         {
             ++cbSlot;
             continue;
         }
+
+        const MeshLod& selectedLod = meshPtr->GetLod(selectedLodIndex);
 
         // Write per-entity MVP + model matrix into the constant buffer.
         const XMMATRIX model = entity.Transform.GetTransform();
@@ -254,25 +263,26 @@ void EntityMeshRenderer::Render(
         commandList->SetGraphicsRootConstantBufferView(
             0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
 
-        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
-        commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
+        commandList->IASetVertexBuffers(0, 1, &selectedGpuMesh.VertexBufferView);
+        commandList->IASetIndexBuffer(&selectedGpuMesh.IndexBufferView);
 
         const std::string& materialPath = entity.Mesh->MaterialPath;
-        const std::vector<SubMesh>& subMeshes = meshPtr->GetSubMeshes();
+        const std::vector<SubMesh>& subMeshes = selectedLod.SubMeshes;
 
         if (mLoggedDrawEntities.emplace(i).second)
         {
             std::ostringstream logStream;
             logStream << "First draw for entityIndex=" << i
                       << ", entity='" << entity.Name << "'"
-                      << ", vertexCount=" << meshPtr->GetVertices().size()
-                      << ", indexCount=" << gpuMesh.IndexCount
+                      << ", lodIndex=" << selectedLodIndex
+                      << ", vertexCount=" << selectedLod.Vertices.size()
+                      << ", indexCount=" << selectedGpuMesh.IndexCount
                       << ", materialPath='" << materialPath << "'"
                       << ", subMeshCount=" << subMeshes.size();
 
             if (subMeshes.empty())
             {
-                logStream << ", draw[0]={indexStart=0,indexCount=" << gpuMesh.IndexCount << "}";
+                logStream << ", draw[0]={indexStart=0,indexCount=" << selectedGpuMesh.IndexCount << "}";
             }
             else
             {
@@ -284,7 +294,7 @@ void EntityMeshRenderer::Render(
                     const SubMesh& subMesh = subMeshes[subMeshIndex];
                     summedSubMeshIndices += subMesh.indexCount;
                     if (static_cast<std::uint64_t>(subMesh.indexStart) + static_cast<std::uint64_t>(subMesh.indexCount)
-                        > static_cast<std::uint64_t>(gpuMesh.IndexCount))
+                        > static_cast<std::uint64_t>(selectedGpuMesh.IndexCount))
                     {
                         validSubMeshRanges = false;
                     }
@@ -436,7 +446,7 @@ void EntityMeshRenderer::Render(
 
             commandList->SetGraphicsRootConstantBufferView(
                 1, mMaterialCB->GetGPUVirtualAddress() + matSlot * sizeof(MaterialConstants));
-            commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
+            commandList->DrawIndexedInstanced(selectedGpuMesh.IndexCount, 1, 0, 0, 0);
             ++matSlot;
         }
 
@@ -446,7 +456,7 @@ void EntityMeshRenderer::Render(
 
 bool EntityMeshRenderer::GetGpuMeshInfo(std::size_t entityIndex, GpuMeshInfo& outInfo) const
 {
-    const auto it = mGpuMeshes.find(entityIndex);
+    const auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(entityIndex, 0));
     if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         return false;
 
@@ -561,13 +571,13 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, 0))
         {
             ++slot;
             continue;
         }
 
-        auto it = mGpuMeshes.find(i);
+        auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(i, 0));
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -625,13 +635,13 @@ void EntityMeshRenderer::RenderDepthOnly(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr))
+        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, 0))
         {
             ++slot;
             continue;
         }
 
-        auto it = mGpuMeshes.find(i);
+        auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(i, 0));
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -821,7 +831,7 @@ bool EntityMeshRenderer::CreatePipeline(
     for (UINT i = 0; i < 3; ++i)
         psoDesc.BlendState.RenderTarget[i] = rtBlend;
 
-    psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.FillMode              = mWireframeEnabled ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
     psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_BACK;
     psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
     psoDesc.RasterizerState.DepthClipEnable       = TRUE;
@@ -898,32 +908,47 @@ bool EntityMeshRenderer::EnsureRainSurfaceConstantBuffer()
 bool EntityMeshRenderer::EnsureEntityGpuMesh(
     ID3D12GraphicsCommandList* commandList,
     std::size_t entityIndex,
-    const Mesh* mesh)
+    const Mesh* mesh,
+    std::size_t lodIndex)
 {
-    auto it = mGpuMeshes.find(entityIndex);
-    if (it != mGpuMeshes.end() && it->second.SourceMesh == mesh)
+    const std::uint64_t cacheKey = MakeEntityMeshCacheKey(entityIndex, lodIndex);
+    auto it = mGpuMeshes.find(cacheKey);
+    if (it != mGpuMeshes.end() && it->second.SourceMesh == mesh && it->second.LodIndex == lodIndex)
     {
         // Buffers are already up to date for this mesh.
         return true;
     }
 
-    // Remove stale entry if the mesh pointer changed.
-    if (it != mGpuMeshes.end())
+    // Remove stale entries if the mesh pointer changed.
+    if (mesh != nullptr)
     {
-        mGpuMeshes.erase(it);
-        mLoggedDrawEntities.erase(entityIndex);
+        for (auto gpuMeshIt = mGpuMeshes.begin(); gpuMeshIt != mGpuMeshes.end(); )
+        {
+            if ((gpuMeshIt->first >> 32) == entityIndex && gpuMeshIt->second.SourceMesh != mesh)
+            {
+                gpuMeshIt = mGpuMeshes.erase(gpuMeshIt);
+                mLoggedDrawEntities.erase(entityIndex);
+            }
+            else
+            {
+                ++gpuMeshIt;
+            }
+        }
     }
 
-    if (mesh == nullptr || mesh->GetVertices().empty() || mesh->GetIndices().empty())
+    const MeshLod* meshLod = mesh != nullptr ? &mesh->GetLod(lodIndex) : nullptr;
+
+    if (mesh == nullptr || meshLod == nullptr || meshLod->Vertices.empty() || meshLod->Indices.empty())
     {
         std::ostringstream logStream;
         logStream << "Skipped GPU upload for entityIndex=" << entityIndex
                   << " because mesh data was missing or empty."
                   << " meshPtr=" << mesh;
-        if (mesh != nullptr)
+        if (meshLod != nullptr)
         {
-            logStream << ", vertexCount=" << mesh->GetVertices().size()
-                      << ", indexCount=" << mesh->GetIndices().size();
+            logStream << ", lodIndex=" << lodIndex
+                      << ", vertexCount=" << meshLod->Vertices.size()
+                      << ", indexCount=" << meshLod->Indices.size();
         }
         LogEntityMeshRendererDiagnostic(logStream.str());
         return false;
@@ -937,10 +962,11 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
 
     EntityGpuMesh gpuMesh;
     gpuMesh.SourceMesh = mesh;
+    gpuMesh.LodIndex = lodIndex;
     mSceneContentChanged = true;
 
-    const UINT64 vbSize = mesh->GetVertices().size() * sizeof(Vertex);
-    const UINT64 ibSize = mesh->GetIndices().size()  * sizeof(std::uint32_t);
+    const UINT64 vbSize = meshLod->Vertices.size() * sizeof(Vertex);
+    const UINT64 ibSize = meshLod->Indices.size()  * sizeof(std::uint32_t);
 
     // Vertex buffer: upload heap → default heap via CopyBufferRegion.
     if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_DEFAULT,
@@ -959,7 +985,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     {
         return false;
     }
-    std::memcpy(mappedVB, mesh->GetVertices().data(), static_cast<std::size_t>(vbSize));
+    std::memcpy(mappedVB, meshLod->Vertices.data(), static_cast<std::size_t>(vbSize));
     gpuMesh.VertexUpload->Unmap(0, nullptr);
 
     commandList->CopyBufferRegion(gpuMesh.VertexBuffer.Get(), 0, gpuMesh.VertexUpload.Get(), 0, vbSize);
@@ -990,7 +1016,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     {
         return false;
     }
-    std::memcpy(mappedIB, mesh->GetIndices().data(), static_cast<std::size_t>(ibSize));
+    std::memcpy(mappedIB, meshLod->Indices.data(), static_cast<std::size_t>(ibSize));
     gpuMesh.IndexUpload->Unmap(0, nullptr);
 
     commandList->CopyBufferRegion(gpuMesh.IndexBuffer.Get(), 0, gpuMesh.IndexUpload.Get(), 0, ibSize);
@@ -1003,20 +1029,51 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     gpuMesh.IndexBufferView.BufferLocation = gpuMesh.IndexBuffer->GetGPUVirtualAddress();
     gpuMesh.IndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
     gpuMesh.IndexBufferView.SizeInBytes    = static_cast<UINT>(ibSize);
-    gpuMesh.IndexCount = static_cast<UINT>(mesh->GetIndices().size());
+    gpuMesh.IndexCount = static_cast<UINT>(meshLod->Indices.size());
 
     {
         std::ostringstream logStream;
         logStream << "Uploaded GPU mesh for entityIndex=" << entityIndex
-                  << ", vertexCount=" << mesh->GetVertices().size()
-                  << ", indexCount=" << mesh->GetIndices().size()
+                  << ", lodIndex=" << lodIndex
+                  << ", vertexCount=" << meshLod->Vertices.size()
+                  << ", indexCount=" << meshLod->Indices.size()
                   << ", vbBytes=" << vbSize
                   << ", ibBytes=" << ibSize;
         LogEntityMeshRendererDiagnostic(logStream.str());
     }
 
-    mGpuMeshes.emplace(entityIndex, std::move(gpuMesh));
+    mGpuMeshes.insert_or_assign(cacheKey, std::move(gpuMesh));
     return true;
+}
+
+std::size_t EntityMeshRenderer::SelectLodIndex(const Entity& entity, const Mesh& mesh, const DirectX::XMFLOAT3& cameraPosition) const
+{
+    if (!entity.Mesh.has_value())
+    {
+        return 0;
+    }
+
+    const MeshComponent& meshComponent = *entity.Mesh;
+    const std::size_t lodCount = mesh.GetLodCount();
+    if (lodCount <= 1)
+    {
+        return 0;
+    }
+
+    if (meshComponent.DebugForcedLod >= 0)
+    {
+        return (std::min)(static_cast<std::size_t>(meshComponent.DebugForcedLod), lodCount - 1);
+    }
+
+    const DirectX::XMFLOAT3& position = entity.Transform.Position;
+    const float dx = position.x - cameraPosition.x;
+    const float dy = position.y - cameraPosition.y;
+    const float dz = position.z - cameraPosition.z;
+    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const float scaledDistance = distance * (std::max)(meshComponent.LodUsageScale, 0.1f);
+
+    std::size_t lodIndex = static_cast<std::size_t>(scaledDistance / 25.0f);
+    return (std::min)(lodIndex, lodCount - 1);
 }
 
 bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)

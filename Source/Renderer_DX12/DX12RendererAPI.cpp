@@ -1266,6 +1266,7 @@ extern "C"
                 &gSceneRenderer.GetVolumetricFogSettings(),
                 &gSceneRenderer.GetBloomSettings());
             gEditor.SetShowViewportPlacementIcons(showViewportPlacementIcons);
+            gEditor.SetWireframeEnabled(gSceneRenderer.IsWireframeEnabled());
             gEditor.Draw(
                 gSceneRenderer.GetSceneTextureHandle(),
                 gSceneRenderer.GetCamera(),
@@ -1275,6 +1276,7 @@ extern "C"
                 gAudioManagerPtr);
             gSceneRenderer.SetCameraMovementSpeed(cameraSpeed);
             gSceneRenderer.SetGridEnabled(gEditor.GetShowViewportGrid());
+            gSceneRenderer.SetWireframeEnabled(gEditor.GetWireframeEnabled());
 
             // Handle screenshot capture if requested
             if (gEditor.GetScreenshotRequested())

@@ -3,10 +3,12 @@
 #include "System/SystemAssetApi.h"
 
 #include "System/AssetManager.h"
+#include "System/FbxCompiler.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -122,5 +124,37 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_ImportTextureToData(
     }
 
     WriteStatusMessage(statusMessage, statusMessageCapacity, "Imported texture into Data: " + importedTexturePath);
+    return true;
+}
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateMeshLods(
+    const char* geometryPath,
+    char* statusMessage,
+    int statusMessageCapacity)
+{
+    if (geometryPath == nullptr || geometryPath[0] == '\0')
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Choose a geometry asset before generating LODs.");
+        return false;
+    }
+
+    const std::filesystem::path inputPath(geometryPath);
+    const std::filesystem::path pteroPath = _stricmp(inputPath.extension().string().c_str(), ".ptero") == 0
+        ? inputPath
+        : std::filesystem::path(inputPath.string() + ".ptero");
+
+    if (!std::filesystem::exists(pteroPath))
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "The selected geometry asset does not have a cooked .ptero file yet.");
+        return false;
+    }
+
+    if (!FbxCompiler::GenerateLodsForPtero(pteroPath.string()))
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Failed to regenerate mesh LODs for the selected geometry asset.");
+        return false;
+    }
+
+    WriteStatusMessage(statusMessage, statusMessageCapacity, "Regenerated mesh LODs: " + pteroPath.string());
     return true;
 }

@@ -80,6 +80,9 @@
     <ClCompile Include="Source\Renderer_DX12\DX12RendererAPI.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\EditorMainMenu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Ptero-Engine.rc">

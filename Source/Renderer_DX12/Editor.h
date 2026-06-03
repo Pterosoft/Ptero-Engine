@@ -101,6 +101,16 @@ public:
         return mShowViewportGrid;
     }
 
+    void SetWireframeEnabled(bool shouldShow)
+    {
+        mWireframeEnabled = shouldShow;
+    }
+
+    bool GetWireframeEnabled() const
+    {
+        return mWireframeEnabled;
+    }
+
     bool* GetShowComponentsPanelPointer()
     {
         return &mShowComponentsPanel;
@@ -201,7 +211,8 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
         D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
         D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon);
+        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon);
 
     void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
     void DrawAudioManagerWindow(AudioManager* audioManager);
@@ -384,10 +395,12 @@ private:
     IconTexture mPointLightIcon;
     IconTexture mAudioEmitterIcon;
     IconTexture mDecalIcon;
+    IconTexture mRainIcon;
     IconTexture mSelectIcon;
     IconTexture mMoveIcon;
     IconTexture mRotateIcon;
     IconTexture mScaleIcon;
+    IconTexture mWireframeIcon;
     bool mIsInitialized = false;
     bool mGeometryIconLoadAttempted = false;
     std::string mGeometryIconStatus;
@@ -412,6 +425,7 @@ private:
     bool mShowViewportStatistics = true;
     bool mViewportStatisticsInitialized = false;
     bool mShowViewportGrid = true;
+    bool mWireframeEnabled = false;
 
     // Viewport resolution control
     int mViewportResolutionWidth = 1920;

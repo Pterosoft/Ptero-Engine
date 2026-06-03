@@ -695,6 +695,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     mEntityMeshRenderer.Render(
         commandList,
         XMLoadFloat4x4(&mJitteredViewProjection),
+        mCamera.GetPosition(),
         kAlbedoFmt,
         kNormalFmt,
         kMaterialFmt,

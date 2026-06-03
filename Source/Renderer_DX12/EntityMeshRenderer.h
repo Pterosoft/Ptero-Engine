@@ -51,6 +51,7 @@ public:
     void Render(
         ID3D12GraphicsCommandList* commandList,
         const DirectX::XMMATRIX& viewProjection,
+        const DirectX::XMFLOAT3& cameraPosition,
         DXGI_FORMAT albedoFormat,
         DXGI_FORMAT normalFormat,
         DXGI_FORMAT materialFormat,
@@ -103,6 +104,20 @@ public:
 
     bool IsSceneContentDirty() const { return mSceneContentChanged; }
 
+    void SetWireframeEnabled(bool enabled)
+    {
+        if (mWireframeEnabled != enabled)
+        {
+            mWireframeEnabled = enabled;
+            mPipelineReady = false;
+        }
+    }
+
+    bool IsWireframeEnabled() const
+    {
+        return mWireframeEnabled;
+    }
+
     const char* GetLastErrorMessage() const
     {
         return mLastError.empty() ? nullptr : mLastError.c_str();
@@ -119,6 +134,7 @@ private:
         D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         UINT                     IndexCount = 0;
+        std::size_t              LodIndex = 0;
         // The MeshAsset pointer used when these buffers were built; used to
         // detect when the mesh has been replaced and buffers must be rebuilt.
         const Mesh*              SourceMesh = nullptr;
@@ -222,7 +238,8 @@ private:
     bool EnsureEntityGpuMesh(
         ID3D12GraphicsCommandList* commandList,
         std::size_t entityIndex,
-        const Mesh* mesh);
+        const Mesh* mesh,
+        std::size_t lodIndex);
     bool EnsureConstantBuffer(std::size_t requiredEntityCount);
     bool EnsureDepthPassConstantBuffer(std::size_t requiredEntityCount);
     bool EnsureMaterialConstantBuffer(std::size_t requiredDrawCount);
@@ -233,8 +250,8 @@ private:
     std::unordered_map<uint32_t, SubMaterialTextures>
         ResolveAllSubMaterialTextures(const std::string& materialPath) const;
 
-    // key = entity index
-    std::unordered_map<std::size_t, EntityGpuMesh> mGpuMeshes;
+    // key = entity index + lod index
+    std::unordered_map<std::uint64_t, EntityGpuMesh> mGpuMeshes;
     std::unordered_set<std::size_t> mLoggedDrawEntities;
 
     Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
@@ -277,6 +294,7 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE            mFallbackGpuHandle{};
 
     bool CreateFallbackTexture(ID3D12GraphicsCommandList* commandList);
+    std::size_t SelectLodIndex(const Entity& entity, const Mesh& mesh, const DirectX::XMFLOAT3& cameraPosition) const;
 
     // Resolve a single-material file path to its base-color DDS path.
     // Returns an empty string if the material cannot be read or has no base-color texture.
@@ -297,6 +315,7 @@ private:
     DXGI_FORMAT mMaterialFormat = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT mDepthFormat    = DXGI_FORMAT_UNKNOWN;
     bool        mSceneContentChanged = false;
+    bool        mWireframeEnabled = false;
     std::string mLastError;
 
 public:

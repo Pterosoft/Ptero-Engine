@@ -6,20 +6,68 @@
 #include "System/PteroMeshFormat.h"
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
 // nlohmann/json for writing the auto-generated multi-material JSON alongside the .ptero file.
 #include "..\SDKs\nlohmann\json.hpp"
+#include "..\SDKs\meshoptimizer\src\meshoptimizer.h"
 
 #if defined(PTERO_FBX_SDK_AVAILABLE)
 #include <fbxsdk.h>
 
 namespace
 {
+    struct VertexKey
+    {
+        DirectX::XMFLOAT3 Position{};
+        DirectX::XMFLOAT3 Normal{};
+        DirectX::XMFLOAT2 TexCoord{};
+        DirectX::XMFLOAT4 Color{};
+
+        bool operator==(const VertexKey& other) const noexcept
+        {
+            return std::memcmp(this, &other, sizeof(VertexKey)) == 0;
+        }
+    };
+
+    struct VertexKeyHasher
+    {
+        std::size_t operator()(const VertexKey& key) const noexcept
+        {
+            const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&key);
+            std::size_t hash = 1469598103934665603ull;
+            for (std::size_t byteIndex = 0; byteIndex < sizeof(VertexKey); ++byteIndex)
+            {
+                hash ^= static_cast<std::size_t>(bytes[byteIndex]);
+                hash *= 1099511628211ull;
+            }
+
+            return hash;
+        }
+    };
+
+    struct MeshLodData
+    {
+        std::vector<Vertex> vertices;
+        std::vector<std::uint32_t> indices;
+        std::vector<PteroSubMeshEntry> subMeshEntries;
+    };
+
+    struct LegacyPteroMeshHeader
+    {
+        char magic[4] = { 'P', 'T', 'R', 'O' };
+        std::uint32_t version = 2;
+        std::uint32_t vertexCount = 0;
+        std::uint32_t indexCount = 0;
+        std::uint32_t subMeshCount = 0;
+    };
+
     template <typename LayerElementType>
     int ResolveLayerElementIndex(const LayerElementType* layerElement, const int elementIndex)
     {
@@ -299,6 +347,483 @@ namespace
         return !meshes.empty();
     }
 
+    std::vector<PteroSubMeshEntry> EnsureSubMeshEntries(const std::vector<PteroSubMeshEntry>& subMeshEntries, const std::size_t indexCount)
+    {
+        if (!subMeshEntries.empty())
+        {
+            return subMeshEntries;
+        }
+
+        if (indexCount == 0)
+        {
+            return {};
+        }
+
+        return { PteroSubMeshEntry{ 0u, 0u, static_cast<std::uint32_t>(indexCount) } };
+    }
+
+    bool ExtractSubMeshGeometry(
+        const MeshLodData& source,
+        const PteroSubMeshEntry& subMeshEntry,
+        std::vector<Vertex>& outVertices,
+        std::vector<std::uint32_t>& outIndices)
+    {
+        outVertices.clear();
+        outIndices.clear();
+
+        if (subMeshEntry.indexCount == 0)
+        {
+            return false;
+        }
+
+        const std::uint64_t subMeshEnd = static_cast<std::uint64_t>(subMeshEntry.indexStart) + static_cast<std::uint64_t>(subMeshEntry.indexCount);
+        if (subMeshEnd > source.indices.size())
+        {
+            return false;
+        }
+
+        std::vector<std::uint32_t> remap(source.vertices.size(), (std::numeric_limits<std::uint32_t>::max)());
+        outVertices.reserve(subMeshEntry.indexCount);
+        outIndices.reserve(subMeshEntry.indexCount);
+
+        for (std::uint32_t indexOffset = 0; indexOffset < subMeshEntry.indexCount; ++indexOffset)
+        {
+            const std::uint32_t sourceIndex = source.indices[subMeshEntry.indexStart + indexOffset];
+            if (sourceIndex >= source.vertices.size())
+            {
+                return false;
+            }
+
+            std::uint32_t localIndex = remap[sourceIndex];
+            if (localIndex == (std::numeric_limits<std::uint32_t>::max)())
+            {
+                localIndex = static_cast<std::uint32_t>(outVertices.size());
+                remap[sourceIndex] = localIndex;
+                outVertices.push_back(source.vertices[sourceIndex]);
+            }
+
+            outIndices.push_back(localIndex);
+        }
+
+        return !outVertices.empty() && !outIndices.empty();
+    }
+
+    bool SimplifyMeshGeometry(
+        const std::vector<Vertex>& sourceVertices,
+        const std::vector<std::uint32_t>& sourceIndices,
+        const std::size_t targetIndexCount,
+        std::vector<Vertex>& outVertices,
+        std::vector<std::uint32_t>& outIndices)
+    {
+        outVertices.clear();
+        outIndices.clear();
+
+        if (sourceVertices.empty() || sourceIndices.size() < 6 || targetIndexCount >= sourceIndices.size())
+        {
+            return false;
+        }
+
+        const std::size_t clampedTargetIndexCount = (std::max)(
+            static_cast<std::size_t>(3),
+            (targetIndexCount / 3) * 3);
+        if (clampedTargetIndexCount >= sourceIndices.size())
+        {
+            return false;
+        }
+
+        std::vector<std::uint32_t> simplifiedIndices(sourceIndices.size());
+        float resultError = 0.0f;
+        const std::size_t simplifiedIndexCount = meshopt_simplify(
+            simplifiedIndices.data(),
+            sourceIndices.data(),
+            sourceIndices.size(),
+            &sourceVertices[0].Position.x,
+            sourceVertices.size(),
+            sizeof(Vertex),
+            clampedTargetIndexCount,
+            0.02f,
+            0,
+            &resultError);
+
+        if (simplifiedIndexCount == 0 || simplifiedIndexCount >= sourceIndices.size())
+        {
+            return false;
+        }
+
+        simplifiedIndices.resize(simplifiedIndexCount);
+
+        std::vector<unsigned int> remap(sourceVertices.size());
+        const std::size_t remappedVertexCount = meshopt_optimizeVertexFetchRemap(
+            remap.data(),
+            simplifiedIndices.data(),
+            simplifiedIndices.size(),
+            sourceVertices.size());
+        if (remappedVertexCount == 0)
+        {
+            return false;
+        }
+
+        outVertices.resize(remappedVertexCount);
+        outIndices.resize(simplifiedIndices.size());
+        meshopt_remapVertexBuffer(
+            outVertices.data(),
+            sourceVertices.data(),
+            sourceVertices.size(),
+            sizeof(Vertex),
+            remap.data());
+        meshopt_remapIndexBuffer(
+            outIndices.data(),
+            simplifiedIndices.data(),
+            simplifiedIndices.size(),
+            remap.data());
+
+        std::vector<Vertex> optimizedVertices(outVertices.size());
+        const std::size_t optimizedVertexCount = meshopt_optimizeVertexFetch(
+            optimizedVertices.data(),
+            outIndices.data(),
+            outIndices.size(),
+            outVertices.data(),
+            outVertices.size(),
+            sizeof(Vertex));
+        if (optimizedVertexCount == 0)
+        {
+            return false;
+        }
+
+        optimizedVertices.resize(optimizedVertexCount);
+        outVertices = std::move(optimizedVertices);
+        return true;
+    }
+
+    bool CompactMeshGeometry(
+        const std::vector<Vertex>& sourceVertices,
+        const std::vector<std::uint32_t>& sourceIndices,
+        std::vector<Vertex>& outVertices,
+        std::vector<std::uint32_t>& outIndices)
+    {
+        outVertices.clear();
+        outIndices.clear();
+
+        if (sourceVertices.empty() || sourceIndices.empty())
+        {
+            return false;
+        }
+
+        std::vector<unsigned int> remap(sourceVertices.size());
+        const std::size_t uniqueVertexCount = meshopt_generateVertexRemap(
+            remap.data(),
+            sourceIndices.data(),
+            sourceIndices.size(),
+            sourceVertices.data(),
+            sourceVertices.size(),
+            sizeof(Vertex));
+        if (uniqueVertexCount == 0)
+        {
+            return false;
+        }
+
+        outVertices.resize(uniqueVertexCount);
+        outIndices.resize(sourceIndices.size());
+        meshopt_remapVertexBuffer(
+            outVertices.data(),
+            sourceVertices.data(),
+            sourceVertices.size(),
+            sizeof(Vertex),
+            remap.data());
+        meshopt_remapIndexBuffer(
+            outIndices.data(),
+            sourceIndices.data(),
+            sourceIndices.size(),
+            remap.data());
+
+        std::vector<Vertex> optimizedVertices(outVertices.size());
+        const std::size_t optimizedVertexCount = meshopt_optimizeVertexFetch(
+            optimizedVertices.data(),
+            outIndices.data(),
+            outIndices.size(),
+            outVertices.data(),
+            outVertices.size(),
+            sizeof(Vertex));
+        if (optimizedVertexCount == 0)
+        {
+            return false;
+        }
+
+        optimizedVertices.resize(optimizedVertexCount);
+        outVertices = std::move(optimizedVertices);
+        return true;
+    }
+
+    MeshLodData BuildNextLod(const MeshLodData& sourceLod)
+    {
+        MeshLodData nextLod;
+        const std::vector<PteroSubMeshEntry> sourceSubMeshes = EnsureSubMeshEntries(sourceLod.subMeshEntries, sourceLod.indices.size());
+
+        bool simplifiedAnySubMesh = false;
+        for (const PteroSubMeshEntry& sourceSubMesh : sourceSubMeshes)
+        {
+            std::vector<Vertex> localVertices;
+            std::vector<std::uint32_t> localIndices;
+            if (!ExtractSubMeshGeometry(sourceLod, sourceSubMesh, localVertices, localIndices))
+            {
+                return {};
+            }
+
+            std::vector<Vertex> compactVertices;
+            std::vector<std::uint32_t> compactIndices;
+            if (CompactMeshGeometry(localVertices, localIndices, compactVertices, compactIndices))
+            {
+                localVertices = std::move(compactVertices);
+                localIndices = std::move(compactIndices);
+            }
+
+            std::vector<Vertex> simplifiedVertices;
+            std::vector<std::uint32_t> simplifiedIndices;
+            const std::size_t targetIndexCount = (std::max)(
+                static_cast<std::size_t>(3),
+                ((localIndices.size() / 2) / 3) * 3);
+            const bool simplified = SimplifyMeshGeometry(
+                localVertices,
+                localIndices,
+                targetIndexCount,
+                simplifiedVertices,
+                simplifiedIndices);
+
+            const std::vector<Vertex>& outputVertices = simplified ? simplifiedVertices : localVertices;
+            const std::vector<std::uint32_t>& outputIndices = simplified ? simplifiedIndices : localIndices;
+            simplifiedAnySubMesh |= simplified;
+
+            const std::uint32_t baseVertex = static_cast<std::uint32_t>(nextLod.vertices.size());
+            const std::uint32_t indexStart = static_cast<std::uint32_t>(nextLod.indices.size());
+
+            nextLod.vertices.insert(nextLod.vertices.end(), outputVertices.begin(), outputVertices.end());
+            for (const std::uint32_t localIndex : outputIndices)
+            {
+                nextLod.indices.push_back(baseVertex + localIndex);
+            }
+
+            PteroSubMeshEntry nextSubMesh{};
+            nextSubMesh.materialId = sourceSubMesh.materialId;
+            nextSubMesh.indexStart = indexStart;
+            nextSubMesh.indexCount = static_cast<std::uint32_t>(outputIndices.size());
+            nextLod.subMeshEntries.push_back(nextSubMesh);
+        }
+
+        if (!simplifiedAnySubMesh || nextLod.indices.size() >= sourceLod.indices.size())
+        {
+            return {};
+        }
+
+        return nextLod;
+    }
+
+    std::vector<MeshLodData> GenerateMeshLods(const MeshLodData& baseLod)
+    {
+        std::vector<MeshLodData> lods;
+        if (baseLod.vertices.empty() || baseLod.indices.empty())
+        {
+            return lods;
+        }
+
+        lods.push_back(baseLod);
+
+        static constexpr std::size_t kMaxAdditionalLods = 3;
+        for (std::size_t lodIndex = 0; lodIndex < kMaxAdditionalLods; ++lodIndex)
+        {
+            MeshLodData nextLod = BuildNextLod(lods.back());
+            if (nextLod.vertices.empty() || nextLod.indices.empty())
+            {
+                break;
+            }
+
+            lods.push_back(std::move(nextLod));
+        }
+
+        return lods;
+    }
+
+    bool WriteMeshPayload(
+        std::ofstream& outputStream,
+        const std::vector<PteroSubMeshEntry>& subMeshEntries,
+        const std::vector<Vertex>& vertices,
+        const std::vector<std::uint32_t>& indices)
+    {
+        if (!subMeshEntries.empty())
+        {
+            outputStream.write(
+                reinterpret_cast<const char*>(subMeshEntries.data()),
+                static_cast<std::streamsize>(subMeshEntries.size() * sizeof(PteroSubMeshEntry)));
+        }
+
+        if (!vertices.empty())
+        {
+            outputStream.write(
+                reinterpret_cast<const char*>(vertices.data()),
+                static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
+        }
+
+        if (!indices.empty())
+        {
+            outputStream.write(
+                reinterpret_cast<const char*>(indices.data()),
+                static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
+        }
+
+        return static_cast<bool>(outputStream);
+    }
+
+    bool ReadMeshPayload(
+        std::ifstream& inputStream,
+        const std::uint32_t vertexCount,
+        const std::uint32_t indexCount,
+        const std::uint32_t subMeshCount,
+        MeshLodData& outLod)
+    {
+        outLod = {};
+
+        if (subMeshCount > 0)
+        {
+            outLod.subMeshEntries.resize(subMeshCount);
+            inputStream.read(
+                reinterpret_cast<char*>(outLod.subMeshEntries.data()),
+                static_cast<std::streamsize>(outLod.subMeshEntries.size() * sizeof(PteroSubMeshEntry)));
+            if (!inputStream)
+            {
+                return false;
+            }
+        }
+
+        if (vertexCount > 0)
+        {
+            outLod.vertices.resize(vertexCount);
+            inputStream.read(
+                reinterpret_cast<char*>(outLod.vertices.data()),
+                static_cast<std::streamsize>(outLod.vertices.size() * sizeof(Vertex)));
+            if (!inputStream)
+            {
+                return false;
+            }
+        }
+
+        if (indexCount > 0)
+        {
+            outLod.indices.resize(indexCount);
+            inputStream.read(
+                reinterpret_cast<char*>(outLod.indices.data()),
+                static_cast<std::streamsize>(outLod.indices.size() * sizeof(std::uint32_t)));
+            if (!inputStream)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool WritePteroMeshFile(const std::string& pteroOutPath, const std::vector<MeshLodData>& lods)
+    {
+        if (lods.empty())
+        {
+            return false;
+        }
+
+        if (const std::filesystem::path outputPath(pteroOutPath); outputPath.has_parent_path())
+        {
+            std::filesystem::create_directories(outputPath.parent_path());
+        }
+
+        std::ofstream outputStream(pteroOutPath, std::ios::binary);
+        if (!outputStream)
+        {
+            return false;
+        }
+
+        const MeshLodData& baseLod = lods.front();
+        PteroMeshHeader header{};
+        header.vertexCount = static_cast<std::uint32_t>(baseLod.vertices.size());
+        header.indexCount = static_cast<std::uint32_t>(baseLod.indices.size());
+        header.subMeshCount = static_cast<std::uint32_t>(baseLod.subMeshEntries.size());
+        header.lodCount = static_cast<std::uint32_t>(lods.size());
+        outputStream.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+        if (!WriteMeshPayload(outputStream, baseLod.subMeshEntries, baseLod.vertices, baseLod.indices))
+        {
+            return false;
+        }
+
+        for (std::size_t lodIndex = 1; lodIndex < lods.size(); ++lodIndex)
+        {
+            const MeshLodData& lod = lods[lodIndex];
+            const PteroLodEntry lodEntry{
+                static_cast<std::uint32_t>(lod.vertices.size()),
+                static_cast<std::uint32_t>(lod.indices.size()),
+                static_cast<std::uint32_t>(lod.subMeshEntries.size()) };
+            outputStream.write(reinterpret_cast<const char*>(&lodEntry), sizeof(lodEntry));
+            if (!WriteMeshPayload(outputStream, lod.subMeshEntries, lod.vertices, lod.indices))
+            {
+                return false;
+            }
+        }
+
+        return static_cast<bool>(outputStream);
+    }
+
+    bool ReadPteroMeshFile(const std::string& pteroPath, std::vector<MeshLodData>& outLods)
+    {
+        outLods.clear();
+
+        std::ifstream inputStream(pteroPath, std::ios::binary);
+        if (!inputStream)
+        {
+            return false;
+        }
+
+        LegacyPteroMeshHeader legacyHeader{};
+        inputStream.read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
+        if (!inputStream || std::memcmp(legacyHeader.magic, "PTRO", 4) != 0)
+        {
+            return false;
+        }
+
+        std::uint32_t lodCount = 1;
+        if (legacyHeader.version >= 3)
+        {
+            inputStream.read(reinterpret_cast<char*>(&lodCount), sizeof(lodCount));
+            if (!inputStream)
+            {
+                return false;
+            }
+        }
+
+        MeshLodData baseLod;
+        if (!ReadMeshPayload(inputStream, legacyHeader.vertexCount, legacyHeader.indexCount, legacyHeader.subMeshCount, baseLod))
+        {
+            return false;
+        }
+
+        outLods.push_back(std::move(baseLod));
+        lodCount = (std::max)(lodCount, 1u);
+        for (std::uint32_t lodIndex = 1; lodIndex < lodCount; ++lodIndex)
+        {
+            PteroLodEntry lodEntry{};
+            inputStream.read(reinterpret_cast<char*>(&lodEntry), sizeof(lodEntry));
+            if (!inputStream)
+            {
+                return false;
+            }
+
+            MeshLodData lod;
+            if (!ReadMeshPayload(inputStream, lodEntry.vertexCount, lodEntry.indexCount, lodEntry.subMeshCount, lod))
+            {
+                return false;
+            }
+
+            outLods.push_back(std::move(lod));
+        }
+
+        return true;
+    }
+
     void ProcessMesh(FbxMesh* mesh, std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, std::vector<PteroSubMeshEntry>& subMeshEntries)
     {
         if (mesh == nullptr || mesh->GetControlPoints() == nullptr)
@@ -330,6 +855,8 @@ namespace
             int localVertex;
         };
         std::unordered_map<int, std::vector<TriVert>> perMaterialTris;
+        std::unordered_map<VertexKey, std::uint32_t, VertexKeyHasher> vertexLookup;
+        vertexLookup.reserve(static_cast<std::size_t>(polygonCount) * 3ull);
 
         int polygonVertexIndex = 0;
         for (int polygonIndex = 0; polygonIndex < polygonCount; ++polygonIndex)
@@ -389,7 +916,7 @@ namespace
 
             for (std::size_t i = 0; i + 2 < triVerts.size(); i += 3)
             {
-                const std::uint32_t base = static_cast<std::uint32_t>(vertices.size());
+                std::uint32_t triangleIndices[3] = {};
 
                 for (int v = 0; v < 3; ++v)
                 {
@@ -402,13 +929,31 @@ namespace
                         vertex.TexCoord = ReadUv(mesh, tv.controlPointIndex, tv.polygonIndex, tv.localVertex);
                     }
                     vertex.Color = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-                    vertices.push_back(vertex);
+
+                    VertexKey vertexKey{};
+                    vertexKey.Position = vertex.Position;
+                    vertexKey.Normal = vertex.Normal;
+                    vertexKey.TexCoord = vertex.TexCoord;
+                    vertexKey.Color = vertex.Color;
+
+                    const auto existingVertex = vertexLookup.find(vertexKey);
+                    if (existingVertex != vertexLookup.end())
+                    {
+                        triangleIndices[v] = existingVertex->second;
+                    }
+                    else
+                    {
+                        const std::uint32_t newIndex = static_cast<std::uint32_t>(vertices.size());
+                        vertices.push_back(vertex);
+                        vertexLookup.emplace(vertexKey, newIndex);
+                        triangleIndices[v] = newIndex;
+                    }
                 }
 
                 // Flipping winding keeps front faces correct after the handedness flip (Z negation).
-                indices.push_back(base + 0);
-                indices.push_back(base + 2);
-                indices.push_back(base + 1);
+                indices.push_back(triangleIndices[0]);
+                indices.push_back(triangleIndices[2]);
+                indices.push_back(triangleIndices[1]);
             }
 
             PteroSubMeshEntry entry{};
@@ -486,43 +1031,12 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
         ProcessMesh(mesh, vertices, indices, subMeshEntries);
     }
 
-    if (const std::filesystem::path outputPath(pteroOutPath); outputPath.has_parent_path())
-    {
-        std::filesystem::create_directories(outputPath.parent_path());
-    }
-
-    std::ofstream outputStream(pteroOutPath, std::ios::binary);
-    if (!outputStream)
-    {
-        destroyManager();
-        return false;
-    }
-
-    PteroMeshHeader header{};
-    header.vertexCount = static_cast<std::uint32_t>(vertices.size());
-    header.indexCount = static_cast<std::uint32_t>(indices.size());
-    header.subMeshCount = static_cast<std::uint32_t>(subMeshEntries.size());
-
-    outputStream.write(reinterpret_cast<const char*>(&header), sizeof(header));
-
-    // Write the sub-mesh table immediately after the header so readers know the material layout before parsing geometry.
-    if (!subMeshEntries.empty())
-    {
-        outputStream.write(reinterpret_cast<const char*>(subMeshEntries.data()),
-            static_cast<std::streamsize>(subMeshEntries.size() * sizeof(PteroSubMeshEntry)));
-    }
-
-    if (!vertices.empty())
-    {
-        outputStream.write(reinterpret_cast<const char*>(vertices.data()), static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
-    }
-
-    if (!indices.empty())
-    {
-        outputStream.write(reinterpret_cast<const char*>(indices.data()), static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
-    }
-
-    const bool writeSucceeded = static_cast<bool>(outputStream);
+    MeshLodData baseLod;
+    baseLod.vertices = std::move(vertices);
+    baseLod.indices = std::move(indices);
+    baseLod.subMeshEntries = std::move(subMeshEntries);
+    const std::vector<MeshLodData> lods = GenerateMeshLods(baseLod);
+    const bool writeSucceeded = !lods.empty() && WritePteroMeshFile(pteroOutPath, lods);
 
     // Write a companion multi-material JSON into Data/MultiMaterials/ so the editor
     // can assign materials to the imported mesh without manual authoring.
@@ -556,11 +1070,34 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
     destroyManager();
     return writeSucceeded;
 }
+
+bool FbxCompiler::GenerateLodsForPtero(const std::string& pteroPath)
+{
+    std::vector<MeshLodData> sourceLods;
+    if (!ReadPteroMeshFile(pteroPath, sourceLods) || sourceLods.empty())
+    {
+        return false;
+    }
+
+    const std::vector<MeshLodData> regeneratedLods = GenerateMeshLods(sourceLods.front());
+    if (regeneratedLods.empty())
+    {
+        return false;
+    }
+
+    return WritePteroMeshFile(pteroPath, regeneratedLods);
+}
 #else
 bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::string& pteroOutPath)
 {
     (void)fbxPath;
     (void)pteroOutPath;
+    return false;
+}
+
+bool FbxCompiler::GenerateLodsForPtero(const std::string& pteroPath)
+{
+    (void)pteroPath;
     return false;
 }
 #endif

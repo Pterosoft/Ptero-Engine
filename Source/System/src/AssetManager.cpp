@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <iterator>
 #include <sstream>
 #include <utility>
@@ -18,6 +19,15 @@
 
 namespace
 {
+    struct LegacyPteroMeshHeader
+    {
+        char magic[4] = { 'P', 'T', 'R', 'O' };
+        std::uint32_t version = 2;
+        std::uint32_t vertexCount = 0;
+        std::uint32_t indexCount = 0;
+        std::uint32_t subMeshCount = 0;
+    };
+
     void LogAssetManagerDiagnostic(const std::string& message)
     {
         OutputDebugStringA("[AssetManager] ");
@@ -132,6 +142,65 @@ namespace
         }
 
         return candidatePath.lexically_normal();
+    }
+
+    bool ReadMeshLodPayload(
+        std::ifstream& inputStream,
+        const std::uint32_t vertexCount,
+        const std::uint32_t indexCount,
+        const std::uint32_t subMeshCount,
+        MeshLod& outLod,
+        std::string& errorMessage)
+    {
+        outLod = {};
+
+        if (subMeshCount > 0)
+        {
+            std::vector<PteroSubMeshEntry> entries(subMeshCount);
+            inputStream.read(
+                reinterpret_cast<char*>(entries.data()),
+                static_cast<std::streamsize>(entries.size() * sizeof(PteroSubMeshEntry)));
+            if (!inputStream)
+            {
+                errorMessage = "Failed to read the sub-mesh table from the cooked mesh.";
+                return false;
+            }
+
+            outLod.SubMeshes.reserve(entries.size());
+            for (const PteroSubMeshEntry& entry : entries)
+            {
+                SubMesh sm{};
+                sm.materialId = entry.materialId;
+                sm.indexStart = entry.indexStart;
+                sm.indexCount = entry.indexCount;
+                outLod.SubMeshes.push_back(sm);
+            }
+        }
+
+        outLod.Vertices.resize(vertexCount);
+        outLod.Indices.resize(indexCount);
+
+        if (!outLod.Vertices.empty())
+        {
+            inputStream.read(
+                reinterpret_cast<char*>(outLod.Vertices.data()),
+                static_cast<std::streamsize>(outLod.Vertices.size() * sizeof(Vertex)));
+        }
+
+        if (!outLod.Indices.empty())
+        {
+            inputStream.read(
+                reinterpret_cast<char*>(outLod.Indices.data()),
+                static_cast<std::streamsize>(outLod.Indices.size() * sizeof(std::uint32_t)));
+        }
+
+        if (!inputStream)
+        {
+            errorMessage = "The cooked mesh file ended before all vertex and index data was read.";
+            return false;
+        }
+
+        return true;
     }
 }
 
@@ -405,27 +474,39 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         return nullptr;
     }
 
-    PteroMeshHeader header{};
-    inputStream.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!inputStream || std::memcmp(header.magic, "PTRO", 4) != 0)
+    LegacyPteroMeshHeader legacyHeader{};
+    inputStream.read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
+    if (!inputStream || std::memcmp(legacyHeader.magic, "PTRO", 4) != 0)
     {
         mLastErrorMessage = "The cooked mesh header is invalid.";
         return nullptr;
     }
 
+    std::uint32_t lodCount = 1;
+    if (legacyHeader.version >= 3)
+    {
+        inputStream.read(reinterpret_cast<char*>(&lodCount), sizeof(lodCount));
+        if (!inputStream)
+        {
+            mLastErrorMessage = "The cooked mesh LOD header is invalid.";
+            return nullptr;
+        }
+    }
+
     {
         std::ostringstream logStream;
         logStream << "Read cooked mesh header from '" << pteroPath << "'"
-                  << ": version=" << header.version
-                  << ", vertexCount=" << header.vertexCount
-                  << ", indexCount=" << header.indexCount
-                  << ", subMeshCount=" << header.subMeshCount;
+                  << ": version=" << legacyHeader.version
+                  << ", vertexCount=" << legacyHeader.vertexCount
+                  << ", indexCount=" << legacyHeader.indexCount
+                  << ", subMeshCount=" << legacyHeader.subMeshCount
+                  << ", lodCount=" << lodCount;
         LogAssetManagerDiagnostic(logStream.str());
     }
 
     // If the cached .ptero was baked by an older compiler that lacks sub-mesh support, re-cook it now.
     // Native .ptero files have no source FBX available, so skip re-cooking and just report the version mismatch.
-    if (header.version != kPteroMeshVersion)
+    if (legacyHeader.version != kPteroMeshVersion)
     {
         if (isNativePtero)
         {
@@ -447,67 +528,69 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
             return nullptr;
         }
 
-        inputStream.read(reinterpret_cast<char*>(&header), sizeof(header));
-        if (!inputStream || std::memcmp(header.magic, "PTRO", 4) != 0 || header.version != kPteroMeshVersion)
+        inputStream.read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
+        if (!inputStream || std::memcmp(legacyHeader.magic, "PTRO", 4) != 0 || legacyHeader.version != kPteroMeshVersion)
         {
             mLastErrorMessage = "Re-cooked mesh header is still invalid.";
             return nullptr;
         }
-    }
 
-    // Read the sub-mesh table that sits between the header and the vertex data (version 2+).
-    std::vector<SubMesh> subMeshes;
-    if (header.subMeshCount > 0)
-    {
-        std::vector<PteroSubMeshEntry> entries(header.subMeshCount);
-        inputStream.read(reinterpret_cast<char*>(entries.data()),
-            static_cast<std::streamsize>(entries.size() * sizeof(PteroSubMeshEntry)));
-        if (!inputStream)
+        lodCount = 1;
+        if (legacyHeader.version >= 3)
         {
-            mLastErrorMessage = "Failed to read the sub-mesh table from the cooked mesh.";
-            return nullptr;
-        }
-
-        subMeshes.reserve(entries.size());
-        for (const PteroSubMeshEntry& entry : entries)
-        {
-            SubMesh sm{};
-            sm.materialId = entry.materialId;
-            sm.indexStart = entry.indexStart;
-            sm.indexCount = entry.indexCount;
-            subMeshes.push_back(sm);
-
-            std::ostringstream logStream;
-            const bool isRangeValid = static_cast<std::uint64_t>(entry.indexStart) + static_cast<std::uint64_t>(entry.indexCount)
-                <= static_cast<std::uint64_t>(header.indexCount);
-            logStream << "SubMesh materialId=" << entry.materialId
-                      << ", indexStart=" << entry.indexStart
-                      << ", indexCount=" << entry.indexCount
-                      << ", validRange=" << (isRangeValid ? "true" : "false");
-            LogAssetManagerDiagnostic(logStream.str());
+            inputStream.read(reinterpret_cast<char*>(&lodCount), sizeof(lodCount));
+            if (!inputStream)
+            {
+                mLastErrorMessage = "Re-cooked mesh LOD header is invalid.";
+                return nullptr;
+            }
         }
     }
 
-    std::vector<Vertex> vertices(header.vertexCount);
-    std::vector<std::uint32_t> indices(header.indexCount);
+    lodCount = (std::max)(lodCount, 1u);
+    std::vector<MeshLod> lods;
+    lods.reserve(lodCount);
 
-    if (!vertices.empty())
+    MeshLod baseLod;
+    if (!ReadMeshLodPayload(inputStream, legacyHeader.vertexCount, legacyHeader.indexCount, legacyHeader.subMeshCount, baseLod, mLastErrorMessage))
     {
-        inputStream.read(reinterpret_cast<char*>(vertices.data()), static_cast<std::streamsize>(vertices.size() * sizeof(Vertex)));
-    }
-
-    if (!indices.empty())
-    {
-        inputStream.read(reinterpret_cast<char*>(indices.data()), static_cast<std::streamsize>(indices.size() * sizeof(std::uint32_t)));
-    }
-
-    if (!inputStream)
-    {
-        mLastErrorMessage = "The cooked mesh file ended before all vertex and index data was read.";
         return nullptr;
     }
 
-    auto mesh = std::make_shared<Mesh>(std::move(vertices), std::move(indices), std::move(subMeshes));
+    for (const SubMesh& subMesh : baseLod.SubMeshes)
+    {
+        std::ostringstream logStream;
+        const bool isRangeValid = static_cast<std::uint64_t>(subMesh.indexStart) + static_cast<std::uint64_t>(subMesh.indexCount)
+            <= static_cast<std::uint64_t>(baseLod.Indices.size());
+        logStream << "SubMesh materialId=" << subMesh.materialId
+                  << ", indexStart=" << subMesh.indexStart
+                  << ", indexCount=" << subMesh.indexCount
+                  << ", validRange=" << (isRangeValid ? "true" : "false");
+        LogAssetManagerDiagnostic(logStream.str());
+    }
+
+    lods.push_back(std::move(baseLod));
+
+    for (std::uint32_t lodIndex = 1; lodIndex < lodCount; ++lodIndex)
+    {
+        PteroLodEntry lodEntry{};
+        inputStream.read(reinterpret_cast<char*>(&lodEntry), sizeof(lodEntry));
+        if (!inputStream)
+        {
+            mLastErrorMessage = "Failed to read an additional mesh LOD entry from the cooked mesh.";
+            return nullptr;
+        }
+
+        MeshLod lod;
+        if (!ReadMeshLodPayload(inputStream, lodEntry.vertexCount, lodEntry.indexCount, lodEntry.subMeshCount, lod, mLastErrorMessage))
+        {
+            return nullptr;
+        }
+
+        lods.push_back(std::move(lod));
+    }
+
+    auto mesh = std::make_shared<Mesh>(std::move(lods));
     if (!mesh->UploadToGpu())
     {
         mLastErrorMessage = "The mesh data loaded, but the GPU upload step failed.";
@@ -520,6 +603,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
                   << ", vertices=" << mesh->GetVertices().size()
                   << ", indices=" << mesh->GetIndices().size()
                   << ", subMeshes=" << mesh->GetSubMeshes().size()
+                  << ", lods=" << mesh->GetLodCount()
                   << ", uploadedToGpu=" << (mesh->IsUploadedToGpu() ? "true" : "false");
         LogAssetManagerDiagnostic(logStream.str());
     }

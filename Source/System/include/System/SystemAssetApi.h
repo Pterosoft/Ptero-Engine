@@ -22,3 +22,8 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_ImportTextureToData(
     const char* targetDirectoryRelativeToData,
     char* statusMessage,
     int statusMessageCapacity);
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateMeshLods(
+    const char* geometryPath,
+    char* statusMessage,
+    int statusMessageCapacity);

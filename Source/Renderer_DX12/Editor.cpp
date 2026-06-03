@@ -265,11 +265,13 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
     LoadIconTexture(L"PointLight.png", mPointLightIcon, &iconStatus, commandList);
     LoadIconTexture(L"AudioEmitter.png", mAudioEmitterIcon, &iconStatus, commandList);
     LoadIconTexture(L"Decal.png", mDecalIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Rain.png", mRainIcon, &iconStatus, commandList);
     ReportProgress(L"Loading editor toolbar icons...");
     LoadIconTexture(L"Select.png", mSelectIcon, &iconStatus, commandList);
     LoadIconTexture(L"Move.png", mMoveIcon, &iconStatus, commandList);
     LoadIconTexture(L"Rotate.png", mRotateIcon, &iconStatus, commandList);
     LoadIconTexture(L"Scale.png", mScaleIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Wireframe.png", mWireframeIcon, &iconStatus, commandList);
     ReportProgress(L"Editor UI assets ready.");
     mIsInitialized = true;
     return true;
@@ -287,10 +289,12 @@ void Editor::Shutdown()
     ReleaseIconTexture(mPointLightIcon);
     ReleaseIconTexture(mAudioEmitterIcon);
     ReleaseIconTexture(mDecalIcon);
+    ReleaseIconTexture(mRainIcon);
     ReleaseIconTexture(mSelectIcon);
     ReleaseIconTexture(mMoveIcon);
     ReleaseIconTexture(mRotateIcon);
     ReleaseIconTexture(mScaleIcon);
+    ReleaseIconTexture(mWireframeIcon);
     mIsInitialized = false;
 }
 
@@ -1679,6 +1683,8 @@ void Editor::DrawViewportPlacementIcons(
             iconHandle = mAudioEmitterIcon.GpuHandle;
         else if (mEntities[i].Decal.has_value())
             iconHandle = mDecalIcon.GpuHandle;
+        else if (mEntities[i].Rain.has_value())
+            iconHandle = mRainIcon.GpuHandle;
         else
             iconHandle = mGeometryIcon.GpuHandle;
 
@@ -1878,9 +1884,10 @@ void Editor::DrawToolbar(
     D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
     D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
     D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon)
+    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon)
 {
-    ImGui::SetNextWindowSize(ImVec2(220.0f, 56.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(280.0f, 56.0f), ImGuiCond_FirstUseEver);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(4, 4));
 
@@ -1893,6 +1900,7 @@ void Editor::DrawToolbar(
 
     const float iconSize = 24.0f;
     const ImVec2 btnSize(iconSize + 8.0f, iconSize + 8.0f);
+    const float separatorWidth = 8.0f;
 
     auto ToolButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, GizmoType type, const char* tooltip) {
         bool active = (mActiveGizmo == type);
@@ -1907,7 +1915,21 @@ void Editor::DrawToolbar(
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
     };
 
-    const float totalButtonsWidth = btnSize.x * 4.0f + ImGui::GetStyle().ItemSpacing.x * 3.0f;
+    auto ToggleButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, bool& value, const char* tooltip)
+    {
+        if (value) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        const bool clicked = (icon.ptr != 0)
+            ? ImGui::ImageButton(tooltip, TextureIdFromHandle(icon), ImVec2(iconSize, iconSize))
+            : ImGui::Button(tooltip, btnSize);
+        if (value) ImGui::PopStyleColor();
+        if (clicked) value = !value;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    };
+
+    const float totalButtonsWidth =
+        btnSize.x * 5.0f +
+        ImGui::GetStyle().ItemSpacing.x * 4.0f +
+        separatorWidth;
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     if (availableWidth > totalButtonsWidth)
     {
@@ -1921,6 +1943,10 @@ void Editor::DrawToolbar(
     ToolButton(rotateIcon, GizmoType::Rotate,     "Rotate  (E)");
     ImGui::SameLine();
     ToolButton(scaleIcon,  GizmoType::Scale,      "Scale   (R)");
+    ImGui::SameLine();
+    ImGui::Dummy(ImVec2(separatorWidth, 0.0f));
+    ImGui::SameLine();
+    ToggleButton(wireframeIcon, mWireframeEnabled, "Wireframe");
 
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -2281,6 +2307,26 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                         mSceneDirty = true;
                     }
                 }
+            }
+
+            ImGui::Spacing();
+            if (ImGui::DragFloat("LOD Usage Scale", &meshComponent.LodUsageScale, 0.01f, 0.1f, 8.0f, "%.2f"))
+            {
+                meshComponent.LodUsageScale = (std::clamp)(meshComponent.LodUsageScale, 0.1f, 8.0f);
+                mSceneDirty = true;
+            }
+
+            const char* lodDebugModes[] = { "Automatic", "LOD 0", "LOD 1", "LOD 2", "LOD 3" };
+            int lodDebugMode = meshComponent.DebugForcedLod + 1;
+            if (ImGui::Combo("LOD Debug View", &lodDebugMode, lodDebugModes, IM_ARRAYSIZE(lodDebugModes)))
+            {
+                meshComponent.DebugForcedLod = lodDebugMode - 1;
+                mSceneDirty = true;
+            }
+
+            if (meshComponent.MeshAsset)
+            {
+                ImGui::Text("Available LODs: %zu", meshComponent.MeshAsset->GetLodCount());
             }
         }
     }
@@ -2733,7 +2779,7 @@ void Editor::Draw(
 
     DrawViewport(sceneTextureHandle, camera, selectedEntity);
     selectedEntity = GetSelectedEntity();
-    DrawToolbar(mSelectIcon.GpuHandle, mMoveIcon.GpuHandle, mRotateIcon.GpuHandle, mScaleIcon.GpuHandle);
+    DrawToolbar(mSelectIcon.GpuHandle, mMoveIcon.GpuHandle, mRotateIcon.GpuHandle, mScaleIcon.GpuHandle, mWireframeIcon.GpuHandle);
 
     if (mShowComponentsPanel)   DrawComponentsPanel();
     if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();

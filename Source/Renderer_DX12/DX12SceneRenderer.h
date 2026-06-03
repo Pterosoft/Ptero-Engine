@@ -132,6 +132,16 @@ public:
         return mGridEnabled;
     }
 
+    void SetWireframeEnabled(bool isEnabled)
+    {
+        mEntityMeshRenderer.SetWireframeEnabled(isEnabled);
+    }
+
+    bool IsWireframeEnabled() const
+    {
+        return mEntityMeshRenderer.IsWireframeEnabled();
+    }
+
     // Returns the final scene output for display:
     //   AgX tonemapped → Bloom composited → DLSS upscaled → TAA resolved → raw scene colour (in priority order when enabled).
     ImTextureID GetSceneTextureId() const

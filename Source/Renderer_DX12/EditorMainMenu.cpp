@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -178,6 +179,9 @@ namespace
 
     using SystemImportFbxToDataFn = decltype(&System_ImportFbxToData);
     using SystemImportTextureToDataFn = decltype(&System_ImportTextureToData);
+    using SystemGenerateMeshLodsFn = decltype(&System_GenerateMeshLods);
+
+    void InvalidateEditorMeshAssets(void* editor, const std::string& relativeGeometryPath);
 
     std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath)
     {
@@ -475,6 +479,108 @@ namespace
         }
 
         return importTexture(sourceTexturePath, targetDirectoryRelativeToData, statusMessage, statusMessageCapacity);
+    }
+
+    bool GenerateMeshLodsFromSystem(
+        const char* geometryPath,
+        char* statusMessage,
+        const int statusMessageCapacity)
+    {
+        if (statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            statusMessage[0] = '\0';
+        }
+
+        HMODULE systemModule = EnsureSystemModuleLoaded(statusMessage, statusMessageCapacity);
+        if (systemModule == nullptr)
+        {
+            return false;
+        }
+
+        const auto generateMeshLods = reinterpret_cast<SystemGenerateMeshLodsFn>(GetProcAddress(systemModule, "System_GenerateMeshLods"));
+        if (generateMeshLods == nullptr)
+        {
+            if (statusMessage != nullptr && statusMessageCapacity > 0)
+            {
+                _snprintf_s(
+                    statusMessage,
+                    static_cast<size_t>(statusMessageCapacity),
+                    _TRUNCATE,
+                    "System.dll is missing the System_GenerateMeshLods export. Win32 error: %lu",
+                    GetLastError());
+            }
+
+            return false;
+        }
+
+        return generateMeshLods(geometryPath, statusMessage, statusMessageCapacity);
+    }
+
+    bool IsGeometryAssetPath(const std::string& relativePath)
+    {
+        const std::string extension = std::filesystem::path(relativePath).extension().string();
+        return _stricmp(extension.c_str(), ".ptero") == 0 || _stricmp(extension.c_str(), ".fbx") == 0;
+    }
+
+    bool RegenerateSelectedGeometryLods(void* editor)
+    {
+        if (gSelectedAssetRelativePath.empty() || !IsGeometryAssetPath(gSelectedAssetRelativePath))
+        {
+            SetAssetBrowserStatus(false, "Select an FBX or .ptero geometry asset before generating LODs.");
+            return false;
+        }
+
+        const std::filesystem::path geometryPath = GetAbsoluteDataPath(gSelectedAssetRelativePath);
+        char statusMessage[512] = {};
+        const bool succeeded = GenerateMeshLodsFromSystem(
+            geometryPath.string().c_str(),
+            statusMessage,
+            static_cast<int>(std::size(statusMessage)));
+        SetAssetBrowserStatus(succeeded, statusMessage);
+        if (succeeded)
+        {
+            InvalidateEditorMeshAssets(editor, gSelectedAssetRelativePath);
+        }
+        return succeeded;
+    }
+
+    void InvalidateEditorMeshAssets(void* editor, const std::string& relativeGeometryPath)
+    {
+        if (editor == nullptr || relativeGeometryPath.empty())
+        {
+            return;
+        }
+
+        Editor* editorInstance = static_cast<Editor*>(editor);
+        const std::filesystem::path requestedPath(relativeGeometryPath);
+        const std::string requestedPathString = requestedPath.generic_string();
+        const std::string requestedStem = requestedPath.stem().generic_string();
+        const bool requestedIsPtero = _stricmp(requestedPath.extension().string().c_str(), ".ptero") == 0;
+
+        for (Entity& entity : editorInstance->GetEntities())
+        {
+            if (!entity.Mesh.has_value())
+            {
+                continue;
+            }
+
+            MeshComponent& meshComponent = *entity.Mesh;
+            if (meshComponent.MeshPath.empty())
+            {
+                continue;
+            }
+
+            const std::filesystem::path entityMeshPath(meshComponent.MeshPath);
+            const std::string entityPathString = entityMeshPath.generic_string();
+            const std::string entityStem = entityMeshPath.stem().generic_string();
+            const bool matchesExactPath = _stricmp(entityPathString.c_str(), requestedPathString.c_str()) == 0;
+            const bool matchesCookedPair = requestedIsPtero && _stricmp(entityStem.c_str(), requestedStem.c_str()) == 0;
+            const bool matchesFbxPair = !requestedIsPtero && _stricmp(entityPathString.c_str(), requestedPathString.c_str()) == 0;
+            if (matchesExactPath || matchesCookedPair || matchesFbxPair)
+            {
+                meshComponent.MeshAsset.reset();
+            }
+        }
     }
 
     bool PromptForAndImportFbx(HWND windowHandle, const std::string& targetFolderRelativePath)
@@ -2095,6 +2201,7 @@ void RenderEditorMainMenu(
         }
 
         const bool hasSelectedAsset = !gSelectedAssetRelativePath.empty();
+        const bool selectedAssetIsGeometry = hasSelectedAsset && IsGeometryAssetPath(gSelectedAssetRelativePath);
         const bool canPaste = gClipboardHasValue;
 
         // The toolbar keeps common content-browser actions visible, similar to the asset views used by large game editors.
@@ -2151,6 +2258,15 @@ void RenderEditorMainMenu(
         if (ImGui::Button("Remove"))
         {
             DeleteSelectedAsset();
+            RefreshAssetBrowserState();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!selectedAssetIsGeometry);
+        if (ImGui::Button("Generate LODs"))
+        {
+            RegenerateSelectedGeometryLods(editor);
             RefreshAssetBrowserState();
         }
         ImGui::EndDisabled();
@@ -2384,6 +2500,12 @@ void RenderEditorMainMenu(
                         if (ImGui::MenuItem("Copy"))
                         {
                             CopySelectedAssetToClipboard();
+                        }
+
+                        if (!item.IsDirectory && IsGeometryAssetPath(item.RelativePath) && ImGui::MenuItem("Generate LODs"))
+                        {
+                            RegenerateSelectedGeometryLods(editor);
+                            RefreshAssetBrowserState();
                         }
 
                         if (ImGui::MenuItem("Remove"))
