@@ -387,6 +387,16 @@ void SceneSerializer::Serialize(const std::string& filepath)
             entityJson["AudioEmitterComponent"] = *entity.AudioEmitter;
         }
 
+        if (entity.HasDecalComponent())
+        {
+            entityJson["DecalComponent"] = *entity.Decal;
+        }
+
+        if (entity.HasRainComponent())
+        {
+            entityJson["RainComponent"] = *entity.Rain;
+        }
+
         sceneJson["Entities"].push_back(entityJson);
     }
 
@@ -494,6 +504,16 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
             if (entityJson.contains("AudioEmitterComponent"))
             {
                 entity.AddAudioEmitterComponent() = entityJson["AudioEmitterComponent"].get<AudioEmitterComponent>();
+            }
+
+            if (entityJson.contains("DecalComponent"))
+            {
+                entity.AddDecalComponent() = entityJson["DecalComponent"].get<DecalComponent>();
+            }
+
+            if (entityJson.contains("RainComponent"))
+            {
+                entity.AddRainComponent() = entityJson["RainComponent"].get<RainComponent>();
             }
 
             ++entityIndex;

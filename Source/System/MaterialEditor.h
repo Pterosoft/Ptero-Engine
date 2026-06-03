@@ -51,6 +51,7 @@ struct MaterialDefinition
     bool IsDoubleSided = false;
     bool UseAlphaCutout = false;
     bool UseTransparentBlend = false;
+    bool IsDecalMaterial = false;
     MaterialTextureSet Textures;
 };
 

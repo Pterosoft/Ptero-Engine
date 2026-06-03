@@ -1,0 +1,220 @@
+#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+
+#include <DirectXMath.h>
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <cstdint>
+
+// Settings that map to the RainComponent and are also exposed through ImGui.
+struct RainSettings
+{
+	// Maximum number of active rain particles.
+	static constexpr uint32_t MaxParticles = 65536;
+	static constexpr uint32_t BaseParticleCount = 16384;
+
+	// Physics
+	DirectX::XMFLOAT3 WindVector       { 0.5f, 0.0f, 0.2f };
+	float             Gravity          = 9.8f;
+
+	// Bounding box half-extents around the camera (XYZ).
+	DirectX::XMFLOAT3 BoundingBoxExtents{ 20.0f, 15.0f, 20.0f };
+
+	// Visual
+	float             Intensity        = 1.0f;
+	float             StreakLength     = 0.18f;
+	float             RainColorR       = 0.65f;
+	float             RainColorG       = 0.75f;
+	float             RainColorB       = 0.85f;
+	float             RainColorA       = 0.35f;
+	float             WetnessIntensity = 0.7f;
+
+	// Whether the rain simulation is active.
+	bool              Enabled          = true;
+};
+
+// RainRenderer manages the GPU resources and pipeline states for the rain
+// particle simulation and rendering.
+class RainRenderer
+{
+public:
+	RainRenderer() = default;
+	~RainRenderer() { Shutdown(); }
+
+	// Allocates GPU buffers and compiles shaders.  Must be called once before
+	// Dispatch/Draw and after a DX12 device is available.
+	bool Initialize();
+
+	// Release all GPU resources.
+	void Shutdown();
+
+	// Run the compute shader to integrate particle physics.
+	// cmdList must be in the recording state.
+	void Dispatch(
+		ID3D12GraphicsCommandList* cmdList,
+		const RainSettings&        settings,
+		const DirectX::XMFLOAT3&   cameraPosition,
+		const DirectX::XMFLOAT3&   cameraRight,
+		const DirectX::XMFLOAT3&   cameraForward,
+		const DirectX::XMFLOAT3&   cameraUp,
+		float                      deltaTime);
+
+	// Render rain streaks into the currently bound render target.
+	// The render target and depth stencil must already be set on cmdList.
+	void Draw(
+		ID3D12GraphicsCommandList* cmdList,
+		const RainSettings&        settings,
+		const DirectX::XMFLOAT4X4& viewProj,
+		const DirectX::XMFLOAT3&   cameraPosition,
+		const DirectX::XMFLOAT3&   cameraRight,
+		const DirectX::XMFLOAT3&   cameraUp,
+		const DirectX::XMFLOAT3&   primaryLightPosition,
+		const DirectX::XMFLOAT3&   primaryLightColor,
+		float                      primaryLightIntensity);
+
+	void ResetSimulation();
+
+	bool IsInitialized() const { return mIsInitialized; }
+
+	const char* GetLastError() const
+	{
+		return mLastError.empty() ? nullptr : mLastError.c_str();
+	}
+
+private:
+	// GPU layout for a single rain particle (must match Rain_Update.hlsl).
+	struct GpuRainDrop
+	{
+		DirectX::XMFLOAT3 Position;
+		float             Age;
+		DirectX::XMFLOAT3 Velocity;
+		float             State;
+		DirectX::XMFLOAT4 Variation;
+		DirectX::XMFLOAT4 ImpactData;
+	};
+
+	// Constant buffer layout for the compute shader (must match Rain_Update.hlsl).
+	struct alignas(256) UpdateConstants
+	{
+		float             DeltaTime;
+		DirectX::XMFLOAT3 WindVector;
+		float             Gravity;
+		DirectX::XMFLOAT3 CameraPosition;
+		float             GroundHeight;
+		DirectX::XMFLOAT3 PreviousCameraPosition;
+		float             GlobalTime;
+		DirectX::XMFLOAT3 CameraRight;
+		float             TurbulenceStrength;
+		DirectX::XMFLOAT3 CameraForward;
+		float             TurbulenceScale;
+		DirectX::XMFLOAT3 CameraUp;
+		float             SplashLifetime;
+		DirectX::XMFLOAT3 PreviousCameraRight;
+		float             MistLifetime;
+		DirectX::XMFLOAT3 PreviousCameraForward;
+		float             BaseSplashSize;
+		DirectX::XMFLOAT3 PreviousCameraUp;
+		float             BaseMistStrength;
+		DirectX::XMFLOAT3 BoundingBoxExtents;
+		uint32_t          ParticleCount;
+	};
+
+	// Constant buffer layout for the draw shaders (must match Rain_Draw.hlsl).
+	struct alignas(256) DrawConstants
+	{
+		DirectX::XMFLOAT4X4 ViewProj;
+		DirectX::XMFLOAT3   CameraPosition;
+		float               BaseStreakLength;
+		DirectX::XMFLOAT3   CameraRight;
+		float               NearFadeDistance;
+		DirectX::XMFLOAT3   CameraUp;
+		float               FarFadeDistance;
+		DirectX::XMFLOAT4   RainColor;
+		DirectX::XMFLOAT3   PrimaryLightPosition;
+		float               PrimaryLightIntensity;
+		DirectX::XMFLOAT3   PrimaryLightColor;
+		float               RefractionStrength;
+		float               WetnessIntensity;
+		float               MistHeightFade;
+		float               MistSoftness;
+		float               _Pad;
+	};
+
+	bool CreateComputePipeline();
+	bool CreateDrawPipeline();
+	bool CreateParticleBuffers();
+	bool CreateConstantBuffers();
+	void SeedParticles(
+		const DirectX::XMFLOAT3& cameraPosition,
+		const DirectX::XMFLOAT3& cameraRight,
+		const DirectX::XMFLOAT3& cameraForward,
+		const DirectX::XMFLOAT3& cameraUp,
+		const RainSettings& settings);
+	void UploadUpdateConstants(
+		const RainSettings&       settings,
+		const DirectX::XMFLOAT3&  cameraPosition,
+		const DirectX::XMFLOAT3&  previousCameraPosition,
+		const DirectX::XMFLOAT3&  cameraRight,
+		const DirectX::XMFLOAT3&  cameraForward,
+		const DirectX::XMFLOAT3&  cameraUp,
+		const DirectX::XMFLOAT3&  previousCameraRight,
+		const DirectX::XMFLOAT3&  previousCameraForward,
+		const DirectX::XMFLOAT3&  previousCameraUp,
+		float                     deltaTime);
+	void UploadDrawConstants(
+		const RainSettings&        settings,
+		const DirectX::XMFLOAT4X4& viewProj,
+		const DirectX::XMFLOAT3&   cameraPosition,
+		const DirectX::XMFLOAT3&   cameraRight,
+		const DirectX::XMFLOAT3&   cameraUp,
+		const DirectX::XMFLOAT3&   primaryLightPosition,
+		const DirectX::XMFLOAT3&   primaryLightColor,
+		float                      primaryLightIntensity);
+
+	// ---- compute pipeline ------------------------------------------------
+	Microsoft::WRL::ComPtr<ID3D12RootSignature>  mUpdateRootSig;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState>  mUpdatePso;
+
+	// ---- draw pipeline ---------------------------------------------------
+	Microsoft::WRL::ComPtr<ID3D12RootSignature>  mDrawRootSig;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState>  mDrawPso;
+
+	// ---- particle buffers (ping-pong) ------------------------------------
+	Microsoft::WRL::ComPtr<ID3D12Resource>  mParticleBufferA;   // SRV source
+	Microsoft::WRL::ComPtr<ID3D12Resource>  mParticleBufferB;   // UAV dest
+	bool                                    mPingPong   = false; // which buffer is "current"
+
+	// Descriptor heap for the particle SRV/UAV pair used by the compute pass.
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mComputeHeap;
+	// Four descriptors: A-SRV, A-UAV, B-SRV, B-UAV
+	static constexpr uint32_t kDescCount = 4;
+	uint32_t                  mDescSize  = 0;
+
+	// Draw SRV descriptors are allocated from the shared engine heap.
+	D3D12_CPU_DESCRIPTOR_HANDLE mDrawSrvACpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mDrawSrvAGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mDrawSrvBCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mDrawSrvBGpu{};
+
+	// ---- constant buffers ------------------------------------------------
+	Microsoft::WRL::ComPtr<ID3D12Resource> mUpdateCb;
+	void*                                  mUpdateCbPtr = nullptr;
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> mDrawCb;
+	void*                                  mDrawCbPtr   = nullptr;
+
+	bool        mIsInitialized = false;
+	bool        mSeeded        = false;
+	uint32_t    mActiveParticleCount = RainSettings::BaseParticleCount;
+	float       mSimulationTime = 0.0f;
+	DirectX::XMFLOAT3 mPreviousCameraPosition = { 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT3 mPreviousCameraRight = { 1.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT3 mPreviousCameraForward = { 0.0f, 1.0f, 0.0f };
+	DirectX::XMFLOAT3 mPreviousCameraUp = { 0.0f, 0.0f, 1.0f };
+	bool        mHasPreviousCameraPosition = false;
+	DirectX::XMFLOAT3 mLastSeedExtents = { -1.0f, -1.0f, -1.0f };
+	std::string mLastError;
+};

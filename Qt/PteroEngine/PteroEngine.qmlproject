@@ -1,0 +1,137 @@
+import QmlProject
+
+Project {
+    mainFile: "PteroEngineContent/App.qml"
+    mainUiFile: "PteroEngineContent/Screen01.ui.qml"
+
+    /* Include .qml, .js, and image files from current directory and subdirectories */
+    QmlFiles {
+        directory: "PteroEngine"
+    }
+
+    QmlFiles {
+        directory: "PteroEngineContent"
+    }
+
+    QmlFiles {
+        directory: "Generated"
+    }
+
+    JavaScriptFiles {
+        directory: "PteroEngine"
+    }
+
+    JavaScriptFiles {
+        directory: "PteroEngineContent"
+    }
+
+    ImageFiles {
+        directory: "PteroEngineContent"
+    }
+
+    ImageFiles {
+        directory: "Generated"
+    }
+
+    Files {
+        filter: "*.conf"
+        files: ["qtquickcontrols2.conf"]
+    }
+
+    Files {
+        filter: "qmldir"
+        directory: "."
+    }
+
+    FontFiles {
+        filter: "*.ttf;*.otf"
+    }
+
+    Files {
+        filter: "*.wav;*.mp3"
+    }
+
+    Files {
+        filter: "*.mp4"
+    }
+
+    Files {
+        filter: "*.glsl;*.glslv;*.glslf;*.vsh;*.fsh;*.vert;*.frag"
+    }
+
+    Files {
+        filter: "*.qsb"
+    }
+
+    Files {
+        filter: "*.json"
+    }
+
+    Files {
+        filter: "*.mesh"
+        directory: "Generated"
+    }
+
+    Files {
+        filter: "*.qad"
+        directory: "Generated"
+    }
+
+    /* Baked lightmaps */
+    Files {
+        filter: "*.bin;*.exr;*.mesh"
+        directory: "PteroEngineContent"
+    }
+
+    Environment {
+        QT_QUICK_CONTROLS_CONF: "qtquickcontrols2.conf"
+        QML_COMPAT_RESOLVE_URLS_ON_ASSIGNMENT: "1"
+        QT_LOGGING_RULES: "qt.qml.connections=false"
+        QT_ENABLE_HIGHDPI_SCALING: "0"
+        /* Useful for debugging
+       QSG_VISUALIZE=batches
+       QSG_VISUALIZE=clip
+       QSG_VISUALIZE=changes
+       QSG_VISUALIZE=overdraw
+       */
+    }
+
+    qt6Project: true
+
+    /* List of plugin directories passed to QML runtime */
+    importPaths: [ "." ]
+
+    /* Required for deployment */
+    targetDirectory: "/opt/PteroEngine"
+
+    enableCMakeGeneration: true
+    standaloneApp: true
+
+    qdsVersion: "4.8"
+
+    quickVersion: "6.8"
+
+    /* If any modules the project imports require widgets (e.g. QtCharts), widgetApp must be true */
+    widgetApp: true
+
+    /* args: Specifies command line arguments for qsb tool to generate shaders.
+       files: Specifies target files for qsb tool. If path is included, it must be relative to this file.
+              Wildcard '*' can be used in the file name part of the path.
+              e.g. files: [ "PteroEngineContent/shaders/*.vert", "*.frag" ]  */
+    ShaderTool {
+        args: "-s --glsl 100es,120,150 --hlsl 50 --msl 12"
+        files: [ "PteroEngineContent/shaders/*" ]
+    }
+
+    EffectComposer {
+        /* Qsb tool arguments for Effect Composer shader generation.
+           Default arguments support all pre-built effects.
+           Changing qsbArgs may make some or all pre-built effects unusable in the project. */
+        qsbArgs: "-s --glsl 300es,140,330,410 --hlsl 50 --msl 12"
+    }
+
+    multilanguageSupport: true
+    supportedLanguages: ["en"]
+    primaryLanguage: "en"
+
+}

@@ -1,0 +1,145 @@
+﻿// GBuffer.hlsl
+// Geometry pass for the deferred renderer.
+// Writes albedo, world-space normal, and roughness/metallic/AO into three
+// separate render targets.  No lighting is computed here.
+
+cbuffer EntityConstants : register(b0)
+{
+    float4x4 gMVP;      // pre-transposed model-view-projection
+    float4x4 gModel;    // pre-transposed model-to-world matrix
+};
+
+// Per-draw material parameters, uploaded from the JSON material definition.
+cbuffer MaterialConstants : register(b1)
+{
+    float4 gBaseColorTint;      // RGBA tint multiplied with base-color texture
+    float3 gEmissiveColor;      float _MatPad0;
+    float  gMetallicFactor;     // scalar multiplied with metallic texture (or used directly)
+    float  gRoughnessFactor;    // scalar multiplied with roughness texture (or used directly)
+    float  gNormalScale;        // tangent-space normal intensity
+    float  gAoStrength;         // ambient-occlusion blend strength
+    // Texture presence flags (1 = texture bound, 0 = use factor only).
+    int    gHasNormalMap;
+    int    gHasMetallicMap;
+    int    gHasRoughnessMap;
+    int    gHasAoMap;
+    int    gHasEmissiveMap;
+    int    gHasPackedMaterialMap;
+    float2 _MatPad1;
+};
+
+// Texture slots – all optional; fallback textures are bound when absent.
+Texture2D    gBaseColorTexture  : register(t0);  // diffuse / albedo
+Texture2D    gNormalTexture     : register(t1);  // tangent-space normal map
+Texture2D    gMetallicTexture   : register(t2);  // metallic (R channel)
+Texture2D    gRoughnessTexture  : register(t3);  // roughness (R channel)
+Texture2D    gAoTexture         : register(t4);  // ambient occlusion (R channel)
+Texture2D    gEmissiveTexture   : register(t5);  // emissive (RGB)
+SamplerState gLinearSampler     : register(s0);
+
+struct VSInput
+{
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD;
+    float4 Color    : COLOR;
+};
+
+struct PSInput
+{
+    float4 Position      : SV_Position;
+    float3 WorldPosition : WORLDPOS;
+    float3 WorldNormal   : NORMAL;
+    float2 TexCoord      : TEXCOORD;
+    float4 Color         : COLOR;
+};
+
+// G-Buffer outputs:
+//   SV_Target0 – Albedo  (RGB = base colour, A = unused)
+//   SV_Target1 – Normal  (RGB = world-space normal encoded to [0,1])
+//   SV_Target2 – Material (R = roughness, G = metallic, B = AO, A = unused)
+struct PSOutput
+{
+    float4 Albedo   : SV_Target0;
+    float4 Normal   : SV_Target1;
+    float4 Material : SV_Target2;
+};
+
+float2 OctWrap(float2 v)
+{
+    return (1.0f - abs(v.yx)) * (float2(v.xy >= 0.0f) * 2.0f - 1.0f);
+}
+
+float2 EncodeOctNormal(float3 n)
+{
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    float2 oct = (n.z >= 0.0f) ? n.xy : OctWrap(n.xy);
+    return oct * 0.5f + 0.5f;
+}
+
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    output.Position      = mul(float4(input.Position, 1.0f), gMVP);
+    output.WorldPosition = mul(float4(input.Position, 1.0f), gModel).xyz;
+    output.WorldNormal   = mul(float4(input.Normal,   0.0f), gModel).xyz;
+    output.TexCoord      = input.TexCoord;
+    output.Color         = input.Color;
+    return output;
+}
+
+PSOutput PSMain(PSInput input)
+{
+    PSOutput output;
+
+    // --- Albedo ---
+    float4 texColor = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord);
+    // Tint: per-vertex colour (from material slot) × JSON baseColorTint × texture.
+    output.Albedo = float4(texColor.rgb * input.Color.rgb * gBaseColorTint.rgb, texColor.a * gBaseColorTint.a);
+
+    // --- Normal ---
+    float3 N = normalize(input.WorldNormal);
+    if (gHasNormalMap)
+    {
+        // BC5 stores only XY; rebuild Z after remapping into tangent space.
+        float2 tsNormalXY = gNormalTexture.Sample(gLinearSampler, input.TexCoord).rg * 2.0f - 1.0f;
+        float3 tsNormal = float3(tsNormalXY, sqrt(saturate(1.0f - dot(tsNormalXY, tsNormalXY))));
+        tsNormal.xy *= gNormalScale;
+        tsNormal.z = sqrt(saturate(1.0f - dot(tsNormal.xy, tsNormal.xy)));
+
+        // Build a tangent frame from the geometry normal using the "frisvad" method.
+        // This avoids the need for a separate tangent vertex attribute.
+        float3 up  = (abs(N.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+        float3 T   = normalize(cross(up, N));
+        float3 B   = cross(N, T);
+        // Transform tangent-space normal to world space.
+        N = normalize(T * tsNormal.x + B * tsNormal.y + N * tsNormal.z);
+    }
+    // Pack the normal target as oct-encoded world normal in XY plus scene depth in Z.
+    // RTGI reads this surface texture as "normal + depth" for world-position
+    // reconstruction and neighbourhood validation, while the deferred lighting pass
+    // decodes the normal back from the XY oct representation.
+    const float2 octNormal = EncodeOctNormal(N);
+    output.Normal = float4(octNormal, input.Position.z, 0.0f);
+
+    // --- Material (roughness, metallic, AO) ---
+    float4 metallicSample = gMetallicTexture.Sample(gLinearSampler, input.TexCoord);
+    float4 roughnessSample = gRoughnessTexture.Sample(gLinearSampler, input.TexCoord);
+    float4 aoSample = gAoTexture.Sample(gLinearSampler, input.TexCoord);
+
+    float roughness = gHasRoughnessMap
+        ? (gHasPackedMaterialMap ? roughnessSample.r : roughnessSample.r) * gRoughnessFactor
+        : gRoughnessFactor;
+
+    float metallic = gHasMetallicMap
+        ? (gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
+        : gMetallicFactor;
+
+    float ao = gHasAoMap
+        ? lerp(1.0f, gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
+        : 1.0f;
+
+    output.Material = float4(roughness, metallic, ao, 0.0f);
+
+    return output;
+}

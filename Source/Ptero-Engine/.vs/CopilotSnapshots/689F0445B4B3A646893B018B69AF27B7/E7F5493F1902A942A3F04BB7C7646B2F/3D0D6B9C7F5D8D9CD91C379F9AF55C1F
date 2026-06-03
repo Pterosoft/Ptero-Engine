@@ -1,0 +1,93 @@
+﻿// Rain_Draw.hlsl
+// Vertex + Pixel shaders for rendering rain particles as velocity-stretched
+// screen-space line segments (billboard streaks).
+
+struct RainDrop
+{
+    float3 Position;
+    float  Age;
+    float3 Velocity;
+    float  _Pad;
+};
+
+StructuredBuffer<RainDrop> Particles : register(t0);
+
+cbuffer DrawConstants : register(b0)
+{
+    float4x4 ViewProj;
+    float3   CameraPosition;
+    float    StreakLength;   // World-space length of the rain streak tail (e.g. 0.15)
+    float4   RainColor;     // RGBA; alpha controls overall transparency
+    float    WetnessIntensity; // Drives surface wetness in the PBR pass (informational here)
+    float3   _Pad;
+};
+
+struct VSInput
+{
+    uint VertexID   : SV_VertexID;  // 0 = tip (velocity head), 1 = tail
+    uint InstanceID : SV_InstanceID;
+};
+
+struct VSOutput
+{
+    float4 Position : SV_Position;
+    float  Alpha    : TEXCOORD0;    // Fades from 1 at tip to 0 at tail
+};
+
+// ---------------------------------------------------------------------------
+// Vertex Shader
+// ---------------------------------------------------------------------------
+VSOutput VSMain(VSInput input)
+{
+    RainDrop p = Particles[input.InstanceID];
+
+    // Normalise velocity to get the streak direction; fall back to straight
+    // down if the particle is barely moving.
+    float  speed    = length(p.Velocity);
+    float3 dir      = speed > 0.001f ? (p.Velocity / speed) : float3(0.0f, -1.0f, 0.0f);
+
+    // The streak is two vertices: tip at the particle position, tail offset
+    // backwards along the velocity direction.
+    float  t         = (float)input.VertexID; // 0 = tip, 1 = tail
+    float3 worldPos  = p.Position - dir * (StreakLength * t);
+
+    VSOutput output;
+    output.Position = mul(float4(worldPos, 1.0f), ViewProj);
+    output.Alpha    = 1.0f - t * 0.75f;     // tip fully opaque, tail 25% opaque
+    return output;
+}
+
+// ---------------------------------------------------------------------------
+// Pixel Shader
+// ---------------------------------------------------------------------------
+float4 PSMain(VSOutput input) : SV_Target
+{
+    float4 color = RainColor;
+    color.a     *= input.Alpha;
+    return color;
+}
+
+// ---------------------------------------------------------------------------
+// ApplyRainWetness – called from MeshEntity / GBuffer pixel shader
+// ---------------------------------------------------------------------------
+struct WetnessResult
+{
+    float3 Albedo;
+    float  Roughness;
+};
+
+WetnessResult ApplyRainWetness(
+    float3 worldNormal,
+    float3 baseAlbedo,
+    float  baseRoughness,
+    float  wetnessIntensity)
+{
+    // Only top-facing surfaces get wet; undersides stay dry.
+    float wetnessMask = saturate(dot(worldNormal, float3(0.0f, 1.0f, 0.0f)));
+    float w           = wetnessMask * wetnessIntensity;
+
+    WetnessResult result;
+    result.Albedo     = baseAlbedo * lerp(1.0f, 0.6f, w);
+    result.Roughness  = lerp(baseRoughness, 0.02f, w);
+    return result;
+}

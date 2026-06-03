@@ -1,0 +1,2610 @@
+﻿#include "pch.h"
+#include "DX12SceneRenderer.h"
+
+#include "..\System\include\System\AssetManager.h"
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_GetRenderSize(UINT* width, UINT* height);
+    HWND __stdcall DX12Context_GetWindowHandle();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+    bool __stdcall DX12Context_WaitForGPU();
+    bool __stdcall DX12Context_StreamlineInitialize();
+}
+
+    namespace
+{
+    constexpr DXGI_FORMAT SceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    // The depth resource must be TYPELESS so we can create both a DSV (D32_FLOAT)
+    // and an SRV (R32_FLOAT) for the deferred lighting pass world-position reconstruction.
+    constexpr DXGI_FORMAT SceneDepthResourceFormat = DXGI_FORMAT_R32_TYPELESS;
+    constexpr DXGI_FORMAT SceneDepthFormat         = DXGI_FORMAT_D32_FLOAT;
+    constexpr DXGI_FORMAT SceneDepthSrvFormat      = DXGI_FORMAT_R32_FLOAT;
+
+    std::vector<DX12SceneRenderer::Vertex> GenerateGridVertices()
+    {
+        constexpr float gridExtent = 50.0f;
+        constexpr float lineSpacing = 1.0f;
+        constexpr XMFLOAT4 gridColor(0.2f, 0.2f, 0.2f, 1.0f);
+
+        std::vector<DX12SceneRenderer::Vertex> vertices;
+        vertices.reserve(404);
+
+        // Emit one pair of vertices per grid line so the geometry can be drawn as a line list.
+        for (float position = -gridExtent; position <= gridExtent; position += lineSpacing)
+        {
+            vertices.push_back({ XMFLOAT3(position, -gridExtent, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3(position,  gridExtent, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3(-gridExtent, position, 0.0f), gridColor });
+            vertices.push_back({ XMFLOAT3( gridExtent, position, 0.0f), gridColor });
+        }
+
+        return vertices;
+    }
+
+    DirectX::XMFLOAT3 KelvinToLinearRgb(float temperatureKelvin)
+    {
+        const float temperature = (std::clamp)(temperatureKelvin, 1000.0f, 40000.0f) / 100.0f;
+
+        float red = 255.0f;
+        float green = 0.0f;
+        float blue = 0.0f;
+
+        if (temperature <= 66.0f)
+        {
+            green = 99.4708025861f * std::log(temperature) - 161.1195681661f;
+            blue = temperature <= 19.0f
+                ? 0.0f
+                : 138.5177312231f * std::log(temperature - 10.0f) - 305.0447927307f;
+        }
+        else
+        {
+            red = 329.698727446f * std::pow(temperature - 60.0f, -0.1332047592f);
+            green = 288.1221695283f * std::pow(temperature - 60.0f, -0.0755148492f);
+            blue = 255.0f;
+        }
+
+        red = (std::clamp)(red, 0.0f, 255.0f) / 255.0f;
+        green = (std::clamp)(green, 0.0f, 255.0f) / 255.0f;
+        blue = (std::clamp)(blue, 0.0f, 255.0f) / 255.0f;
+
+        return DirectX::XMFLOAT3(red, green, blue);
+    }
+}
+
+float DX12SceneRenderer::GetMeshLocalRadius(const Mesh* mesh) const
+{
+    if (mesh == nullptr)
+    {
+        return 0.0f;
+    }
+
+    const auto cached = mMeshLocalRadiusCache.find(mesh);
+    if (cached != mMeshLocalRadiusCache.end())
+    {
+        return cached->second;
+    }
+
+    float localRadius = 0.0f;
+    for (const ::Vertex& vertex : mesh->GetVertices())
+    {
+        const float distance = std::sqrt(
+            vertex.Position.x * vertex.Position.x +
+            vertex.Position.y * vertex.Position.y +
+            vertex.Position.z * vertex.Position.z);
+        localRadius = (distance > localRadius) ? distance : localRadius;
+    }
+
+    mMeshLocalRadiusCache.emplace(mesh, localRadius);
+    return localRadius;
+}
+
+float DX12SceneRenderer::ComputeSceneBoundRadius() const
+{
+    float sceneRadius = 50.0f;
+
+    if (mEntities == nullptr)
+    {
+        return sceneRadius;
+    }
+
+    for (const Entity& entity : *mEntities)
+    {
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+        {
+            continue;
+        }
+
+        const Mesh* mesh = entity.Mesh->MeshAsset.get();
+        const float localRadius = GetMeshLocalRadius(mesh);
+        const float scaleX = std::fabs(entity.Transform.Scale.x * TransformComponent::MeshWorldScale);
+        const float scaleY = std::fabs(entity.Transform.Scale.y * TransformComponent::MeshWorldScale);
+        const float scaleZ = std::fabs(entity.Transform.Scale.z * TransformComponent::MeshWorldScale);
+        const float maxScale = (scaleX > scaleY)
+            ? ((scaleX > scaleZ) ? scaleX : scaleZ)
+            : ((scaleY > scaleZ) ? scaleY : scaleZ);
+        const float worldOffset = std::sqrt(
+            entity.Transform.Position.x * entity.Transform.Position.x +
+            entity.Transform.Position.y * entity.Transform.Position.y +
+            entity.Transform.Position.z * entity.Transform.Position.z);
+
+        const float worldRadius = worldOffset + (localRadius * maxScale);
+        sceneRadius = (worldRadius > sceneRadius) ? worldRadius : sceneRadius;
+    }
+
+    // Add a little slack so the orthographic shadow camera does not clip near the scene edge.
+    return sceneRadius * 1.1f;
+}
+
+bool DX12SceneRenderer::IsSceneContentDirtyForTemporal() const
+{
+    return mEntityMeshRenderer.IsSceneContentDirty();
+}
+
+void DX12SceneRenderer::ReportProgress(const wchar_t* message) const
+{
+    if (mProgressCallback)
+        mProgressCallback(message);
+}
+
+bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    try
+    {
+        if (mIsInitialized)
+        {
+            return true;
+        }
+
+        if (commandList == nullptr)
+        {
+            return false;
+        }
+
+        ReportProgress(L"Preparing depth debug resources...");
+        if (!CreateDepthDebugResources())
+        {
+            mLastErrorMessage = "Failed to create the depth debug preview resources.";
+            Shutdown();
+            return false;
+        }
+
+        mLastErrorMessage.clear();
+
+        mCamera.SetPosition(0.0f, -6.0f, 1.5f);
+        mCamera.LookAt(0.0f, 0.0f, 0.0f);
+
+        ReportProgress(L"Compiling scene shaders and pipeline...");
+        if (!CreatePipeline())
+        {
+            mLastErrorMessage = "Failed to create the DX12 scene pipeline or compile the cube shaders.";
+            Shutdown();
+            return false;
+        }
+
+        ReportProgress(L"Creating scene render targets...");
+        if (!EnsureSceneTargetMatchesWindowSize())
+        {
+            if (mLastErrorMessage.empty())
+            {
+                mLastErrorMessage = "Failed to create the off-screen scene render target.";
+            }
+            Shutdown();
+            return false;
+        }
+
+        ReportProgress(L"Uploading startup geometry buffers...");
+        if (!CreateGeometry(commandList))
+        {
+            mLastErrorMessage = "Failed to upload cube vertex or index buffers to the GPU.";
+            Shutdown();
+            return false;
+        }
+
+        ReportProgress(L"Creating camera constant buffers...");
+        if (!CreateConstantBuffer())
+        {
+            mLastErrorMessage = "Failed to create the camera constant buffer.";
+            Shutdown();
+            return false;
+        }
+
+        ReportProgress(L"Initializing motion vector renderer...");
+        if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Motion vector renderer initialization failed.\n");
+            if (mMotionVectorRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mMotionVectorRenderer.GetLastErrorMessage());
+        }
+
+        ReportProgress(L"Initializing DLSS and Streamline...");
+        if (DX12Context_StreamlineInitialize())
+        {
+            if (!mDlssRenderer.Initialize(mSceneWidth, mSceneHeight))
+            {
+                OutputDebugStringA("DX12SceneRenderer: DLSS initialization failed – DLSS disabled.\n");
+                if (mDlssRenderer.GetLastErrorMessage())
+                    OutputDebugStringA(mDlssRenderer.GetLastErrorMessage());
+            }
+        }
+        else
+        {
+            OutputDebugStringA("DX12SceneRenderer: Streamline initialization failed; DLSS unavailable.\n");
+        }
+
+        UpdateSceneConstants();
+
+        // Initialize the entity mesh renderer so it is ready to receive entities each frame.
+        ReportProgress(L"Initializing entity mesh renderer...");
+        if (!mEntityMeshRenderer.Initialize(commandList))
+        {
+            mLastErrorMessage = "Failed to initialize the entity mesh renderer.";
+            Shutdown();
+            return false;
+        }
+
+        // Initialize the TAA renderer.  Non-fatal if it fails – TAA is a quality feature
+        // and the engine still renders correctly without it.
+        ReportProgress(L"Initializing temporal anti-aliasing...");
+        if (!mTaaRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: TAA initialization failed – TAA disabled.\n");
+            if (mTaaRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mTaaRenderer.GetLastErrorMessage());
+            mTaaSettings.Enabled = false;
+        }
+        else
+        {
+            // The history texture starts undefined on first init, so force the
+            // first resolve to use only the current frame instead of blending
+            // against uninitialized history data.
+            mTaaSettings.ResetHistory = true;
+        }
+
+        // Initialize the AgX tonemapper.  Non-fatal if it fails.
+        ReportProgress(L"Initializing AgX tonemapper...");
+        if (!mAgxTonemapper.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: AgX tonemapper initialization failed – tonemapping disabled.\n");
+            if (mAgxTonemapper.GetLastErrorMessage())
+                OutputDebugStringA(mAgxTonemapper.GetLastErrorMessage());
+            mAgxSettings.Enabled = false;
+        }
+
+        // Initialize the sky renderer.  Non-fatal if it fails.
+        ReportProgress(L"Initializing sky renderer...");
+        if (!mSkyRenderer.Initialize(SceneColorFormat, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Sky renderer initialization failed.\n");
+            if (mSkyRenderer.GetLastError())
+                OutputDebugStringA(mSkyRenderer.GetLastError());
+        }
+
+        // Initialize the shadow map renderer.  Non-fatal if it fails — meshes
+        // will render without shadows until the next successful initialization.
+        ReportProgress(L"Initializing directional shadows...");
+        if (!mShadowMapRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Shadow map renderer initialization failed.\n");
+            if (mShadowMapRenderer.GetLastError())
+                OutputDebugStringA(mShadowMapRenderer.GetLastError());
+        }
+
+        ReportProgress(L"Initializing point light shadows...");
+        mPointShadowMapRenderer.SetMapSize(static_cast<UINT>(mPointShadowSettings.MapSize));
+        mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
+        mPointShadowMapRenderer.SetSlopeScaledDepthBias(mPointShadowSettings.SlopeScaledDepthBias);
+        if (!mPointShadowMapRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Point shadow map renderer initialization failed.\n");
+            if (mPointShadowMapRenderer.GetLastError())
+                OutputDebugStringA(mPointShadowMapRenderer.GetLastError());
+        }
+
+        // Initialize the point light renderer (wireframe gizmo spheres).  Non-fatal.
+        ReportProgress(L"Initializing point light renderer...");
+        if (!mPointLightRenderer.Initialize(commandList, SceneColorFormat, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Point light renderer initialization failed.\n");
+            if (mPointLightRenderer.GetLastError())
+                OutputDebugStringA(mPointLightRenderer.GetLastError());
+        }
+
+        // Initialize the decal renderer (wireframe box + arrow gizmos).  Non-fatal.
+        ReportProgress(L"Initializing decal renderer...");
+        if (!mDecalRenderer.Initialize(commandList, SceneColorFormat, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Decal renderer initialization failed.\n");
+            if (mDecalRenderer.GetLastError())
+                OutputDebugStringA(mDecalRenderer.GetLastError());
+        }
+
+        // Initialize the deferred lighting pass (G-Buffer RTs + fullscreen lighting resolve).
+        // Non-fatal — the scene will be black if this fails but won't crash.
+        ReportProgress(L"Initializing deferred lighting...");
+        if (!mDeferredLightingPass.Initialize(mSceneWidth, mSceneHeight, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Deferred lighting pass initialization failed.\n");
+            if (mDeferredLightingPass.GetLastError())
+                OutputDebugStringA(mDeferredLightingPass.GetLastError());
+        }
+
+        ReportProgress(L"Initializing volumetric fog...");
+        if (!mVolumetricFogRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Volumetric fog initialization failed.\n");
+            if (mVolumetricFogRenderer.GetLastError())
+                OutputDebugStringA(mVolumetricFogRenderer.GetLastError());
+        }
+
+        ReportProgress(L"Initializing rain renderer...");
+        if (!mRainRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Rain renderer initialization failed.\n");
+            if (mRainRenderer.GetLastError())
+                OutputDebugStringA(mRainRenderer.GetLastError());
+        }
+
+        // Initialize the bloom renderer. Non-fatal if it fails.
+        ReportProgress(L"Initializing bloom...");
+        if (!mBloomRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Bloom initialization failed – bloom disabled.\n");
+            if (mBloomRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mBloomRenderer.GetLastErrorMessage());
+            mBloomSettings.Enabled = false;
+        }
+
+        // RTGI is lazily initialized on first use (waits for a valid render size).
+        // We do not pre-initialize here so startup is fast even on non-DXR GPUs.
+
+        ReportProgress(L"Scene renderer ready.");
+        mIsInitialized = true;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        mLastErrorMessage = exception.what();
+        Shutdown();
+        return false;
+    }
+    catch (...)
+    {
+        mLastErrorMessage = "The DX12 scene renderer failed with an unknown exception during initialization.";
+        Shutdown();
+        return false;
+    }
+}
+
+void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
+{
+    if (!(mIsInitialized && commandList && mPipeline.GetRootSignature() && mPipeline.GetPipelineState()))
+    {
+        return;
+    }
+
+    if (!EnsureSceneTargetMatchesWindowSize())
+    {
+        return;
+    }
+
+    const uint32_t renderFrameIndex = mRenderFrameIndex++;
+
+    // Drive the editor camera once per frame so the constant buffer reflects live input.
+    UpdateCamera();
+    UpdateSceneConstants();
+
+    const bool rtaoDebugViewActive = (mRtaoSettings.DebugView > 0);
+    if (rtaoDebugViewActive != mRtaoDebugViewWasActive)
+    {
+        mTaaSettings.ResetHistory = true;
+        mRtaoDebugViewWasActive = rtaoDebugViewActive;
+    }
+
+    // Evaluate the Hosek-Wilkie sky model from the current time-of-day settings.
+    mHosekResult = EvaluateHosekWilkie(mTimeOfDaySettings);
+
+    // ---- Scale normalised Hosek colours by user-specified lux values ----
+    constexpr float kRefSkyLux = 20000.0f;
+    constexpr float kRefSunLux = 100000.0f;
+
+    const float sunR = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorR : mHosekResult.SunR)
+                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
+    const float sunG = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorG : mHosekResult.SunG)
+                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
+    const float sunB = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorB : mHosekResult.SunB)
+                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
+    const float skyR = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorR : mHosekResult.SkyR)
+                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
+    const float skyG = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorG : mHosekResult.SkyG)
+                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
+    const float skyB = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorB : mHosekResult.SkyB)
+                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
+
+    // ---- Upload per-frame lighting data to the deferred lighting pass ----
+    mDeferredLightingPass.SetSceneLighting(
+        { mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ },
+        { sunR, sunG, sunB },
+        { skyR, skyG, skyB });
+    mDeferredLightingPass.SetPointShadowDebug(
+        mPointShadowSettings.DebugView,
+        mPointShadowSettings.FilterRadius,
+        mPointShadowSettings.SeamBlendDistance,
+        mPointShadowSettings.NormalOffset);
+
+    // Upload inverse view-projection for world-position reconstruction in the lighting pass.
+    // mJitteredViewProjection = view * proj (not transposed).
+    // HLSL uses mul(ndc, M) which expects M = Transpose(inv(VP)).
+    {
+        const XMMATRIX vp = XMLoadFloat4x4(&mJitteredViewProjection);
+        XMFLOAT4X4 invVP;
+        XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, vp)));
+        mInvViewProjection = invVP;
+        const XMFLOAT3 camPos = mCamera.GetPosition();
+        mDeferredLightingPass.SetCameraData(invVP, camPos);
+    }
+
+    // Gather point lights from the entity list and upload to the deferred lighting pass.
+    VolumetricFogRenderer::FogPointLight fogPointLights[VolumetricFogRenderer::kMaxPointLights]{};
+    uint32_t numFogPointLights = 0;
+    if (mEntities != nullptr)
+    {
+        // Normalise against 800 lm (standard 60W-equivalent LED) so default lights = 1.0 brightness.
+        constexpr float kRefLumens = 800.0f;
+
+        DeferredLightingPass::PointLightGpu gpuLights[DeferredLightingPass::kMaxPointLights]{};
+        int numLights = 0;
+
+        for (const Entity& entity : *mEntities)
+        {
+            if (!entity.HasPointLightComponent() || numLights >= DeferredLightingPass::kMaxPointLights)
+                continue;
+
+            const PointLightComponent& pl = *entity.PointLight;
+            const float brightness = pl.IntensityLumens / kRefLumens;
+            const DirectX::XMFLOAT3 lightColor = pl.UseTemperature
+                ? KelvinToLinearRgb(pl.TemperatureKelvin)
+                : DirectX::XMFLOAT3(pl.ColorR, pl.ColorG, pl.ColorB);
+
+            DeferredLightingPass::PointLightGpu& gpu = gpuLights[numLights++];
+            gpu.Position    = entity.Transform.Position;
+            gpu.Radius      = pl.Radius > 0.0f ? pl.Radius : 0.001f;
+            gpu.Color       = { lightColor.x * brightness, lightColor.y * brightness, lightColor.z * brightness };
+            gpu.InvRadiusSq = 1.0f / (gpu.Radius * gpu.Radius);
+            gpu.FalloffExponent = pl.FalloffExponent;
+            gpu.SourceRadius = pl.SourceRadius;
+            gpu.CastShadows = pl.CastShadows ? 1.0f : 0.0f;
+            gpu._Pad0 = 0.0f;
+
+            if (pl.AffectVolumetricFog && numFogPointLights < VolumetricFogRenderer::kMaxPointLights)
+            {
+                VolumetricFogRenderer::FogPointLight& fogLight = fogPointLights[numFogPointLights++];
+                fogLight.Position[0] = entity.Transform.Position.x;
+                fogLight.Position[1] = entity.Transform.Position.y;
+                fogLight.Position[2] = entity.Transform.Position.z;
+                fogLight.Radius = gpu.Radius;
+                fogLight.Color[0] = gpu.Color.x;
+                fogLight.Color[1] = gpu.Color.y;
+                fogLight.Color[2] = gpu.Color.z;
+                fogLight.InvRadiusSq = gpu.InvRadiusSq;
+            }
+        }
+
+        mDeferredLightingPass.SetPointLights(gpuLights, numLights);
+
+        // Cache for the RT GI pass (which runs later in the same frame).
+        mNumCachedPointLights = numLights;
+        memcpy(mCachedPointLights, gpuLights, numLights * sizeof(DeferredLightingPass::PointLightGpu));
+
+        mRainSettings = RainSettings{};
+        mRainSettings.Enabled = false;
+        bool foundRainComponent = false;
+
+        // Sync the first RainComponent found in the entity list to the rain renderer settings.
+        for (const Entity& entity : *mEntities)
+        {
+            if (!entity.HasRainComponent())
+                continue;
+            const RainComponent& rc = *entity.Rain;
+            foundRainComponent = true;
+            mRainSettings.Enabled           = rc.Enabled;
+            mRainSettings.WindVector        = { rc.WindX, rc.WindY, rc.WindZ };
+            mRainSettings.Gravity           = rc.Gravity;
+            mRainSettings.BoundingBoxExtents = { rc.BoxExtentX, rc.BoxExtentY, rc.BoxExtentZ };
+            mRainSettings.StreakLength       = rc.StreakLength;
+            mRainSettings.RainColorR         = rc.ColorR;
+            mRainSettings.RainColorG         = rc.ColorG;
+            mRainSettings.RainColorB         = rc.ColorB;
+            mRainSettings.RainColorA         = rc.ColorA;
+            mRainSettings.WetnessIntensity   = rc.WetnessIntensity;
+            break;
+        }
+
+        if (!foundRainComponent)
+        {
+            mRainRenderer.ResetSimulation();
+        }
+    }
+    else
+    {
+        mRainSettings = RainSettings{};
+        mRainSettings.Enabled = false;
+        mRainRenderer.ResetSimulation();
+    }
+
+    mEntityMeshRenderer.SetRainSurfaceState(mRainSettings.Enabled, mRainSettings.WetnessIntensity);
+
+    // -----------------------------------------------------------------------
+    // PASS 1 – Shadow pass (unchanged from forward renderer)
+    // Render scene depth from the sun's perspective before touching the scene RT.
+    // -----------------------------------------------------------------------
+    if (mShadowMapRenderer.IsInitialized())
+    {
+        const XMFLOAT3 sunDir(mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ);
+        const float kSceneBoundRadius = ComputeSceneBoundRadius();
+        mShadowMapRenderer.BeginShadowPass(commandList, sunDir, kSceneBoundRadius);
+
+        mEntityMeshRenderer.RenderDepthOnly(
+            commandList,
+            mShadowMapRenderer.GetRootSignature(),
+            mShadowMapRenderer.GetPipelineState(),
+            mShadowMapRenderer.GetLightViewProjection());
+
+        mShadowMapRenderer.EndShadowPass(commandList);
+
+        // Forward shadow data to the deferred lighting pass (used in the lighting resolve).
+        mDeferredLightingPass.SetShadowData(
+            mShadowMapRenderer.GetLightViewProjection(),
+            static_cast<float>(kShadowMapSize),
+            mShadowMapRenderer.GetShadowSrvGpuHandle());
+    }
+
+    if (mPointShadowMapRenderer.IsInitialized() && mEntities != nullptr)
+    {
+       const UINT desiredPointShadowMapSize = static_cast<UINT>((mPointShadowSettings.MapSize > 0) ? mPointShadowSettings.MapSize : 1);
+        if (mPointShadowMapRenderer.GetMapSize() != desiredPointShadowMapSize)
+        {
+            if (!DX12Context_WaitForGPU())
+            {
+                mLastErrorMessage = "Timed out while waiting to recreate point-shadow resources.";
+            }
+            else
+            {
+            mPointShadowMapRenderer.Shutdown();
+            mPointShadowMapRenderer.SetMapSize(desiredPointShadowMapSize);
+            mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
+            mPointShadowMapRenderer.SetSlopeScaledDepthBias(mPointShadowSettings.SlopeScaledDepthBias);
+            if (!mPointShadowMapRenderer.Initialize())
+            {
+                OutputDebugStringA("DX12SceneRenderer: Point shadow map renderer reinitialization failed.\n");
+                if (mPointShadowMapRenderer.GetLastError())
+                    OutputDebugStringA(mPointShadowMapRenderer.GetLastError());
+            }
+            }
+        }
+
+        mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
+        mPointShadowMapRenderer.SetSlopeScaledDepthBias(mPointShadowSettings.SlopeScaledDepthBias);
+        std::vector<PointShadowMapRenderer::ShadowedPointLight> shadowLights;
+        shadowLights.reserve(kMaxShadowCastingPointLights);
+
+        int pointLightIndex = 0;
+        for (Entity& entity : *mEntities)
+        {
+            if (!entity.HasPointLightComponent() || pointLightIndex >= DeferredLightingPass::kMaxPointLights)
+                continue;
+
+            PointLightComponent& pl = *entity.PointLight;
+            if (pl.CastShadows && shadowLights.size() < kMaxShadowCastingPointLights)
+            {
+                shadowLights.push_back({ entity.Transform.Position, (std::max)(pl.Radius, 0.05f) });
+                mCachedPointLights[pointLightIndex]._Pad0 = static_cast<float>(shadowLights.size() - 1);
+            }
+            else
+            {
+                mCachedPointLights[pointLightIndex]._Pad0 = -1.0f;
+            }
+
+            ++pointLightIndex;
+        }
+
+        mPointShadowMapRenderer.BeginFrame(shadowLights);
+        for (int lightIndex = 0; lightIndex < mPointShadowMapRenderer.GetActiveLightCount(); ++lightIndex)
+        {
+            for (int faceIndex = 0; faceIndex < 6; ++faceIndex)
+            {
+                mPointShadowMapRenderer.BeginShadowFacePass(commandList, lightIndex, faceIndex);
+                mEntityMeshRenderer.RenderPointLightShadowDepth(
+                    commandList,
+                    mPointShadowMapRenderer.GetRootSignature(),
+                    mPointShadowMapRenderer.GetPipelineState(),
+                    mPointShadowMapRenderer.GetFaceViewProjection(lightIndex, faceIndex),
+                    mPointShadowMapRenderer.GetLightPosition(lightIndex),
+                    mPointShadowMapRenderer.GetLightFarPlane(lightIndex));
+                mPointShadowMapRenderer.EndShadowFacePass(commandList, lightIndex, faceIndex);
+            }
+        }
+
+        mDeferredLightingPass.SetPointShadowSrv(
+            mPointShadowMapRenderer.GetShadowTextureArraySrvGpuHandle(),
+            mPointShadowMapRenderer.GetActiveLightCount(),
+            static_cast<float>(mPointShadowMapRenderer.GetMapSize()),
+            mPointShadowMapRenderer.GetShadowBias());
+        mDeferredLightingPass.SetPointShadowMatrices(
+            mPointShadowMapRenderer.GetAllFaceViewProjections(),
+            mPointShadowMapRenderer.GetActiveLightCount());
+        mDeferredLightingPass.SetPointLights(mCachedPointLights, mNumCachedPointLights);
+    }
+    else
+    {
+        mDeferredLightingPass.SetPointShadowSrv({}, 0, 0.0f, 0.0f);
+    }
+
+    // Bind the shared shader-visible SRV heap for all subsequent passes.
+    ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+    commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
+
+    // -----------------------------------------------------------------------
+    // PASS 2 – Geometry pass (G-Buffer fill)
+    // All mesh entities write albedo, normal, and material into three MRT
+    // outputs.  The scene depth buffer is used for depth testing/writing.
+    // The scene colour RT is NOT bound here; it will be used in the sky and
+    // lighting passes.
+    // -----------------------------------------------------------------------
+
+    // Ensure the G-Buffer is the correct resolution.
+    mDeferredLightingPass.EnsureSize(mSceneWidth, mSceneHeight);
+
+    // Transition the scene depth to DEPTH_WRITE if it's still in SRV state
+    // from the previous frame's lighting resolve.
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+    {
+        const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        commandList->ResourceBarrier(1, &toDepthWrite);
+        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+
+    // Clear scene depth and begin the G-Buffer geometry pass.
+    commandList->ClearDepthStencilView(mSceneDsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    mDeferredLightingPass.BeginGeometryPass(commandList, mSceneDsvHandle, mSceneWidth, mSceneHeight);
+
+    // G-Buffer formats: albedo (RGBA8), normal (RGBA16F), material (RGBA8).
+    constexpr DXGI_FORMAT kAlbedoFmt   = DXGI_FORMAT_R8G8B8A8_UNORM;
+    constexpr DXGI_FORMAT kNormalFmt   = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    constexpr DXGI_FORMAT kMaterialFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    mEntityMeshRenderer.Render(
+        commandList,
+        XMLoadFloat4x4(&mJitteredViewProjection),
+        kAlbedoFmt,
+        kNormalFmt,
+        kMaterialFmt,
+        SceneDepthFormat);
+
+    // Close the G-Buffer pass: transition G-Buffer RTs to SRV state.
+    mDeferredLightingPass.EndGeometryPass(commandList);
+
+    // Reset TAA history on scene content changes.
+    const bool sceneContentChanged = IsSceneContentDirtyForTemporal();
+    if (sceneContentChanged)
+        mTaaSettings.ResetHistory = true;
+
+    // -----------------------------------------------------------------------
+    // PASS 2b – Custom RTGI (ReSTIR GI)
+    // Dispatches four compute passes: RayGen → Temporal → Spatial → Composite.
+    // The output is a RGBA16F GI radiance buffer bound as t5 in the deferred
+    // lighting pass below.
+    // -----------------------------------------------------------------------
+
+    // The G-Buffer was left in PIXEL_SHADER_RESOURCE by EndGeometryPass, but compute
+    // shaders require ALL_SHADER_RESOURCE state.  Promote before RTGI dispatch.
+    mProbeSettings.GridX = (std::clamp)(mProbeSettings.GridX, 1, 64);
+    mProbeSettings.GridY = (std::clamp)(mProbeSettings.GridY, 1, 64);
+    mProbeSettings.GridZ = (std::clamp)(mProbeSettings.GridZ, 1, 64);
+
+    const bool probesEnabled = mProbeSettings.Enabled && mEntities != nullptr;
+    const bool probesDebugEnabled = probesEnabled && mProbeSettings.DebugShowProbes;
+    const bool rtgiWillRun = mRtgiSettings.Enabled && mEntities != nullptr && !probesEnabled;
+    const bool rtaoWillRun = mRtaoSettings.Enabled && mEntities != nullptr;
+    const bool gtaoWillRun = mGtaoSettings.Enabled;
+    const bool volumetricFogWillRun = mVolumetricFogSettings.Enabled && mVolumetricFogRenderer.IsInitialized();
+    if (rtgiWillRun || rtaoWillRun || gtaoWillRun || volumetricFogWillRun || probesEnabled || probesDebugEnabled)
+    {
+        D3D12_RESOURCE_BARRIER toNonPixel[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            toNonPixel[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, toNonPixel);
+
+        if (mDepthBufferState == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+        {
+            auto toDepthSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &toDepthSrv);
+            mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        }
+    }
+
+    const auto dispatchVolumetricFog = [&]()
+    {
+        if (!volumetricFogWillRun)
+        {
+            mDeferredLightingPass.SetVolumetricFogSrv({}, nullptr);
+            return;
+        }
+
+        mVolumetricFogRenderer.EnsureSize(mSceneWidth, mSceneHeight, mVolumetricFogSettings);
+
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> cmdList4;
+        if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&cmdList4))))
+        {
+            if (mRtgiRenderer.IsInitialized() && mRtgiRenderer.IsTlasReady())
+            {
+                const XMMATRIX fogViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
+                XMFLOAT4X4 invVP;
+                XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, fogViewProjection)));
+
+                XMFLOAT4X4 currJitteredVP;
+                XMStoreFloat4x4(&currJitteredVP, XMMatrixTranspose(fogViewProjection));
+
+                const XMFLOAT3 camPos = mCamera.GetPosition();
+
+                mVolumetricFogRenderer.Dispatch(
+                    cmdList4.Get(),
+                    mDepthSrvGpuHandle,
+                    mRtgiRenderer.GetTlasSrv(),
+                    mVolumetricFogSettings,
+                    invVP.m[0],
+                    currJitteredVP.m[0],
+                    &camPos.x,
+                    0.1f,
+                    mVolumetricFogSettings.MaxDistance,
+                    mHosekResult.SunDirX,
+                    mHosekResult.SunDirY,
+                    mHosekResult.SunDirZ,
+                    sunR,
+                    sunG,
+                    sunB,
+                    skyR,
+                    skyG,
+                    skyB,
+                    fogPointLights,
+                    numFogPointLights);
+
+                mDeferredLightingPass.SetVolumetricFogSrv(
+                    mVolumetricFogRenderer.GetIntegratedFogSrv(),
+                    &mVolumetricFogSettings);
+            }
+            else
+            {
+                mDeferredLightingPass.SetVolumetricFogSrv({}, nullptr);
+            }
+        }
+    };
+
+    if (mRtgiSettings.Enabled && mEntities != nullptr)
+    {
+        // Lazy-initialize once; stop retrying after a permanent failure.
+        if (!mRtgiRenderer.IsInitialized() && !mRtgiRenderer.HasInitFailed())
+        {
+            if (!mRtgiRenderer.Initialize(mSceneWidth, mSceneHeight))
+            {
+                std::string rtgiErr = "RTGI init failed";
+                if (mRtgiRenderer.GetLastError()) rtgiErr += std::string(": ") + mRtgiRenderer.GetLastError();
+                OutputDebugStringA((rtgiErr + "\n").c_str());
+                mLastErrorMessage = rtgiErr;
+                // Write error to a log file so it is visible without a debugger attached.
+                {
+                    wchar_t exePath[MAX_PATH]{};
+                    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+                    namespace fs = std::filesystem;
+                    fs::path logPath = fs::path(exePath).parent_path() / L"rtgi_init_error.txt";
+                    std::ofstream log(logPath, std::ios::out | std::ios::trunc);
+                    if (log.is_open()) log << rtgiErr;
+                }
+            }
+        }
+    }
+
+    // Build the shared raytracing scene once per frame and reuse it across RTGI,
+    // RTAO, volumetric fog, and probe updates. Rebuilding multiple times in the
+    // same frame can retire BLAS upload buffers too early when new geometry is
+    // added, which can hang the GPU.
+    const bool sharedTlasNeeded = mEntities != nullptr
+        && (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || probesEnabled);
+    if (sharedTlasNeeded)
+    {
+        if (!mRtgiRenderer.IsInitialized() && !mRtgiRenderer.HasInitFailed())
+        {
+            mRtgiRenderer.Initialize(mSceneWidth, mSceneHeight);
+        }
+
+        if (mRtgiRenderer.IsInitialized())
+        {
+            mRtgiRenderer.EnsureSize(mSceneWidth, mSceneHeight);
+
+            Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> sharedRtCmdList;
+            if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&sharedRtCmdList))))
+            {
+                mRtgiRenderer.BuildTlas(sharedRtCmdList.Get(), *mEntities);
+            }
+        }
+    }
+
+    if (rtgiWillRun && mRtgiRenderer.IsInitialized() && mEntities != nullptr)
+    {
+        mRtgiRenderer.EnsureSize(mSceneWidth, mSceneHeight);
+
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> cmdList4;
+        if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&cmdList4))))
+        {
+            // Reconstructing current-frame world positions must use the same jittered
+            // view-projection that wrote the G-Buffer depth this frame.  History
+            // reprojection stays non-jittered separately via mPreviousViewProjectionForRtgi.
+            const XMMATRIX rtgiViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
+            XMFLOAT4X4 invVP;
+            XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, rtgiViewProjection)));
+
+            // Previous frame VP is used by the temporal pass to reproject reservoir samples.
+            XMFLOAT4X4 prevVP;
+            XMStoreFloat4x4(&prevVP, XMMatrixTranspose(XMLoadFloat4x4(&mPreviousViewProjectionForRtgi)));
+
+            XMFLOAT4X4 currNonJitteredVP;
+            XMStoreFloat4x4(&currNonJitteredVP, XMMatrixTranspose(XMLoadFloat4x4(&mNonJitteredViewProjection)));
+
+            const XMFLOAT3 camPos = mCamera.GetPosition();
+
+            // Dispatch the RTGI passes. NRD expects the original non-jittered camera matrices,
+            // not the transposed row-vector versions used by the engine's own HLSL shaders.
+            const XMFLOAT4X4& worldToView     = mNonJitteredViewMatrix;
+            const XMFLOAT4X4& prevWorldToView = mPrevNonJitteredViewMatrix;
+            const XMFLOAT4X4& viewToClip      = mNonJitteredProjectionMatrix;
+            const XMFLOAT4X4& prevViewToClip  = mPrevNonJitteredProjectionMatrix;
+
+            mRtgiRenderer.Dispatch(
+                cmdList4.Get(),
+                mDeferredLightingPass.GetSrvs().Albedo,   // t0: albedo G-buffer
+                mDeferredLightingPass.GetSrvs().Normal,   // t1: normal+depth G-buffer
+                mDeferredLightingPass.GetSrvs().Material, // t2: roughness/metallic/AO G-buffer
+                mRtgiSettings,
+                invVP.m[0],
+                currNonJitteredVP.m[0],
+                prevVP.m[0],
+                &camPos.x,
+                // Sun direction and colours from the Hosek-Wilkie sky model.
+                mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
+                sunR, sunG, sunB,
+                skyR, skyG, skyB,
+                mCachedPointLights,
+                static_cast<uint32_t>(mNumCachedPointLights),
+                worldToView.m[0],
+                viewToClip.m[0],
+                prevWorldToView.m[0],
+                prevViewToClip.m[0],
+                mCurrentCameraJitter,
+                mPrevCameraJitter,
+                mFrameDeltaTimeMs);
+
+            // Bind the RTGI output as the GI radiance source in the deferred lighting pass.
+            mDeferredLightingPass.SetGiSrv(mRtgiRenderer.GetOutputSrv(), mRtgiSettings.GiIntensity);
+            mDeferredLightingPass.SetProbeSrv({}, nullptr, mCamera.GetPosition());
+            mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
+
+            // Bind the RTGI specular reflections if enabled.
+            if (mRtgiSettings.SpecularEnabled)
+                mDeferredLightingPass.SetSpecularSrv(mRtgiRenderer.GetSpecularSrv(), mRtgiSettings.SpecularIntensity);
+            else
+                mDeferredLightingPass.SetSpecularSrv({}, 0.0f);
+
+            // Save the non-jittered VP for next frame's temporal reprojection.
+            mPreviousViewProjectionForRtgi = mNonJitteredViewProjection;
+            mPrevCameraPositionForRtgi     = camPos;
+        }
+    }
+    else
+    {
+        // RTGI disabled – clear the GI and specular contributions in the deferred lighting pass.
+        mDeferredLightingPass.SetGiSrv({}, 0.0f);
+        mDeferredLightingPass.SetSpecularSrv({}, 0.0f);
+        mDeferredLightingPass.SetRtgiDebugView(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 2b – Radiance Probe Update
+    // Updates the world-space SH irradiance probe grid from TLAS ray samples.
+    // -----------------------------------------------------------------------
+    if (probesEnabled)
+    {
+        if (!mProbeRenderer.IsInitialized() && !mProbeRenderer.HasInitFailed())
+        {
+            if (!mProbeRenderer.Initialize(mProbeSettings))
+            {
+                OutputDebugStringA("RadianceProbeRenderer init failed\n");
+                if (mProbeRenderer.GetLastError())
+                {
+                    OutputDebugStringA(mProbeRenderer.GetLastError());
+                    OutputDebugStringA("\n");
+                }
+            }
+        }
+
+        if (mProbeRenderer.IsInitialized())
+        {
+            const XMFLOAT3 camPos = mCamera.GetPosition();
+            const uint32_t totalProbes = static_cast<uint32_t>(
+                mProbeSettings.GridX * mProbeSettings.GridY * mProbeSettings.GridZ);
+            if (totalProbes != mProbeRenderer.GetTotalProbes())
+            {
+                if (!mProbeRenderer.Initialize(mProbeSettings) && mProbeRenderer.GetLastError())
+                {
+                    OutputDebugStringA(mProbeRenderer.GetLastError());
+                    OutputDebugStringA("\n");
+                }
+                mProbeFrameIndex = 0;
+            }
+
+            Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> probeCmdList4;
+            if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&probeCmdList4))))
+            {
+                ID3D12DescriptorHeap* sharedSrvHeap = DX12Context_GetSrvDescriptorHeap();
+                if (sharedSrvHeap)
+                    probeCmdList4->SetDescriptorHeaps(1, &sharedSrvHeap);
+
+                if (!mRtgiRenderer.IsInitialized() && !mRtgiRenderer.HasInitFailed())
+                    mRtgiRenderer.Initialize(mSceneWidth, mSceneHeight);
+
+                if (mRtgiRenderer.IsInitialized() && mRtgiRenderer.IsTlasReady())
+                {
+                    mProbeRenderer.Update(
+                        probeCmdList4.Get(),
+                        mRtgiRenderer.GetTlasSrv(),
+                        mRtgiRenderer.GetVertexSrv(),
+                        mRtgiRenderer.GetIndexSrv(),
+                        mRtgiRenderer.GetInstanceInfoSrv(),
+                        mRtgiRenderer.GetMaterialRangeSrv(),
+                        mRtgiRenderer.GetBaseTextureTableSrv(),
+                        mProbeSettings,
+                        mRtgiSettings.ColorLeakIntensity,
+                        mRtgiSettings.MaxBounces,
+                        mCachedPointLights,
+                        static_cast<uint32_t>(mNumCachedPointLights),
+                        &camPos.x,
+                        mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
+                        sunR, sunG, sunB,
+                        skyR, skyG, skyB,
+                        mProbeFrameIndex++);
+
+                    mDeferredLightingPass.SetGiSrv({}, mRtgiSettings.GiIntensity);
+                    mDeferredLightingPass.SetProbeSrv(mProbeRenderer.GetProbeSHSrv(), &mProbeSettings, camPos);
+                    mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
+                }
+                else
+                {
+                    mDeferredLightingPass.SetGiSrv({}, 0.0f);
+                    mDeferredLightingPass.SetProbeSrv({}, nullptr, camPos);
+                    mDeferredLightingPass.SetRtgiDebugView(0);
+                }
+            }
+        }
+    }
+    else
+    {
+        mDeferredLightingPass.SetProbeSrv({}, nullptr, mCamera.GetPosition());
+    }
+    // -----------------------------------------------------------------------
+    // PASS 2c – Ray Traced Ambient Occlusion (RTAO)
+    // Dispatches three compute passes: RayGen → Temporal → Spatial.
+    // Shares the TLAS already built by RTGI (if RTGI ran this frame).
+    // If RTGI did not run, RTAO builds its own TLAS via a QueryInterface.
+    // -----------------------------------------------------------------------
+    if (rtaoWillRun && mEntities != nullptr)
+    {
+        // Lazy-initialize once; stop retrying after a permanent failure.
+        if (!mRtaoRenderer.IsInitialized() && !mRtaoRenderer.HasInitFailed())
+        {
+            if (!mRtaoRenderer.Initialize(mSceneWidth, mSceneHeight))
+            {
+                std::string aoErr = "RTAO init failed";
+                if (mRtaoRenderer.GetLastError()) aoErr += std::string(": ") + mRtaoRenderer.GetLastError();
+                OutputDebugStringA((aoErr + "\n").c_str());
+                mLastErrorMessage = aoErr;
+            }
+        }
+    }
+
+    if (rtaoWillRun && mRtaoRenderer.IsInitialized() && mEntities != nullptr)
+    {
+        mRtaoRenderer.EnsureSize(mSceneWidth, mSceneHeight);
+
+        if (sceneContentChanged)
+        {
+            mRtaoRenderer.ResetHistory();
+            mPreviousViewProjectionForRtao = mJitteredViewProjection;
+        }
+
+        // If RTGI did not run this frame we need to build the TLAS ourselves.
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> cmdList4;
+        if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&cmdList4))))
+        {
+            ID3D12DescriptorHeap* sharedSrvHeap = DX12Context_GetSrvDescriptorHeap();
+            if (sharedSrvHeap)
+                cmdList4->SetDescriptorHeaps(1, &sharedSrvHeap);
+
+            // Build TLAS if RTGI didn't (avoids a duplicate build when both are enabled).
+            if (mRtgiRenderer.IsInitialized() && mRtgiRenderer.IsTlasReady())
+            {
+                XMFLOAT4X4 invVP;
+                const XMMATRIX nonJitteredVpMatrix = XMLoadFloat4x4(&mNonJitteredViewProjection);
+                XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, nonJitteredVpMatrix)));
+
+                XMFLOAT4X4 currNonJitteredVP;
+                XMStoreFloat4x4(&currNonJitteredVP, XMMatrixTranspose(nonJitteredVpMatrix));
+
+                XMFLOAT4X4 prevRtaoSource = mPreviousViewProjectionForRtao;
+                if (prevRtaoSource._44 == 0.0f)
+                {
+                    prevRtaoSource = mNonJitteredViewProjection;
+                }
+
+                XMFLOAT4X4 prevRtaoVP;
+                XMStoreFloat4x4(&prevRtaoVP, XMMatrixTranspose(XMLoadFloat4x4(&prevRtaoSource)));
+
+                const XMFLOAT3 camPos = mCamera.GetPosition();
+
+                mRtaoRenderer.Dispatch(
+                    cmdList4.Get(),
+                    mDeferredLightingPass.GetSrvs().Normal,  // t0: G-Buffer normal+depth
+                    mDepthSrvGpuHandle,                      // t2: scene depth SRV
+                    mRtgiRenderer.GetTlasSrv(),              // t1: shared TLAS
+                    mRtaoSettings,
+                    invVP.m[0],
+                    currNonJitteredVP.m[0],
+                    prevRtaoVP.m[0],
+                    &camPos.x,
+                    mNonJitteredViewMatrix.m[0],
+                    mNonJitteredProjectionMatrix.m[0],
+                    mPrevNonJitteredViewMatrix.m[0],
+                    mPrevNonJitteredProjectionMatrix.m[0],
+                    mCurrentCameraJitter,
+                    mPrevCameraJitter,
+                    mFrameDeltaTimeMs);
+
+                mPreviousViewProjectionForRtao = mNonJitteredViewProjection;
+
+                // Bind the RTAO output only when XeGTAO is not selected as the active AO source.
+                if (!gtaoWillRun)
+                {
+                    const D3D12_GPU_DESCRIPTOR_HANDLE aoDebugSrv = (mRtaoSettings.DebugView == 1)
+                        ? mRtaoRenderer.GetRawAOSrv()
+                        : mRtaoRenderer.GetOutputSrv();
+                    mDeferredLightingPass.SetAoSrv(aoDebugSrv, mRtaoSettings.Intensity, mRtaoSettings.DebugView);
+                }
+            }
+        }
+    }
+    else if (!gtaoWillRun)
+    {
+        mDeferredLightingPass.SetAoSrv({}, 0.0f, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 2d – XeGTAO (Screen-Space Ground Truth Ambient Occlusion)
+    // Only runs when GTAO is enabled and RTAO is not already providing AO.
+    // -----------------------------------------------------------------------
+    if (gtaoWillRun)
+    {
+        if (!mGtaoRenderer.IsInitialized() && !mGtaoRenderer.HasInitFailed())
+        {
+            if (!mGtaoRenderer.Initialize(mSceneWidth, mSceneHeight))
+            {
+                std::string err = "GTAO init failed";
+                if (mGtaoRenderer.GetLastError()) err += std::string(": ") + mGtaoRenderer.GetLastError();
+                OutputDebugStringA((err + "\n").c_str());
+                mLastErrorMessage = err;
+            }
+        }
+
+        if (mGtaoRenderer.IsInitialized())
+        {
+            mGtaoRenderer.EnsureSize(mSceneWidth, mSceneHeight);
+
+            // Depth must be in ALL_SHADER_RESOURCE for compute (may already be there from RTAO/RTGI).
+            if (mDepthBufferState == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+            {
+                auto b = CD3DX12_RESOURCE_BARRIER::Transition(
+                    mSceneDepthTarget.Get(),
+                    D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                    D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+                commandList->ResourceBarrier(1, &b);
+                mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+            }
+
+            // Projection matrix (row-major, non-jittered) for GTAOUpdateConstants.
+            const float* projMat    = mNonJitteredProjectionMatrix.m[0];
+            const float* worldToView = mNonJitteredViewMatrix.m[0];
+
+            mGtaoRenderer.Dispatch(
+                commandList,
+                mDeferredLightingPass.GetSrvs().Normal,
+                mDepthSrvGpuHandle,
+                mGtaoSettings,
+                projMat,
+                worldToView,
+                0); // fixed noise index - no temporal accumulation for GTAO
+
+            // XeGTAO is the active AO source whenever it is enabled.
+            mDeferredLightingPass.SetAoSrv(mGtaoRenderer.GetOutputSrv(), mGtaoSettings.Intensity, mGtaoSettings.DebugView);
+        }
+    }
+
+    // Consume the scene-content changed flag once at the end of temporal pass setup.
+    mEntityMeshRenderer.ConsumeSceneContentChangedFlag();
+
+    dispatchVolumetricFog();
+
+    // Dispatch the rain particle physics compute shader.
+    if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
+    {
+        ID3D12DescriptorHeap* computeHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, computeHeaps);
+        const XMFLOAT3 camPos = mCamera.GetPosition();
+        const XMFLOAT3 camForward = mCamera.GetForwardVector();
+        const XMFLOAT3 camUp = mCamera.GetUpVector();
+        XMFLOAT3 camRight;
+        XMStoreFloat3(
+            &camRight,
+            XMVector3Normalize(
+                XMVector3Cross(
+                    XMLoadFloat3(&camUp),
+                    XMLoadFloat3(&camForward))));
+        const float deltaTimeSec = mFrameDeltaTimeMs * 0.001f;
+        mRainRenderer.Dispatch(commandList, mRainSettings, camPos, camRight, camForward, camUp, deltaTimeSec);
+    }
+
+    // Restore G-Buffer and depth back to PIXEL_SHADER_RESOURCE for the deferred lighting pass.
+    if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || gtaoWillRun || probesEnabled || probesDebugEnabled)
+    {
+        D3D12_RESOURCE_BARRIER toPixel[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            toPixel[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, toPixel);
+
+        if (mDepthBufferState == D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+        {
+            auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            commandList->ResourceBarrier(1, &toDepthWrite);
+            mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 3 – Sky pass
+    // Render the sky into the scene colour RT before the lighting pass so that
+    // pixels with depth == 1.0 (no geometry) keep the sky colour.
+    // -----------------------------------------------------------------------
+    const auto toSceneRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorTarget.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commandList->ResourceBarrier(1, &toSceneRenderTarget);
+
+    const float sceneClearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    commandList->ClearRenderTargetView(mSceneRtvHandle, sceneClearColor, 0, nullptr);
+
+    // The sky renderer writes directly into the scene colour RT (no DSV needed).
+    commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, nullptr);
+    const D3D12_VIEWPORT vpFull = { 0, 0, static_cast<float>(mSceneWidth), static_cast<float>(mSceneHeight), 0, 1 };
+    const D3D12_RECT     srFull = { 0, 0, static_cast<LONG>(mSceneWidth), static_cast<LONG>(mSceneHeight) };
+    commandList->RSSetViewports(1, &vpFull);
+    commandList->RSSetScissorRects(1, &srFull);
+
+    if (mSkyRenderer.IsInitialized())
+    {
+        mSkyRenderer.Render(
+            commandList,
+            mHosekResult,
+            mTimeOfDaySettings,
+            XMLoadFloat4x4(&mJitteredProjection),
+            mCamera.GetViewMatrix(),
+            mSceneWidth,
+            mSceneHeight);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 4 – Deferred lighting resolve
+    // Transition scene depth to SRV state, then run the fullscreen lighting
+    // quad that samples the G-Buffer + depth + shadow map.
+    // -----------------------------------------------------------------------
+    {
+        const auto toDepthSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &toDepthSrv);
+        mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+
+    if (mDeferredLightingPass.IsInitialized())
+    {
+        ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
+
+        mDeferredLightingPass.ResolveLight(
+            commandList,
+            mSceneRtvHandle,
+            mDepthSrvGpuHandle,
+            SceneColorFormat,
+            mSceneWidth,
+            mSceneHeight);
+    }
+
+    // Build a remapped depth preview texture for the editor debug window.
+    RenderDepthDebugPreview(commandList);
+
+    // -----------------------------------------------------------------------
+    // PASS 4b – Radiance Probe Debug Overlay
+    // Draws coloured spheres at each probe position if debug visualisation is on.
+    // -----------------------------------------------------------------------
+    if (mProbeSettings.Enabled && mProbeSettings.DebugShowProbes
+        && mProbeRenderer.IsInitialized())
+    {
+        const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        commandList->ResourceBarrier(1, &toDepthWrite);
+        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+        ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
+
+        const XMMATRIX probeDebugViewProjection = XMLoadFloat4x4(&mNonJitteredViewProjection);
+        XMFLOAT4X4 probeDebugVP;
+        XMFLOAT4X4 probeDebugInvVP;
+        XMStoreFloat4x4(&probeDebugVP, XMMatrixTranspose(probeDebugViewProjection));
+        XMStoreFloat4x4(&probeDebugInvVP, XMMatrixTranspose(XMMatrixInverse(nullptr, probeDebugViewProjection)));
+
+        mProbeRenderer.DrawDebug(
+            commandList,
+            mSceneRtvHandle,
+            mSceneDsvHandle,
+            SceneColorFormat,
+            mSceneWidth,
+            mSceneHeight,
+            probeDebugVP.m[0],
+            probeDebugInvVP.m[0]);
+
+        if (mProbeRenderer.GetLastError())
+        {
+            OutputDebugStringA(mProbeRenderer.GetLastError());
+            OutputDebugStringA("\n");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 5 – Grid overlay
+    // Transition depth back to DEPTH_WRITE and bind it so the grid and gizmos
+    // correctly depth-test against the geometry already rendered.
+    // -----------------------------------------------------------------------
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+    {
+        const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        commandList->ResourceBarrier(1, &toDepthWrite);
+        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+
+    commandList->SetGraphicsRootSignature(mPipeline.GetRootSignature());
+    commandList->SetPipelineState(mPipeline.GetPipelineState());
+    // Bind the scene colour RTV AND the depth buffer so depth-testing works.
+    commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
+    commandList->RSSetViewports(1, &vpFull);
+    commandList->RSSetScissorRects(1, &srFull);
+
+    if (mGridEnabled)
+    {
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        commandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+        commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+        commandList->DrawInstanced(mVertexCount, 1, 0, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 6 – Point light gizmos (editor wireframe spheres)
+    // -----------------------------------------------------------------------
+    if (mPointLightRenderer.IsInitialized() && mEntities != nullptr)
+    {
+        mPointLightRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 7 – Decal gizmos (wireframe box + facing arrow)
+    // -----------------------------------------------------------------------
+    if (mDecalRenderer.IsInitialized() && mEntities != nullptr)
+    {
+        mDecalRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+    }
+
+    // -----------------------------------------------------------------------
+    // Rain streak draw pass – additive transparent pass over the full scene.
+    // -----------------------------------------------------------------------
+    if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
+    {
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+        commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
+        commandList->RSSetViewports(1, &vpFull);
+        commandList->RSSetScissorRects(1, &srFull);
+        XMFLOAT4X4 rainViewProjection;
+        XMStoreFloat4x4(&rainViewProjection, XMMatrixTranspose(XMLoadFloat4x4(&mJitteredViewProjection)));
+        mRainRenderer.Draw(commandList, mRainSettings, rainViewProjection);
+    }
+
+    // -----------------------------------------------------------------------
+    // Transition scene colour to SRV for ImGui display (and TAA input).
+    // -----------------------------------------------------------------------
+    const auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneColorTarget.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toShaderResource);
+
+    // -----------------------------------------------------------------------
+    // PASS 7 – TAA resolve (optional)
+    // -----------------------------------------------------------------------
+    const bool dlssWillEvaluate = !rtaoDebugViewActive
+        && mDlssSettings.Enabled
+        && mDlssRenderer.IsAvailable()
+        && mMotionVectorRenderer.GetOutputResource() != nullptr;
+
+    if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+    {
+        mTaaRenderer.Resolve(
+            commandList,
+            mSceneColorTarget.Get(),
+            mSceneSrvCpuHandle,
+            mTaaSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 7.5 – Motion vectors + DLSS SR (optional)
+    // Runs after TAA so the temporal resolve can remain available when DLSS is off.
+    // Bloom and AgX then consume the DLSS output when enabled.
+    // -----------------------------------------------------------------------
+    if (dlssWillEvaluate)
+    {
+        if (mEntities != nullptr)
+        {
+            mMotionVectorRenderer.SetEntities(mEntities);
+            mMotionVectorRenderer.Render(
+                commandList,
+                mPreviousEntityTransforms,
+                mNonJitteredViewProjection,
+                mPreviousViewProjectionForRtgi,
+                mDlssSettings.ResetHistory);
+        }
+
+        DlssRenderer::CameraFrameData cameraData{};
+        cameraData.View = mNonJitteredViewMatrix;
+        cameraData.Projection = mNonJitteredProjectionMatrix;
+        cameraData.PrevViewProjection = mPreviousViewProjectionForRtgi;
+        cameraData.CameraPosition = mCamera.GetPosition();
+        cameraData.CameraUp = mCamera.GetUpVector();
+        cameraData.CameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
+        cameraData.CameraForward = mCamera.GetForwardVector();
+        cameraData.JitterX = mCurrentCameraJitter[0];
+        cameraData.JitterY = mCurrentCameraJitter[1];
+        cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
+        cameraData.NearPlane = 0.1f;
+        cameraData.FarPlane = 100.0f;
+        cameraData.FovY = XM_PIDIV4;
+        cameraData.AspectRatio = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(mSceneHeight, 1u));
+
+        ID3D12Resource* dlssInputResource = mSceneColorTarget.Get();
+        ID3D12Resource* motionVectorResource = mMotionVectorRenderer.GetOutputResource();
+        const D3D12_RESOURCE_STATES dlssReadState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
+        {
+            const auto colorToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                dlssInputResource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &colorToAllShaderRead);
+        }
+
+        if (mDepthBufferState != dlssReadState)
+        {
+            const auto depthToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                mDepthBufferState,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &depthToSrv);
+            mDepthBufferState = dlssReadState;
+        }
+
+        {
+            const auto motionVectorsToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                motionVectorResource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                dlssReadState);
+            commandList->ResourceBarrier(1, &motionVectorsToAllShaderRead);
+        }
+
+        mDlssRenderer.Evaluate(
+            commandList,
+            dlssInputResource,
+            mSceneDepthTarget.Get(),
+            motionVectorResource,
+            cameraData,
+            mDlssSettings,
+            renderFrameIndex);
+
+        {
+            const auto colorBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                dlssInputResource,
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &colorBackToPixelShaderRead);
+        }
+
+        {
+            const auto motionVectorsBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                motionVectorResource,
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &motionVectorsBackToPixelShaderRead);
+        }
+
+        if (mDepthBufferState == dlssReadState)
+        {
+            const auto depthBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                dlssReadState,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &depthBackToPixelShaderRead);
+            mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        }
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 8 – Bloom (optional, physical mip-chain)
+    // Runs after TAA so the bloom operates on the temporally-stable image.
+    // -----------------------------------------------------------------------
+    if (!rtaoDebugViewActive && mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+    {
+        ID3D12Resource*             bloomInputResource = mSceneColorTarget.Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomInputSrv      = mSceneSrvCpuHandle;
+
+        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            bloomInputResource = mTaaRenderer.GetOutputResource();
+            bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+        }
+        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        {
+            bloomInputResource = mDlssRenderer.GetOutputResource();
+            bloomInputSrv = mDlssRenderer.GetOutputCpuSrv();
+        }
+
+        mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 9 – AgX tonemap (optional)
+    // Runs after Bloom so the tonemapper operates on the bloom-composited image.
+    // -----------------------------------------------------------------------
+    if (!rtaoDebugViewActive && mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
+    {
+        // Determine the source for the tonemapper: Bloom output → TAA output → raw scene colour.
+        ID3D12Resource*             agxInputResource = mSceneColorTarget.Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE agxInputSrv      = mSceneSrvCpuHandle;
+
+        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+        {
+            agxInputResource = mBloomRenderer.GetOutputResource();
+            agxInputSrv      = mBloomRenderer.GetOutputCpuSrv();
+        }
+        else if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        {
+            agxInputResource = mDlssRenderer.GetOutputResource();
+            agxInputSrv = mDlssRenderer.GetOutputCpuSrv();
+        }
+        else if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            agxInputResource = mTaaRenderer.GetOutputResource();
+            agxInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+        }
+
+        mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    if (mEntities != nullptr)
+    {
+        mPreviousEntityTransforms.clear();
+        for (std::size_t i = 0; i < mEntities->size(); ++i)
+        {
+            const Entity& entity = (*mEntities)[i];
+            if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            {
+                continue;
+            }
+
+            XMFLOAT4X4 model{};
+            XMStoreFloat4x4(&model, entity.Transform.GetTransform());
+            mPreviousEntityTransforms[i] = model;
+        }
+    }
+
+    mPreviousViewProjectionForRtgi = mNonJitteredViewProjection;
+}
+
+void DX12SceneRenderer::Shutdown()
+{
+    mEntityMeshRenderer.Shutdown();
+    mPointLightRenderer.Shutdown();
+    mDecalRenderer.Shutdown();
+    mPointShadowMapRenderer.Shutdown();
+    mDeferredLightingPass.Shutdown();
+    mRtgiRenderer.Shutdown();
+    mProbeRenderer.Shutdown();
+    mVolumetricFogRenderer.Shutdown();
+    mRainRenderer.Shutdown();
+    mTaaRenderer.Shutdown();
+    mBloomRenderer.Shutdown();
+    mAgxTonemapper.Shutdown();
+    mSkyRenderer.Shutdown();
+    mShadowMapRenderer.Shutdown();
+
+    if (mConstantBuffer && mMappedConstants != nullptr)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedConstants = nullptr;
+    }
+    if (mDepthDebugConstantBuffer && mMappedDepthDebugConstants != nullptr)
+    {
+        mDepthDebugConstantBuffer->Unmap(0, nullptr);
+        mMappedDepthDebugConstants = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mVertexBuffer = {};
+    mIndexBuffer = {};
+    ReleaseSceneTargetResources();
+    mPipeline.mPipelineState.Reset();
+    mPipeline.mRootSignature.Reset();
+    mDepthDebugPipelineState.Reset();
+    mDepthDebugRootSignature.Reset();
+    mSceneSrvCpuHandle = {};
+    mSceneSrvGpuHandle = {};
+    mDepthDebugSrvCpuHandle = {};
+    mDepthDebugSrvGpuHandle = {};
+    mSceneTextureId = ImTextureID_Invalid;
+    mEntities = nullptr;
+    mMeshLocalRadiusCache.clear();
+    mIsInitialized = false;
+}
+
+bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
+{
+    UINT outputWidth = 0;
+    UINT outputHeight = 0;
+    if (!DX12Context_GetRenderSize(&outputWidth, &outputHeight))
+    {
+        mLastErrorMessage = "Failed to query the DX12 back-buffer size.";
+        return false;
+    }
+
+    UINT renderWidth = outputWidth;
+    UINT renderHeight = outputHeight;
+    const UINT previousSceneWidth = mSceneWidth;
+    const UINT previousSceneHeight = mSceneHeight;
+    if (mDlssSettings.Enabled && mDlssRenderer.IsAvailable())
+    {
+        mDlssRenderer.QueryOptimalRenderSize(outputWidth, outputHeight, mDlssSettings, renderWidth, renderHeight);
+    }
+    else if (mHasCustomSceneResolution)
+    {
+        renderWidth = mCustomSceneWidth;
+        renderHeight = mCustomSceneHeight;
+    }
+
+    if (renderWidth == 0 || renderHeight == 0)
+    {
+        return true;
+    }
+
+    const bool outputSizeChanged = !mDlssRenderer.IsInitialized()
+        || outputWidth != mDlssRenderer.GetOutputWidth()
+        || outputHeight != mDlssRenderer.GetOutputHeight();
+    const bool renderSizeChanged = !mSceneColorTarget
+        || renderWidth != previousSceneWidth
+        || renderHeight != previousSceneHeight;
+
+    if (!renderSizeChanged && !outputSizeChanged)
+    {
+        return true;
+    }
+
+    if (!renderSizeChanged && outputSizeChanged)
+    {
+        if (!mDlssRenderer.EnsureSize(renderWidth, renderHeight, outputWidth, outputHeight))
+        {
+            mLastErrorMessage = "Failed to resize the DLSS output resources.";
+            return false;
+        }
+
+        if (mBloomRenderer.IsInitialized())
+        {
+            mBloomRenderer.Initialize(outputWidth, outputHeight);
+        }
+
+        if (mAgxTonemapper.IsInitialized())
+        {
+            mAgxTonemapper.Initialize(outputWidth, outputHeight);
+        }
+
+        mDlssSettings.ResetHistory = true;
+        return true;
+    }
+
+    mLastErrorMessage.clear();
+    return ResizeSceneTargetsTo(renderWidth, renderHeight);
+}
+
+bool DX12SceneRenderer::ResizeSceneTarget(UINT width, UINT height)
+{
+    if (mDlssSettings.Enabled)
+    {
+        mHasCustomSceneResolution = false;
+        return EnsureSceneTargetMatchesWindowSize();
+    }
+
+    if (width == 0 || height == 0)
+    {
+        return false;
+    }
+
+    mHasCustomSceneResolution = true;
+    mCustomSceneWidth = width;
+    mCustomSceneHeight = height;
+
+    if (mSceneColorTarget && width == mSceneWidth && height == mSceneHeight)
+    {
+        return true;
+    }
+
+    mLastErrorMessage.clear();
+    return ResizeSceneTargetsTo(width, height);
+}
+
+void DX12SceneRenderer::ClearCustomSceneResolution()
+{
+    mHasCustomSceneResolution = false;
+}
+
+bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
+{
+    ReleaseSceneTargetResources();
+    mSceneWidth = width;
+    mSceneHeight = height;
+    mCamera.SetLens(XM_PIDIV4, static_cast<float>(mSceneWidth) / static_cast<float>(mSceneHeight), 0.1f, 100.0f);
+
+    if (!CreateSceneTarget())
+    {
+        mLastErrorMessage = "Failed to resize the off-screen scene render target.";
+        return false;
+    }
+
+    if (mTaaRenderer.IsInitialized())
+    {
+        mTaaRenderer.Initialize(mSceneWidth, mSceneHeight);
+        mTaaSettings.ResetHistory = true;
+    }
+
+    if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
+    {
+        OutputDebugStringA("DX12SceneRenderer: motion vector resize failed.\n");
+    }
+
+    UINT outputWidth = mSceneWidth;
+    UINT outputHeight = mSceneHeight;
+    if (DX12Context_GetRenderSize(&outputWidth, &outputHeight) && mDlssRenderer.IsAvailable())
+    {
+        mDlssRenderer.EnsureSize(mSceneWidth, mSceneHeight, outputWidth, outputHeight);
+    }
+
+    const UINT postProcessWidth = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputWidth : mSceneWidth;
+    const UINT postProcessHeight = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputHeight : mSceneHeight;
+
+    if (mAgxTonemapper.IsInitialized())
+    {
+        mAgxTonemapper.Initialize(postProcessWidth, postProcessHeight);
+    }
+
+    if (mBloomRenderer.IsInitialized())
+    {
+        mBloomRenderer.Initialize(postProcessWidth, postProcessHeight);
+    }
+
+    if (mVolumetricFogRenderer.IsInitialized())
+    {
+        mVolumetricFogRenderer.Initialize(mSceneWidth, mSceneHeight);
+    }
+
+    mDlssSettings.ResetHistory = true;
+
+    return true;
+}
+
+void DX12SceneRenderer::ReleaseSceneTargetResources()
+{
+    // Flush the GPU before releasing resources to prevent the device from
+    // referencing freed memory, which causes the level to disappear for a frame.
+    DX12Context_WaitForGPU();
+
+    mSceneColorTarget.Reset();
+    mSceneDepthTarget.Reset();
+    mDepthDebugTarget.Reset();
+    mSceneRtvHeap.Reset();
+    mSceneDsvHeap.Reset();
+    mDepthDebugRtvHeap.Reset();
+    mSceneRtvHandle = {};
+    mSceneDsvHandle = {};
+    mDepthDebugRtvHandle = {};
+}
+
+bool DX12SceneRenderer::CreatePipeline()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const ShaderCompileRequest vertexShaderRequest
+    {
+        L"Shaders\\HelloCube.hlsl",
+        L"VSMain",
+        L"vs_5_0",
+        ShaderStage::Vertex
+    };
+
+    const ShaderCompileRequest pixelShaderRequest
+    {
+        L"Shaders\\HelloCube.hlsl",
+        L"PSMain",
+        L"ps_5_0",
+        ShaderStage::Pixel
+    };
+
+    if (!mVertexShader.Compile(vertexShaderRequest))
+    {
+        mLastErrorMessage = std::string("Vertex shader compilation failed: ")
+            + (mVertexShader.GetLastErrorMessage() ? mVertexShader.GetLastErrorMessage() : "Unknown shader compiler error.");
+        return false;
+    }
+
+    if (!mPixelShader.Compile(pixelShaderRequest))
+    {
+        mLastErrorMessage = std::string("Pixel shader compilation failed: ")
+            + (mPixelShader.GetLastErrorMessage() ? mPixelShader.GetLastErrorMessage() : "Unknown shader compiler error.");
+        return false;
+    }
+
+    D3D12_ROOT_PARAMETER rootParameter{};
+    rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParameter.Descriptor.ShaderRegister = 0;
+    rootParameter.Descriptor.RegisterSpace = 0;
+    rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+    rootSignatureDesc.NumParameters = 1;
+    rootSignatureDesc.pParameters = &rootParameter;
+    rootSignatureDesc.NumStaticSamplers = 0;
+    rootSignatureDesc.pStaticSamplers = nullptr;
+    rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serializedRootSignature;
+    ComPtr<ID3DBlob> rootSignatureErrors;
+    DX12_THROW_IF_FAILED(D3D12SerializeRootSignature(
+        &rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &serializedRootSignature,
+        &rootSignatureErrors));
+    DX12_THROW_IF_FAILED(device->CreateRootSignature(
+        0,
+        serializedRootSignature->GetBufferPointer(),
+        serializedRootSignature->GetBufferSize(),
+        IID_PPV_ARGS(&mPipeline.mRootSignature)));
+
+    const D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = mPipeline.GetRootSignature();
+    psoDesc.VS = mVertexShader.GetBytecode();
+    psoDesc.PS = mPixelShader.GetBytecode();
+    psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
+    psoDesc.BlendState.IndependentBlendEnable = FALSE;
+    D3D12_RENDER_TARGET_BLEND_DESC renderTargetBlendDesc{};
+    renderTargetBlendDesc.BlendEnable = FALSE;
+    renderTargetBlendDesc.LogicOpEnable = FALSE;
+    renderTargetBlendDesc.SrcBlend = D3D12_BLEND_ONE;
+    renderTargetBlendDesc.DestBlend = D3D12_BLEND_ZERO;
+    renderTargetBlendDesc.BlendOp = D3D12_BLEND_OP_ADD;
+    renderTargetBlendDesc.SrcBlendAlpha = D3D12_BLEND_ONE;
+    renderTargetBlendDesc.DestBlendAlpha = D3D12_BLEND_ZERO;
+    renderTargetBlendDesc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    renderTargetBlendDesc.LogicOp = D3D12_LOGIC_OP_NOOP;
+    renderTargetBlendDesc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.BlendState.RenderTarget[0] = renderTargetBlendDesc;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    psoDesc.RasterizerState.MultisampleEnable = FALSE;
+    psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
+    psoDesc.RasterizerState.ForcedSampleCount = 0;
+    psoDesc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.DepthStencilState.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+    psoDesc.DepthStencilState.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+    const D3D12_DEPTH_STENCILOP_DESC defaultStencilOp =
+    {
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_STENCIL_OP_KEEP,
+        D3D12_COMPARISON_FUNC_ALWAYS
+    };
+    psoDesc.DepthStencilState.FrontFace = defaultStencilOp;
+    psoDesc.DepthStencilState.BackFace = defaultStencilOp;
+    psoDesc.InputLayout = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = SceneColorFormat;
+    psoDesc.DSVFormat = SceneDepthFormat;
+    psoDesc.SampleDesc.Count = 1;
+
+    DX12_THROW_IF_FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipeline.mPipelineState)));
+    mPipeline.SetDebugName(L"Floor Grid Pipeline");
+    return true;
+}
+
+bool DX12SceneRenderer::CreateSceneTarget()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    if ((mSceneSrvCpuHandle.ptr == 0 || mSceneSrvGpuHandle.ptr == 0) &&
+        !DX12Context_AllocateSrvDescriptor(&mSceneSrvCpuHandle, &mSceneSrvGpuHandle))
+    {
+        return false;
+    }
+
+    mSceneTextureId = static_cast<ImTextureID>(mSceneSrvGpuHandle.ptr);
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
+    rtvHeapDesc.NumDescriptors = 1;
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mSceneRtvHeap)));
+    mSceneRtvHandle = mSceneRtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mSceneDsvHeap)));
+    mSceneDsvHandle = mSceneDsvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    D3D12_RESOURCE_DESC colorTargetDesc{};
+    colorTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    colorTargetDesc.Alignment = 0;
+    colorTargetDesc.Width = mSceneWidth;
+    colorTargetDesc.Height = mSceneHeight;
+    colorTargetDesc.DepthOrArraySize = 1;
+    colorTargetDesc.MipLevels = 1;
+    colorTargetDesc.Format = SceneColorFormat;
+    colorTargetDesc.SampleDesc.Count = 1;
+    colorTargetDesc.SampleDesc.Quality = 0;
+    colorTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    colorTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE colorClearValue{};
+    colorClearValue.Format = SceneColorFormat;
+    colorClearValue.Color[0] = 0.12f;
+    colorClearValue.Color[1] = 0.14f;
+    colorClearValue.Color[2] = 0.18f;
+    colorClearValue.Color[3] = 1.0f;
+
+    D3D12_HEAP_PROPERTIES defaultHeapProperties{};
+    defaultHeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeapProperties.CreationNodeMask = 1;
+    defaultHeapProperties.VisibleNodeMask = 1;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &colorTargetDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &colorClearValue,
+        IID_PPV_ARGS(&mSceneColorTarget)));
+
+    device->CreateRenderTargetView(mSceneColorTarget.Get(), nullptr, mSceneRtvHandle);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = SceneColorFormat;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(mSceneColorTarget.Get(), &srvDesc, mSceneSrvCpuHandle);
+
+    D3D12_RESOURCE_DESC depthTargetDesc{};
+    depthTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthTargetDesc.Alignment = 0;
+    depthTargetDesc.Width = mSceneWidth;
+    depthTargetDesc.Height = mSceneHeight;
+    depthTargetDesc.DepthOrArraySize = 1;
+    depthTargetDesc.MipLevels = 1;
+    // Use TYPELESS so we can create both a D32_FLOAT DSV and an R32_FLOAT SRV
+    // for the deferred lighting pass to reconstruct world-space positions.
+    depthTargetDesc.Format = SceneDepthResourceFormat;
+    depthTargetDesc.SampleDesc.Count = 1;
+    depthTargetDesc.SampleDesc.Quality = 0;
+    depthTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depthTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE depthClearValue{};
+    depthClearValue.Format = SceneDepthFormat;
+    depthClearValue.DepthStencil.Depth = 1.0f;
+    depthClearValue.DepthStencil.Stencil = 0;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &depthTargetDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthClearValue,
+        IID_PPV_ARGS(&mSceneDepthTarget)));
+
+    // Track the current state so Render() issues the correct barriers.
+    mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+    dsvDesc.Format = SceneDepthFormat;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(mSceneDepthTarget.Get(), &dsvDesc, mSceneDsvHandle);
+
+    // Create an R32_FLOAT SRV for the depth buffer so the deferred lighting pass can
+    // sample it to reconstruct world-space positions.  Allocate from the shared
+    // shader-visible heap so it is accessible during the lighting resolve draw.
+    if (mDepthSrvCpuHandle.ptr == 0 || mDepthSrvGpuHandle.ptr == 0)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&mDepthSrvCpuHandle, &mDepthSrvGpuHandle))
+        {
+            // Non-fatal: deferred lighting world-pos reconstruction will be unavailable,
+            // but the rest of the renderer continues to work.
+            OutputDebugStringA("DX12SceneRenderer: Failed to allocate depth SRV descriptor.\n");
+        }
+    }
+    if (mDepthDebugSrvCpuHandle.ptr == 0 || mDepthDebugSrvGpuHandle.ptr == 0)
+    {
+        if (!DX12Context_AllocateSrvDescriptor(&mDepthDebugSrvCpuHandle, &mDepthDebugSrvGpuHandle))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Failed to allocate debug depth SRV descriptor.\n");
+        }
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC depthDebugRtvHeapDesc{};
+    depthDebugRtvHeapDesc.NumDescriptors = 1;
+    depthDebugRtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&depthDebugRtvHeapDesc, IID_PPV_ARGS(&mDepthDebugRtvHeap)));
+    mDepthDebugRtvHandle = mDepthDebugRtvHeap->GetCPUDescriptorHandleForHeapStart();
+    if (mDepthSrvCpuHandle.ptr != 0)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
+        depthSrvDesc.Format                    = SceneDepthSrvFormat; // R32_FLOAT
+        depthSrvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+        depthSrvDesc.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        depthSrvDesc.Texture2D.MipLevels       = 1;
+        device->CreateShaderResourceView(mSceneDepthTarget.Get(), &depthSrvDesc, mDepthSrvCpuHandle);
+
+        if (mDepthDebugSrvCpuHandle.ptr != 0)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC depthDebugSrvDesc{};
+            depthDebugSrvDesc.Format                  = SceneDepthSrvFormat; // R32_FLOAT
+            depthDebugSrvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+            // Preview the inverse depth in grayscale so surfaces look dark
+            // instead of nearly white from raw perspective depth near 1.0.
+            depthDebugSrvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+                D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
+                D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
+                D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
+                D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
+            depthDebugSrvDesc.Texture2D.MipLevels     = 1;
+            device->CreateShaderResourceView(mSceneDepthTarget.Get(), &depthDebugSrvDesc, mDepthDebugSrvCpuHandle);
+        }
+    }
+
+    D3D12_RESOURCE_DESC depthDebugTargetDesc{};
+    depthDebugTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthDebugTargetDesc.Width = mSceneWidth;
+    depthDebugTargetDesc.Height = mSceneHeight;
+    depthDebugTargetDesc.DepthOrArraySize = 1;
+    depthDebugTargetDesc.MipLevels = 1;
+    depthDebugTargetDesc.Format = SceneColorFormat;
+    depthDebugTargetDesc.SampleDesc.Count = 1;
+    depthDebugTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    depthDebugTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE depthDebugClearValue{};
+    depthDebugClearValue.Format = SceneColorFormat;
+    depthDebugClearValue.Color[0] = 0.0f;
+    depthDebugClearValue.Color[1] = 0.0f;
+    depthDebugClearValue.Color[2] = 0.0f;
+    depthDebugClearValue.Color[3] = 1.0f;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &depthDebugTargetDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &depthDebugClearValue,
+        IID_PPV_ARGS(&mDepthDebugTarget)));
+
+    device->CreateRenderTargetView(mDepthDebugTarget.Get(), nullptr, mDepthDebugRtvHandle);
+
+    if (mDepthDebugSrvCpuHandle.ptr != 0)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC depthDebugOutputSrvDesc{};
+        depthDebugOutputSrvDesc.Format = SceneColorFormat;
+        depthDebugOutputSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        depthDebugOutputSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        depthDebugOutputSrvDesc.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(mDepthDebugTarget.Get(), &depthDebugOutputSrvDesc, mDepthDebugSrvCpuHandle);
+    }
+
+    return true;
+}
+
+bool DX12SceneRenderer::CreateDepthDebugResources()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const ShaderCompileRequest vsRequest
+    {
+        L"Shaders\\DepthDebug.hlsl",
+        L"VSMain",
+        L"vs_5_0",
+        ShaderStage::Vertex
+    };
+    const ShaderCompileRequest psRequest
+    {
+        L"Shaders\\DepthDebug.hlsl",
+        L"PSMain",
+        L"ps_5_0",
+        ShaderStage::Pixel
+    };
+
+    if (!mDepthDebugVertexShader.Compile(vsRequest) || !mDepthDebugPixelShader.Compile(psRequest))
+    {
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_RANGE depthRange{};
+    depthRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depthRange.NumDescriptors = 1;
+    depthRange.BaseShaderRegister = 0;
+    depthRange.RegisterSpace = 0;
+    depthRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges = &depthRange;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+    rsDesc.NumParameters = 2;
+    rsDesc.pParameters = params;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &sampler;
+    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serializedRootSignature;
+    ComPtr<ID3DBlob> rootSignatureErrors;
+    DX12_THROW_IF_FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedRootSignature, &rootSignatureErrors));
+    DX12_THROW_IF_FAILED(device->CreateRootSignature(0, serializedRootSignature->GetBufferPointer(), serializedRootSignature->GetBufferSize(), IID_PPV_ARGS(&mDepthDebugRootSignature)));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = mDepthDebugRootSignature.Get();
+    psoDesc.VS = mDepthDebugVertexShader.GetBytecode();
+    psoDesc.PS = mDepthDebugPixelShader.GetBytecode();
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
+    psoDesc.BlendState.IndependentBlendEnable = FALSE;
+    D3D12_RENDER_TARGET_BLEND_DESC rtBlend{};
+    rtBlend.BlendEnable = FALSE;
+    rtBlend.LogicOpEnable = FALSE;
+    rtBlend.SrcBlend = D3D12_BLEND_ONE;
+    rtBlend.DestBlend = D3D12_BLEND_ZERO;
+    rtBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    rtBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    rtBlend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    rtBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    rtBlend.LogicOp = D3D12_LOGIC_OP_NOOP;
+    rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.BlendState.RenderTarget[0] = rtBlend;
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.InputLayout = { nullptr, 0 };
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = SceneColorFormat;
+    psoDesc.SampleDesc.Count = 1;
+    DX12_THROW_IF_FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mDepthDebugPipelineState)));
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CreationNodeMask = 1;
+    uploadHeap.VisibleNodeMask = 1;
+    D3D12_RESOURCE_DESC cbDesc{};
+    cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    cbDesc.Width = sizeof(DepthDebugConstants);
+    cbDesc.Height = 1;
+    cbDesc.DepthOrArraySize = 1;
+    cbDesc.MipLevels = 1;
+    cbDesc.Format = DXGI_FORMAT_UNKNOWN;
+    cbDesc.SampleDesc.Count = 1;
+    cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mDepthDebugConstantBuffer))))
+    {
+        return false;
+    }
+    if (FAILED(mDepthDebugConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedDepthDebugConstants))))
+    {
+        return false;
+    }
+    // Raw perspective depth is already non-linear and tends toward 1.0 for most
+    // visible surfaces, so a large scale factor just saturates the preview to
+    // white. Keep the scale at 1 so the debug view stays dark/gray instead.
+    mMappedDepthDebugConstants->DepthScale = 1.0f;
+    return true;
+}
+
+void DX12SceneRenderer::RenderDepthDebugPreview(ID3D12GraphicsCommandList* commandList)
+{
+    if (!commandList || !mDepthDebugPipelineState || !mDepthDebugRootSignature || !mDepthDebugTarget || mDepthSrvGpuHandle.ptr == 0)
+    {
+        return;
+    }
+
+    const auto toDepthDebugRt = CD3DX12_RESOURCE_BARRIER::Transition(
+        mDepthDebugTarget.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commandList->ResourceBarrier(1, &toDepthDebugRt);
+
+    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    commandList->ClearRenderTargetView(mDepthDebugRtvHandle, clearColor, 0, nullptr);
+    commandList->OMSetRenderTargets(1, &mDepthDebugRtvHandle, FALSE, nullptr);
+
+    const D3D12_VIEWPORT vp = { 0, 0, static_cast<float>(mSceneWidth), static_cast<float>(mSceneHeight), 0, 1 };
+    const D3D12_RECT sr = { 0, 0, static_cast<LONG>(mSceneWidth), static_cast<LONG>(mSceneHeight) };
+    commandList->RSSetViewports(1, &vp);
+    commandList->RSSetScissorRects(1, &sr);
+    commandList->SetGraphicsRootSignature(mDepthDebugRootSignature.Get());
+    commandList->SetPipelineState(mDepthDebugPipelineState.Get());
+    commandList->SetGraphicsRootConstantBufferView(0, mDepthDebugConstantBuffer->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootDescriptorTable(1, mDepthSrvGpuHandle);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    const auto toDepthDebugSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        mDepthDebugTarget.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toDepthDebugSrv);
+}
+
+void DX12SceneRenderer::TransitionDepthForRead(ID3D12GraphicsCommandList* commandList)
+{
+    // Only transition if depth is not already in PIXEL_SHADER_RESOURCE state.
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE && mSceneDepthTarget)
+    {
+        const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &barrier);
+        mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+}
+
+void DX12SceneRenderer::TransitionDepthAfterRead(ID3D12GraphicsCommandList* commandList)
+{
+    // Restore depth to DEPTH_WRITE for the next frame's geometry pass.
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE && mSceneDepthTarget)
+    {
+        const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        commandList->ResourceBarrier(1, &barrier);
+        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+}
+
+bool DX12SceneRenderer::CreateGeometry(ID3D12GraphicsCommandList* commandList)
+{
+    const std::vector<Vertex> gridVertices = GenerateGridVertices();
+    if (!CreateBufferWithUpload(
+        commandList,
+        gridVertices.data(),
+        static_cast<UINT64>(gridVertices.size() * sizeof(Vertex)),
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        mVertexBuffer))
+    {
+        return false;
+    }
+
+    mVertexBufferView.BufferLocation = mVertexBuffer.DefaultBuffer->GetGPUVirtualAddress();
+    mVertexBufferView.StrideInBytes = sizeof(Vertex);
+    mVertexBufferView.SizeInBytes = static_cast<UINT>(gridVertices.size() * sizeof(Vertex));
+
+    // The floor grid is drawn as a non-indexed line list, so vertex count is all that is needed at draw time.
+    mVertexCount = static_cast<UINT>(gridVertices.size());
+    return true;
+}
+
+bool DX12SceneRenderer::CreateConstantBuffer()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    const UINT64 constantBufferSize = (sizeof(SceneConstants) + 255ull) & ~255ull;
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeapProperties.CreationNodeMask = 1;
+    uploadHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC constantBufferDesc{};
+    constantBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    constantBufferDesc.Alignment = 0;
+    constantBufferDesc.Width = constantBufferSize;
+    constantBufferDesc.Height = 1;
+    constantBufferDesc.DepthOrArraySize = 1;
+    constantBufferDesc.MipLevels = 1;
+    constantBufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    constantBufferDesc.SampleDesc.Count = 1;
+    constantBufferDesc.SampleDesc.Quality = 0;
+    constantBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    constantBufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &constantBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mConstantBuffer)));
+
+    DX12_THROW_IF_FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedConstants)));
+    return true;
+}
+
+bool DX12SceneRenderer::CreateBufferWithUpload(
+    ID3D12GraphicsCommandList* commandList,
+    const void* initialData,
+    UINT64 dataSize,
+    D3D12_RESOURCE_STATES finalState,
+    BufferResource& outBuffer) const
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!(device && commandList && initialData && dataSize > 0))
+    {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES defaultHeapProperties{};
+    defaultHeapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    defaultHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    defaultHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    defaultHeapProperties.CreationNodeMask = 1;
+    defaultHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_HEAP_PROPERTIES uploadHeapProperties{};
+    uploadHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeapProperties.CreationNodeMask = 1;
+    uploadHeapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Alignment = 0;
+    bufferDesc.Width = dataSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.SampleDesc.Quality = 0;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&outBuffer.DefaultBuffer)));
+
+    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&outBuffer.UploadBuffer)));
+
+    void* mappedData = nullptr;
+    DX12_THROW_IF_FAILED(outBuffer.UploadBuffer->Map(0, nullptr, &mappedData));
+    std::memcpy(mappedData, initialData, static_cast<size_t>(dataSize));
+    outBuffer.UploadBuffer->Unmap(0, nullptr);
+
+    // Geometry upload follows the standard DX12 staging path: CPU writes to the upload heap,
+    // then the command list copies into the default heap before the buffer is used for drawing.
+    commandList->CopyBufferRegion(outBuffer.DefaultBuffer.Get(), 0, outBuffer.UploadBuffer.Get(), 0, dataSize);
+    const auto transitionBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        outBuffer.DefaultBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        finalState);
+    commandList->ResourceBarrier(1, &transitionBarrier);
+    return true;
+}
+
+void DX12SceneRenderer::UpdateCamera()
+{
+    static auto previousFrameTime = std::chrono::steady_clock::now();
+
+    const auto currentFrameTime = std::chrono::steady_clock::now();
+    const float deltaTime = std::chrono::duration<float>(currentFrameTime - previousFrameTime).count();
+    previousFrameTime = currentFrameTime;
+    // Store in ms for NRD's timing expectations.
+    mFrameDeltaTimeMs = deltaTime * 1000.0f;
+
+    HWND windowHandle = DX12Context_GetWindowHandle();
+    if (windowHandle == nullptr)
+    {
+        return;
+    }
+
+    POINT mousePosition{};
+    if (!GetCursorPos(&mousePosition))
+    {
+        return;
+    }
+
+    ScreenToClient(windowHandle, &mousePosition);
+
+    const bool moveForward = (GetAsyncKeyState('W') & 0x8000) != 0;
+    const bool moveBackward = (GetAsyncKeyState('S') & 0x8000) != 0;
+    const bool moveLeft = (GetAsyncKeyState('A') & 0x8000) != 0;
+    const bool moveRight = (GetAsyncKeyState('D') & 0x8000) != 0;
+    const bool rightMouseButtonDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+
+    // Feed the current keyboard state and mouse position into the camera every frame.
+    mCamera.Update(
+        deltaTime,
+        moveForward,
+        moveBackward,
+        moveLeft,
+        moveRight,
+        rightMouseButtonDown,
+        static_cast<float>(mousePosition.x),
+        static_cast<float>(mousePosition.y));
+}
+
+void DX12SceneRenderer::UpdateSceneConstants()
+{
+    if (mMappedConstants == nullptr)
+    {
+        return;
+    }
+
+    const XMMATRIX model      = XMMatrixIdentity();
+    const XMMATRIX view       = mCamera.GetViewMatrix();
+    XMMATRIX       projection = mCamera.GetProjectionMatrix();
+    mPrevCameraJitter[0] = mCurrentCameraJitter[0];
+    mPrevCameraJitter[1] = mCurrentCameraJitter[1];
+    mCurrentCameraJitter[0] = 0.0f;
+    mCurrentCameraJitter[1] = 0.0f;
+
+    // Detect meaningful camera movement with a tolerance instead of exact float equality.
+    // Exact memcmp on matrices can spuriously differ frame-to-frame and continuously
+    // reset TAA history, which prevents temporal stabilization.
+    XMFLOAT4X4 viewF;
+    XMStoreFloat4x4(&viewF, view);
+    float maxViewDiff = 0.0f;
+    const float* currentViewElems = &viewF.m[0][0];
+    const float* previousViewElems = &mPreviousViewMatrix.m[0][0];
+    for (int i = 0; i < 16; ++i)
+    {
+        maxViewDiff = (std::max)(maxViewDiff, std::fabs(currentViewElems[i] - previousViewElems[i]));
+    }
+    mCameraMovedThisFrame = maxViewDiff > 1e-4f;
+    if (mTaaSettings.Enabled && mCameraMovedThisFrame)
+    {
+        mTaaSettings.ResetHistory = true;
+    }
+    mPreviousViewMatrix = viewF;
+
+    // Cache the non-jittered VP before jitter is applied - used by RT GI to avoid
+    // triggering a false accumulation reset every frame from the TAA sub-pixel shift.
+    XMStoreFloat4x4(&mNonJitteredViewProjection, view * projection);
+
+    // Cache the individual view and projection matrices (non-jittered) so that NRD
+    // can receive worldToView and viewToClip separately each frame.
+    mPrevNonJitteredViewMatrix       = mNonJitteredViewMatrix;
+    mPrevNonJitteredProjectionMatrix = mNonJitteredProjectionMatrix;
+    XMStoreFloat4x4(&mNonJitteredViewMatrix,       view);
+    XMStoreFloat4x4(&mNonJitteredProjectionMatrix, projection);
+
+    const bool suppressJitterForRtao = mRtaoSettings.Enabled;
+    const bool suppressJitterForGtao = mGtaoSettings.Enabled;
+    if (suppressJitterForRtao != mRtaoJitterSuppressedLastFrame)
+    {
+        mTaaSettings.ResetHistory = true;
+        mRtaoJitterSuppressedLastFrame = suppressJitterForRtao;
+    }
+    if (suppressJitterForGtao != mGtaoJitterSuppressedLastFrame)
+    {
+        mTaaSettings.ResetHistory = true;
+        mGtaoJitterSuppressedLastFrame = suppressJitterForGtao;
+    }
+
+    // Apply a sub-pixel Halton jitter to the projection matrix when TAA is enabled.
+    // Jittering causes each frame to sample a slightly different sub-pixel location;
+    // the TAA resolve pass then accumulates these into a stable anti-aliased image.
+    const bool suppressProjectionJitter = suppressJitterForRtao || suppressJitterForGtao;
+    if (!suppressProjectionJitter && mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
+    {
+        // Halton(2,3) sequence gives a well-distributed low-discrepancy pattern.
+        constexpr UINT HaltonSequenceLength = 16;
+        static const float kHaltonX[HaltonSequenceLength] =
+        {
+             0.5f,   0.25f,  0.75f,  0.125f,  0.625f,  0.375f,  0.875f,  0.0625f,
+             0.5625f,0.3125f,0.8125f, 0.1875f, 0.6875f, 0.4375f, 0.9375f, 0.03125f
+        };
+        static const float kHaltonY[HaltonSequenceLength] =
+        {
+             1.f/3,  2.f/3, 1.f/9, 4.f/9, 7.f/9, 2.f/9, 5.f/9, 8.f/9,
+             1.f/27, 10.f/27,19.f/27,4.f/27,13.f/27,22.f/27,7.f/27,16.f/27
+        };
+
+        mJitterIndex = (mJitterIndex + 1) % HaltonSequenceLength;
+
+        // Keep the original sub-pixel jitter in pixel units for NRD.
+        const float jitterPixelX = (kHaltonX[mJitterIndex] - 0.5f) * mTaaSettings.JitterScale;
+        const float jitterPixelY = (kHaltonY[mJitterIndex] - 0.5f) * mTaaSettings.JitterScale;
+        mCurrentCameraJitter[0] = jitterPixelX;
+        mCurrentCameraJitter[1] = jitterPixelY;
+
+        // Convert jitter from pixel units to NDC (range [-1,1]) for the engine projection matrix.
+        const float jitterX = jitterPixelX * 2.0f / static_cast<float>(mSceneWidth);
+        const float jitterY = jitterPixelY * 2.0f / static_cast<float>(mSceneHeight);
+
+        // Add the jitter directly to the last column of the projection matrix (NDC shift).
+        XMFLOAT4X4 projF;
+        XMStoreFloat4x4(&projF, projection);
+        projF._31 += jitterX;
+        projF._32 += jitterY;
+        projection = XMLoadFloat4x4(&projF);
+    }
+
+    // The floor grid lives on the Z-up ground plane so the camera transform is the only motion applied here.
+    const XMMATRIX mvp = XMMatrixTranspose(model * view * projection);
+    XMStoreFloat4x4(&mMappedConstants->ModelViewProjection, mvp);
+
+    // Cache the jittered VP so Render() can pass it to the entity renderer.
+    XMStoreFloat4x4(&mJitteredViewProjection, view * projection);
+
+    // Cache the jittered projection alone so the sky pass uses the same per-frame
+    // jitter as geometry, avoiding sky fringing at mesh edges during TAA accumulation.
+    XMStoreFloat4x4(&mJitteredProjection, projection);
+}

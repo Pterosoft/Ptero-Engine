@@ -1,0 +1,450 @@
+﻿#include "pch.h"
+#include "DecalRenderer.h"
+
+#include "d3dx12.h"
+#include "DX12ShaderCompiler.h"
+
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+// ---------------------------------------------------------------------------
+// Helpers shared with other gizmo renderers
+// ---------------------------------------------------------------------------
+namespace
+{
+    static bool CreateAndUploadBuffer(
+        ID3D12Device*              device,
+        ID3D12GraphicsCommandList* commandList,
+        const void*                initialData,
+        UINT64                     dataSize,
+        D3D12_RESOURCE_STATES      finalState,
+        ComPtr<ID3D12Resource>&    outDefault,
+        ComPtr<ID3D12Resource>&    outUpload)
+    {
+        auto heapDefault = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto heapUpload  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto bufDesc     = CD3DX12_RESOURCE_DESC::Buffer(dataSize);
+
+        if (FAILED(device->CreateCommittedResource(
+            &heapDefault, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&outDefault))))
+            return false;
+
+        if (FAILED(device->CreateCommittedResource(
+            &heapUpload, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&outUpload))))
+            return false;
+
+        D3D12_SUBRESOURCE_DATA sub{};
+        sub.pData      = initialData;
+        sub.RowPitch   = static_cast<LONG_PTR>(dataSize);
+        sub.SlicePitch = sub.RowPitch;
+        UpdateSubresources(commandList, outDefault.Get(), outUpload.Get(), 0, 0, 1, &sub);
+
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            outDefault.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
+        commandList->ResourceBarrier(1, &barrier);
+
+        return true;
+    }
+
+    // Resolve the shader path the same way other renderers do: walk up from the
+    // executable directory until a Data/Shaders folder is found.
+    static std::wstring ResolveShaderPath(const wchar_t* shaderFileName)
+    {
+        wchar_t exePath[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath)));
+        std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+
+        while (!current.empty())
+        {
+            std::filesystem::path candidate = current / L"Data" / L"Shaders" / shaderFileName;
+            if (std::filesystem::exists(candidate))
+                return candidate.wstring();
+
+            std::filesystem::path parent = current.parent_path();
+            if (parent == current) break;
+            current = parent;
+        }
+        return shaderFileName;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Initialize
+// ---------------------------------------------------------------------------
+
+bool DecalRenderer::Initialize(
+    ID3D12GraphicsCommandList* commandList,
+    DXGI_FORMAT                colorFormat,
+    DXGI_FORMAT                depthFormat)
+{
+    if (mPipelineReady) return true;
+
+    if (!CreateBoxMesh(commandList))   return false;
+    if (!CreateArrowMesh(commandList)) return false;
+    if (!CreatePipeline(colorFormat, depthFormat)) return false;
+
+    mPipelineReady = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry: unit wire box, extents [-0.5, 0.5] on each axis
+// ---------------------------------------------------------------------------
+
+bool DecalRenderer::CreateBoxMesh(ID3D12GraphicsCommandList* commandList)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // 8 corners of a unit cube
+    const std::array<XMFLOAT3, 8> verts = {{
+        { -0.5f, -0.5f, -0.5f },
+        {  0.5f, -0.5f, -0.5f },
+        {  0.5f,  0.5f, -0.5f },
+        { -0.5f,  0.5f, -0.5f },
+        { -0.5f, -0.5f,  0.5f },
+        {  0.5f, -0.5f,  0.5f },
+        {  0.5f,  0.5f,  0.5f },
+        { -0.5f,  0.5f,  0.5f },
+    }};
+
+    // 12 edges as a line-list (24 indices)
+    const std::array<uint16_t, 24> indices = {{
+        0,1, 1,2, 2,3, 3,0,   // back face
+        4,5, 5,6, 6,7, 7,4,   // front face
+        0,4, 1,5, 2,6, 3,7    // connecting edges
+    }};
+
+    mBoxIndexCount = static_cast<UINT>(indices.size());
+
+    if (!CreateAndUploadBuffer(device, commandList,
+        verts.data(), sizeof(verts),
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        mBoxVertexBuffer, mBoxVertexUpload))
+        return false;
+
+    if (!CreateAndUploadBuffer(device, commandList,
+        indices.data(), sizeof(indices),
+        D3D12_RESOURCE_STATE_INDEX_BUFFER,
+        mBoxIndexBuffer, mBoxIndexUpload))
+        return false;
+
+    mBoxVBView.BufferLocation = mBoxVertexBuffer->GetGPUVirtualAddress();
+    mBoxVBView.SizeInBytes    = sizeof(verts);
+    mBoxVBView.StrideInBytes  = sizeof(XMFLOAT3);
+
+    mBoxIBView.BufferLocation = mBoxIndexBuffer->GetGPUVirtualAddress();
+    mBoxIBView.SizeInBytes    = sizeof(indices);
+    mBoxIBView.Format         = DXGI_FORMAT_R16_UINT;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry: arrow pointing in -Z (decal faces -Z in local space)
+// Shaft from (0,0,0) to (0,0,-1), two fins at the tip.
+// ---------------------------------------------------------------------------
+
+bool DecalRenderer::CreateArrowMesh(ID3D12GraphicsCommandList* commandList)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // shaft base, tip, and four arrowhead verts
+    const std::array<XMFLOAT3, 6> verts = {{
+        {  0.0f,  0.0f,  0.0f },   // 0: shaft base
+        {  0.0f,  0.0f, -1.0f },   // 1: tip
+        {  0.2f,  0.0f, -0.7f },   // 2: fin +X
+        { -0.2f,  0.0f, -0.7f },   // 3: fin -X
+        {  0.0f,  0.2f, -0.7f },   // 4: fin +Y
+        {  0.0f, -0.2f, -0.7f },   // 5: fin -Y
+    }};
+
+    const std::array<uint16_t, 10> indices = {{
+        0, 1,   // shaft
+        1, 2, 1, 3,  // horizontal fins
+        1, 4, 1, 5   // vertical fins
+    }};
+
+    mArrowIndexCount = static_cast<UINT>(indices.size());
+
+    if (!CreateAndUploadBuffer(device, commandList,
+        verts.data(), sizeof(verts),
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        mArrowVertexBuffer, mArrowVertexUpload))
+        return false;
+
+    if (!CreateAndUploadBuffer(device, commandList,
+        indices.data(), sizeof(indices),
+        D3D12_RESOURCE_STATE_INDEX_BUFFER,
+        mArrowIndexBuffer, mArrowIndexUpload))
+        return false;
+
+    mArrowVBView.BufferLocation = mArrowVertexBuffer->GetGPUVirtualAddress();
+    mArrowVBView.SizeInBytes    = sizeof(verts);
+    mArrowVBView.StrideInBytes  = sizeof(XMFLOAT3);
+
+    mArrowIBView.BufferLocation = mArrowIndexBuffer->GetGPUVirtualAddress();
+    mArrowIBView.SizeInBytes    = sizeof(indices);
+    mArrowIBView.Format         = DXGI_FORMAT_R16_UINT;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline
+// ---------------------------------------------------------------------------
+
+bool DecalRenderer::CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // Root signature: single root CBV at b0
+    {
+        CD3DX12_ROOT_PARAMETER rootParam{};
+        rootParam.InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsDesc(1, &rootParam, 0, nullptr,
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+        ComPtr<ID3DBlob> blob, errorBlob;
+        if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+            &blob, &errorBlob)))
+        {
+            mLastError = "DecalRenderer: failed to serialize root signature.";
+            return false;
+        }
+
+        if (FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(),
+            blob->GetBufferSize(), IID_PPV_ARGS(&mRootSignature))))
+        {
+            mLastError = "DecalRenderer: failed to create root signature.";
+            return false;
+        }
+    }
+
+    // Compile shaders
+    const std::wstring shaderPath = ResolveShaderPath(L"Decal.hlsl");
+
+    ShaderCompileRequest vsReq;
+    vsReq.FilePath      = shaderPath;
+    vsReq.EntryPoint    = L"VSMain";
+    vsReq.TargetProfile = L"vs_6_0";
+    vsReq.Stage         = ShaderStage::Vertex;
+
+    ShaderCompileRequest psReq;
+    psReq.FilePath      = shaderPath;
+    psReq.EntryPoint    = L"PSMain";
+    psReq.TargetProfile = L"ps_6_0";
+    psReq.Stage         = ShaderStage::Pixel;
+
+    DX12ShaderCompiler compiler;
+    DX12Shader vs, ps;
+    if (!compiler.Compile(vsReq, vs) || !compiler.Compile(psReq, ps))
+    {
+        mLastError = "DecalRenderer: shader compilation failed.";
+        return false;
+    }
+
+    // Input layout: POSITION (float3)
+    const D3D12_INPUT_ELEMENT_DESC inputElements[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    // Pipeline state
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = mRootSignature.Get();
+    psoDesc.VS                    = { vs.GetBlob()->GetBufferPointer(), vs.GetBlob()->GetBufferSize() };
+    psoDesc.PS                    = { ps.GetBlob()->GetBufferPointer(), ps.GetBlob()->GetBufferSize() };
+    psoDesc.InputLayout           = { inputElements, static_cast<UINT>(std::size(inputElements)) };
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = colorFormat;
+    psoDesc.DSVFormat             = depthFormat;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    // Rasteriser: no backface culling for wireframe
+    psoDesc.RasterizerState                 = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_WIREFRAME;
+    psoDesc.RasterizerState.AntialiasedLineEnable = TRUE;
+
+    // Alpha blending for the gizmo color (src-alpha / one-minus-src-alpha)
+    psoDesc.BlendState                              = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState.RenderTarget[0].BlendEnable  = TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend     = D3D12_BLEND_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].DestBlend    = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOp      = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha   = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    // Depth: test but don't write so the gizmo overlaps geometry without z-fighting
+    psoDesc.DepthStencilState                  = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    psoDesc.DepthStencilState.DepthWriteMask   = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc        = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+    if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState))))
+    {
+        mLastError = "DecalRenderer: failed to create pipeline state.";
+        return false;
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Constant buffer management
+// ---------------------------------------------------------------------------
+
+bool DecalRenderer::EnsureConstantBuffer(std::size_t requiredCount)
+{
+    if (requiredCount <= mConstantBufferCapacity)
+        return true;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device) return false;
+
+    // Each decal needs two draws (box + arrow), so allocate 2x slots
+    const std::size_t slotCount = requiredCount * 2;
+    const UINT64 bufferSize = static_cast<UINT64>(slotCount) * sizeof(GizmoConstants);
+
+    auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    auto bufDesc   = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
+
+    mConstantBuffer.Reset();
+    mMappedConstants = nullptr;
+
+    if (FAILED(device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&mConstantBuffer))))
+        return false;
+
+    void* mapped = nullptr;
+    if (FAILED(mConstantBuffer->Map(0, nullptr, &mapped)))
+        return false;
+
+    mMappedConstants = static_cast<GizmoConstants*>(mapped);
+    mConstantBufferCapacity = requiredCount;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+void DecalRenderer::Render(
+    ID3D12GraphicsCommandList* commandList,
+    const std::vector<Entity>& entities,
+    const XMMATRIX&            viewProjection)
+{
+    if (!mPipelineReady) return;
+
+    // Collect decal entities
+    std::vector<std::size_t> decalIndices;
+    for (std::size_t i = 0; i < entities.size(); ++i)
+    {
+        if (entities[i].Decal.has_value())
+            decalIndices.push_back(i);
+    }
+
+    if (decalIndices.empty()) return;
+
+    if (!EnsureConstantBuffer(decalIndices.size())) return;
+
+    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+
+    const D3D12_GPU_VIRTUAL_ADDRESS cbBase = mConstantBuffer->GetGPUVirtualAddress();
+
+    for (std::size_t drawIndex = 0; drawIndex < decalIndices.size(); ++drawIndex)
+    {
+        const Entity& entity  = entities[decalIndices[drawIndex]];
+        const DecalComponent& dc = *entity.Decal;
+
+        // Build the box model matrix: scale by decal extents, then apply entity transform
+        const XMMATRIX scaleM = XMMatrixScaling(dc.SizeX, dc.SizeY, dc.SizeZ);
+        const XMMATRIX rotM   = XMMatrixRotationRollPitchYaw(
+            entity.Transform.Rotation.x,
+            entity.Transform.Rotation.y,
+            entity.Transform.Rotation.z);
+        const XMMATRIX transM = XMMatrixTranslation(
+            entity.Transform.Position.x,
+            entity.Transform.Position.y,
+            entity.Transform.Position.z);
+        const XMMATRIX boxModel = scaleM * rotM * transM;
+        const XMMATRIX boxMVP   = XMMatrixTranspose(boxModel * viewProjection);
+
+        // Arrow: scale by (min size * 0.8) to keep it proportional, same rotation/translation
+        const float arrowScale  = std::min({ dc.SizeX, dc.SizeY, dc.SizeZ }) * 0.8f;
+        const XMMATRIX arrowModel = XMMatrixScaling(arrowScale, arrowScale, arrowScale) * rotM * transM;
+        const XMMATRIX arrowMVP   = XMMatrixTranspose(arrowModel * viewProjection);
+
+        // Slot layout: even = box, odd = arrow
+        const std::size_t boxSlot   = drawIndex * 2;
+        const std::size_t arrowSlot = drawIndex * 2 + 1;
+
+        GizmoConstants& boxCB = mMappedConstants[boxSlot];
+        XMStoreFloat4x4(&boxCB.MVP, boxMVP);
+        boxCB.Color = XMFLOAT4(0.3f, 0.8f, 1.0f, 0.85f);   // cyan box
+
+        GizmoConstants& arrowCB = mMappedConstants[arrowSlot];
+        XMStoreFloat4x4(&arrowCB.MVP, arrowMVP);
+        arrowCB.Color = XMFLOAT4(1.0f, 0.6f, 0.1f, 0.95f); // orange arrow
+
+        // --- Draw box ---
+        const D3D12_GPU_VIRTUAL_ADDRESS boxCBAddr = cbBase + boxSlot * sizeof(GizmoConstants);
+        commandList->SetGraphicsRootConstantBufferView(0, boxCBAddr);
+        commandList->IASetVertexBuffers(0, 1, &mBoxVBView);
+        commandList->IASetIndexBuffer(&mBoxIBView);
+        commandList->DrawIndexedInstanced(mBoxIndexCount, 1, 0, 0, 0);
+
+        // --- Draw arrow ---
+        const D3D12_GPU_VIRTUAL_ADDRESS arrowCBAddr = cbBase + arrowSlot * sizeof(GizmoConstants);
+        commandList->SetGraphicsRootConstantBufferView(0, arrowCBAddr);
+        commandList->IASetVertexBuffers(0, 1, &mArrowVBView);
+        commandList->IASetIndexBuffer(&mArrowIBView);
+        commandList->DrawIndexedInstanced(mArrowIndexCount, 1, 0, 0, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown
+// ---------------------------------------------------------------------------
+
+void DecalRenderer::Shutdown()
+{
+    if (mConstantBuffer && mMappedConstants)
+    {
+        mConstantBuffer->Unmap(0, nullptr);
+        mMappedConstants = nullptr;
+    }
+
+    mConstantBuffer.Reset();
+    mBoxVertexBuffer.Reset();
+    mBoxVertexUpload.Reset();
+    mBoxIndexBuffer.Reset();
+    mBoxIndexUpload.Reset();
+    mArrowVertexBuffer.Reset();
+    mArrowVertexUpload.Reset();
+    mArrowIndexBuffer.Reset();
+    mArrowIndexUpload.Reset();
+    mRootSignature.Reset();
+    mPipelineState.Reset();
+    mConstantBufferCapacity = 0;
+    mPipelineReady = false;
+}

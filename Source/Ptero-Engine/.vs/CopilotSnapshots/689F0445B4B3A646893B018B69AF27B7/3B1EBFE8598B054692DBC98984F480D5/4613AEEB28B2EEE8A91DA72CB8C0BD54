@@ -1,0 +1,616 @@
+﻿#include "pch.h"
+#include "RainRenderer.h"
+
+#include "..\Ptero-Engine\RenderInterfaces.h"
+
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+extern "C"
+{
+	ID3D12Device* __stdcall DX12Context_GetDevice();
+	bool __stdcall DX12Context_AllocateSrvDescriptor(
+		D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+		D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+	ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+	UINT __stdcall DX12Context_GetSrvDescriptorSize();
+	bool __stdcall DX12Context_WaitForGPU();
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+static std::wstring GetShaderDir()
+{
+	wchar_t path[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, path, MAX_PATH);
+	std::wstring exe(path);
+	auto slash = exe.find_last_of(L"\\/");
+	std::wstring dir = (slash != std::wstring::npos) ? exe.substr(0, slash + 1) : L"";
+
+	// Walk up until we find a "Data/Shaders" folder.
+	for (int attempt = 0; attempt < 6; ++attempt)
+	{
+		std::wstring candidate = dir + L"Data\\Shaders\\";
+		if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
+			return candidate;
+		auto up = dir.find_last_of(L"\\/", dir.size() - 2);
+		if (up == std::wstring::npos) break;
+		dir = dir.substr(0, up + 1);
+	}
+	return L"Data\\Shaders\\";
+}
+
+static ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, UINT64 size)
+{
+	ComPtr<ID3D12Resource> res;
+	D3D12_HEAP_PROPERTIES heapProps{};
+	heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+	D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(size);
+	device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+		&desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&res));
+	return res;
+}
+
+static ComPtr<ID3D12Resource> CreateDefaultBuffer(ID3D12Device* device, UINT64 size,
+	D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
+{
+	ComPtr<ID3D12Resource> res;
+	D3D12_HEAP_PROPERTIES heapProps{};
+	heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+	D3D12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(size, flags);
+	device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+		&desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res));
+	return res;
+}
+
+// ---------------------------------------------------------------------------
+// Initialize / Shutdown
+// ---------------------------------------------------------------------------
+
+bool RainRenderer::Initialize()
+{
+	if (mIsInitialized)
+		return true;
+
+	mLastError.clear();
+
+	if (!CreateParticleBuffers())   return false;
+	if (!CreateConstantBuffers())   return false;
+	if (!CreateComputePipeline())   return false;
+	if (!CreateDrawPipeline())      return false;
+
+	mIsInitialized = true;
+	return true;
+}
+
+void RainRenderer::Shutdown()
+{
+	if (mUpdateCbPtr) { mUpdateCb->Unmap(0, nullptr); mUpdateCbPtr = nullptr; }
+	if (mDrawCbPtr)   { mDrawCb->Unmap(0, nullptr);   mDrawCbPtr   = nullptr; }
+
+	mUpdateCb.Reset();
+	mDrawCb.Reset();
+	mParticleBufferA.Reset();
+	mParticleBufferB.Reset();
+	mComputeHeap.Reset();
+	mUpdateRootSig.Reset();
+	mUpdatePso.Reset();
+	mDrawRootSig.Reset();
+	mDrawPso.Reset();
+
+	mPingPong      = false;
+	mSeeded        = false;
+	mIsInitialized = false;
+}
+
+// ---------------------------------------------------------------------------
+// CreateParticleBuffers
+// ---------------------------------------------------------------------------
+
+bool RainRenderer::CreateParticleBuffers()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device) { mLastError = "RainRenderer: no DX12 device."; return false; }
+
+	const UINT64 bufSize = static_cast<UINT64>(RainSettings::MaxParticles) * sizeof(GpuRainDrop);
+
+	mParticleBufferA = CreateDefaultBuffer(device, bufSize,
+		D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	mParticleBufferB = CreateDefaultBuffer(device, bufSize,
+		D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+	if (!mParticleBufferA || !mParticleBufferB)
+	{
+		mLastError = "RainRenderer: failed to create particle buffers.";
+		return false;
+	}
+
+	mParticleBufferA->SetName(L"RainParticleBufferA");
+	mParticleBufferB->SetName(L"RainParticleBufferB");
+
+	// Private heap: 4 descriptors (A-SRV, A-UAV, B-SRV, B-UAV).
+	{
+		D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+		heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		heapDesc.NumDescriptors = kDescCount;
+		heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+		if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mComputeHeap))))
+		{
+			mLastError = "RainRenderer: failed to create compute descriptor heap.";
+			return false;
+		}
+	}
+
+	mDescSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+	auto heapCpu = [&](UINT i) {
+		D3D12_CPU_DESCRIPTOR_HANDLE h = mComputeHeap->GetCPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<SIZE_T>(i) * mDescSize;
+		return h;
+	};
+
+	// Structured buffer SRV helper.
+	auto makeSrv = [&](ID3D12Resource* res, D3D12_CPU_DESCRIPTOR_HANDLE dst)
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+		srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.Buffer.NumElements         = RainSettings::MaxParticles;
+		srvDesc.Buffer.StructureByteStride = sizeof(GpuRainDrop);
+		srvDesc.Buffer.Flags               = D3D12_BUFFER_SRV_FLAG_NONE;
+		device->CreateShaderResourceView(res, &srvDesc, dst);
+	};
+
+	auto makeUav = [&](ID3D12Resource* res, D3D12_CPU_DESCRIPTOR_HANDLE dst)
+	{
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format                      = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension               = D3D12_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements          = RainSettings::MaxParticles;
+		uavDesc.Buffer.StructureByteStride  = sizeof(GpuRainDrop);
+		uavDesc.Buffer.Flags                = D3D12_BUFFER_UAV_FLAG_NONE;
+		device->CreateUnorderedAccessView(res, nullptr, &uavDesc, dst);
+	};
+
+	// Slot layout:  0=A-SRV, 1=A-UAV, 2=B-SRV, 3=B-UAV
+	makeSrv(mParticleBufferA.Get(), heapCpu(0));
+	makeUav(mParticleBufferA.Get(), heapCpu(1));
+	makeSrv(mParticleBufferB.Get(), heapCpu(2));
+	makeUav(mParticleBufferB.Get(), heapCpu(3));
+
+	// Allocate draw SRVs from the shared engine heap so ImGui/root tables can use them.
+	if (!DX12Context_AllocateSrvDescriptor(&mDrawSrvACpu, &mDrawSrvAGpu) ||
+		!DX12Context_AllocateSrvDescriptor(&mDrawSrvBCpu, &mDrawSrvBGpu))
+	{
+		mLastError = "RainRenderer: failed to allocate shared SRV descriptors.";
+		return false;
+	}
+
+	makeSrv(mParticleBufferA.Get(), mDrawSrvACpu);
+	makeSrv(mParticleBufferB.Get(), mDrawSrvBCpu);
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// CreateConstantBuffers
+// ---------------------------------------------------------------------------
+
+bool RainRenderer::CreateConstantBuffers()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device) return false;
+
+	mUpdateCb = CreateUploadBuffer(device, sizeof(UpdateConstants));
+	mDrawCb   = CreateUploadBuffer(device, sizeof(DrawConstants));
+
+	if (!mUpdateCb || !mDrawCb)
+	{
+		mLastError = "RainRenderer: failed to create constant buffers.";
+		return false;
+	}
+
+	mUpdateCb->SetName(L"RainUpdateCB");
+	mDrawCb->SetName(L"RainDrawCB");
+
+	const CD3DX12_RANGE readRange(0, 0);
+	if (FAILED(mUpdateCb->Map(0, &readRange, &mUpdateCbPtr)) ||
+		FAILED(mDrawCb->Map(0, &readRange, &mDrawCbPtr)))
+	{
+		mLastError = "RainRenderer: failed to map constant buffers.";
+		return false;
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// CreateComputePipeline
+// ---------------------------------------------------------------------------
+
+bool RainRenderer::CreateComputePipeline()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device) return false;
+
+	// Root signature: [0] CBV b0, [1] SRV table t0, [2] UAV table u0
+	{
+		CD3DX12_DESCRIPTOR_RANGE srvRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+		CD3DX12_DESCRIPTOR_RANGE uavRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+
+		CD3DX12_ROOT_PARAMETER params[3];
+		params[0].InitAsConstantBufferView(0);
+		params[1].InitAsDescriptorTable(1, &srvRange);
+		params[2].InitAsDescriptorTable(1, &uavRange);
+
+		CD3DX12_ROOT_SIGNATURE_DESC rsDesc(3, params, 0, nullptr,
+			D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+		ComPtr<ID3DBlob> blob, err;
+		if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)))
+		{
+			mLastError = "RainRenderer: failed to serialize compute root signature.";
+			return false;
+		}
+		if (FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+			IID_PPV_ARGS(&mUpdateRootSig))))
+		{
+			mLastError = "RainRenderer: failed to create compute root signature.";
+			return false;
+		}
+		mUpdateRootSig->SetName(L"RainUpdateRootSig");
+	}
+
+	DX12Shader cs;
+	ShaderCompileRequest req{};
+	req.FilePath       = GetShaderDir() + L"Rain_Update.hlsl";
+	req.EntryPoint     = L"CSMain";
+	req.TargetProfile  = L"cs_6_5";
+	req.Stage          = ShaderStage::Compute;
+	if (!cs.Compile(req))
+	{
+		mLastError = std::string("RainRenderer: compute shader compile failed: ") +
+			(cs.GetLastErrorMessage() ? cs.GetLastErrorMessage() : "unknown");
+		return false;
+	}
+
+	D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+	psoDesc.pRootSignature = mUpdateRootSig.Get();
+	psoDesc.CS             = cs.GetBytecode();
+	if (FAILED(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&mUpdatePso))))
+	{
+		mLastError = "RainRenderer: failed to create compute PSO.";
+		return false;
+	}
+	mUpdatePso->SetName(L"RainUpdatePSO");
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// CreateDrawPipeline
+// ---------------------------------------------------------------------------
+
+bool RainRenderer::CreateDrawPipeline()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device) return false;
+
+	// Root signature: [0] CBV b0, [1] SRV table t0
+	{
+		CD3DX12_DESCRIPTOR_RANGE srvRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+
+		CD3DX12_ROOT_PARAMETER params[2];
+		params[0].InitAsConstantBufferView(0);
+		params[1].InitAsDescriptorTable(1, &srvRange);
+
+		CD3DX12_ROOT_SIGNATURE_DESC rsDesc(2, params, 0, nullptr,
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+		ComPtr<ID3DBlob> blob, err;
+		if (FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err)))
+		{
+			mLastError = "RainRenderer: failed to serialize draw root signature.";
+			return false;
+		}
+		if (FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+			IID_PPV_ARGS(&mDrawRootSig))))
+		{
+			mLastError = "RainRenderer: failed to create draw root signature.";
+			return false;
+		}
+		mDrawRootSig->SetName(L"RainDrawRootSig");
+	}
+
+	DX12Shader vs, ps;
+	{
+		ShaderCompileRequest req{};
+		req.FilePath      = GetShaderDir() + L"Rain_Draw.hlsl";
+		req.EntryPoint    = L"VSMain";
+		req.TargetProfile = L"vs_6_5";
+		req.Stage         = ShaderStage::Vertex;
+		if (!vs.Compile(req))
+		{
+			mLastError = std::string("RainRenderer: VS compile failed: ") +
+				(vs.GetLastErrorMessage() ? vs.GetLastErrorMessage() : "unknown");
+			return false;
+		}
+	}
+	{
+		ShaderCompileRequest req{};
+		req.FilePath      = GetShaderDir() + L"Rain_Draw.hlsl";
+		req.EntryPoint    = L"PSMain";
+		req.TargetProfile = L"ps_6_5";
+		req.Stage         = ShaderStage::Pixel;
+		if (!ps.Compile(req))
+		{
+			mLastError = std::string("RainRenderer: PS compile failed: ") +
+				(ps.GetLastErrorMessage() ? ps.GetLastErrorMessage() : "unknown");
+			return false;
+		}
+	}
+
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+	psoDesc.pRootSignature = mDrawRootSig.Get();
+	psoDesc.VS             = vs.GetBytecode();
+	psoDesc.PS             = ps.GetBytecode();
+
+	// Additive blending for rain streaks.
+	D3D12_RENDER_TARGET_BLEND_DESC blendDesc{};
+	blendDesc.BlendEnable           = TRUE;
+	blendDesc.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+	blendDesc.DestBlend             = D3D12_BLEND_ONE;
+	blendDesc.BlendOp               = D3D12_BLEND_OP_ADD;
+	blendDesc.SrcBlendAlpha         = D3D12_BLEND_ONE;
+	blendDesc.DestBlendAlpha        = D3D12_BLEND_ONE;
+	blendDesc.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+	blendDesc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+	psoDesc.BlendState.RenderTarget[0] = blendDesc;
+
+	psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+	psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+
+	// Depth read but no write so rain doesn't occlude scene.
+	psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+	psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+	// No vertex buffer – vertices are generated procedurally in the VS.
+	psoDesc.InputLayout            = { nullptr, 0 };
+	psoDesc.PrimitiveTopologyType  = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+	psoDesc.NumRenderTargets       = 1;
+	psoDesc.RTVFormats[0]          = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	psoDesc.DSVFormat              = DXGI_FORMAT_D32_FLOAT;
+	psoDesc.SampleDesc.Count       = 1;
+	psoDesc.SampleMask             = UINT_MAX;
+
+	if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mDrawPso))))
+	{
+		mLastError = "RainRenderer: failed to create draw PSO.";
+		return false;
+	}
+	mDrawPso->SetName(L"RainDrawPSO");
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// SeedParticles  (CPU-side initial positions, uploaded via an upload buffer)
+// ---------------------------------------------------------------------------
+
+void RainRenderer::SeedParticles(const XMFLOAT3& cameraPos, const RainSettings& settings)
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device) return;
+
+	const uint32_t count = RainSettings::MaxParticles;
+	const UINT64 bufSize = static_cast<UINT64>(count) * sizeof(GpuRainDrop);
+
+	ComPtr<ID3D12Resource> uploadBuf = CreateUploadBuffer(device, bufSize);
+	if (!uploadBuf) return;
+
+	GpuRainDrop* mapped = nullptr;
+	const CD3DX12_RANGE readRange(0, 0);
+	if (FAILED(uploadBuf->Map(0, &readRange, reinterpret_cast<void**>(&mapped)))) return;
+
+	for (uint32_t i = 0; i < count; ++i)
+	{
+		float rx = (static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f) * settings.BoundingBoxExtents.x;
+		float ry = (static_cast<float>(rand()) / RAND_MAX) * settings.BoundingBoxExtents.y * 2.0f
+				   - settings.BoundingBoxExtents.y;
+		float rz = (static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f) * settings.BoundingBoxExtents.z;
+
+		mapped[i].Position = XMFLOAT3(cameraPos.x + rx, cameraPos.y + ry, cameraPos.z + rz);
+		mapped[i].Velocity = XMFLOAT3(settings.WindVector.x,
+			-9.0f - static_cast<float>(rand()) / RAND_MAX * 4.0f,
+			settings.WindVector.z);
+		mapped[i].Age  = static_cast<float>(rand()) / RAND_MAX * 5.0f;
+		mapped[i]._Pad = 0.0f;
+	}
+	uploadBuf->Unmap(0, nullptr);
+
+	// We need a command list to copy; use a simple approach via the device.
+	// Create a one-shot command list for the copy.
+	ComPtr<ID3D12CommandAllocator> alloc;
+	ComPtr<ID3D12GraphicsCommandList> cmdList;
+	ComPtr<ID3D12CommandQueue> queue;
+
+	D3D12_COMMAND_QUEUE_DESC qDesc{};
+	qDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+	if (FAILED(device->CreateCommandQueue(&qDesc, IID_PPV_ARGS(&queue)))) return;
+	if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)))) return;
+	if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr, IID_PPV_ARGS(&cmdList)))) return;
+
+	// Transition A to COPY_DEST.
+	auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+		mParticleBufferA.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+	cmdList->ResourceBarrier(1, &bar);
+	cmdList->CopyBufferRegion(mParticleBufferA.Get(), 0, uploadBuf.Get(), 0, bufSize);
+
+	// Transition A to NON_PIXEL_SHADER_RESOURCE (SRV for compute).
+	bar = CD3DX12_RESOURCE_BARRIER::Transition(
+		mParticleBufferA.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	cmdList->ResourceBarrier(1, &bar);
+
+	// Transition B to UAV ready.
+	bar = CD3DX12_RESOURCE_BARRIER::Transition(
+		mParticleBufferB.Get(), D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	cmdList->ResourceBarrier(1, &bar);
+
+	cmdList->Close();
+	ID3D12CommandList* lists[] = { cmdList.Get() };
+	queue->ExecuteCommandLists(1, lists);
+
+	// Fence sync.
+	ComPtr<ID3D12Fence> fence;
+	device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+	HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+	queue->Signal(fence.Get(), 1);
+	fence->SetEventOnCompletion(1, ev);
+	WaitForSingleObject(ev, 5000);
+	CloseHandle(ev);
+
+	mSeeded   = true;
+	mPingPong = false; // A is current SRV, B is UAV
+}
+
+// ---------------------------------------------------------------------------
+// UploadUpdateConstants
+// ---------------------------------------------------------------------------
+
+void RainRenderer::UploadUpdateConstants(const RainSettings& settings,
+	const XMFLOAT3& cameraPosition, float deltaTime)
+{
+	if (!mUpdateCbPtr) return;
+
+	UpdateConstants cb{};
+	cb.DeltaTime         = deltaTime;
+	cb.WindVector        = settings.WindVector;
+	cb.Gravity           = settings.Gravity;
+	cb.CameraPosition    = cameraPosition;
+	cb._Pad0             = 0.0f;
+	cb.BoundingBoxExtents = settings.BoundingBoxExtents;
+	cb.ParticleCount     = RainSettings::MaxParticles;
+	cb._Pad1             = 0.0f;
+	std::memcpy(mUpdateCbPtr, &cb, sizeof(UpdateConstants));
+}
+
+// ---------------------------------------------------------------------------
+// UploadDrawConstants
+// ---------------------------------------------------------------------------
+
+void RainRenderer::UploadDrawConstants(const RainSettings& settings,
+	const XMFLOAT4X4& viewProj)
+{
+	if (!mDrawCbPtr) return;
+
+	DrawConstants cb{};
+	cb.ViewProj         = viewProj;
+	cb.CameraPosition   = { 0.0f, 0.0f, 0.0f }; // unused in draw, kept for packing
+	cb.StreakLength      = settings.StreakLength;
+	cb.RainColor        = { settings.RainColorR, settings.RainColorG,
+							 settings.RainColorB, settings.RainColorA };
+	cb.WetnessIntensity = settings.WetnessIntensity;
+	std::memcpy(mDrawCbPtr, &cb, sizeof(DrawConstants));
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch  (compute physics update)
+// ---------------------------------------------------------------------------
+
+void RainRenderer::Dispatch(
+	ID3D12GraphicsCommandList* cmdList,
+	const RainSettings&        settings,
+	const XMFLOAT3&            cameraPosition,
+	float                      deltaTime)
+{
+	if (!mIsInitialized || cmdList == nullptr || !settings.Enabled)
+		return;
+
+	if (!mSeeded)
+		SeedParticles(cameraPosition, settings);
+
+	UploadUpdateConstants(settings, cameraPosition, deltaTime);
+
+	// Current state:  mPingPong==false => A is SRV (NON_PIXEL_SHADER), B is UAV.
+	//                 mPingPong==true  => B is SRV (NON_PIXEL_SHADER), A is UAV.
+	ID3D12Resource* srcBuf = mPingPong ? mParticleBufferB.Get() : mParticleBufferA.Get();
+	ID3D12Resource* dstBuf = mPingPong ? mParticleBufferA.Get() : mParticleBufferB.Get();
+	// Slot indices: A-SRV=0, A-UAV=1, B-SRV=2, B-UAV=3
+	const UINT srvSlot = mPingPong ? 2u : 0u;
+	const UINT uavSlot = mPingPong ? 1u : 3u;
+
+	auto heapGpu = [&](UINT i) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+		D3D12_GPU_DESCRIPTOR_HANDLE h = mComputeHeap->GetGPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<UINT64>(i) * mDescSize;
+		return h;
+	};
+
+	ID3D12DescriptorHeap* heaps[] = { mComputeHeap.Get() };
+	cmdList->SetDescriptorHeaps(1, heaps);
+
+	cmdList->SetComputeRootSignature(mUpdateRootSig.Get());
+	cmdList->SetPipelineState(mUpdatePso.Get());
+
+	cmdList->SetComputeRootConstantBufferView(0, mUpdateCb->GetGPUVirtualAddress());
+	cmdList->SetComputeRootDescriptorTable(1, heapGpu(srvSlot));
+	cmdList->SetComputeRootDescriptorTable(2, heapGpu(uavSlot));
+
+	constexpr uint32_t kThreadGroupSize = 256;
+	const UINT groups = (RainSettings::MaxParticles + kThreadGroupSize - 1) / kThreadGroupSize;
+	cmdList->Dispatch(groups, 1, 1);
+
+	// UAV barrier on the destination buffer.
+	const auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(dstBuf);
+	cmdList->ResourceBarrier(1, &uavBarrier);
+
+	// Transition old SRV -> UAV, new dst -> SRV (PIXEL + NON_PIXEL for draw).
+	D3D12_RESOURCE_BARRIER barriers[2] =
+	{
+		CD3DX12_RESOURCE_BARRIER::Transition(srcBuf,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+		CD3DX12_RESOURCE_BARRIER::Transition(dstBuf,
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+	};
+	cmdList->ResourceBarrier(2, barriers);
+
+	mPingPong = !mPingPong;
+}
+
+// ---------------------------------------------------------------------------
+// Draw  (render streaks)
+// ---------------------------------------------------------------------------
+
+void RainRenderer::Draw(
+	ID3D12GraphicsCommandList* cmdList,
+	const RainSettings&        settings,
+	const XMFLOAT4X4&          viewProj)
+{
+	if (!mIsInitialized || cmdList == nullptr || !settings.Enabled || !mSeeded)
+		return;
+
+	UploadDrawConstants(settings, viewProj);
+
+	// The buffer that was just written by the compute pass is now in
+	// PIXEL_SHADER_RESOURCE state.  Pick the correct shared-heap SRV.
+	D3D12_GPU_DESCRIPTOR_HANDLE srvGpu = mPingPong ? mDrawSrvBGpu : mDrawSrvAGpu;
+
+	// The caller is responsible for setting the correct descriptor heap
+	// (the shared engine SRV heap) and render target.
+	cmdList->SetGraphicsRootSignature(mDrawRootSig.Get());
+	cmdList->SetPipelineState(mDrawPso.Get());
+	cmdList->SetGraphicsRootConstantBufferView(0, mDrawCb->GetGPUVirtualAddress());
+	cmdList->SetGraphicsRootDescriptorTable(1, srvGpu);
+
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+	// 2 vertices per particle, no vertex buffer (fully procedural).
+	cmdList->DrawInstanced(2, RainSettings::MaxParticles, 0, 0);
+}

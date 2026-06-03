@@ -4,6 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "EntityMeshRenderer.h"
 #include "PointLightRenderer.h"
+#include "DecalRenderer.h"
 #include "TAARenderer.h"
 #include "TaaSettings.h"
 #include "SkyRenderer.h"
@@ -23,6 +24,7 @@
 #include "AgxTonemapSettings.h"
 #include "VolumetricFogRenderer.h"
 #include "VolumetricFogSettings.h"
+#include "RainRenderer.h"
 #include "XeGtaoRenderer.h"
 #include "GtaoSettings.h"
 #include "BloomRenderer.h"
@@ -361,6 +363,8 @@ private:
     DeferredLightingPass mDeferredLightingPass;
     // Draws a wireframe sphere gizmo for each point light in the scene.
     PointLightRenderer mPointLightRenderer;
+    // Draws a wireframe box gizmo + arrow for each decal in the scene.
+    DecalRenderer mDecalRenderer;
     std::vector<Entity>* mEntities = nullptr;
 
     // Temporal Anti-Aliasing renderer and settings.
@@ -407,6 +411,10 @@ private:
     // Volumetric fog froxel renderer.
     VolumetricFogRenderer mVolumetricFogRenderer;
     VolumetricFogSettings mVolumetricFogSettings;
+
+    // Rain particle simulation.
+    RainRenderer  mRainRenderer;
+    RainSettings  mRainSettings;
 
     // Cached point lights built each frame; shared with the RT GI dispatch.
     DeferredLightingPass::PointLightGpu mCachedPointLights[DeferredLightingPass::kMaxPointLights]{};

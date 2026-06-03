@@ -26,6 +26,7 @@
 extern "C"
 {
     ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
     bool __stdcall DX12Context_AllocateSrvDescriptor(
         D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
@@ -185,6 +186,16 @@ private:
     };
     static_assert(sizeof(MaterialConstants) == 256);
 
+    struct alignas(256) RainSurfaceConstants
+    {
+        float RainWetnessIntensity = 0.0f;
+        float RainEnabled = 0.0f;
+        float _Pad0 = 0.0f;
+        float _Pad1 = 0.0f;
+        std::byte Padding[240]{};
+    };
+    static_assert(sizeof(RainSurfaceConstants) == 256);
+
     // All texture paths for one sub-material, resolved to absolute paths.
     struct SubMaterialTextures
     {
@@ -216,6 +227,7 @@ private:
     bool EnsureDepthPassConstantBuffer(std::size_t requiredEntityCount);
     bool EnsureMaterialConstantBuffer(std::size_t requiredDrawCount);
     bool EnsurePointShadowFaceConstantBuffer();
+    bool EnsureRainSurfaceConstantBuffer();
 
     // Resolve all texture paths for every sub-material in a JSON file.
     std::unordered_map<uint32_t, SubMaterialTextures>
@@ -244,6 +256,9 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12Resource>      mPointShadowFaceConstantBuffer;
     PointShadowFaceConstants*                    mMappedPointShadowFaceCB = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource>      mRainSurfaceConstantBuffer;
+    RainSurfaceConstants*                        mMappedRainSurfaceCB = nullptr;
 
     DX12Shader mVertexShader;
     DX12Shader mPixelShader;
@@ -283,5 +298,8 @@ private:
     DXGI_FORMAT mDepthFormat    = DXGI_FORMAT_UNKNOWN;
     bool        mSceneContentChanged = false;
     std::string mLastError;
+
+public:
+    void SetRainSurfaceState(bool enabled, float wetnessIntensity);
 };
 

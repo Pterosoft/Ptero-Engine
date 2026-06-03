@@ -28,6 +28,13 @@ cbuffer MaterialConstants : register(b1)
     float2 _MatPad1;
 };
 
+cbuffer RainSurfaceConstants : register(b2)
+{
+    float gRainWetnessIntensity;
+    float gRainEnabled;
+    float2 _RainPad0;
+};
+
 // Texture slots – all optional; fallback textures are bound when absent.
 Texture2D    gBaseColorTexture  : register(t0);  // diffuse / albedo
 Texture2D    gNormalTexture     : register(t1);  // tangent-space normal map
@@ -65,6 +72,11 @@ struct PSOutput
     float4 Material : SV_Target2;
 };
 
+float ComputeRainWetnessMask(float3 worldNormal)
+{
+    return saturate(dot(normalize(worldNormal), float3(0.0f, 0.0f, 1.0f)));
+}
+
 float2 OctWrap(float2 v)
 {
     return (1.0f - abs(v.yx)) * (float2(v.xy >= 0.0f) * 2.0f - 1.0f);
@@ -95,7 +107,7 @@ PSOutput PSMain(PSInput input)
     // --- Albedo ---
     float4 texColor = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord);
     // Tint: per-vertex colour (from material slot) × JSON baseColorTint × texture.
-    output.Albedo = float4(texColor.rgb * input.Color.rgb * gBaseColorTint.rgb, texColor.a * gBaseColorTint.a);
+    float3 baseAlbedo = texColor.rgb * input.Color.rgb * gBaseColorTint.rgb;
 
     // --- Normal ---
     float3 N = normalize(input.WorldNormal);
@@ -138,6 +150,12 @@ PSOutput PSMain(PSInput input)
     float ao = gHasAoMap
         ? lerp(1.0f, gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
         : 1.0f;
+
+    const float rainWetness = gRainWetnessIntensity * saturate(gRainEnabled) * ComputeRainWetnessMask(N);
+    baseAlbedo *= lerp(1.0f, 0.6f, rainWetness);
+    roughness = lerp(roughness, 0.02f, rainWetness);
+
+    output.Albedo = float4(baseAlbedo, texColor.a * gBaseColorTint.a);
 
     output.Material = float4(roughness, metallic, ao, 0.0f);
 

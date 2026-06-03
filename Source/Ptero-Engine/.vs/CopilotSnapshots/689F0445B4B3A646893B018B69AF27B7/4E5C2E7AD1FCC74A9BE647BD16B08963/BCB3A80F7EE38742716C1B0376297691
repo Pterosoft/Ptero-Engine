@@ -1,0 +1,98 @@
+﻿// Rain_Update.hlsl
+// Compute shader (cs_6_5) - updates rain particle positions and wraps them
+// around a camera-relative bounding box for infinite-seeming rainfall.
+
+struct RainDrop
+{
+    float3 Position;
+    float  Age;
+    float3 Velocity;
+    float  _Pad;
+};
+
+StructuredBuffer<RainDrop>   ParticlesIn  : register(t0);
+RWStructuredBuffer<RainDrop> ParticlesOut : register(u0);
+
+cbuffer RainConstants : register(b0)
+{
+    float  DeltaTime;
+    float3 WindVector;
+    float  Gravity;
+    float3 CameraPosition;
+    float3 PreviousCameraPosition;
+    float  _Pad0;
+    float3 CameraRight;
+    float  _Pad1;
+    float3 CameraForward;
+    float  _Pad2;
+    float3 CameraUp;
+    float  _Pad3;
+    float3 PreviousCameraRight;
+    float  _Pad4;
+    float3 PreviousCameraForward;
+    float  _Pad5;
+    float3 PreviousCameraUp;
+    float  _Pad6;
+    float3 BoundingBoxExtents;
+    uint   ParticleCount;
+};
+
+// A simple low-quality but fast hash for pseudo-random numbers on the GPU.
+float Hash(uint n)
+{
+    n = (n << 13u) ^ n;
+    n = n * (n * n * 15731u + 789221u) + 1376312589u;
+    return float(n & 0x7fffffffu) / float(0x7fffffff);
+}
+
+float Hash2(uint seed, uint offset)
+{
+    return Hash(seed * 1664525u + offset);
+}
+
+[numthreads(256, 1, 1)]
+void CSMain(uint3 DTid : SV_DispatchThreadID)
+{
+    const uint id = DTid.x;
+    if (id >= ParticleCount)
+        return;
+
+    RainDrop p = ParticlesIn[id];
+
+    // Keep the rain volume camera-relative by translation only. The weather box
+    // stays aligned to world space so rotating the camera cannot move the rain
+    // out of view.
+    p.Position += CameraPosition - PreviousCameraPosition;
+
+    // Integrate in the engine's Z-up space. Wind is treated as a steady drift,
+    // while gravity is the only continuous acceleration.
+    p.Velocity.x = WindVector.x;
+    p.Velocity.y = WindVector.y;
+    p.Velocity.z += WindVector.z * DeltaTime;
+    p.Velocity.z -= Gravity * DeltaTime;
+
+    p.Position += p.Velocity * DeltaTime;
+    p.Age      += DeltaTime;
+
+    // Camera-relative bounding box check in the engine's Z-up space. If the
+    // particle has fallen below the bottom of the box, or drifted outside the
+    // horizontal XY extents, recycle it.
+    float3 localPos = p.Position - CameraPosition;
+    bool outOfBounds =
+        localPos.z < -BoundingBoxExtents.z ||
+        abs(localPos.x) > BoundingBoxExtents.x ||
+        abs(localPos.y) > BoundingBoxExtents.y;
+
+    if (outOfBounds)
+    {
+        // Spawn at the top of the bounding box with a random XY offset.
+        float rx = (Hash2(id, 0u + (uint)(p.Age * 1000.0f)) * 2.0f - 1.0f) * BoundingBoxExtents.x;
+        float ry = (Hash2(id, 1u + (uint)(p.Age * 1000.0f)) * 2.0f - 1.0f) * BoundingBoxExtents.y;
+
+        p.Position = CameraPosition + float3(rx, ry, BoundingBoxExtents.z);
+        p.Velocity = float3(WindVector.x, WindVector.y, WindVector.z - 9.0f - Hash2(id, 2u) * 4.0f);
+        p.Age      = 0.0f;
+    }
+
+    ParticlesOut[id] = p;
+}

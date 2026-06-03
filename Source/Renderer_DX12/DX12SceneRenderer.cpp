@@ -325,6 +325,15 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mPointLightRenderer.GetLastError());
         }
 
+        // Initialize the decal renderer (wireframe box + arrow gizmos).  Non-fatal.
+        ReportProgress(L"Initializing decal renderer...");
+        if (!mDecalRenderer.Initialize(commandList, SceneColorFormat, SceneDepthFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Decal renderer initialization failed.\n");
+            if (mDecalRenderer.GetLastError())
+                OutputDebugStringA(mDecalRenderer.GetLastError());
+        }
+
         // Initialize the deferred lighting pass (G-Buffer RTs + fullscreen lighting resolve).
         // Non-fatal — the scene will be black if this fails but won't crash.
         ReportProgress(L"Initializing deferred lighting...");
@@ -341,6 +350,14 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             OutputDebugStringA("DX12SceneRenderer: Volumetric fog initialization failed.\n");
             if (mVolumetricFogRenderer.GetLastError())
                 OutputDebugStringA(mVolumetricFogRenderer.GetLastError());
+        }
+
+        ReportProgress(L"Initializing rain renderer...");
+        if (!mRainRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Rain renderer initialization failed.\n");
+            if (mRainRenderer.GetLastError())
+                OutputDebugStringA(mRainRenderer.GetLastError());
         }
 
         // Initialize the bloom renderer. Non-fatal if it fails.
@@ -493,7 +510,45 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         // Cache for the RT GI pass (which runs later in the same frame).
         mNumCachedPointLights = numLights;
         memcpy(mCachedPointLights, gpuLights, numLights * sizeof(DeferredLightingPass::PointLightGpu));
+
+        mRainSettings = RainSettings{};
+        mRainSettings.Enabled = false;
+        bool foundRainComponent = false;
+
+        // Sync the first RainComponent found in the entity list to the rain renderer settings.
+        for (const Entity& entity : *mEntities)
+        {
+            if (!entity.HasRainComponent())
+                continue;
+            const RainComponent& rc = *entity.Rain;
+            foundRainComponent = true;
+            mRainSettings.Enabled           = rc.Enabled;
+            mRainSettings.WindVector        = { rc.WindX, rc.WindY, rc.WindZ };
+            mRainSettings.Gravity           = rc.Gravity;
+            mRainSettings.BoundingBoxExtents = { rc.BoxExtentX, rc.BoxExtentY, rc.BoxExtentZ };
+            mRainSettings.Intensity          = rc.Intensity;
+            mRainSettings.StreakLength       = rc.StreakLength;
+            mRainSettings.RainColorR         = rc.ColorR;
+            mRainSettings.RainColorG         = rc.ColorG;
+            mRainSettings.RainColorB         = rc.ColorB;
+            mRainSettings.RainColorA         = rc.ColorA;
+            mRainSettings.WetnessIntensity   = rc.WetnessIntensity;
+            break;
+        }
+
+        if (!foundRainComponent)
+        {
+            mRainRenderer.ResetSimulation();
+        }
     }
+    else
+    {
+        mRainSettings = RainSettings{};
+        mRainSettings.Enabled = false;
+        mRainRenderer.ResetSimulation();
+    }
+
+    mEntityMeshRenderer.SetRainSurfaceState(mRainSettings.Enabled, mRainSettings.WetnessIntensity);
 
     // -----------------------------------------------------------------------
     // PASS 1 – Shadow pass (unchanged from forward renderer)
@@ -1112,6 +1167,39 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
     dispatchVolumetricFog();
 
+    // Dispatch the rain particle physics compute shader.
+    if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
+    {
+        ID3D12DescriptorHeap* computeHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, computeHeaps);
+        const XMFLOAT3 camPos = mCamera.GetPosition();
+        const XMFLOAT3 rawCamForward = mCamera.GetForwardVector();
+        const XMFLOAT3 camUp = { 0.0f, 0.0f, 1.0f };
+
+        XMFLOAT3 camForward = { rawCamForward.x, rawCamForward.y, 0.0f };
+        const float flatForwardLengthSq = camForward.x * camForward.x + camForward.y * camForward.y;
+        if (flatForwardLengthSq > 1.0e-6f)
+        {
+            const float invLength = 1.0f / std::sqrt(flatForwardLengthSq);
+            camForward.x *= invLength;
+            camForward.y *= invLength;
+        }
+        else
+        {
+            camForward = { 0.0f, 1.0f, 0.0f };
+        }
+
+        XMFLOAT3 camRight;
+        XMStoreFloat3(
+            &camRight,
+            XMVector3Normalize(
+                XMVector3Cross(
+                    XMLoadFloat3(&camUp),
+                    XMLoadFloat3(&camForward))));
+        const float deltaTimeSec = mFrameDeltaTimeMs * 0.001f;
+        mRainRenderer.Dispatch(commandList, mRainSettings, camPos, camRight, camForward, camUp, deltaTimeSec);
+    }
+
     // Restore G-Buffer and depth back to PIXEL_SHADER_RESOURCE for the deferred lighting pass.
     if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || gtaoWillRun || probesEnabled || probesDebugEnabled)
     {
@@ -1276,6 +1364,76 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     if (mPointLightRenderer.IsInitialized() && mEntities != nullptr)
     {
         mPointLightRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 7 – Decal gizmos (wireframe box + facing arrow)
+    // -----------------------------------------------------------------------
+    if (mDecalRenderer.IsInitialized() && mEntities != nullptr)
+    {
+        mDecalRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+    }
+
+    // -----------------------------------------------------------------------
+    // Rain streak draw pass – additive transparent pass over the full scene.
+    // -----------------------------------------------------------------------
+    if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
+    {
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+        commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
+        commandList->RSSetViewports(1, &vpFull);
+        commandList->RSSetScissorRects(1, &srFull);
+        XMFLOAT4X4 rainViewProjection;
+        XMStoreFloat4x4(&rainViewProjection, XMMatrixTranspose(XMLoadFloat4x4(&mJitteredViewProjection)));
+        const XMFLOAT3 rainCameraPosition = mCamera.GetPosition();
+        const XMFLOAT3 rainCameraUp = mCamera.GetUpVector();
+        const XMFLOAT3 rainCameraForward = mCamera.GetForwardVector();
+        XMFLOAT3 rainCameraRight{};
+        XMStoreFloat3(
+            &rainCameraRight,
+            XMVector3Normalize(
+                XMVector3Cross(
+                    XMLoadFloat3(&rainCameraUp),
+                    XMLoadFloat3(&rainCameraForward))));
+
+        XMFLOAT3 primaryLightPosition = { rainCameraPosition.x, rainCameraPosition.y, rainCameraPosition.z + 4.0f };
+        XMFLOAT3 primaryLightColor = { 0.7f, 0.75f, 0.85f };
+        float primaryLightIntensity = 0.6f;
+
+        if (mEntities != nullptr)
+        {
+            constexpr float kRefLumens = 800.0f;
+            float brightestLight = 0.0f;
+            for (const Entity& entity : *mEntities)
+            {
+                if (!entity.HasPointLightComponent())
+                    continue;
+
+                const PointLightComponent& pointLight = *entity.PointLight;
+                const float normalizedIntensity = pointLight.IntensityLumens / kRefLumens;
+                if (normalizedIntensity <= brightestLight)
+                    continue;
+
+                brightestLight = normalizedIntensity;
+                primaryLightPosition = entity.Transform.Position;
+                primaryLightColor = pointLight.UseTemperature
+                    ? KelvinToLinearRgb(pointLight.TemperatureKelvin)
+                    : XMFLOAT3(pointLight.ColorR, pointLight.ColorG, pointLight.ColorB);
+                primaryLightIntensity = normalizedIntensity;
+            }
+        }
+
+        mRainRenderer.Draw(
+            commandList,
+            mRainSettings,
+            rainViewProjection,
+            rainCameraPosition,
+            rainCameraRight,
+            rainCameraUp,
+            primaryLightPosition,
+            primaryLightColor,
+            primaryLightIntensity);
     }
 
     // -----------------------------------------------------------------------
@@ -1492,11 +1650,13 @@ void DX12SceneRenderer::Shutdown()
 {
     mEntityMeshRenderer.Shutdown();
     mPointLightRenderer.Shutdown();
+    mDecalRenderer.Shutdown();
     mPointShadowMapRenderer.Shutdown();
     mDeferredLightingPass.Shutdown();
     mRtgiRenderer.Shutdown();
     mProbeRenderer.Shutdown();
     mVolumetricFogRenderer.Shutdown();
+    mRainRenderer.Shutdown();
     mTaaRenderer.Shutdown();
     mBloomRenderer.Shutdown();
     mAgxTonemapper.Shutdown();

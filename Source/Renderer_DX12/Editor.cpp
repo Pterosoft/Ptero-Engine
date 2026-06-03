@@ -264,6 +264,7 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
     LoadIconTexture(L"Geometry.png", mGeometryIcon, &iconStatus, commandList);
     LoadIconTexture(L"PointLight.png", mPointLightIcon, &iconStatus, commandList);
     LoadIconTexture(L"AudioEmitter.png", mAudioEmitterIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Decal.png", mDecalIcon, &iconStatus, commandList);
     ReportProgress(L"Loading editor toolbar icons...");
     LoadIconTexture(L"Select.png", mSelectIcon, &iconStatus, commandList);
     LoadIconTexture(L"Move.png", mMoveIcon, &iconStatus, commandList);
@@ -279,6 +280,7 @@ void Editor::Shutdown()
     ReleaseIconTexture(mGeometryIcon);
     ReleaseIconTexture(mPointLightIcon);
     ReleaseIconTexture(mAudioEmitterIcon);
+    ReleaseIconTexture(mDecalIcon);
     ReleaseIconTexture(mSelectIcon);
     ReleaseIconTexture(mMoveIcon);
     ReleaseIconTexture(mRotateIcon);
@@ -845,7 +847,8 @@ bool Editor::TryProjectWorldToViewport(
     const ImVec2& viewportOrigin,
     const ImVec2& viewportSize,
     const EditorCamera& camera,
-    ImVec2& outScreenPosition) const
+    ImVec2& outScreenPosition,
+    bool clampToViewport) const
 {
     using namespace DirectX;
     XMVECTOR pos = XMLoadFloat3(&worldPosition);
@@ -858,7 +861,13 @@ bool Editor::TryProjectWorldToViewport(
     float ndcX = XMVectorGetX(clip) / w;
     float ndcY = XMVectorGetY(clip) / w;
 
-    if (ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f) return false;
+    if (!clampToViewport && (ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f)) return false;
+
+    if (clampToViewport)
+    {
+        ndcX = (std::max)(-1.0f, (std::min)(1.0f, ndcX));
+        ndcY = (std::max)(-1.0f, (std::min)(1.0f, ndcY));
+    }
 
     outScreenPosition.x = viewportOrigin.x + (ndcX  * 0.5f + 0.5f) * viewportSize.x;
     outScreenPosition.y = viewportOrigin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * viewportSize.y;
@@ -955,7 +964,7 @@ void Editor::FinishViewportSelection(
     const ImVec2& viewportSize,
     const EditorCamera& camera)
 {
-    if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mAudioEmitterPrototypeSelected)
+    if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mAudioEmitterPrototypeSelected || mDecalPrototypeSelected || mRainPrototypeSelected)
     {
         DirectX::XMFLOAT3 worldPosition{};
         if (TryGetViewportWorldPositionOnGrid(mViewportSelection.Current, viewportOrigin, viewportSize, camera, worldPosition))
@@ -982,6 +991,26 @@ void Editor::FinishViewportSelection(
                 entity.Name = "AudioEmitter_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
                 entity.Transform.Position = worldPosition;
                 entity.AddAudioEmitterComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mDecalPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "Decal_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddDecalComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mRainPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "Rain_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddRainComponent();
                 mEntities.push_back(std::move(entity));
                 mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
                 mSelectedEntityIndices = { mSelectedEntityIndex };
@@ -1069,7 +1098,7 @@ void Editor::HandleManualGizmoInteraction(
     ImVec2 xScreen;
     ImVec2 yScreen;
     ImVec2 zScreen;
-    if (!TryProjectWorldToViewport(origin, viewportOrigin, viewportSize, camera, pivotScreen))
+    if (!TryProjectWorldToViewport(origin, viewportOrigin, viewportSize, camera, pivotScreen, true))
         return;
 
     auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, ImVec2& axisScreenEnd, float& axisWorldLength) -> bool
@@ -1080,7 +1109,8 @@ void Editor::HandleManualGizmoInteraction(
                 viewportOrigin,
                 viewportSize,
                 camera,
-                unitScreenEnd))
+                unitScreenEnd,
+                true))
         {
             return false;
         }
@@ -1099,7 +1129,8 @@ void Editor::HandleManualGizmoInteraction(
             viewportOrigin,
             viewportSize,
             camera,
-            axisScreenEnd);
+            axisScreenEnd,
+            true);
     };
 
     float xAxisWorldLength = 0.0f;
@@ -1545,6 +1576,8 @@ void Editor::DrawViewportPlacementIcons(
             iconHandle = mPointLightIcon.GpuHandle;
         else if (mEntities[i].AudioEmitter.has_value())
             iconHandle = mAudioEmitterIcon.GpuHandle;
+        else if (mEntities[i].Decal.has_value())
+            iconHandle = mDecalIcon.GpuHandle;
         else
             iconHandle = mGeometryIcon.GpuHandle;
 
@@ -1576,11 +1609,11 @@ void Editor::DrawManualGizmoPivot(
 
     auto projectAxisPoint = [&](const XMFLOAT3& point, ImVec2& screenPoint) -> bool
     {
-        return TryProjectWorldToViewport(point, viewportOrigin, viewportSize, camera, screenPoint);
+        return TryProjectWorldToViewport(point, viewportOrigin, viewportSize, camera, screenPoint, true);
     };
 
     ImVec2 screenPos;
-    if (TryProjectWorldToViewport(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, screenPos))
+    if (TryProjectWorldToViewport(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, screenPos, true))
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddCircleFilled(screenPos, 6.0f, IM_COL32(255, 200, 0, 230));
@@ -1989,6 +2022,7 @@ void Editor::DrawComponentsPanel()
         mGeometryPrototypeSelected = shouldSelect;
         mPointLightPrototypeSelected = false;
         mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
     }
 
     if (ImGui::Selectable("Point Light", mPointLightPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
@@ -1997,6 +2031,7 @@ void Editor::DrawComponentsPanel()
         mGeometryPrototypeSelected = false;
         mPointLightPrototypeSelected = shouldSelect;
         mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
     }
 
     if (ImGui::Selectable("Audio Emitter", mAudioEmitterPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
@@ -2005,6 +2040,27 @@ void Editor::DrawComponentsPanel()
         mGeometryPrototypeSelected = false;
         mPointLightPrototypeSelected = false;
         mAudioEmitterPrototypeSelected = shouldSelect;
+        mDecalPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Decal", mDecalPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mDecalPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = shouldSelect;
+        mRainPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Rain", mRainPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mRainPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
+        mRainPrototypeSelected = shouldSelect;
     }
 
     ImGui::End();
@@ -2212,6 +2268,73 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
 
             if (ImGui::Checkbox("Auto Play##ae", &ae.AutoPlay))
+                mSceneDirty = true;
+        }
+    }
+
+    if (selectedEntity->Decal.has_value())
+    {
+        if (ImGui::CollapsingHeader("Decal", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& dc = *selectedEntity->Decal;
+
+            static char matBuf[512];
+            strncpy_s(matBuf, dc.MaterialPath.c_str(), sizeof(matBuf) - 1);
+            if (ImGui::InputText("Material##dc", matBuf, sizeof(matBuf)))
+            {
+                dc.MaterialPath = matBuf;
+                mSceneDirty = true;
+            }
+
+            if (ImGui::DragFloat("Size X##dc", &dc.SizeX, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Size Y##dc", &dc.SizeY, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Size Z##dc", &dc.SizeZ, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+        }
+    }
+
+    if (selectedEntity->Rain.has_value())
+    {
+        if (ImGui::CollapsingHeader("Rain", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& rc = *selectedEntity->Rain;
+
+            if (ImGui::Checkbox("Enabled##rain", &rc.Enabled))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Physics");
+            float wind[3] = { rc.WindX, rc.WindY, rc.WindZ };
+            if (ImGui::DragFloat3("Wind##rain", wind, 0.05f, -20.0f, 20.0f))
+            {
+                rc.WindX = wind[0]; rc.WindY = wind[1]; rc.WindZ = wind[2];
+                mSceneDirty = true;
+            }
+            if (ImGui::DragFloat("Gravity##rain", &rc.Gravity, 0.1f, 0.0f, 50.0f))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Bounding Box");
+            if (ImGui::DragFloat("Extent X##rain", &rc.BoxExtentX, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Extent Y##rain", &rc.BoxExtentY, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Extent Z##rain", &rc.BoxExtentZ, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Visual");
+            if (ImGui::DragFloat("Intensity##rain", &rc.Intensity, 0.01f, 0.0f, 8.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Streak Length##rain", &rc.StreakLength, 0.005f, 0.01f, 2.0f))
+                mSceneDirty = true;
+            float col[4] = { rc.ColorR, rc.ColorG, rc.ColorB, rc.ColorA };
+            if (ImGui::ColorEdit4("Color##rain", col))
+            {
+                rc.ColorR = col[0]; rc.ColorG = col[1];
+                rc.ColorB = col[2]; rc.ColorA = col[3];
+                mSceneDirty = true;
+            }
+            if (ImGui::DragFloat("Wetness##rain", &rc.WetnessIntensity, 0.01f, 0.0f, 1.0f))
                 mSceneDirty = true;
         }
     }

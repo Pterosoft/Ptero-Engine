@@ -209,6 +209,16 @@ void EntityMeshRenderer::Render(
     }
     if (!EnsureMaterialConstantBuffer(totalDraws))
         return;
+    if (!EnsureRainSurfaceConstantBuffer())
+        return;
+
+    ID3D12DescriptorHeap* sharedSrvHeap = DX12Context_GetSrvDescriptorHeap();
+    if (sharedSrvHeap == nullptr)
+        return;
+
+    commandList->SetDescriptorHeaps(1, &sharedSrvHeap);
+    commandList->SetGraphicsRootConstantBufferView(
+        2, mRainSurfaceConstantBuffer->GetGPUVirtualAddress());
 
     std::size_t cbSlot  = 0;
     std::size_t matSlot = 0;
@@ -320,7 +330,7 @@ void EntityMeshRenderer::Render(
             }
         }
 
-        // Helper: bind all 6 texture slots to root slots 2–7.
+        // Helper: bind all 6 texture slots to root slots 3–8.
         // Each slot maps to one texture register (t0–t5) via its own descriptor table.
         // Uses the pre-allocated GPU handle from the texture cache directly —
         // no descriptor copying needed.  Also fills scalar material parameters.
@@ -377,9 +387,9 @@ void EntityMeshRenderer::Render(
                         if (flags[s]) *flags[s] = 1;
                     }
                 }
-                // Root slots 2–7 correspond to t0–t5.
+                // Root slots 3–8 correspond to t0–t5.
                 if (handle.ptr != 0)
-                    commandList->SetGraphicsRootDescriptorTable(2 + s, handle);
+                    commandList->SetGraphicsRootDescriptorTable(3 + s, handle);
             }
         };
 
@@ -483,6 +493,13 @@ void EntityMeshRenderer::Shutdown()
     }
     mPointShadowFaceConstantBuffer.Reset();
 
+    if (mRainSurfaceConstantBuffer && mMappedRainSurfaceCB != nullptr)
+    {
+        mRainSurfaceConstantBuffer->Unmap(0, nullptr);
+        mMappedRainSurfaceCB = nullptr;
+    }
+    mRainSurfaceConstantBuffer.Reset();
+
     mGpuMeshes.clear();
     mRootSignature.Reset();
     mPipelineState.Reset();
@@ -496,6 +513,17 @@ void EntityMeshRenderer::Shutdown()
     mFallbackTextureResource.Reset();
     mFallbackCpuHandle = {};
     mFallbackGpuHandle = {};
+}
+
+void EntityMeshRenderer::SetRainSurfaceState(bool enabled, float wetnessIntensity)
+{
+    if (!EnsureRainSurfaceConstantBuffer() || mMappedRainSurfaceCB == nullptr)
+    {
+        return;
+    }
+
+    mMappedRainSurfaceCB->RainEnabled = enabled ? 1.0f : 0.0f;
+    mMappedRainSurfaceCB->RainWetnessIntensity = wetnessIntensity;
 }
 
 void EntityMeshRenderer::RenderPointLightShadowDepth(
@@ -679,12 +707,13 @@ bool EntityMeshRenderer::CreatePipeline(
     // Root signature layout:
     //   slot 0 – root CBV  (b0, VS) per-entity MVP + model matrix
     //   slot 1 – root CBV  (b1, PS) per-draw material constants
-    //   slots 2–7 – individual 1-SRV descriptor tables (PS):
-    //              2=t0 baseColor, 3=t1 normal, 4=t2 metallic,
-    //              5=t3 roughness, 6=t4 ao, 7=t5 emissive
+    //   slot 2 – root CBV  (b2, PS) frame rain surface constants
+    //   slots 3–8 – individual 1-SRV descriptor tables (PS):
+    //              3=t0 baseColor, 4=t1 normal, 5=t2 metallic,
+    //              6=t3 roughness, 7=t4 ao, 8=t5 emissive
     // Using 6 individual tables (instead of one 6-SRV table) means each texture
     // can be bound directly from its pre-allocated GPU handle without copying.
-    D3D12_ROOT_PARAMETER rootParams[8]{};
+    D3D12_ROOT_PARAMETER rootParams[9]{};
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0
@@ -696,6 +725,11 @@ bool EntityMeshRenderer::CreatePipeline(
     rootParams[1].Descriptor.RegisterSpace  = 0;
     rootParams[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    rootParams[2].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[2].Descriptor.ShaderRegister = 2; // b2
+    rootParams[2].Descriptor.RegisterSpace  = 0;
+    rootParams[2].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
     // One D3D12_DESCRIPTOR_RANGE per texture slot (t0–t5).
     D3D12_DESCRIPTOR_RANGE srvRanges[6]{};
     for (int i = 0; i < 6; ++i)
@@ -706,10 +740,10 @@ bool EntityMeshRenderer::CreatePipeline(
         srvRanges[i].RegisterSpace                     = 0;
         srvRanges[i].OffsetInDescriptorsFromTableStart = 0;
 
-        rootParams[2 + i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rootParams[2 + i].DescriptorTable.NumDescriptorRanges = 1;
-        rootParams[2 + i].DescriptorTable.pDescriptorRanges   = &srvRanges[i];
-        rootParams[2 + i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        rootParams[3 + i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[3 + i].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[3 + i].DescriptorTable.pDescriptorRanges   = &srvRanges[i];
+        rootParams[3 + i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
     }
 
     // Static sampler s0: anisotropic wrap for material textures.
@@ -806,6 +840,58 @@ bool EntityMeshRenderer::CreatePipeline(
 
     mPipelineReady = true;
     mLastError.clear();
+    return true;
+}
+
+bool EntityMeshRenderer::EnsureRainSurfaceConstantBuffer()
+{
+    if (mRainSurfaceConstantBuffer && mMappedRainSurfaceCB != nullptr)
+    {
+        return true;
+    }
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+    {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES uploadHeap{};
+    uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
+    uploadHeap.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    uploadHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    uploadHeap.CreationNodeMask     = 1;
+    uploadHeap.VisibleNodeMask      = 1;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = sizeof(RainSurfaceConstants);
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mRainSurfaceConstantBuffer))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to create rain surface constant buffer.";
+        return false;
+    }
+
+    if (FAILED(mRainSurfaceConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedRainSurfaceCB))))
+    {
+        mLastError = "EntityMeshRenderer: Failed to map rain surface constant buffer.";
+        return false;
+    }
+
+    *mMappedRainSurfaceCB = RainSurfaceConstants{};
     return true;
 }
 

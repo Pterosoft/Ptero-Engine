@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -164,6 +164,7 @@
     <ClInclude Include="AgxTonemapSettings.h" />
     <ClInclude Include="BloomRenderer.h" />
     <ClInclude Include="BloomSettings.h" />
+    <ClInclude Include="DecalRenderer.h" />
     <ClInclude Include="DlssRenderer.h" />
     <ClInclude Include="DlssSettings.h" />
     <ClInclude Include="GtaoSettings.h" />
@@ -172,6 +173,7 @@
     <ClInclude Include="PointShadowSettings.h" />
     <ClInclude Include="RadianceProbeRenderer.h" />
     <ClInclude Include="RadianceProbeSettings.h" />
+    <ClInclude Include="RainRenderer.h" />
     <ClInclude Include="RtAmbientOcclusion.h" />
     <ClInclude Include="Components.h" />
     <ClInclude Include="d3dx12.h" />
@@ -206,6 +208,7 @@
   <ItemGroup>
     <ClCompile Include="AgxTonemapper.cpp" />
     <ClCompile Include="BloomRenderer.cpp" />
+    <ClCompile Include="DecalRenderer.cpp" />
     <ClCompile Include="DeferredLightingPass.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="DlssRenderer.cpp" />
@@ -309,6 +312,7 @@
     </ClCompile>
     <ClCompile Include="PointLightRenderer.cpp" />
     <ClCompile Include="RadianceProbeRenderer.cpp" />
+    <ClCompile Include="RainRenderer.cpp" />
     <ClCompile Include="RtAmbientOcclusion.cpp" />
     <ClCompile Include="RtGlobalIllumination.cpp" />
     <ClCompile Include="SceneSerializer.cpp" />
@@ -369,6 +373,8 @@
     <None Include="..\..\Data\Shaders\RtAO_RayGen.hlsl" />
     <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl" />
     <None Include="..\..\Data\Shaders\RtAO_Spatial.hlsl" />
+    <None Include="..\..\Data\Shaders\Rain_Update.hlsl" />
+    <None Include="..\..\Data\Shaders\Rain_Draw.hlsl" />
     <None Include="..\..\Data\Shaders\RtGI_Composite.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </None>

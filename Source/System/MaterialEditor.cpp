@@ -92,6 +92,7 @@ namespace
             { "doubleSided", materialDefinition.IsDoubleSided },
             { "useAlphaCutout", materialDefinition.UseAlphaCutout },
             { "useTransparentBlend", materialDefinition.UseTransparentBlend },
+            { "isDecalMaterial", materialDefinition.IsDecalMaterial },
             {
                 "textures",
                 {
@@ -182,6 +183,7 @@ namespace
             outMaterialDefinition.IsDoubleSided = sourceJson.value("doubleSided", outMaterialDefinition.IsDoubleSided);
             outMaterialDefinition.UseAlphaCutout = sourceJson.value("useAlphaCutout", outMaterialDefinition.UseAlphaCutout);
             outMaterialDefinition.UseTransparentBlend = sourceJson.value("useTransparentBlend", outMaterialDefinition.UseTransparentBlend);
+            outMaterialDefinition.IsDecalMaterial = sourceJson.value("isDecalMaterial", outMaterialDefinition.IsDecalMaterial);
 
             if (sourceJson.contains("textures"))
             {

@@ -74,6 +74,9 @@
     <ClCompile Include="..\SDKs\imgui\imgui_widgets.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Ptero-Engine.rc">

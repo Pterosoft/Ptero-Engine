@@ -182,6 +182,7 @@
     </ClCompile>
     <ClCompile Include="EditorMain.cpp" />
     <ClCompile Include="GridGeometry.cpp" />
+    <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.cpp" />
     <ClCompile Include="SplashScreen.cpp" />
   </ItemGroup>
   <ItemGroup>

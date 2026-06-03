@@ -1,0 +1,251 @@
+// Rain_Draw.hlsl
+// Vertex + Pixel shaders for rendering rain particles as state-aware streaks,
+// splashes, and mist overlays.
+
+struct RainDrop
+{
+    float3 Position;
+    float  Age;
+    float3 Velocity;
+    float  State;
+    float4 Variation;
+    float4 ImpactData;
+};
+
+StructuredBuffer<RainDrop> Particles : register(t0);
+
+cbuffer DrawConstants : register(b0)
+{
+    float4x4 ViewProj;
+    float3   CameraPosition;
+    float    BaseStreakLength;
+    float3   CameraRight;
+    float    NearFadeDistance;
+    float3   CameraUp;
+    float    FarFadeDistance;
+    float4   RainColor;
+    float3   PrimaryLightPosition;
+    float    PrimaryLightIntensity;
+    float3   PrimaryLightColor;
+    float    RefractionStrength;
+    float    WetnessIntensity;
+    float    MistHeightFade;
+    float    MistSoftness;
+    float    _Pad;
+};
+
+struct VSInput
+{
+    uint VertexID   : SV_VertexID;
+    uint InstanceID : SV_InstanceID;
+};
+
+struct VSOutput
+{
+    float4 Position        : SV_Position;
+    float  Alpha           : TEXCOORD0;
+    float3 WorldPosition   : TEXCOORD1;
+    float3 WorldNormal     : TEXCOORD2;
+    float3 ViewDirection   : TEXCOORD3;
+    float  DistanceFade    : TEXCOORD4;
+    float  State           : TEXCOORD5;
+    float2 LocalUv         : TEXCOORD6;
+    float  RefractStrength : TEXCOORD7;
+};
+
+float3 SafeNormalize(float3 value, float3 fallback)
+{
+    const float lenSq = dot(value, value);
+    return (lenSq > 1.0e-6f) ? (value * rsqrt(lenSq)) : fallback;
+}
+
+float2 GetQuadCorner(uint vertexId)
+{
+    switch (vertexId)
+    {
+    case 0u: return float2(-1.0f, 0.0f);
+    case 1u: return float2(1.0f, 0.0f);
+    case 2u: return float2(-1.0f, 1.0f);
+    case 3u: return float2(-1.0f, 1.0f);
+    case 4u: return float2(1.0f, 0.0f);
+    default: return float2(1.0f, 1.0f);
+    }
+}
+
+VSOutput VSMain(VSInput input)
+{
+    RainDrop p = Particles[input.InstanceID];
+
+    const bool isRain = p.State < 0.5f;
+    const bool isSplash = p.State >= 0.5f && p.State < 1.5f;
+    const float3 cameraForward = SafeNormalize(cross(CameraRight, CameraUp), float3(0.0f, 1.0f, 0.0f));
+    const float3 groundRight = SafeNormalize(CameraRight - CameraUp * dot(CameraRight, CameraUp), float3(1.0f, 0.0f, 0.0f));
+    const float3 groundForward = SafeNormalize(cross(CameraUp, groundRight), float3(0.0f, 1.0f, 0.0f));
+    const float2 quadCorner = GetQuadCorner(input.VertexID);
+
+    const float3 toCamera = CameraPosition - p.Position;
+    const float distanceToCamera = length(toCamera);
+    const float3 viewDirection = SafeNormalize(toCamera, float3(0.0f, 1.0f, 0.0f));
+    const float distanceFade = saturate((FarFadeDistance - distanceToCamera) / max(FarFadeDistance - NearFadeDistance, 0.001f));
+
+    float3 worldPos = p.Position;
+    float3 normal = CameraUp;
+    float alpha = 0.0f;
+    float refractStrength = 0.0f;
+
+    if (isRain)
+    {
+        const float speed = length(p.Velocity);
+        const float3 dir = SafeNormalize(p.Velocity, float3(0.0f, 0.0f, -1.0f));
+        const float3 side = SafeNormalize(cross(viewDirection, dir), CameraRight);
+        const float streakLength = BaseStreakLength * lerp(0.4f, 1.9f, saturate(p.Variation.x * 0.7f)) * (0.6f + speed * 0.05f);
+        const float streakWidth = lerp(0.0015f, 0.008f, saturate(p.Variation.z));
+
+        worldPos = p.Position
+            - dir * (quadCorner.y * streakLength)
+            + side * (quadCorner.x * streakWidth);
+        normal = SafeNormalize(cross(side, dir), CameraUp);
+        alpha = saturate((1.0f - quadCorner.y * 0.55f) * RainColor.a * 2.8f * p.ImpactData.w * distanceFade);
+        refractStrength = RefractionStrength * p.Variation.z * distanceFade;
+    }
+    else if (isSplash)
+    {
+        const float splashRadius = max(p.ImpactData.w, 0.01f);
+        worldPos = p.Position
+            + groundRight * (quadCorner.x * splashRadius)
+            + groundForward * ((quadCorner.y - 0.5f) * splashRadius * 2.0f);
+        worldPos.z = p.Position.z + 0.01f;
+        normal = CameraUp;
+        alpha = saturate(RainColor.a * 1.35f * distanceFade);
+        refractStrength = RefractionStrength * 0.35f * distanceFade;
+    }
+    else
+    {
+        const float mistRadius = lerp(0.03f, 0.22f, saturate(p.Variation.x));
+        worldPos = p.Position
+            + CameraRight * (quadCorner.x * mistRadius)
+            + cameraForward * ((quadCorner.y - 0.5f) * mistRadius * 2.0f)
+            + CameraUp * ((quadCorner.y - 0.5f) * mistRadius * 0.4f);
+        normal = CameraUp;
+        alpha = saturate(p.ImpactData.w * RainColor.a * 0.65f * distanceFade);
+        refractStrength = RefractionStrength * 0.18f * distanceFade;
+    }
+
+    VSOutput output;
+    output.Position = mul(float4(worldPos, 1.0f), ViewProj);
+    output.Alpha = alpha;
+    output.WorldPosition = worldPos;
+    output.WorldNormal = normal;
+    output.ViewDirection = viewDirection;
+    output.DistanceFade = distanceFade;
+    output.State = p.State;
+    output.LocalUv = float2(quadCorner.x, quadCorner.y * 2.0f - 1.0f);
+    output.RefractStrength = refractStrength;
+    return output;
+}
+
+float4 PSMain(VSOutput input) : SV_Target
+{
+    const float3 lightVector = PrimaryLightPosition - input.WorldPosition;
+    const float3 lightDirection = SafeNormalize(lightVector, float3(0.0f, 0.0f, 1.0f));
+    const float lightDistanceSq = max(dot(lightVector, lightVector), 0.5f);
+    const float lightAttenuation = PrimaryLightIntensity / lightDistanceSq;
+
+    float3 shadedNormal = input.WorldNormal;
+    float splashMask = 0.0f;
+
+    if (input.State >= 0.5f && input.State < 1.5f)
+    {
+        const float2 centeredUv = float2(input.LocalUv.x, input.LocalUv.y * 0.5f);
+        const float radialDistance = length(centeredUv);
+        const float discMask = 1.0f - saturate((radialDistance - 0.78f) / 0.22f);
+        const float rimMask = 1.0f - saturate(abs(radialDistance - 0.62f) / 0.18f);
+        splashMask = saturate(discMask * 0.7f + rimMask * 0.75f);
+
+        const float ripplePhase = radialDistance * 32.0f;
+        const float ripple = sin(ripplePhase) * splashMask * 0.18f;
+        const float2 radialDir = radialDistance > 1.0e-4f ? centeredUv / radialDistance : float2(0.0f, 0.0f);
+        const float3 tangentX = float3(1.0f, 0.0f, radialDir.x * ripple);
+        const float3 tangentY = float3(0.0f, 1.0f, radialDir.y * ripple);
+        shadedNormal = normalize(float3(-tangentX.z, -tangentY.z, 1.0f));
+    }
+
+    const float3 halfVector = SafeNormalize(lightDirection + input.ViewDirection, input.ViewDirection);
+    const float isSplash = (input.State >= 0.5f && input.State < 1.5f) ? 1.0f : 0.0f;
+    const float specularPower = (input.State < 0.5f) ? 48.0f : 128.0f;
+    const float specular = pow(saturate(dot(shadedNormal, halfVector)), specularPower);
+    const float fresnel = pow(1.0f - saturate(dot(input.ViewDirection, shadedNormal)), 4.0f);
+    const float distortion = input.RefractStrength * lerp(0.35f, 0.75f, fresnel) * (1.0f - isSplash * 0.75f);
+
+    float shapeAlpha = 1.0f;
+    if (input.State < 0.5f)
+    {
+        shapeAlpha = saturate(1.0f - abs(input.LocalUv.x));
+    }
+    else if (input.State < 1.5f)
+    {
+        const float2 splashUv = float2(input.LocalUv.x, input.LocalUv.y * 0.5f);
+        const float splashRadius = length(splashUv);
+        const float outerFade = 1.0f - saturate((splashRadius - 0.9f) / 0.1f);
+        shapeAlpha = splashMask * outerFade;
+    }
+    else
+    {
+        const float radial = saturate(length(input.LocalUv));
+        const float verticalFade = saturate(1.0f - abs(input.LocalUv.y));
+        shapeAlpha = saturate((1.0f - radial) * verticalFade);
+    }
+
+    float3 color = RainColor.rgb * lerp(0.18f, 0.45f, shapeAlpha);
+
+    if (input.State >= 0.5f && input.State < 1.5f)
+    {
+        const float splashRoughness = 0.025f;
+        const float splashMetallic = 0.0f;
+        const float waterDiffuse = 0.12f;
+        const float3 waterTint = float3(0.26f, 0.31f, 0.34f);
+        color = waterTint * waterDiffuse * (1.0f - splashMetallic);
+        color += PrimaryLightColor * lightAttenuation * (specular * 9.0f + fresnel * (1.3f - splashRoughness));
+        color += RainColor.rgb * (0.22f * splashMask);
+    }
+    else
+    {
+        color += PrimaryLightColor * lightAttenuation * (specular * 2.5f + fresnel * 0.35f);
+    }
+
+    color += PrimaryLightColor * distortion;
+
+    if (input.State >= 0.5f && input.State < 1.5f)
+    {
+        color *= saturate(1.0f + shapeAlpha * 0.35f);
+    }
+
+    if (input.State >= 1.5f)
+    {
+        color = lerp(color, PrimaryLightColor * 0.18f + RainColor.rgb * 0.25f, 0.45f);
+    }
+
+    const float alpha = saturate(input.Alpha * shapeAlpha * (0.55f + fresnel * 0.45f));
+    return float4(color, alpha);
+}
+
+struct WetnessResult
+{
+    float3 Albedo;
+    float  Roughness;
+};
+
+WetnessResult ApplyRainWetness(
+    float3 worldNormal,
+    float3 baseAlbedo,
+    float  baseRoughness,
+    float  wetnessIntensity)
+{
+    float wetnessMask = saturate(dot(worldNormal, float3(0.0f, 0.0f, 1.0f)));
+    float w           = wetnessMask * wetnessIntensity;
+
+    WetnessResult result;
+    result.Albedo     = baseAlbedo * lerp(1.0f, 0.6f, w);
+    result.Roughness  = lerp(baseRoughness, 0.02f, w);
+    return result;
+}

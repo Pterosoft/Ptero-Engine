@@ -90,6 +90,47 @@ struct AudioEmitterComponent
     std::string RuntimeRegisteredEventPath;
 };
 
+// DecalComponent: projects a material onto surfaces within an oriented box volume.
+// The decal faces -Z in local space; rotate the entity to control projection direction.
+struct DecalComponent
+{
+    // Relative path (from Data/) of the .json material assigned to this decal.
+    // The material must have "isDecalMaterial": true to be eligible.
+    std::string MaterialPath;
+
+    // Half-extents of the projection box in world units along each local axis.
+    float SizeX = 1.0f;
+    float SizeY = 1.0f;
+    float SizeZ = 1.0f;
+};
+
+// RainComponent: places a camera-relative rain particle simulation at this entity's location.
+// All fields here are artist-facing and saved directly to the level file.
+struct RainComponent
+{
+    // Physics
+    float WindX           = 0.5f;
+    float WindY           = 0.0f;
+    float WindZ           = 0.2f;
+    float Gravity         = 9.8f;
+
+    // Bounding box half-extents (XYZ) around the camera.
+    float BoxExtentX      = 20.0f;
+    float BoxExtentY      = 15.0f;
+    float BoxExtentZ      = 20.0f;
+
+    // Visual
+    float Intensity       = 1.0f;
+    float StreakLength     = 0.18f;
+    float ColorR           = 0.65f;
+    float ColorG           = 0.75f;
+    float ColorB           = 0.85f;
+    float ColorA           = 0.35f;
+    float WetnessIntensity = 0.7f;
+
+    bool  Enabled          = true;
+};
+
 struct Entity
 {
     std::string Name = "Entity";
@@ -97,6 +138,8 @@ struct Entity
     std::optional<MeshComponent> Mesh;
     std::optional<PointLightComponent> PointLight;
     std::optional<AudioEmitterComponent> AudioEmitter;
+    std::optional<DecalComponent> Decal;
+    std::optional<RainComponent> Rain;
 
     bool HasMeshComponent() const
     {
@@ -174,6 +217,36 @@ struct Entity
 
         return *AudioEmitter;
     }
+
+    bool HasDecalComponent() const
+    {
+        return Decal.has_value();
+    }
+
+    DecalComponent& AddDecalComponent()
+    {
+        if (!Decal.has_value())
+        {
+            Decal.emplace();
+        }
+
+        return *Decal;
+    }
+
+    bool HasRainComponent() const
+    {
+        return Rain.has_value();
+    }
+
+    RainComponent& AddRainComponent()
+    {
+        if (!Rain.has_value())
+        {
+            Rain.emplace();
+        }
+
+        return *Rain;
+    }
 };
 
 namespace DirectX
@@ -241,4 +314,62 @@ inline void from_json(const nlohmann::json& j, AudioEmitterComponent& ae)
 {
     ae.EventPath = j.value("EventPath", std::string{});
     ae.AutoPlay = j.value("AutoPlay", true);
+}
+
+inline void to_json(nlohmann::json& j, const DecalComponent& dc)
+{
+    j = nlohmann::json{
+        { "MaterialPath", dc.MaterialPath },
+        { "SizeX",        dc.SizeX        },
+        { "SizeY",        dc.SizeY        },
+        { "SizeZ",        dc.SizeZ        }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, DecalComponent& dc)
+{
+    dc.MaterialPath = j.value("MaterialPath", std::string{});
+    dc.SizeX        = j.value("SizeX",        1.0f);
+    dc.SizeY        = j.value("SizeY",        1.0f);
+    dc.SizeZ        = j.value("SizeZ",        1.0f);
+}
+
+inline void to_json(nlohmann::json& j, const RainComponent& rc)
+{
+    j = nlohmann::json{
+        { "WindX",            rc.WindX            },
+        { "WindY",            rc.WindY            },
+        { "WindZ",            rc.WindZ            },
+        { "Gravity",          rc.Gravity          },
+        { "BoxExtentX",       rc.BoxExtentX       },
+        { "BoxExtentY",       rc.BoxExtentY       },
+        { "BoxExtentZ",       rc.BoxExtentZ       },
+        { "Intensity",        rc.Intensity        },
+        { "StreakLength",     rc.StreakLength      },
+        { "ColorR",           rc.ColorR           },
+        { "ColorG",           rc.ColorG           },
+        { "ColorB",           rc.ColorB           },
+        { "ColorA",           rc.ColorA           },
+        { "WetnessIntensity", rc.WetnessIntensity },
+        { "Enabled",          rc.Enabled          }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, RainComponent& rc)
+{
+    rc.WindX            = j.value("WindX",            0.5f);
+    rc.WindY            = j.value("WindY",            0.0f);
+    rc.WindZ            = j.value("WindZ",            0.2f);
+    rc.Gravity          = j.value("Gravity",          9.8f);
+    rc.BoxExtentX       = j.value("BoxExtentX",       20.0f);
+    rc.BoxExtentY       = j.value("BoxExtentY",       15.0f);
+    rc.BoxExtentZ       = j.value("BoxExtentZ",       20.0f);
+    rc.Intensity        = j.value("Intensity",        1.0f);
+    rc.StreakLength      = j.value("StreakLength",     0.18f);
+    rc.ColorR           = j.value("ColorR",           0.65f);
+    rc.ColorG           = j.value("ColorG",           0.75f);
+    rc.ColorB           = j.value("ColorB",           0.85f);
+    rc.ColorA           = j.value("ColorA",           0.35f);
+    rc.WetnessIntensity = j.value("WetnessIntensity", 0.7f);
+    rc.Enabled          = j.value("Enabled",          true);
 }
