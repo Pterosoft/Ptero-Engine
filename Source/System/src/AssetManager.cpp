@@ -2,6 +2,7 @@
 
 #include "System/AssetManager.h"
 
+#include "System/CollisionGenerator.h"
 #include "System/FbxCompiler.h"
 #include "System/PteroMeshFormat.h"
 #include "System/TextureImporter.h"
@@ -26,6 +27,12 @@ namespace
         std::uint32_t vertexCount = 0;
         std::uint32_t indexCount = 0;
         std::uint32_t subMeshCount = 0;
+    };
+
+    struct PteroCollisionFileData
+    {
+        std::vector<MeshLod> Lods;
+        std::vector<CollisionHull> CollisionHulls;
     };
 
     void LogAssetManagerDiagnostic(const std::string& message)
@@ -202,6 +209,108 @@ namespace
 
         return true;
     }
+
+    bool ReadCollisionPayload(
+        std::ifstream& inputStream,
+        const std::uint32_t version,
+        std::vector<CollisionHull>& outCollisionHulls,
+        std::string& errorMessage)
+    {
+        outCollisionHulls.clear();
+        if (version < 4)
+        {
+            return true;
+        }
+
+        PteroCollisionHeader collisionHeader{};
+        inputStream.read(reinterpret_cast<char*>(&collisionHeader), sizeof(collisionHeader));
+        if (!inputStream)
+        {
+            errorMessage = "Failed to read the embedded collision header from the cooked mesh.";
+            return false;
+        }
+
+        outCollisionHulls.reserve(collisionHeader.hullCount);
+        for (std::uint32_t hullIndex = 0; hullIndex < collisionHeader.hullCount; ++hullIndex)
+        {
+            PteroCollisionHullEntry hullEntry{};
+            inputStream.read(reinterpret_cast<char*>(&hullEntry), sizeof(hullEntry));
+            if (!inputStream)
+            {
+                errorMessage = "Failed to read an embedded collision hull entry from the cooked mesh.";
+                return false;
+            }
+
+            CollisionHull hull;
+            hull.Vertices.resize(hullEntry.vertexCount);
+            hull.Indices.resize(hullEntry.indexCount);
+
+            if (!hull.Vertices.empty())
+            {
+                inputStream.read(
+                    reinterpret_cast<char*>(hull.Vertices.data()),
+                    static_cast<std::streamsize>(hull.Vertices.size() * sizeof(DirectX::XMFLOAT3)));
+            }
+
+            if (!hull.Indices.empty())
+            {
+                inputStream.read(
+                    reinterpret_cast<char*>(hull.Indices.data()),
+                    static_cast<std::streamsize>(hull.Indices.size() * sizeof(std::uint32_t)));
+            }
+
+            if (!inputStream)
+            {
+                errorMessage = "The cooked mesh file ended before all embedded collision data was read.";
+                return false;
+            }
+
+            outCollisionHulls.push_back(std::move(hull));
+        }
+
+        return true;
+    }
+
+    bool ReadPteroFileData(
+        std::ifstream& inputStream,
+        const LegacyPteroMeshHeader& legacyHeader,
+        const std::uint32_t lodCount,
+        PteroCollisionFileData& outData,
+        std::string& errorMessage)
+    {
+        outData = {};
+
+        const std::uint32_t clampedLodCount = (std::max)(lodCount, 1u);
+        outData.Lods.reserve(clampedLodCount);
+
+        MeshLod baseLod;
+        if (!ReadMeshLodPayload(inputStream, legacyHeader.vertexCount, legacyHeader.indexCount, legacyHeader.subMeshCount, baseLod, errorMessage))
+        {
+            return false;
+        }
+
+        outData.Lods.push_back(std::move(baseLod));
+        for (std::uint32_t lodIndex = 1; lodIndex < clampedLodCount; ++lodIndex)
+        {
+            PteroLodEntry lodEntry{};
+            inputStream.read(reinterpret_cast<char*>(&lodEntry), sizeof(lodEntry));
+            if (!inputStream)
+            {
+                errorMessage = "Failed to read an additional mesh LOD entry from the cooked mesh.";
+                return false;
+            }
+
+            MeshLod lod;
+            if (!ReadMeshLodPayload(inputStream, lodEntry.vertexCount, lodEntry.indexCount, lodEntry.subMeshCount, lod, errorMessage))
+            {
+                return false;
+            }
+
+            outData.Lods.push_back(std::move(lod));
+        }
+
+        return ReadCollisionPayload(inputStream, legacyHeader.version, outData.CollisionHulls, errorMessage);
+    }
 }
 
 bool AssetManager::ImportTextureToDataDirectory(
@@ -328,6 +437,10 @@ bool AssetManager::ImportFbxToDataDirectory(
         mLastErrorMessage = "Failed to compile the imported FBX file into a cooked .ptero mesh inside Data.";
         return false;
     }
+
+    // Auto-generate collision hulls for the newly imported mesh.
+    // Failure is non-fatal: collisions can always be regenerated later from the asset browser.
+    CollisionGenerator::GenerateCollisions(destinationFbxPath.string());
 
     // Auto-import textures referenced by the generated multi-material JSON.
     // FbxCompiler writes the JSON to Data/MultiMaterials/<stem>.json.
@@ -547,15 +660,14 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         }
     }
 
-    lodCount = (std::max)(lodCount, 1u);
-    std::vector<MeshLod> lods;
-    lods.reserve(lodCount);
-
-    MeshLod baseLod;
-    if (!ReadMeshLodPayload(inputStream, legacyHeader.vertexCount, legacyHeader.indexCount, legacyHeader.subMeshCount, baseLod, mLastErrorMessage))
+    PteroCollisionFileData fileData;
+    if (!ReadPteroFileData(inputStream, legacyHeader, lodCount, fileData, mLastErrorMessage))
     {
         return nullptr;
     }
+
+    lodCount = static_cast<std::uint32_t>(fileData.Lods.size());
+    MeshLod& baseLod = fileData.Lods.front();
 
     for (const SubMesh& subMesh : baseLod.SubMeshes)
     {
@@ -569,28 +681,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         LogAssetManagerDiagnostic(logStream.str());
     }
 
-    lods.push_back(std::move(baseLod));
-
-    for (std::uint32_t lodIndex = 1; lodIndex < lodCount; ++lodIndex)
-    {
-        PteroLodEntry lodEntry{};
-        inputStream.read(reinterpret_cast<char*>(&lodEntry), sizeof(lodEntry));
-        if (!inputStream)
-        {
-            mLastErrorMessage = "Failed to read an additional mesh LOD entry from the cooked mesh.";
-            return nullptr;
-        }
-
-        MeshLod lod;
-        if (!ReadMeshLodPayload(inputStream, lodEntry.vertexCount, lodEntry.indexCount, lodEntry.subMeshCount, lod, mLastErrorMessage))
-        {
-            return nullptr;
-        }
-
-        lods.push_back(std::move(lod));
-    }
-
-    auto mesh = std::make_shared<Mesh>(std::move(lods));
+    auto mesh = std::make_shared<Mesh>(std::move(fileData.Lods), std::move(fileData.CollisionHulls));
     if (!mesh->UploadToGpu())
     {
         mLastErrorMessage = "The mesh data loaded, but the GPU upload step failed.";
@@ -604,6 +695,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
                   << ", indices=" << mesh->GetIndices().size()
                   << ", subMeshes=" << mesh->GetSubMeshes().size()
                   << ", lods=" << mesh->GetLodCount()
+                  << ", collisionHulls=" << mesh->GetCollisionHulls().size()
                   << ", uploadedToGpu=" << (mesh->IsUploadedToGpu() ? "true" : "false");
         LogAssetManagerDiagnostic(logStream.str());
     }

@@ -27,3 +27,8 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateMeshLods(
     const char* geometryPath,
     char* statusMessage,
     int statusMessageCapacity);
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateCollisions(
+    const char* fbxOrPteroPath,
+    char* statusMessage,
+    int statusMessageCapacity);

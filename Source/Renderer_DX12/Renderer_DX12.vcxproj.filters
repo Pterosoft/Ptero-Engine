@@ -40,6 +40,9 @@
     <Filter Include="Source Files\Lights">
       <UniqueIdentifier>{557ba837-6cbf-4729-8c9e-932f454ad9b9}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CoACD">
+      <UniqueIdentifier>{71067a0a-28f9-46d6-939a-e81e62bd7035}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -172,6 +175,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RainRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -356,6 +362,54 @@
     <ClCompile Include="RainRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btAlignedAllocator.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btConvexHullComputer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\bvh.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\clip.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\public\coacd.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\cost.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\io.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\logger.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\mcts.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\model_obj.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\preprocess.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\process.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\quickhull\QuickHull.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\shape.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\sobol.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\CollisionGenerator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
@@ -412,5 +466,9 @@
       <Filter>Source Files\Shaders</Filter>
     </None>
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resource.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
 </Project>
-

@@ -1,0 +1,703 @@
+﻿## From full 'Build' logs:
+Build started at 12:11 PM...
+1>------ Build started: Project: Renderer_DX12, Configuration: Debug x64 ------
+2>------ Build started: Project: System, Configuration: Debug x64 ------
+1>K:\Visual Studio\MSBuild\Microsoft\VC\v180\Microsoft.CppBuild.targets(537,5): warning MSB8004: Output Directory does not end with a trailing slash.  This build instance will add the slash as it is required to allow proper evaluation of the Output Directory.
+2>K:\Visual Studio\MSBuild\Microsoft\VC\v180\Microsoft.CppBuild.targets(537,5): warning MSB8004: Output Directory does not end with a trailing slash.  This build instance will add the slash as it is required to allow proper evaluation of the Output Directory.
+1>  pch.cpp
+2>  clip.cpp
+1>  AgxTonemapper.cpp
+2>K:\Ptero-Engine\Source\SDKs\CoACD\src\process.h(55,15): warning C4267: '=': conversion from 'size_t' to 'int32_t', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+1>  BloomRenderer.cpp
+2>K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(178,42): warning C4101: 'e': unreferenced local variable
+2>K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(236,21): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.h(1045,30): warning C4244: '*=': conversion from 'double' to 'size_t', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+2>      K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.h(1045,30):
+2>      the template instantiation context (the oldest one first) is
+2>          K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(162,17):
+2>          see reference to function template instantiation 'void CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,coacd::Triangulation::<lambda_1>,coacd::Triangulation::<lambda_2>>(const TVertexIter,const TVertexIter,TGetVertexCoordX,TGetVertexCoordY)' being compiled
+2>          with
+2>          [
+2>              T=double,
+2>              _Ty=std::array<double,2>,
+2>              TVertexIter=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<std::array<double,2>>>>,
+2>              TGetVertexCoordX=coacd::Triangulation::<lambda_1>,
+2>              TGetVertexCoordY=coacd::Triangulation::<lambda_2>
+2>          ]
+2>              K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(162,31):
+2>              see the first reference to 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices' in 'coacd::Triangulation'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.h(1046,29): warning C4244: '*=': conversion from 'double' to 'size_t', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(2038,30): warning C4267: 'initializing': conversion from 'size_t' to 'CDT::VertInd', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+2>      K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(2038,30):
+2>      the template instantiation context (the oldest one first) is
+2>          K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(162,17):
+2>          see reference to function template instantiation 'void CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,coacd::Triangulation::<lambda_1>,coacd::Triangulation::<lambda_2>>(const TVertexIter,const TVertexIter,TGetVertexCoordX,TGetVertexCoordY)' being compiled
+2>          with
+2>          [
+2>              T=double,
+2>              _Ty=std::array<double,2>,
+2>              TVertexIter=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<std::array<double,2>>>>,
+2>              TGetVertexCoordX=coacd::Triangulation::<lambda_1>,
+2>              TGetVertexCoordY=coacd::Triangulation::<lambda_2>
+2>          ]
+2>              K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(162,31):
+2>              see the first reference to 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices' in 'coacd::Triangulation'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>          K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(2036,1):
+2>          while compiling class template member function 'void CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices_KDTreeBFS(CDT::VertInd,CDT::Box2d<T>)'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(2038,30): warning C4267: 'initializing': conversion from 'size_t' to 'const CDT::VertInd', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(294,20): warning C4267: 'initializing': conversion from 'size_t' to 'CDT::TriInd', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+2>      K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(294,20):
+2>      the template instantiation context (the oldest one first) is
+2>          K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(1795,1):
+2>          while compiling class template member function 'bool CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::isFinalized(void) const'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>          K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(293,1):
+2>          while compiling class template member function 'CDT::TriInd CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::addTriangle(const CDT::Triangle &)'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>              K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(1029,16):
+2>              see the first reference to 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::addTriangle' in 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::addSuperTriangle'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>              K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.h(1056,25):
+2>              see the first reference to 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::addSuperTriangle' in 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>              K:\Ptero-Engine\Source\SDKs\CoACD\src\clip.cpp(162,31):
+2>              see the first reference to 'CDT::Triangulation<double,CDT::LocatorKDTree<T,32,32,32>>::insertVertices' in 'coacd::Triangulation'
+2>          with
+2>          [
+2>              T=double
+2>          ]
+2>K:\Ptero-Engine\Source\SDKs\CoACD\3rd\cdt\CDT\include\Triangulation.hpp(294,20): warning C4267: 'initializing': conversion from 'size_t' to 'const CDT::TriInd', possible loss of data
+2>  (compiling source file '../SDKs/CoACD/src/clip.cpp')
+1>  DecalRenderer.cpp
+2>libfbxsdk-md.lib(fbxdebug.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdebug.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalloc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalloc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxstring.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxstring.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxvector2.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxvector2.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxvector4.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxvector4.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxaffinematrix.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxaffinematrix.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpropertyhandle.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpropertyhandle.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxquery.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxquery.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxproperty.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxproperty.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxobject.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxobject.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmanager.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmanager.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiosettings.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiosettings.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbximporter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbximporter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlayer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlayer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnodeattribute.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnodeattribute.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxscene.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxscene.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgeometrybase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgeometrybase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmesh.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmesh.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfiletexture.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfiletexture.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgeometryconverter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgeometryconverter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsurfacematerial.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsurfacematerial.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxutils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxutils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxquaternion.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxquaternion.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmath.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmath.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxstringlist.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxstringlist.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconnectionpoint.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconnectionpoint.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtime.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtime.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpropertytypes.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpropertytypes.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdatatypes.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdatatypes.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpropertydef.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpropertydef.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsymbol.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsymbol.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpropertypage.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpropertypage.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxclassid.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxclassid.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimevaluator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimevaluator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimlayer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimlayer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvenode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvenode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimstack.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimstack.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxevents.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxevents.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxemitter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxemitter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnamehandler.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnamehandler.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdocument.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdocument.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbximplementation.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbximplementation.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlibrary.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlibrary.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcharptrset.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcharptrset.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmatrix.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmatrix.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsystemunit.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsystemunit.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxplugin.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxplugin.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxplugincontainer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxplugincontainer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxloadingstrategy.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxloadingstrategy.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxscopedloadingdirectory.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxscopedloadingdirectory.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxscopedloadingfilename.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxscopedloadingfilename.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxxref.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxxref.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiobase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiobase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxexporter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxexporter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcallbacks.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcallbacks.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxio.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxio.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiopluginregistry.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiopluginregistry.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxaudio.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxaudio.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcollection.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcollection.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxaudiolayer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxaudiolayer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcollectionexclusive.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcollectionexclusive.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcontainertemplate.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcontainertemplate.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcontainer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcontainer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdisplaylayer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdisplaylayer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdocumentinfo.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdocumentinfo.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxenvironment.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxenvironment.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxobjectmetadata.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxobjectmetadata.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpose.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpose.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreference.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreference.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtexture.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtexture.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxglobalsettings.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxglobalsettings.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxselectionnode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxselectionnode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxselectionset.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxselectionset.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxthumbnail.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxthumbnail.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxvideo.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxvideo.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurve.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurve.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimevalclassic.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimevalclassic.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraint.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraint.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcharacter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcharacter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcharacterpose.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcharacterpose.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintaim.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintaim.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintcustom.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintcustom.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintparent.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintparent.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintposition.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintposition.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintrotation.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintrotation.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintscale.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintscale.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstraintsinglechainik.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstraintsinglechainik.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcontrolset.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcontrolset.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdeformer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdeformer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxblendshape.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxblendshape.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsubdeformer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsubdeformer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxblendshapechannel.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxblendshapechannel.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcache.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcache.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcachedeffect.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcachedeffect.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcamera.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcamera.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcamerastereo.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcamerastereo.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcameraswitcher.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcameraswitcher.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcluster.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcluster.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgenericnode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgenericnode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlayercontainer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlayercontainer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxshape.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxshape.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgeometry.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgeometry.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgeometryweightedmap.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgeometryweightedmap.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlight.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlight.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxline.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxline.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlodgroup.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlodgroup.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmarker.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmarker.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnull.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnull.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnurbs.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnurbs.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnurbscurve.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnurbscurve.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnurbssurface.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnurbssurface.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxopticalreference.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxopticalreference.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpatch.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpatch.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxproceduralgeometry.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxproceduralgeometry.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxskeleton.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxskeleton.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxskin.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxskin.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsubdiv.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsubdiv.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtrimnurbssurface.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtrimnurbssurface.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxvertexcachedeformer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxvertexcachedeformer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbindingtable.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbindingtable.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbindingoperator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbindingoperator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlayeredtexture.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlayeredtexture.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxproceduraltexture.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxproceduraltexture.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsurfacelambert.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsurfacelambert.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsurfacephong.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsurfacephong.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxprocessor.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxprocessor.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxprocessorxref.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxprocessorxref.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxprocessorxrefuserlib.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxprocessorxrefuserlib.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxprocessorshaderdependency.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxprocessorshaderdependency.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmanipulators.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmanipulators.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxusernotification.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxusernotification.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicinterface.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicinterface.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurve.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurve.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvekfcurve.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvekfcurve.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlocale.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlocale.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmessage.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmessage.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlog.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlog.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxperipheral.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxperipheral.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmediaclip.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmediaclip.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvebase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvebase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbindingtablebase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbindingtablebase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxstatus.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxstatus.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxthread.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxthread.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtakeinfo.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtakeinfo.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxaxissystem.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxaxissystem.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxprogress.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxprogress.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxstatistics.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxstatistics.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderfbx5.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderfbx5.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtransforms.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtransforms.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterunroll.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterunroll.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefiltermatrixconverter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefiltermatrixconverter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdeformationsevaluator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdeformationsevaluator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxgloballightsettings.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxgloballightsettings.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxglobalcamerasettings.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxglobalcamerasettings.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmultimap.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmultimap.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterconstkeyredu.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterconstkeyredu.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterscalecompensate.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterscalecompensate.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterscale.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterscale.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxclonemanager.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxclonemanager.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbitset.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbitset.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxweightedmapping.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxweightedmapping.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsurfaceevaluator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsurfaceevaluator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnurbssurfaceevaluator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnurbssurfaceevaluator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxuniformsurfaceutils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxuniformsurfaceutils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxscenecheckutility.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxscenecheckutility.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awTess2dConstrainedTriangulate.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awTess2dConstrainedTriangulate.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfolder.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfolder.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtimecode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtimecode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimevalstate.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimevalstate.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvenode.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvenode.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kdatatypes.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kdatatypes.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbximplementationfilter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbximplementationfilter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdependencieshelper.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdependencieshelper.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxobjectscontainer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxobjectscontainer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlimitsutilities.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlimitsutilities.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrootnodeutility.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrootnodeutility.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxlistener.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxlistener.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmodule.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmodule.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterfbx5.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterfbx5.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtypes.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtypes.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbase64coder.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbase64coder.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxchainedfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxchainedfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcrcfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcrcfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxencryptedfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxencryptedfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmemoryfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmemoryfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiofield.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiofield.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiofieldlist.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiofieldlist.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxiofieldzlib.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxiofieldzlib.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxinternalfileio.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxinternalfileio.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrenamingstrategyutilities.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrenamingstrategyutilities.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheFileInterface.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheFileInterface.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awPointCache2IO.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awPointCache2IO.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnurbscurveevaluator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnurbscurveevaluator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbindingtableentry.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbindingtableentry.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxbindingsentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxbindingsentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxconstantentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxconstantentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxoperatorentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxoperatorentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxpropertyentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxpropertyentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ErrorHandler.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ErrorHandler.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IArchive.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IArchive.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArchiveInfo.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArchiveInfo.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IObject.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IObject.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ICompoundProperty.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ICompoundProperty.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IArrayProperty.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IArrayProperty.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IScalarProperty.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IScalarProperty.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IFactory.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IFactory.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(XformSample.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(XformSample.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IXform.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IXform.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicgeometry.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicgeometry.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicmaterial.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicmaterial.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicxform.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicxform.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicobject.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicobject.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmemorypool.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmemorypool.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurveglobal.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurveglobal.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsync.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsync.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(xmlHelper.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(xmlHelper.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxstream.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxstream.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreader.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreader.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefiltertss.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefiltertss.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimutilities.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimutilities.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxmaterialconverter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxmaterialconverter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrenamingstrategyfbx5.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrenamingstrategyfbx5.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterkeysync.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterkeysync.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterresample.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterresample.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxdualquaternion.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxdualquaternion.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurveutils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurveutils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinear.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinear.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearPoint2.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearPoint2.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearVector2.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearVector2.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearVector.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearVector.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearNormal.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearNormal.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearParamPlane.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearParamPlane.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearRange2d.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearRange2d.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awGeomTopoMesh.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awGeomTopoMesh.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awGeomTopoMeshIterators.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awGeomTopoMeshIterators.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcachedfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcachedfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreader3ds.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreader3ds.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriter3ds.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriter3ds.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderacclaimasf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderacclaimasf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderacclaimamc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderacclaimamc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriteracclaimasf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriteracclaimasf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriteracclaimamc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriteracclaimamc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderadaptiveoptics.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderadaptiveoptics.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriteradaptiveoptics.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriteradaptiveoptics.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderbiovision.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderbiovision.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterbiovision.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterbiovision.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreadercollada14.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreadercollada14.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwritercollada14.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwritercollada14.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderdxf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderdxf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterdxf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterdxf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderfbx6.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderfbx6.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderfbx7.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderfbx7.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterfbx6.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterfbx6.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterfbx7.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterfbx7.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreadermotionanalysishtr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreadermotionanalysishtr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreadermotionanalysistrc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreadermotionanalysistrc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwritermotionanalysishtr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwritermotionanalysishtr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwritermotionanalysistrc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwritermotionanalysistrc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderobj.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderobj.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwriterobj.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwriterobj.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreadervicon.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreadervicon.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwritervicon.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwritervicon.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreaderzip.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreaderzip.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicreader.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicreader.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awString.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awString.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheFileAccessor.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheFileAccessor.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheFileIffIO.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheFileIffIO.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFilename.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFilename.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(TimeSampling.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(TimeSampling.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ISampleSelector.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ISampleSelector.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ReadWrite.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ReadWrite.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(Read.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(Read.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IexBaseExc.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IexBaseExc.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ImathExc.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ImathExc.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(XformOp.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(XformOp.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IPolyMesh.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IPolyMesh.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IMaterial.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IMaterial.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxalembicutils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxalembicutils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ICurves.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ICurves.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(INuPatch.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(INuPatch.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ISubD.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ISubD.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxatomic.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxatomic.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvefilter.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvefilter.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvefilterconstkeyredu.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvefilterconstkeyredu.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvefiltergimblekiller.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvefiltergimblekiller.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvefilterunroll.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvefilterunroll.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxclock.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxclock.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnodefinder.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnodefinder.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxnodefinderduplicatename.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxnodefinderduplicatename.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrenamingstrategybase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrenamingstrategybase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearAffineMatrix.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearAffineMatrix.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearPoint.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearPoint.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearLine.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearLine.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearParamLine.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearParamLine.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearPlane.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearPlane.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearRange1d.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearRange1d.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awLinearRange3d.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awLinearRange3d.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFSAllocator.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFSAllocator.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefilterkeyreducer.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefilterkeyreducer.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dserr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dserr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(dbase3ds.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(dbase3ds.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsmset.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsmset.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsbgnd.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsbgnd.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsmatr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsmatr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsmobj.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsmobj.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dslites.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dslites.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dscamr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dscamr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dscamm.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dscamm.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsobjm.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsobjm.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsomnm.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsomnm.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dssptm.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dssptm.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrenamingstrategy.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrenamingstrategy.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsiobj.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsiobj.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsrobj.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsrobj.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dskey.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dskey.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxtextfile.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxtextfile.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfileacclaimasf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfileacclaimasf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfileacclaimamc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfileacclaimamc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxreadermotionbase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxreadermotionbase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfileadaptiveoptics.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfileadaptiveoptics.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxwritermotionbase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxwritermotionbase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfilebiovision.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfilebiovision.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxsemanticentryview.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxsemanticentryview.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcolladaiostream.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcolladaiostream.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcolladautils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcolladautils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcolladanamespace.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcolladanamespace.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcolladaelement.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcolladaelement.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxcolladaanimationelement.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxcolladaanimationelement.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxrenamingstrategyfbx6.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxrenamingstrategyfbx6.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxembeddedfilesaccumulator.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxembeddedfilesaccumulator.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfilemotionanalysishtr.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfilemotionanalysishtr.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfilemotionanalysistrc.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfilemotionanalysistrc.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxfilevicon.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxfilevicon.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(unzip.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(unzip.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awStringCType.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awStringCType.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awStringConvert.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awStringConvert.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(al_nprintf.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(al_nprintf.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awhashfunction.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awhashfunction.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheChannel.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheChannel.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheDescriptionIO.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheDescriptionIO.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awUtilError.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awUtilError.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFile.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFile.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFileFactory.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFileFactory.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheFileIO.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheFileIO.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awIffTag.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awIffTag.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awIffFile4.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awIffFile4.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awIffFile8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awIffFile8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(TimeSamplingType.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(TimeSamplingType.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(AwImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(AwImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IFaceSet.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IFaceSet.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(InternalUtil.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(InternalUtil.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfcurvefilterkeysync.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfcurvefilterkeysync.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(smartall.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(smartall.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(strdup.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(strdup.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(assert.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(assert.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsstrlf.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsstrlf.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsprim.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsprim.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(chunk3ds.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(chunk3ds.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(seekchil.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(seekchil.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dshier.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dshier.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsvers.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsvers.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(kfutils.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(kfutils.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxanimcurvefiltergimblekiller.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxanimcurvefiltergimblekiller.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxuniquenameobjectlist.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxuniquenameobjectlist.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(fbxviconbase.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(fbxviconbase.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ioapi.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(ioapi.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awCacheData.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awCacheData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFileStatus.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFileStatus.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSIOStream.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSIOStream.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFileTransport.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFileTransport.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awUtilInitializer.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awUtilInitializer.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSLocalFileTransport.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSLocalFileTransport.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_minfo.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_minfo.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_oserror.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_oserror.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flibopen.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flibopen.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flush.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flush.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_seek.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_seek.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_settmp.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_settmp.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_istty.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_istty.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_read.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_read.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_unread.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_unread.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnread.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnread.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_write.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_write.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwrite.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwrite.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_edit.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_edit.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnget.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnget.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_sget.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_sget.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnput.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnput.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_readchunk.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_readchunk.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_getchunk.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_getchunk.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_putchunk.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_putchunk.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwbchunk.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwbchunk.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnrgroup.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnrgroup.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwgroup.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwgroup.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_skipgroup.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_skipgroup.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_gets.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_gets.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_puts.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_puts.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awIffFile.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awIffFile.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_errno.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_errno.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_minfo8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_minfo8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flibopen8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flibopen8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flush8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flush8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_seek8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_seek8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_settmp8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_settmp8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_istty8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_istty8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_read8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_read8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_unread8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_unread8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnread8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnread8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_write8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_write8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwrite8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwrite8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_edit8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_edit8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnget8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnget8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_sget8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_sget8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnput8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnput8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_readchunk8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_readchunk8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_getchunk8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_getchunk8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_putchunk8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_putchunk8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwbchunk8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwbchunk8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnrgroup8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnrgroup8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_bgnwgroup8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_bgnwgroup8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_skipgroup8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_skipgroup8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_gets8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_gets8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_puts8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_puts8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(TokenMap.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(TokenMap.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(Foundation.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(Foundation.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArchiveWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArchiveWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OGroup.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OGroup.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OArchive.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OArchive.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(MetaDataMap.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(MetaDataMap.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(WriteUtil.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(WriteUtil.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OwData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OwData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OwImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OwImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArchiveReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArchiveReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IGroup.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IGroup.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IArchive.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IArchive.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(StreamManager.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(StreamManager.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OrData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OrData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OrImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OrImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ReadUtil.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ReadUtil.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OrImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OrImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(swapbyte.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(swapbyte.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(3dsutil.cxx.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(3dsutil.cxx.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSTmpFilename.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSTmpFilename.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_scanlist.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_scanlist.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_list.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_list.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_nodes.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_nodes.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_fmemory.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_fmemory.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_getext.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_getext.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_filter.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_filter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_tmpname.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_tmpname.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_fdwrite.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_fdwrite.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_findfile.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_findfile.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_marks.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_marks.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_context.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_context.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_wait.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_wait.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_setdelay.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_setdelay.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flsetid.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flsetid.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_filter8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_filter8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_marks8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_marks8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_context8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_context8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flsetid8.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flsetid8.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(OStream.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(OStream.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(SpookyV2.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(SpookyV2.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CpwData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CpwData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CpwImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CpwImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ObjectWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ObjectWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(IStreams.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(IStreams.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CprData.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CprData.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CprImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CprImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ObjectReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ObjectReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(half.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(half.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArraySample.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArraySample.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CprImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CprImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(awOSFileOps.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(awOSFileOps.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_exec.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_exec.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_flpath.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_flpath.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_gettype.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_gettype.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(SpwImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(SpwImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ApwImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ApwImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(BasePropertyWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(BasePropertyWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CompoundPropertyWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CompoundPropertyWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(SprImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(SprImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(AprImpl.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(AprImpl.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(BasePropertyReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(BasePropertyReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(CompoundPropertyReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(CompoundPropertyReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(Murmur3.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(Murmur3.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(iff_work.cpp.obj) : warning LNK4099: PDB 'libfbxsdk-md.pdb' was not found with 'libfbxsdk-md.lib(iff_work.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\libfbxsdk-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ScalarPropertyWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ScalarPropertyWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArrayPropertyWriter.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArrayPropertyWriter.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ScalarPropertyReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ScalarPropertyReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libfbxsdk-md.lib(ArrayPropertyReader.cpp.obj) : warning LNK4099: PDB 'alembic-md.pdb' was not found with 'libfbxsdk-md.lib(ArrayPropertyReader.cpp.obj)' or at 'K:\Ptero-Engine\Binaries\alembic-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(parser.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(parser.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlstring.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlstring.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(tree.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(tree.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlsave.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlsave.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(globals.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(globals.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(entities.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(entities.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlIO.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlIO.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlmemory.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlmemory.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(buf.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(buf.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(dict.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(dict.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(hash.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(hash.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(error.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(error.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(valid.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(valid.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(encoding.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(encoding.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(parserInternals.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(parserInternals.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(SAX2.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(SAX2.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(threads.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(threads.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(chvalid.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(chvalid.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(uri.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(uri.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlschemastypes.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlschemastypes.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(relaxng.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(relaxng.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xpath.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xpath.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlregexp.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlregexp.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(list.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(list.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlschemas.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlschemas.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(pattern.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(pattern.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlunicode.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlunicode.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xmlreader.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xmlreader.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xinclude.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xinclude.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>libxml2-md.lib(xpointer.c.obj) : warning LNK4099: PDB 'libxml2-md.pdb' was not found with 'libxml2-md.lib(xpointer.c.obj)' or at 'K:\Ptero-Engine\Binaries\libxml2-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(adler32.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(adler32.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(deflate.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(deflate.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(inflate.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(inflate.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(crc32.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(crc32.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(zutil.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(zutil.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(trees.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(trees.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(inftrees.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(inftrees.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>zlib-md.lib(inffast.c.obj) : warning LNK4099: PDB 'zlib-md.pdb' was not found with 'zlib-md.lib(inffast.c.obj)' or at 'K:\Ptero-Engine\Binaries\zlib-md.pdb'; linking object as if no debug info
+2>     Creating library ..\..\Binaries\System.lib and object ..\..\Binaries\System.exp
+2>  System.vcxproj -> K:\Ptero-Engine\Binaries\System.dll
+2>          1 file(s) copied.
+2>          1 file(s) copied.
+2>          1 file(s) copied.
+1>  DeferredLightingPass.cpp
+1>  dllmain.cpp
+1>  DlssRenderer.cpp
+1>  DX12Context.cpp
+1>  DX12RendererAPI.cpp
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): warning C4003: not enough arguments for function-like macro invocation 'max'
+1>  (compiling source file '/DX12RendererAPI.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2589: '(': illegal token on right side of '::'
+1>  (compiling source file '/DX12RendererAPI.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2059: syntax error: ')'
+1>  (compiling source file '/DX12RendererAPI.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\logger.h(4,10): error C1083: Cannot open include file: 'spdlog/spdlog.h': No such file or directory
+1>  (compiling source file '/DX12RendererAPI.cpp')
+1>  DX12SceneRenderer.cpp
+1>  DX12ShaderCompiler.cpp
+1>  Editor.cpp
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): warning C4003: not enough arguments for function-like macro invocation 'max'
+1>  (compiling source file '/Editor.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2589: '(': illegal token on right side of '::'
+1>  (compiling source file '/Editor.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2059: syntax error: ')'
+1>  (compiling source file '/Editor.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\logger.h(4,10): error C1083: Cannot open include file: 'spdlog/spdlog.h': No such file or directory
+1>  (compiling source file '/Editor.cpp')
+1>  EditorMainMenu.cpp
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): warning C4003: not enough arguments for function-like macro invocation 'max'
+1>  (compiling source file '/EditorMainMenu.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2589: '(': illegal token on right side of '::'
+1>  (compiling source file '/EditorMainMenu.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\shape.h(41,57): error C2059: syntax error: ')'
+1>  (compiling source file '/EditorMainMenu.cpp')
+1>K:\Ptero-Engine\Source\SDKs\CoACD\src\logger.h(4,10): error C1083: Cannot open include file: 'spdlog/spdlog.h': No such file or directory
+1>  (compiling source file '/EditorMainMenu.cpp')
+1>  MaterialEditor.cpp
+1>  AssetManager.cpp
+1>  FbxCompiler.cpp
+1>  SystemAssetApi.cpp
+1>  EntityMeshRenderer.cpp
+1>  HosekWilkieSky.cpp
+1>  MotionVectorRenderer.cpp
+1>  NrdDenoiser.cpp
+1>  Generating Code...
+1>  Compiling...
+1>  PointLightRenderer.cpp
+1>  RadianceProbeRenderer.cpp
+1>  RainRenderer.cpp
+1>  RtAmbientOcclusion.cpp
+1>  RtGlobalIllumination.cpp
+1>  SceneSerializer.cpp
+1>  ShadowMapRenderer.cpp
+1>  SkyRenderer.cpp
+1>  TAARenderer.cpp
+1>  TextureManager.cpp
+1>  VolumetricFogRenderer.cpp
+1>  XeGtaoRenderer.cpp
+1>  Generating Code...
+========== Build: 1 succeeded, 1 failed, 1 up-to-date, 0 skipped ==========
+========== Build completed at 12:13 PM and took 01:11.263 minutes ==========

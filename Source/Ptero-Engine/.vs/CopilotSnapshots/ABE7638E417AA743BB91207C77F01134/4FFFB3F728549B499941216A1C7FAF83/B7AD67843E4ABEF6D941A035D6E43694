@@ -1,0 +1,2797 @@
+﻿#include "pch.h"
+#include "Editor.h"
+
+#include "ImGuizmoCompat.h"
+#include "SceneSerializer.h"
+
+#include <commdlg.h>
+#include <wincodec.h>
+#include <shlobj.h>
+
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <cstring>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+    ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
+    HWND __stdcall DX12Context_GetWindowHandle();
+    bool __stdcall DX12Context_GetRenderSize(UINT* width, UINT* height);
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    bool PromptForSceneOpenPath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
+    {
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = ownerWindowHandle;
+        openFileName.lpstrTitle = "Open Scene";
+        openFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        openFileName.lpstrFile = sceneFileBuffer;
+        openFileName.nMaxFile = sceneFileBufferSize;
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        return GetOpenFileNameA(&openFileName) == TRUE;
+    }
+
+    bool PromptForSceneSavePath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
+    {
+        OPENFILENAMEA saveFileName{};
+        saveFileName.lStructSize = sizeof(saveFileName);
+        saveFileName.hwndOwner = ownerWindowHandle;
+        saveFileName.lpstrTitle = "Save Scene";
+        saveFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        saveFileName.lpstrFile = sceneFileBuffer;
+        saveFileName.nMaxFile = sceneFileBufferSize;
+        saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        saveFileName.lpstrDefExt = "json";
+        return GetSaveFileNameA(&saveFileName) == TRUE;
+    }
+
+    ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+    {
+        return static_cast<ImTextureID>(handle.ptr);
+    }
+
+    std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath)
+    {
+        const std::filesystem::path normalizedPath = relativePath.lexically_normal();
+        return (normalizedPath.empty() || normalizedPath == ".") ? std::string{} : normalizedPath.generic_string();
+    }
+
+    std::filesystem::path FindProjectDataDirectory()
+    {
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+            return {};
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path dataDirectory = currentPath / "Data";
+            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
+                return dataDirectory;
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+                break;
+
+            currentPath = parentPath;
+        }
+
+        return {};
+    }
+
+    bool PromptForDataFile(HWND ownerWindowHandle, const char* title, const char* filter, std::string& inOutRelativePath)
+    {
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        if (dataDirectory.empty())
+            return false;
+
+        char fileBuffer[MAX_PATH] = {};
+        if (!inOutRelativePath.empty())
+        {
+            const std::filesystem::path absolutePath = (dataDirectory / std::filesystem::path(inOutRelativePath)).lexically_normal();
+            strcpy_s(fileBuffer, absolutePath.string().c_str());
+        }
+
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = ownerWindowHandle;
+        openFileName.lpstrTitle = title;
+        openFileName.lpstrFilter = filter;
+        openFileName.lpstrFile = fileBuffer;
+        openFileName.nMaxFile = static_cast<DWORD>(std::size(fileBuffer));
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        openFileName.lpstrInitialDir = dataDirectory.string().c_str();
+        if (!GetOpenFileNameA(&openFileName))
+            return false;
+
+        std::error_code relativeError;
+        const std::filesystem::path selectedPath(fileBuffer);
+        const std::filesystem::path relativePath = std::filesystem::relative(selectedPath, dataDirectory, relativeError);
+        if (relativeError)
+            return false;
+
+        inOutRelativePath = NormalizeRelativeDataPath(relativePath);
+        return true;
+    }
+
+    bool DataRelativeFileExists(const std::string& relativePath)
+    {
+        if (relativePath.empty())
+            return false;
+
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        if (dataDirectory.empty())
+            return false;
+
+        std::error_code errorCode;
+        return std::filesystem::exists((dataDirectory / std::filesystem::path(relativePath)).lexically_normal(), errorCode);
+    }
+
+    std::string FindDefaultMaterialPathForMesh(const std::string& meshRelativePath)
+    {
+        if (meshRelativePath.empty())
+            return {};
+
+        const std::filesystem::path meshPath(meshRelativePath);
+        const std::filesystem::path meshDirectory = meshPath.parent_path();
+        std::filesystem::path meshFileName = meshPath.filename();
+
+        if (meshFileName.extension() == ".ptero")
+            meshFileName = meshFileName.stem();
+        if (meshFileName.extension() == ".fbx")
+            meshFileName = meshFileName.stem();
+
+        const std::filesystem::path directCandidate = meshDirectory / (meshFileName.string() + ".json");
+        if (DataRelativeFileExists(directCandidate.generic_string()))
+            return NormalizeRelativeDataPath(directCandidate);
+
+        const std::filesystem::path folderNamedCandidate = meshDirectory / (meshDirectory.filename().string() + ".json");
+        if (DataRelativeFileExists(folderNamedCandidate.generic_string()))
+            return NormalizeRelativeDataPath(folderNamedCandidate);
+
+        std::error_code iteratorError;
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path absoluteMeshDirectory = (dataDirectory / meshDirectory).lexically_normal();
+        for (std::filesystem::directory_iterator it(absoluteMeshDirectory, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            if (it->is_regular_file(iteratorError) && it->path().extension() == ".json")
+            {
+                const std::filesystem::path relativePath = std::filesystem::relative(it->path(), dataDirectory, iteratorError);
+                if (!iteratorError)
+                    return NormalizeRelativeDataPath(relativePath);
+            }
+        }
+
+        return {};
+    }
+
+    float RadiansToDegrees(float radians)
+    {
+        return radians * (180.0f / DirectX::XM_PI);
+    }
+
+    float DegreesToRadians(float degrees)
+    {
+        return degrees * (DirectX::XM_PI / 180.0f);
+    }
+
+    std::filesystem::path ResolveEditorIconPath(const wchar_t* fileName)
+    {
+        if (fileName == nullptr || fileName[0] == L'\0')
+            return {};
+
+        std::filesystem::path requestedPath(fileName);
+        if (requestedPath.is_absolute() && std::filesystem::exists(requestedPath))
+            return requestedPath;
+
+        wchar_t executablePath[MAX_PATH] = {};
+        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (characterCount == 0 || characterCount == std::size(executablePath))
+            return requestedPath;
+
+        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        const std::filesystem::path fileNameOnly = requestedPath.filename();
+        while (!currentPath.empty())
+        {
+            const std::filesystem::path candidate = currentPath / L"Data" / L"Icons" / fileNameOnly;
+            if (std::filesystem::exists(candidate))
+                return candidate;
+
+            const std::filesystem::path parentPath = currentPath.parent_path();
+            if (parentPath == currentPath)
+                break;
+
+            currentPath = parentPath;
+        }
+
+        return requestedPath;
+    }
+}
+
+ImTextureID Editor::TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+{
+    return static_cast<ImTextureID>(handle.ptr);
+}
+
+// ---------------------------------------------------------------------------
+// Constructor / Initialize / Shutdown
+// ---------------------------------------------------------------------------
+
+Editor::Editor() = default;
+
+void Editor::ReportProgress(const wchar_t* message) const
+{
+    if (mProgressCallback)
+        mProgressCallback(message);
+}
+
+bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
+{
+    if (mIsInitialized)
+    {
+        return true;
+    }
+
+    ReportProgress(L"Loading editor geometry icon...");
+    LoadGeometryIcon(commandList);
+    std::string iconStatus;
+    ReportProgress(L"Loading editor placement icons...");
+    LoadIconTexture(L"Geometry.png", mGeometryIcon, &iconStatus, commandList);
+    LoadIconTexture(L"PointLight.png", mPointLightIcon, &iconStatus, commandList);
+    LoadIconTexture(L"AudioEmitter.png", mAudioEmitterIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Decal.png", mDecalIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Rain.png", mRainIcon, &iconStatus, commandList);
+    ReportProgress(L"Loading editor toolbar icons...");
+    LoadIconTexture(L"Select.png", mSelectIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Move.png", mMoveIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Rotate.png", mRotateIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Scale.png", mScaleIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Wireframe.png", mWireframeIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Proxy.png", mProxyIcon, &iconStatus, commandList);
+    ReportProgress(L"Editor UI assets ready.");
+    mIsInitialized = true;
+    return true;
+}
+
+void Editor::Shutdown()
+{
+    if (mSceneLoadWorker.joinable())
+    {
+        mSceneLoadState.CancelRequested.store(true);
+        mSceneLoadWorker.join();
+    }
+
+    ReleaseIconTexture(mGeometryIcon);
+    ReleaseIconTexture(mPointLightIcon);
+    ReleaseIconTexture(mAudioEmitterIcon);
+    ReleaseIconTexture(mDecalIcon);
+    ReleaseIconTexture(mRainIcon);
+    ReleaseIconTexture(mSelectIcon);
+    ReleaseIconTexture(mMoveIcon);
+    ReleaseIconTexture(mRotateIcon);
+    ReleaseIconTexture(mScaleIcon);
+    ReleaseIconTexture(mWireframeIcon);
+    ReleaseIconTexture(mProxyIcon);
+    mIsInitialized = false;
+}
+
+// ---------------------------------------------------------------------------
+// Icon loading helpers (stubs - textures loaded externally via DX12RendererAPI)
+// ---------------------------------------------------------------------------
+
+bool Editor::LoadGeometryIcon(ID3D12GraphicsCommandList* commandList)
+{
+    std::string statusMessage;
+    return LoadIconTexture(L"Geometry.png", mGeometryIcon, &statusMessage, commandList);
+}
+
+bool Editor::LoadIconTexture(const wchar_t* fileName, IconTexture& iconTexture,
+                              std::string* statusMessage, ID3D12GraphicsCommandList* commandList)
+{
+    if (fileName == nullptr || commandList == nullptr)
+    {
+        if (statusMessage) *statusMessage = "Invalid icon load request.";
+        return false;
+    }
+
+    if (iconTexture.Texture)
+    {
+        return true;
+    }
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    ID3D12CommandQueue* queue = DX12Context_GetCommandQueue();
+    if (!device || !queue)
+    {
+        if (statusMessage) *statusMessage = "DX12 device or command queue unavailable for icon load.";
+        return false;
+    }
+
+    const std::filesystem::path resolvedPath = ResolveEditorIconPath(fileName);
+
+    ComPtr<IWICImagingFactory> imagingFactory;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&imagingFactory));
+    if (FAILED(hr) || !imagingFactory)
+    {
+        if (statusMessage) *statusMessage = "Failed to create WIC imaging factory.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    hr = imagingFactory->CreateDecoderFromFilename(
+        resolvedPath.c_str(),
+        nullptr,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnLoad,
+        &decoder);
+    if (FAILED(hr) || !decoder)
+    {
+        if (statusMessage) *statusMessage = "Failed to open icon image.";
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr) || !frame)
+    {
+        if (statusMessage) *statusMessage = "Failed to read icon frame.";
+        return false;
+    }
+
+    ComPtr<IWICFormatConverter> formatConverter;
+    hr = imagingFactory->CreateFormatConverter(&formatConverter);
+    if (FAILED(hr) || !formatConverter)
+    {
+        if (statusMessage) *statusMessage = "Failed to create icon format converter.";
+        return false;
+    }
+
+    hr = formatConverter->Initialize(
+        frame.Get(),
+        GUID_WICPixelFormat32bppRGBA,
+        WICBitmapDitherTypeNone,
+        nullptr,
+        0.0f,
+        WICBitmapPaletteTypeCustom);
+    if (FAILED(hr))
+    {
+        if (statusMessage) *statusMessage = "Failed to convert icon image format.";
+        return false;
+    }
+
+    UINT width = 0;
+    UINT height = 0;
+    hr = formatConverter->GetSize(&width, &height);
+    if (FAILED(hr) || width == 0 || height == 0)
+    {
+        if (statusMessage) *statusMessage = "Failed to read icon dimensions.";
+        return false;
+    }
+
+    const UINT rowPitch = width * 4;
+    const UINT imageSize = rowPitch * height;
+    std::vector<uint8_t> pixelData(imageSize);
+    hr = formatConverter->CopyPixels(nullptr, rowPitch, imageSize, pixelData.data());
+    if (FAILED(hr))
+    {
+        if (statusMessage) *statusMessage = "Failed to copy icon pixels.";
+        return false;
+    }
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Alignment = 0;
+    textureDesc.Width = width;
+    textureDesc.Height = height;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.SampleDesc.Quality = 0;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    const auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    hr = device->CreateCommittedResource(
+        &defaultHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &textureDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&iconTexture.Texture));
+    if (FAILED(hr) || !iconTexture.Texture)
+    {
+        if (statusMessage) *statusMessage = "Failed to create icon texture resource.";
+        return false;
+    }
+
+    D3D12_SUBRESOURCE_DATA subresourceData{};
+    subresourceData.pData = pixelData.data();
+    subresourceData.RowPitch = rowPitch;
+    subresourceData.SlicePitch = imageSize;
+
+    const UINT64 uploadSize = GetRequiredIntermediateSize(iconTexture.Texture.Get(), 0, 1);
+    const auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+    const auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    hr = device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&iconTexture.Upload));
+    if (FAILED(hr) || !iconTexture.Upload)
+    {
+        iconTexture.Texture.Reset();
+        if (statusMessage) *statusMessage = "Failed to create icon upload buffer.";
+        return false;
+    }
+
+    UpdateSubresources(commandList, iconTexture.Texture.Get(), iconTexture.Upload.Get(), 0, 0, 1, &subresourceData);
+
+    const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        iconTexture.Texture.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &barrier);
+
+    if (!DX12Context_AllocateSrvDescriptor(&iconTexture.CpuHandle, &iconTexture.GpuHandle))
+    {
+        iconTexture.Texture.Reset();
+        iconTexture.Upload.Reset();
+        if (statusMessage) *statusMessage = "Failed to allocate icon SRV descriptor.";
+        return false;
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(iconTexture.Texture.Get(), &srvDesc, iconTexture.CpuHandle);
+
+    if (statusMessage) *statusMessage = "";
+    return true;
+}
+
+void Editor::ReleaseIconTexture(IconTexture& iconTexture)
+{
+    iconTexture.Texture.Reset();
+    iconTexture.Upload.Reset();
+    iconTexture = IconTexture{};
+}
+
+// ---------------------------------------------------------------------------
+// Entity accessors
+// ---------------------------------------------------------------------------
+
+Entity* Editor::GetSelectedEntity()
+{
+    if (mSelectedEntityIndex < 0 || mSelectedEntityIndex >= static_cast<int>(mEntities.size()))
+        return nullptr;
+    return &mEntities[mSelectedEntityIndex];
+}
+
+bool Editor::IsEntitySelected(int entityIndex) const
+{
+    return std::find(mSelectedEntityIndices.begin(), mSelectedEntityIndices.end(), entityIndex) != mSelectedEntityIndices.end();
+}
+
+// ---------------------------------------------------------------------------
+// Copy / Paste / Delete
+// ---------------------------------------------------------------------------
+
+bool Editor::CanCopySelectedEntity() const
+{
+    return mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size());
+}
+
+bool Editor::CanPasteEntity() const
+{
+    return mCopiedEntity.has_value();
+}
+
+bool Editor::CanDeleteSelectedEntity() const
+{
+    return !mSelectedEntityIndices.empty()
+        || (mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size()));
+}
+
+bool Editor::CopySelectedEntity()
+{
+    if (!CanCopySelectedEntity()) return false;
+    mCopiedEntity = mEntities[mSelectedEntityIndex];
+    return true;
+}
+
+bool Editor::PasteCopiedEntity()
+{
+    if (!CanPasteEntity()) return false;
+    mEntities.push_back(*mCopiedEntity);
+    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+    mSelectedEntityIndices.clear();
+    mSelectedEntityIndices.push_back(mSelectedEntityIndex);
+    mSceneDirty = true;
+    return true;
+}
+
+bool Editor::DeleteSelectedEntity()
+{
+    if (!CanDeleteSelectedEntity()) return false;
+
+    if (!mSelectedEntityIndices.empty())
+    {
+        std::vector<int> indices = mSelectedEntityIndices;
+        std::sort(indices.begin(), indices.end());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+
+        for (auto it = indices.rbegin(); it != indices.rend(); ++it)
+        {
+            if (*it >= 0 && *it < static_cast<int>(mEntities.size()))
+            {
+                mEntities.erase(mEntities.begin() + *it);
+            }
+        }
+    }
+    else
+    {
+        mEntities.erase(mEntities.begin() + mSelectedEntityIndex);
+    }
+
+    mSelectedEntityIndex = -1;
+    mSelectedEntityIndices.clear();
+    mSceneDirty = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Scene save / load
+// ---------------------------------------------------------------------------
+
+bool Editor::SaveSceneToFile(const std::string& filepath)
+{
+    Scene scene;
+    scene.Entities          = &mEntities;
+    scene.CameraPosition    = &mSavedCameraPosition;
+    scene.CameraRotation    = &mSavedCameraRotation;
+    scene.TimeOfDay         = mTimeOfDaySettings;
+    scene.Taa               = mTaaSettings;
+    scene.Dlss              = mDlssSettings;
+    scene.Rtgi              = mRtgiSettings;
+    scene.Rtao              = mRtaoSettings;
+    scene.Gtao              = mGtaoSettings;
+    scene.Agx               = mAgxSettings;
+    scene.VolumetricFog     = mVolumetricFogSettings;
+    scene.Bloom             = mBloomSettings;
+
+    try
+    {
+        SceneSerializer serializer(&scene);
+        serializer.Serialize(filepath);
+        mCurrentSceneFilePath = filepath;
+        mLastSceneStatusMessage = "Scene saved: " + filepath;
+        mSceneDirty = false;
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        mLastSceneStatusMessage = std::string("Save failed: ") + e.what();
+        return false;
+    }
+}
+
+bool Editor::LoadSceneFromFile(const std::string& filepath)
+{
+    Scene scene;
+    scene.Entities      = &mEntities;
+    scene.CameraPosition = &mSavedCameraPosition;
+    scene.CameraRotation = &mSavedCameraRotation;
+    scene.HasCameraPosition = nullptr;
+    scene.HasCameraRotation = nullptr;
+    scene.TimeOfDay     = mTimeOfDaySettings;
+    scene.Taa           = mTaaSettings;
+    scene.Dlss          = mDlssSettings;
+    scene.Rtgi          = mRtgiSettings;
+    scene.Rtao          = mRtaoSettings;
+    scene.Gtao          = mGtaoSettings;
+    scene.Agx           = mAgxSettings;
+    scene.VolumetricFog = mVolumetricFogSettings;
+    scene.Bloom         = mBloomSettings;
+
+    try
+    {
+        SceneSerializer serializer(&scene);
+        mEntities.clear();
+        mSelectedEntityIndex = -1;
+        mSelectedEntityIndices.clear();
+        if (serializer.Deserialize(filepath))
+        {
+            mCurrentSceneFilePath   = filepath;
+            mLastSceneStatusMessage = "Scene loaded: " + filepath;
+            mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
+            mSceneDirty = false;
+            return true;
+        }
+        mLastSceneStatusMessage = "Failed to deserialize: " + filepath;
+        return false;
+    }
+    catch (const std::exception& e)
+    {
+        mLastSceneStatusMessage = std::string("Load failed: ") + e.what();
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Async scene loading
+// ---------------------------------------------------------------------------
+
+bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
+{
+    if (IsSceneLoading()) return false;
+
+    if (mSceneLoadWorker.joinable())
+    {
+        mSceneLoadWorker.join();
+    }
+
+    mSceneLoadState.Progress = 0.0f;
+    mSceneLoadState.StatusMessage = "Loading...";
+    mSceneLoadState.InProgress = true;
+    mSceneLoadState.Completed = false;
+    mSceneLoadState.CancelRequested = false;
+    mSceneLoadState.Result.reset();
+
+    std::string fp = filepath;
+    mSceneLoadWorker = std::thread([this, fp]()
+    {
+        SceneLoadData data;
+        Scene scene;
+        scene.Entities      = &data.Entities;
+        scene.CameraPosition = &data.CameraPosition;
+        scene.CameraRotation = &data.CameraRotation;
+        scene.HasCameraPosition = &data.HasCameraPosition;
+        scene.HasCameraRotation = &data.HasCameraRotation;
+        scene.TimeOfDay     = &data.TimeOfDay;
+        scene.Taa           = &data.Taa;
+        scene.Rtgi          = &data.Rtgi;
+        scene.Rtao          = &data.Rtao;
+        scene.Gtao          = &data.Gtao;
+        scene.Agx           = &data.Agx;
+        scene.VolumetricFog = &data.VolumetricFog;
+        scene.Bloom         = &data.Bloom;
+
+        try
+        {
+            SceneSerializer serializer(&scene);
+            bool ok = serializer.Deserialize(fp, SceneLoadProgressCallback, this);
+            mSceneLoadState.Completed.store(ok);
+        }
+        catch (...)
+        {
+            mSceneLoadState.Completed.store(false);
+        }
+
+        mSceneLoadState.Result.emplace(std::move(data));
+        mSceneLoadState.InProgress.store(false);
+    });
+
+    mCurrentSceneFilePath = filepath;
+    return true;
+}
+
+void Editor::ResetScene()
+{
+    mEntities.clear();
+    mSelectedEntityIndex = -1;
+    mSelectedEntityIndices.clear();
+    mCurrentSceneFilePath.clear();
+    mLastSceneStatusMessage = "New scene created.";
+    mNextGeometryInstanceId = 1;
+    mSceneDirty = false;
+}
+
+bool Editor::PromptToSaveUnsavedScene(HWND ownerWindowHandle)
+{
+    if (!mSceneDirty)
+    {
+        return true;
+    }
+
+    const int result = MessageBoxA(
+        ownerWindowHandle,
+        "The current level has unsaved changes. Do you want to save it before continuing?",
+        "Unsaved Level",
+        MB_YESNOCANCEL | MB_ICONWARNING);
+
+    if (result == IDCANCEL)
+    {
+        return false;
+    }
+
+    if (result == IDYES)
+    {
+        return SaveScene(ownerWindowHandle);
+    }
+
+    return true;
+}
+
+bool Editor::SaveScene(HWND ownerWindowHandle)
+{
+    if (!mCurrentSceneFilePath.empty())
+    {
+        return SaveSceneToFile(mCurrentSceneFilePath);
+    }
+
+    return SaveSceneAs(ownerWindowHandle);
+}
+
+bool Editor::SaveSceneAs(HWND ownerWindowHandle)
+{
+    char sceneFileBuffer[MAX_PATH] = {};
+    if (!mCurrentSceneFilePath.empty())
+    {
+        strcpy_s(sceneFileBuffer, mCurrentSceneFilePath.c_str());
+    }
+
+    if (!PromptForSceneSavePath(ownerWindowHandle, sceneFileBuffer, static_cast<DWORD>(std::size(sceneFileBuffer))))
+    {
+        return false;
+    }
+
+    return SaveSceneToFile(sceneFileBuffer);
+}
+
+bool Editor::OpenScene(HWND ownerWindowHandle)
+{
+    if (!PromptToSaveUnsavedScene(ownerWindowHandle))
+    {
+        return false;
+    }
+
+    char sceneFileBuffer[MAX_PATH] = {};
+    if (!mCurrentSceneFilePath.empty())
+    {
+        strcpy_s(sceneFileBuffer, mCurrentSceneFilePath.c_str());
+    }
+
+    if (!PromptForSceneOpenPath(ownerWindowHandle, sceneFileBuffer, static_cast<DWORD>(std::size(sceneFileBuffer))))
+    {
+        return false;
+    }
+
+    return BeginLoadSceneFromFile(sceneFileBuffer);
+}
+
+bool Editor::NewScene(HWND ownerWindowHandle)
+{
+    if (!PromptToSaveUnsavedScene(ownerWindowHandle))
+    {
+        return false;
+    }
+
+    ResetScene();
+    return true;
+}
+
+void Editor::UpdateSceneLoading()
+{
+    if (!mSceneLoadState.Result.has_value()) return;
+    if (mSceneLoadState.InProgress.load()) return;
+    if (mSceneLoadWorker.joinable()) mSceneLoadWorker.join();
+
+    if (mSceneLoadState.Completed.load())
+    {
+        auto& data       = *mSceneLoadState.Result;
+        mEntities        = std::move(data.Entities);
+        mSelectedEntityIndex = -1;
+        mSelectedEntityIndices.clear();
+        mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
+
+        if (data.HasCameraPosition)
+            mSavedCameraPosition = data.CameraPosition;
+        if (data.HasCameraRotation)
+            mSavedCameraRotation = data.CameraRotation;
+        mRequestCameraRestore = data.HasCameraPosition || data.HasCameraRotation;
+
+        if (mTimeOfDaySettings)       *mTimeOfDaySettings       = data.TimeOfDay;
+        if (mTaaSettings)             *mTaaSettings             = data.Taa;
+        if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
+        if (mRtaoSettings)            *mRtaoSettings            = data.Rtao;
+        if (mGtaoSettings)            *mGtaoSettings            = data.Gtao;
+        if (mAgxSettings)             *mAgxSettings             = data.Agx;
+        if (mVolumetricFogSettings)   *mVolumetricFogSettings   = data.VolumetricFog;
+        if (mBloomSettings)           *mBloomSettings           = data.Bloom;
+
+        mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
+        mSceneDirty = false;
+    }
+    else
+    {
+        mLastSceneStatusMessage = "Failed to load: " + mCurrentSceneFilePath;
+    }
+
+    mSceneLoadState.Result.reset();
+}
+
+bool Editor::IsSceneLoading() const
+{
+    return mSceneLoadState.InProgress.load();
+}
+
+float Editor::GetSceneLoadProgress() const
+{
+    return mSceneLoadState.Progress.load();
+}
+
+std::string Editor::GetSceneLoadStatusMessage() const
+{
+    return mSceneLoadState.StatusMessage;
+}
+
+void Editor::SetSceneLoadProgress(float progress, const char* statusMessage)
+{
+    mSceneLoadState.Progress.store(progress);
+    if (statusMessage)
+        mSceneLoadState.StatusMessage = statusMessage;
+}
+
+bool Editor::SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData)
+{
+    if (auto* editor = static_cast<Editor*>(userData))
+    {
+        if (editor->mSceneLoadState.CancelRequested.load())
+        {
+            return false;
+        }
+
+        editor->SetSceneLoadProgress(progress, statusMessage);
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Viewport helpers
+// ---------------------------------------------------------------------------
+
+bool Editor::TryProjectWorldToViewport(
+    const DirectX::XMFLOAT3& worldPosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    ImVec2& outScreenPosition,
+    bool clampToViewport) const
+{
+    using namespace DirectX;
+    XMVECTOR pos = XMLoadFloat3(&worldPosition);
+    XMMATRIX vp  = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    XMVECTOR clip = XMVector4Transform(XMVectorSetW(pos, 1.0f), vp);
+
+    float w = XMVectorGetW(clip);
+    if (w < 0.0001f) return false;
+
+    float ndcX = XMVectorGetX(clip) / w;
+    float ndcY = XMVectorGetY(clip) / w;
+
+    if (!clampToViewport && (ndcX < -1.0f || ndcX > 1.0f || ndcY < -1.0f || ndcY > 1.0f)) return false;
+
+    if (clampToViewport)
+    {
+        ndcX = (std::max)(-1.0f, (std::min)(1.0f, ndcX));
+        ndcY = (std::max)(-1.0f, (std::min)(1.0f, ndcY));
+    }
+
+    outScreenPosition.x = viewportOrigin.x + (ndcX  * 0.5f + 0.5f) * viewportSize.x;
+    outScreenPosition.y = viewportOrigin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * viewportSize.y;
+    return true;
+}
+
+bool Editor::TryGetViewportWorldPositionOnGrid(
+    const ImVec2& mousePosition,
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    DirectX::XMFLOAT3& outWorldPosition) const
+{
+    using namespace DirectX;
+
+    if (viewportSize.x <= 0.0f || viewportSize.y <= 0.0f) return false;
+
+    float ndcX = ((mousePosition.x - viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f;
+    float ndcY = 1.0f - ((mousePosition.y - viewportOrigin.y) / viewportSize.y) * 2.0f;
+
+    XMMATRIX invVP = XMMatrixInverse(nullptr, camera.GetViewMatrix() * camera.GetProjectionMatrix());
+
+    XMVECTOR nearClip = XMVector4Transform(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), invVP);
+    XMVECTOR farClip  = XMVector4Transform(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), invVP);
+
+    nearClip = nearClip / XMVectorSplatW(nearClip);
+    farClip  = farClip  / XMVectorSplatW(farClip);
+
+    XMVECTOR dir = XMVector3Normalize(farClip - nearClip);
+    float dirZ = XMVectorGetZ(dir);
+    if (std::abs(dirZ) < 0.0001f) return false;
+
+    float t = -XMVectorGetZ(nearClip) / dirZ;
+    if (t < 0.0f) return false;
+
+    XMVECTOR hit = nearClip + dir * t;
+    XMStoreFloat3(&outWorldPosition, hit);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Viewport selection / interaction
+// ---------------------------------------------------------------------------
+
+void Editor::HandleViewportInteraction(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    bool viewportHovered)
+{
+    if (!viewportHovered) return;
+
+    if (mBlockViewportSelection)
+    {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+        {
+            mBlockViewportSelection = false;
+            mViewportSelection.IsDragging = false;
+        }
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    const bool gizmoHovered = ImGuizmo::IsOver();
+    const bool gizmoInUse = ImGuizmo::IsUsing();
+
+    if (gizmoHovered || gizmoInUse)
+    {
+        mViewportSelection.IsDragging = false;
+        return;
+    }
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        mViewportSelection.IsDragging = true;
+        mViewportSelection.Start       = io.MousePos;
+        mViewportSelection.Current     = io.MousePos;
+    }
+
+    if (mViewportSelection.IsDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        mViewportSelection.Current = io.MousePos;
+    }
+
+    if (mViewportSelection.IsDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        FinishViewportSelection(viewportOrigin, viewportSize, camera);
+        mViewportSelection.IsDragging = false;
+    }
+}
+
+void Editor::FinishViewportSelection(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera)
+{
+    if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mAudioEmitterPrototypeSelected || mDecalPrototypeSelected || mRainPrototypeSelected)
+    {
+        DirectX::XMFLOAT3 worldPosition{};
+        if (TryGetViewportWorldPositionOnGrid(mViewportSelection.Current, viewportOrigin, viewportSize, camera, worldPosition))
+        {
+            worldPosition.z = 0.0f;
+
+            if (mGeometryPrototypeSelected)
+            {
+                CreateGeometryInstanceAt(worldPosition);
+            }
+            else if (mPointLightPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "PointLight_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddPointLightComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mAudioEmitterPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "AudioEmitter_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddAudioEmitterComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mDecalPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "Decal_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddDecalComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mRainPrototypeSelected)
+            {
+                Entity entity;
+                entity.Name = "Rain_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
+                entity.Transform.Position = worldPosition;
+                entity.AddRainComponent();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+        }
+        return;
+    }
+
+    const bool isSelectMode = (mActiveGizmo == GizmoType::None);
+    ImVec2 selectionMin((std::min)(mViewportSelection.Start.x, mViewportSelection.Current.x), (std::min)(mViewportSelection.Start.y, mViewportSelection.Current.y));
+    ImVec2 selectionMax((std::max)(mViewportSelection.Start.x, mViewportSelection.Current.x), (std::max)(mViewportSelection.Start.y, mViewportSelection.Current.y));
+    const float selectionWidth = selectionMax.x - selectionMin.x;
+    const float selectionHeight = selectionMax.y - selectionMin.y;
+
+    if (isSelectMode && (selectionWidth > 4.0f || selectionHeight > 4.0f))
+    {
+        mSelectedEntityIndices.clear();
+        for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
+        {
+            ImVec2 screenPos;
+            if (!TryProjectWorldToViewport(mEntities[i].Transform.Position, viewportOrigin, viewportSize, camera, screenPos))
+                continue;
+
+            if (screenPos.x >= selectionMin.x && screenPos.x <= selectionMax.x &&
+                screenPos.y >= selectionMin.y && screenPos.y <= selectionMax.y)
+            {
+                mSelectedEntityIndices.push_back(i);
+            }
+        }
+
+        mSelectedEntityIndex = mSelectedEntityIndices.empty() ? -1 : mSelectedEntityIndices.front();
+        return;
+    }
+
+    ImVec2 clickPos = mViewportSelection.Current;
+    float  bestDist = 20.0f;
+    int    bestIdx  = -1;
+
+    for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
+    {
+        ImVec2 screenPos;
+        if (TryProjectWorldToViewport(mEntities[i].Transform.Position, viewportOrigin, viewportSize, camera, screenPos))
+        {
+            float dx = screenPos.x - clickPos.x;
+            float dy = screenPos.y - clickPos.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestIdx  = i;
+            }
+        }
+    }
+
+    mSelectedEntityIndex = bestIdx;
+    mSelectedEntityIndices.clear();
+    if (bestIdx >= 0)
+        mSelectedEntityIndices.push_back(bestIdx);
+}
+
+void Editor::HandleManualGizmoInteraction(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    bool viewportHovered,
+    Entity* selectedEntity)
+{
+    if (!selectedEntity || !viewportHovered || mActiveGizmo == GizmoType::None)
+    {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            mManualGizmo.IsActive = false;
+            mManualGizmo.ActiveHandle = ManualGizmoHandle::None;
+        }
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    using namespace DirectX;
+
+    const XMFLOAT3 origin = selectedEntity->Transform.Position;
+    constexpr float desiredAxisScreenLength = 72.0f;
+
+    ImVec2 pivotScreen;
+    ImVec2 xScreen;
+    ImVec2 yScreen;
+    ImVec2 zScreen;
+    if (!TryProjectWorldToViewport(origin, viewportOrigin, viewportSize, camera, pivotScreen, true))
+        return;
+
+    auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, ImVec2& axisScreenEnd, float& axisWorldLength) -> bool
+    {
+        ImVec2 unitScreenEnd;
+        if (!TryProjectWorldToViewport(
+                XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
+                viewportOrigin,
+                viewportSize,
+                camera,
+                unitScreenEnd,
+                true))
+        {
+            return false;
+        }
+
+        const ImVec2 unitScreenDirection(unitScreenEnd.x - pivotScreen.x, unitScreenEnd.y - pivotScreen.y);
+        const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
+        if (pixelsPerWorldUnit <= 0.0001f)
+            return false;
+
+        axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
+        return TryProjectWorldToViewport(
+            XMFLOAT3(
+                origin.x + axisWorldDirection.x * axisWorldLength,
+                origin.y + axisWorldDirection.y * axisWorldLength,
+                origin.z + axisWorldDirection.z * axisWorldLength),
+            viewportOrigin,
+            viewportSize,
+            camera,
+            axisScreenEnd,
+            true);
+    };
+
+    float xAxisWorldLength = 0.0f;
+    float yAxisWorldLength = 0.0f;
+    float zAxisWorldLength = 0.0f;
+    const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
+    const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+    const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+
+    auto distanceToSegment = [](const ImVec2& point, const ImVec2& segmentStart, const ImVec2& segmentEnd) -> float
+    {
+        const ImVec2 segment(segmentEnd.x - segmentStart.x, segmentEnd.y - segmentStart.y);
+        const ImVec2 toPoint(point.x - segmentStart.x, point.y - segmentStart.y);
+        const float segmentLengthSquared = segment.x * segment.x + segment.y * segment.y;
+        if (segmentLengthSquared <= 0.0001f)
+            return FLT_MAX;
+
+        const float t = (std::max)(0.0f, (std::min)(1.0f, (toPoint.x * segment.x + toPoint.y * segment.y) / segmentLengthSquared));
+        const ImVec2 closestPoint(segmentStart.x + segment.x * t, segmentStart.y + segment.y * t);
+        const float dx = point.x - closestPoint.x;
+        const float dy = point.y - closestPoint.y;
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    auto distanceToProjectedRing = [&](const XMFLOAT3& axisA, float axisALength, const XMFLOAT3& axisB, float axisBLength) -> float
+    {
+        constexpr int segmentCount = 48;
+        float bestDistance = FLT_MAX;
+        ImVec2 previousPoint{};
+        bool hasPreviousPoint = false;
+
+        for (int segmentIndex = 0; segmentIndex <= segmentCount; ++segmentIndex)
+        {
+            const float angle = (XM_2PI * static_cast<float>(segmentIndex)) / static_cast<float>(segmentCount);
+            const XMFLOAT3 ringPoint(
+                origin.x + axisA.x * std::cos(angle) * axisALength + axisB.x * std::sin(angle) * axisBLength,
+                origin.y + axisA.y * std::cos(angle) * axisALength + axisB.y * std::sin(angle) * axisBLength,
+                origin.z + axisA.z * std::cos(angle) * axisALength + axisB.z * std::sin(angle) * axisBLength);
+
+            ImVec2 projectedPoint;
+            if (TryProjectWorldToViewport(ringPoint, viewportOrigin, viewportSize, camera, projectedPoint))
+            {
+                if (hasPreviousPoint)
+                    bestDistance = (std::min)(bestDistance, distanceToSegment(io.MousePos, previousPoint, projectedPoint));
+
+                previousPoint = projectedPoint;
+                hasPreviousPoint = true;
+            }
+            else
+            {
+                hasPreviousPoint = false;
+            }
+        }
+
+        return bestDistance;
+    };
+
+    auto beginAxisDrag = [&](ManualGizmoHandle handle, const XMFLOAT3& axisWorldDirection, const ImVec2& axisScreenEnd, float axisWorldLength)
+    {
+        const ImVec2 axisScreenDirection(axisScreenEnd.x - pivotScreen.x, axisScreenEnd.y - pivotScreen.y);
+        const float axisScreenLength = std::sqrt(axisScreenDirection.x * axisScreenDirection.x + axisScreenDirection.y * axisScreenDirection.y);
+        if (axisScreenLength <= 0.0001f)
+            return;
+
+        mManualGizmo.IsActive = true;
+        mManualGizmo.ActiveHandle = handle;
+        mManualGizmo.StartMouse = io.MousePos;
+        mManualGizmo.StartPosition = selectedEntity->Transform.Position;
+        mManualGizmo.StartRotation = selectedEntity->Transform.Rotation;
+        mManualGizmo.StartScale = selectedEntity->Transform.Scale;
+        mManualGizmo.AxisWorldDirection = axisWorldDirection;
+        mManualGizmo.SecondaryAxisWorldDirection = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        mManualGizmo.AxisScreenDirection = ImVec2(axisScreenDirection.x / axisScreenLength, axisScreenDirection.y / axisScreenLength);
+        mManualGizmo.SecondaryAxisScreenDirection = ImVec2(0.0f, 0.0f);
+        mManualGizmo.PixelsPerWorldUnit = axisScreenLength / axisWorldLength;
+        mManualGizmo.SecondaryPixelsPerWorldUnit = 1.0f;
+        mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+        mBlockViewportSelection = true;
+    };
+
+    auto beginPlaneDrag = [&](ManualGizmoHandle handle,
+                              const XMFLOAT3& primaryAxisWorldDirection,
+                              const ImVec2& primaryAxisScreenEnd,
+                              float primaryAxisWorldLength,
+                              const XMFLOAT3& secondaryAxisWorldDirection,
+                              const ImVec2& secondaryAxisScreenEnd,
+                              float secondaryAxisWorldLength)
+    {
+        const ImVec2 primaryAxisScreenDirection(primaryAxisScreenEnd.x - pivotScreen.x, primaryAxisScreenEnd.y - pivotScreen.y);
+        const ImVec2 secondaryAxisScreenDirection(secondaryAxisScreenEnd.x - pivotScreen.x, secondaryAxisScreenEnd.y - pivotScreen.y);
+        const float primaryAxisScreenLength = std::sqrt(primaryAxisScreenDirection.x * primaryAxisScreenDirection.x + primaryAxisScreenDirection.y * primaryAxisScreenDirection.y);
+        const float secondaryAxisScreenLength = std::sqrt(secondaryAxisScreenDirection.x * secondaryAxisScreenDirection.x + secondaryAxisScreenDirection.y * secondaryAxisScreenDirection.y);
+        if (primaryAxisScreenLength <= 0.0001f || secondaryAxisScreenLength <= 0.0001f)
+            return;
+
+        mManualGizmo.IsActive = true;
+        mManualGizmo.ActiveHandle = handle;
+        mManualGizmo.StartMouse = io.MousePos;
+        mManualGizmo.StartPosition = selectedEntity->Transform.Position;
+        mManualGizmo.StartRotation = selectedEntity->Transform.Rotation;
+        mManualGizmo.StartScale = selectedEntity->Transform.Scale;
+        mManualGizmo.AxisWorldDirection = primaryAxisWorldDirection;
+        mManualGizmo.SecondaryAxisWorldDirection = secondaryAxisWorldDirection;
+        mManualGizmo.AxisScreenDirection = ImVec2(primaryAxisScreenDirection.x / primaryAxisScreenLength, primaryAxisScreenDirection.y / primaryAxisScreenLength);
+        mManualGizmo.SecondaryAxisScreenDirection = ImVec2(secondaryAxisScreenDirection.x / secondaryAxisScreenLength, secondaryAxisScreenDirection.y / secondaryAxisScreenLength);
+        mManualGizmo.PixelsPerWorldUnit = primaryAxisScreenLength / primaryAxisWorldLength;
+        mManualGizmo.SecondaryPixelsPerWorldUnit = secondaryAxisScreenLength / secondaryAxisWorldLength;
+        mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+        mBlockViewportSelection = true;
+    };
+
+    auto pointInTriangle = [](const ImVec2& point, const ImVec2& a, const ImVec2& b, const ImVec2& c) -> bool
+    {
+        const auto sign = [](const ImVec2& p1, const ImVec2& p2, const ImVec2& p3)
+        {
+            return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+        };
+
+        const float d1 = sign(point, a, b);
+        const float d2 = sign(point, b, c);
+        const float d3 = sign(point, c, a);
+        const bool hasNegative = (d1 < 0.0f) || (d2 < 0.0f) || (d3 < 0.0f);
+        const bool hasPositive = (d1 > 0.0f) || (d2 > 0.0f) || (d3 > 0.0f);
+        return !(hasNegative && hasPositive);
+    };
+
+    if (!mManualGizmo.IsActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        const float axisHitThreshold = 10.0f;
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && hasYAxis)
+        {
+            const ImVec2 xyCorner(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f + (yScreen.x - pivotScreen.x) * 0.35f,
+                                  pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f + (yScreen.y - pivotScreen.y) * 0.35f);
+            if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xyCorner))
+            {
+                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXYPlane : ManualGizmoHandle::Scale,
+                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
+                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+                return;
+            }
+        }
+
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && hasZAxis)
+        {
+            const ImVec2 xzCorner(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f + (zScreen.x - pivotScreen.x) * 0.35f,
+                                  pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f + (zScreen.y - pivotScreen.y) * 0.35f);
+            if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xzCorner))
+            {
+                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXZPlane : ManualGizmoHandle::Scale,
+                               XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
+                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+                return;
+            }
+        }
+
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasYAxis && hasZAxis)
+        {
+            const ImVec2 yzCorner(pivotScreen.x + (yScreen.x - pivotScreen.x) * 0.35f + (zScreen.x - pivotScreen.x) * 0.35f,
+                                  pivotScreen.y + (yScreen.y - pivotScreen.y) * 0.35f + (zScreen.y - pivotScreen.y) * 0.35f);
+            if (pointInTriangle(io.MousePos, pivotScreen, ImVec2(pivotScreen.x + (yScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (yScreen.y - pivotScreen.y) * 0.35f), yzCorner))
+            {
+                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYZPlane : ManualGizmoHandle::Scale,
+                               XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength,
+                               XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+                return;
+            }
+        }
+
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && distanceToSegment(io.MousePos, pivotScreen, xScreen) <= axisHitThreshold)
+        {
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXAxis : ManualGizmoHandle::ScaleXAxis, XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
+            return;
+        }
+
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasYAxis && distanceToSegment(io.MousePos, pivotScreen, yScreen) <= axisHitThreshold)
+        {
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYAxis : ManualGizmoHandle::ScaleYAxis, XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+            return;
+        }
+
+        if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasZAxis && distanceToSegment(io.MousePos, pivotScreen, zScreen) <= axisHitThreshold)
+        {
+            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateZAxis : ManualGizmoHandle::ScaleZAxis, XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+            return;
+        }
+
+        if (mActiveGizmo == GizmoType::Rotate)
+        {
+            const float rotateHitThreshold = 10.0f;
+            const float redRingDistance = distanceToProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength);
+            const float greenRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength);
+            const float blueRingDistance = distanceToProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength);
+
+            float bestRingDistance = redRingDistance;
+            XMFLOAT3 rotationAxis(1.0f, 0.0f, 0.0f);
+            if (greenRingDistance < bestRingDistance)
+            {
+                bestRingDistance = greenRingDistance;
+                rotationAxis = XMFLOAT3(0.0f, 0.0f, 1.0f);
+            }
+            if (blueRingDistance < bestRingDistance)
+            {
+                bestRingDistance = blueRingDistance;
+                rotationAxis = XMFLOAT3(0.0f, 1.0f, 0.0f);
+            }
+
+            if (bestRingDistance <= rotateHitThreshold)
+            {
+                mManualGizmo.IsActive = true;
+                mManualGizmo.ActiveHandle = ManualGizmoHandle::Rotate;
+                mManualGizmo.StartMouse = io.MousePos;
+                mManualGizmo.StartPosition = selectedEntity->Transform.Position;
+                mManualGizmo.StartRotation = selectedEntity->Transform.Rotation;
+                mManualGizmo.StartScale = selectedEntity->Transform.Scale;
+                mManualGizmo.AxisWorldDirection = rotationAxis;
+                mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+                mBlockViewportSelection = true;
+                return;
+            }
+        }
+    }
+
+    if (!mManualGizmo.IsActive)
+        return;
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        mManualGizmo.IsActive = false;
+        mManualGizmo.ActiveHandle = ManualGizmoHandle::None;
+        mBlockViewportSelection = false;
+        return;
+    }
+
+    const ImVec2 mouseDelta(io.MousePos.x - mManualGizmo.StartMouse.x, io.MousePos.y - mManualGizmo.StartMouse.y);
+    const float projectedPixelDelta = mouseDelta.x * mManualGizmo.AxisScreenDirection.x + mouseDelta.y * mManualGizmo.AxisScreenDirection.y;
+
+    switch (mManualGizmo.ActiveHandle)
+    {
+    case ManualGizmoHandle::TranslateXAxis:
+    case ManualGizmoHandle::TranslateYAxis:
+    case ManualGizmoHandle::TranslateZAxis:
+    case ManualGizmoHandle::TranslateXYPlane:
+    case ManualGizmoHandle::TranslateXZPlane:
+    case ManualGizmoHandle::TranslateYZPlane:
+    {
+        const float worldDelta = projectedPixelDelta / (std::max)(mManualGizmo.PixelsPerWorldUnit, 0.0001f);
+        const float secondaryProjectedPixelDelta = mouseDelta.x * mManualGizmo.SecondaryAxisScreenDirection.x + mouseDelta.y * mManualGizmo.SecondaryAxisScreenDirection.y;
+        const float secondaryWorldDelta = secondaryProjectedPixelDelta / (std::max)(mManualGizmo.SecondaryPixelsPerWorldUnit, 0.0001f);
+        selectedEntity->Transform.Position = XMFLOAT3(
+            mManualGizmo.StartPosition.x + mManualGizmo.AxisWorldDirection.x * worldDelta + mManualGizmo.SecondaryAxisWorldDirection.x * secondaryWorldDelta,
+            mManualGizmo.StartPosition.y + mManualGizmo.AxisWorldDirection.y * worldDelta + mManualGizmo.SecondaryAxisWorldDirection.y * secondaryWorldDelta,
+            mManualGizmo.StartPosition.z + mManualGizmo.AxisWorldDirection.z * worldDelta + mManualGizmo.SecondaryAxisWorldDirection.z * secondaryWorldDelta);
+        break;
+    }
+    case ManualGizmoHandle::ScaleXAxis:
+    case ManualGizmoHandle::ScaleYAxis:
+    case ManualGizmoHandle::ScaleZAxis:
+    {
+        const float scaleDelta = projectedPixelDelta * 0.01f;
+        selectedEntity->Transform.Scale = mManualGizmo.StartScale;
+        if (mManualGizmo.ActiveHandle == ManualGizmoHandle::Scale)
+        {
+            const float secondaryProjectedPixelDelta = mouseDelta.x * mManualGizmo.SecondaryAxisScreenDirection.x + mouseDelta.y * mManualGizmo.SecondaryAxisScreenDirection.y;
+            const float secondaryScaleDelta = secondaryProjectedPixelDelta * 0.01f;
+            selectedEntity->Transform.Scale.x = (std::max)(0.01f, mManualGizmo.StartScale.x + (std::abs(mManualGizmo.AxisWorldDirection.x) > 0.5f ? scaleDelta : 0.0f) + (std::abs(mManualGizmo.SecondaryAxisWorldDirection.x) > 0.5f ? secondaryScaleDelta : 0.0f));
+            selectedEntity->Transform.Scale.y = (std::max)(0.01f, mManualGizmo.StartScale.y + (std::abs(mManualGizmo.AxisWorldDirection.y) > 0.5f ? scaleDelta : 0.0f) + (std::abs(mManualGizmo.SecondaryAxisWorldDirection.y) > 0.5f ? secondaryScaleDelta : 0.0f));
+            selectedEntity->Transform.Scale.z = (std::max)(0.01f, mManualGizmo.StartScale.z + (std::abs(mManualGizmo.AxisWorldDirection.z) > 0.5f ? scaleDelta : 0.0f) + (std::abs(mManualGizmo.SecondaryAxisWorldDirection.z) > 0.5f ? secondaryScaleDelta : 0.0f));
+        }
+        else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleXAxis)
+            selectedEntity->Transform.Scale.x = (std::max)(0.01f, mManualGizmo.StartScale.x + scaleDelta);
+        else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleYAxis)
+            selectedEntity->Transform.Scale.y = (std::max)(0.01f, mManualGizmo.StartScale.y + scaleDelta);
+        else if (mManualGizmo.ActiveHandle == ManualGizmoHandle::ScaleZAxis)
+            selectedEntity->Transform.Scale.z = (std::max)(0.01f, mManualGizmo.StartScale.z + scaleDelta);
+        break;
+    }
+    case ManualGizmoHandle::Rotate:
+    {
+        const float currentAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+        selectedEntity->Transform.Rotation = mManualGizmo.StartRotation;
+        float angleDelta = currentAngle - mManualGizmo.StartAngle;
+        while (angleDelta > DirectX::XM_PI)
+            angleDelta -= DirectX::XM_2PI;
+        while (angleDelta < -DirectX::XM_PI)
+            angleDelta += DirectX::XM_2PI;
+        if (std::abs(mManualGizmo.AxisWorldDirection.x) > 0.5f)
+            selectedEntity->Transform.Rotation.x += angleDelta;
+        else if (std::abs(mManualGizmo.AxisWorldDirection.y) > 0.5f)
+            selectedEntity->Transform.Rotation.z += angleDelta;
+        else
+            selectedEntity->Transform.Rotation.y += angleDelta;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void Editor::CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition)
+{
+    Entity e;
+    e.Name = "Geometry_" + std::to_string(mNextGeometryInstanceId++);
+    e.Transform.Position = worldPosition;
+    e.Transform.Position.z = 0.0f;
+    e.AddMeshComponent();
+    mEntities.push_back(std::move(e));
+    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+    mSelectedEntityIndices = { mSelectedEntityIndex };
+    mSceneDirty = true;
+}
+
+// ---------------------------------------------------------------------------
+// Statistics overlay
+// ---------------------------------------------------------------------------
+
+void Editor::SetViewportStatisticsText(const char* text)
+{
+    mViewportStatisticsText = text;
+}
+
+void Editor::HandleKeyboardShortcuts()
+{
+    if (ImGui::GetIO().WantTextInput)
+        return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    HWND windowHandle = DX12Context_GetWindowHandle();
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
+    {
+        NewScene(windowHandle);
+        return;
+    }
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
+    {
+        OpenScene(windowHandle);
+        return;
+    }
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    {
+        SaveScene(windowHandle);
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_1, false))
+        mActiveGizmo = GizmoType::None;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_2, false))
+        mActiveGizmo = GizmoType::Translate;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_3, false))
+        mActiveGizmo = GizmoType::Rotate;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_4, false))
+        mActiveGizmo = GizmoType::Scale;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && CanDeleteSelectedEntity())
+        DeleteSelectedEntity();
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false) && CanCopySelectedEntity())
+        CopySelectedEntity();
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false) && CanPasteEntity())
+        PasteCopiedEntity();
+}
+
+void Editor::DrawViewportStatisticsOverlay() const
+{
+    if (!mShowViewportStatistics || !mViewportStatisticsText) return;
+    if (mLastViewportContentSize.x <= 1.0f || mLastViewportContentSize.y <= 1.0f) return;
+
+    const ImGuiWindowFlags overlayFlags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMouseInputs;
+
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::SetNextWindowPos(ImVec2(mLastViewportContentOrigin.x + 10.0f,
+                                   mLastViewportContentOrigin.y + 10.0f),
+                             ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+    if (ImGui::Begin("##stats_overlay", nullptr, overlayFlags))
+        ImGui::TextUnformatted(mViewportStatisticsText);
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// ---------------------------------------------------------------------------
+// Scene loading overlay
+// ---------------------------------------------------------------------------
+
+void Editor::DrawSceneLoadingOverlay()
+{
+    if (!IsSceneLoading()) return;
+
+    ImVec2 overlayCenter;
+    if (mLastViewportContentSize.x > 1.0f && mLastViewportContentSize.y > 1.0f)
+    {
+        overlayCenter = ImVec2(
+            mLastViewportContentOrigin.x + mLastViewportContentSize.x * 0.5f,
+            mLastViewportContentOrigin.y + mLastViewportContentSize.y * 0.5f);
+    }
+    else
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        overlayCenter = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    }
+
+    ImGui::SetNextWindowPos(overlayCenter, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 80.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoDocking;
+
+    if (ImGui::Begin("##loading_overlay", nullptr, flags))
+    {
+        ImGui::Text("Loading scene...");
+        ImGui::ProgressBar(GetSceneLoadProgress(), ImVec2(-1.0f, 0.0f));
+        ImGui::TextDisabled("%s", GetSceneLoadStatusMessage().c_str());
+    }
+    ImGui::End();
+}
+
+void Editor::DrawResourceDebugWindow()
+{
+    if (!ImGui::Begin("Resource Debug", &mShowResourceDebugPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextDisabled(
+        "Total CPU: %.1f%%  |  Total GPU: %.1f%%  |  Total RAM: %.1f%%",
+        mResourceUsageSnapshot.TotalCpuUsagePercent,
+        mResourceUsageSnapshot.TotalGpuUsagePercent,
+        mResourceUsageSnapshot.TotalRamUsagePercent);
+    ImGui::Separator();
+
+    if (mResourceUsageSnapshot.Entries.empty())
+    {
+        ImGui::TextDisabled("No resource usage data available.");
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginTable("ResourceUsageTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+    {
+        ImGui::TableSetupColumn("Engine Element");
+        ImGui::TableSetupColumn("CPU %");
+        ImGui::TableSetupColumn("GPU %");
+        ImGui::TableSetupColumn("RAM %");
+        ImGui::TableHeadersRow();
+
+        for (const EngineResourceUsageEntry& entry : mResourceUsageSnapshot.Entries)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(entry.Name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.1f", entry.CpuUsagePercent);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%.1f", entry.GpuUsagePercent);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%.1f", entry.RamUsagePercent);
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::TextDisabled("Values are grouped runtime estimates for engine subsystems intended for debugging.");
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Viewport placement icons
+// ---------------------------------------------------------------------------
+
+void Editor::DrawViewportPlacementIcons(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera)
+{
+    if (!mShowViewportPlacementIcons)
+        return;
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float iconSize = 54.0f;
+
+    for (size_t i = 0; i < mEntities.size(); ++i)
+    {
+        ImVec2 screenPosition;
+        if (!TryProjectWorldToViewport(mEntities[i].Transform.Position, viewportOrigin, viewportSize, camera, screenPosition))
+            continue;
+
+        const bool isSelected = IsEntitySelected(static_cast<int>(i));
+        const ImU32 tintColor = isSelected ? IM_COL32(255, 245, 170, 255) : IM_COL32(255, 255, 255, 230);
+        const ImVec2 iconMin = ImVec2(screenPosition.x - iconSize * 0.5f, screenPosition.y - iconSize * 0.5f);
+        const ImVec2 iconMax = ImVec2(screenPosition.x + iconSize * 0.5f, screenPosition.y + iconSize * 0.5f);
+        D3D12_GPU_DESCRIPTOR_HANDLE iconHandle{};
+
+        if (mEntities[i].PointLight.has_value())
+            iconHandle = mPointLightIcon.GpuHandle;
+        else if (mEntities[i].AudioEmitter.has_value())
+            iconHandle = mAudioEmitterIcon.GpuHandle;
+        else if (mEntities[i].Decal.has_value())
+            iconHandle = mDecalIcon.GpuHandle;
+        else if (mEntities[i].Rain.has_value())
+            iconHandle = mRainIcon.GpuHandle;
+        else
+            iconHandle = mGeometryIcon.GpuHandle;
+
+        if (iconHandle.ptr != 0)
+        {
+            drawList->AddImage(TextureIdFromHandle(iconHandle), iconMin, iconMax, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), tintColor);
+        }
+        else
+        {
+            drawList->AddRectFilled(iconMin, iconMax, IM_COL32(210, 95, 30, 220), 3.0f);
+        }
+
+        if (isSelected)
+        {
+            drawList->AddRect(iconMin, iconMax, IM_COL32(255, 230, 120, 255), 0.0f, 0, 2.0f);
+        }
+    }
+}
+
+void Editor::DrawManualGizmoPivot(
+    const ImVec2& viewportOrigin,
+    const ImVec2& viewportSize,
+    const EditorCamera& camera,
+    const Entity* selectedEntity) const
+{
+    if (!selectedEntity || mActiveGizmo == GizmoType::None) return;
+
+    using namespace DirectX;
+
+    auto projectAxisPoint = [&](const XMFLOAT3& point, ImVec2& screenPoint) -> bool
+    {
+        return TryProjectWorldToViewport(point, viewportOrigin, viewportSize, camera, screenPoint, true);
+    };
+
+    ImVec2 screenPos;
+    if (TryProjectWorldToViewport(selectedEntity->Transform.Position, viewportOrigin, viewportSize, camera, screenPos, true))
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddCircleFilled(screenPos, 6.0f, IM_COL32(255, 200, 0, 230));
+        dl->AddCircle(screenPos, 6.0f, IM_COL32(0, 0, 0, 220), 0, 2.0f);
+
+        constexpr float desiredAxisScreenLength = 72.0f;
+        const XMFLOAT3 origin = selectedEntity->Transform.Position;
+
+        auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, ImVec2& axisScreenEnd, float& axisWorldLength) -> bool
+        {
+            ImVec2 unitScreenEnd;
+            if (!projectAxisPoint(
+                    XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
+                    unitScreenEnd))
+            {
+                return false;
+            }
+
+            const ImVec2 unitScreenDirection(unitScreenEnd.x - screenPos.x, unitScreenEnd.y - screenPos.y);
+            const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
+            if (pixelsPerWorldUnit <= 0.0001f)
+                return false;
+
+            axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
+            return projectAxisPoint(
+                XMFLOAT3(
+                    origin.x + axisWorldDirection.x * axisWorldLength,
+                    origin.y + axisWorldDirection.y * axisWorldLength,
+                    origin.z + axisWorldDirection.z * axisWorldLength),
+                axisScreenEnd);
+        };
+
+        ImVec2 xAxisScreen;
+        ImVec2 yAxisScreen;
+        ImVec2 zAxisScreen;
+        float xAxisWorldLength = 0.0f;
+        float yAxisWorldLength = 0.0f;
+        float zAxisWorldLength = 0.0f;
+        const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisScreen, xAxisWorldLength);
+        const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisScreen, yAxisWorldLength);
+        const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisScreen, zAxisWorldLength);
+
+        if (mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale)
+        {
+            auto drawArrowHead = [&](const ImVec2& start, const ImVec2& end, ImU32 color)
+            {
+                ImVec2 dir(end.x - start.x, end.y - start.y);
+                const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+                if (len <= 0.0001f)
+                    return;
+
+                dir.x /= len;
+                dir.y /= len;
+                const ImVec2 perp(-dir.y, dir.x);
+                const float arrowSize = 8.0f;
+                const ImVec2 left(end.x - dir.x * arrowSize + perp.x * (arrowSize * 0.5f), end.y - dir.y * arrowSize + perp.y * (arrowSize * 0.5f));
+                const ImVec2 right(end.x - dir.x * arrowSize - perp.x * (arrowSize * 0.5f), end.y - dir.y * arrowSize - perp.y * (arrowSize * 0.5f));
+                dl->AddTriangleFilled(end, left, right, color);
+            };
+
+            if (hasXAxis)
+            {
+                dl->AddLine(screenPos, xAxisScreen, IM_COL32(220, 70, 70, 255), 2.5f);
+                drawArrowHead(screenPos, xAxisScreen, IM_COL32(220, 70, 70, 255));
+            }
+            if (hasYAxis)
+            {
+                dl->AddLine(screenPos, yAxisScreen, IM_COL32(80, 160, 255, 255), 2.5f);
+                drawArrowHead(screenPos, yAxisScreen, IM_COL32(80, 160, 255, 255));
+            }
+            if (hasZAxis)
+            {
+                dl->AddLine(screenPos, zAxisScreen, IM_COL32(70, 220, 120, 255), 2.5f);
+                drawArrowHead(screenPos, zAxisScreen, IM_COL32(70, 220, 120, 255));
+            }
+
+            const float planeHandleScale = 0.35f;
+            if (hasXAxis && hasYAxis)
+            {
+                const ImVec2 xyA(screenPos.x + (xAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (xAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 xyB(screenPos.x + (yAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (yAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 xyC(xyA.x + (xyB.x - screenPos.x) * planeHandleScale, xyA.y + (xyB.y - screenPos.y) * planeHandleScale);
+                dl->AddTriangleFilled(screenPos, xyA, xyC, IM_COL32(220, 150, 90, 60));
+                dl->AddTriangle(screenPos, xyA, xyC, IM_COL32(220, 150, 90, 160), 1.5f);
+            }
+
+            if (hasXAxis && hasZAxis)
+            {
+                const ImVec2 xzA(screenPos.x + (xAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (xAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 xzB(screenPos.x + (zAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (zAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 xzC(xzA.x + (xzB.x - screenPos.x) * planeHandleScale, xzA.y + (xzB.y - screenPos.y) * planeHandleScale);
+                dl->AddTriangleFilled(screenPos, xzA, xzC, IM_COL32(180, 120, 220, 60));
+                dl->AddTriangle(screenPos, xzA, xzC, IM_COL32(180, 120, 220, 160), 1.5f);
+            }
+
+            if (hasYAxis && hasZAxis)
+            {
+                const ImVec2 yzA(screenPos.x + (yAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (yAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 yzB(screenPos.x + (zAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (zAxisScreen.y - screenPos.y) * planeHandleScale);
+                const ImVec2 yzC(yzA.x + (yzB.x - screenPos.x) * planeHandleScale, yzA.y + (yzB.y - screenPos.y) * planeHandleScale);
+                dl->AddTriangleFilled(screenPos, yzA, yzC, IM_COL32(120, 200, 220, 60));
+                dl->AddTriangle(screenPos, yzA, yzC, IM_COL32(120, 200, 220, 160), 1.5f);
+            }
+        }
+
+        if (mActiveGizmo == GizmoType::Rotate)
+        {
+            auto drawProjectedRing = [&](const XMFLOAT3& axisA, float axisALength, const XMFLOAT3& axisB, float axisBLength, ImU32 color)
+            {
+                constexpr int segmentCount = 48;
+                ImVec2 previousPoint{};
+                bool hasPreviousPoint = false;
+
+                for (int segmentIndex = 0; segmentIndex <= segmentCount; ++segmentIndex)
+                {
+                    const float angle = (XM_2PI * static_cast<float>(segmentIndex)) / static_cast<float>(segmentCount);
+                    XMFLOAT3 ringPoint(
+                        origin.x + axisA.x * std::cos(angle) * axisALength + axisB.x * std::sin(angle) * axisBLength,
+                        origin.y + axisA.y * std::cos(angle) * axisALength + axisB.y * std::sin(angle) * axisBLength,
+                        origin.z + axisA.z * std::cos(angle) * axisALength + axisB.z * std::sin(angle) * axisBLength);
+
+                    ImVec2 projectedPoint;
+                    if (projectAxisPoint(ringPoint, projectedPoint))
+                    {
+                        if (hasPreviousPoint)
+                            dl->AddLine(previousPoint, projectedPoint, color, 2.0f);
+
+                        previousPoint = projectedPoint;
+                        hasPreviousPoint = true;
+                    }
+                    else
+                    {
+                        hasPreviousPoint = false;
+                    }
+                }
+            };
+
+            drawProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, IM_COL32(220, 70, 70, 220));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, IM_COL32(70, 220, 120, 220));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, IM_COL32(80, 160, 255, 255));
+        }
+
+        if (mActiveGizmo == GizmoType::Scale)
+        {
+            const float handleSize = 4.0f;
+            if (hasXAxis)
+                dl->AddRectFilled(ImVec2(xAxisScreen.x - handleSize, xAxisScreen.y - handleSize), ImVec2(xAxisScreen.x + handleSize, xAxisScreen.y + handleSize), IM_COL32(220, 70, 70, 255), 1.0f);
+            if (hasYAxis)
+                dl->AddRectFilled(ImVec2(yAxisScreen.x - handleSize, yAxisScreen.y - handleSize), ImVec2(yAxisScreen.x + handleSize, yAxisScreen.y + handleSize), IM_COL32(80, 160, 255, 255), 1.0f);
+            if (hasZAxis)
+                dl->AddRectFilled(ImVec2(zAxisScreen.x - handleSize, zAxisScreen.y - handleSize), ImVec2(zAxisScreen.x + handleSize, zAxisScreen.y + handleSize), IM_COL32(70, 220, 120, 255), 1.0f);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DrawToolbar
+// ---------------------------------------------------------------------------
+
+void Editor::DrawToolbar(
+    D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon)
+{
+    ImGui::SetNextWindowSize(ImVec2(280.0f, 56.0f), ImGuiCond_FirstUseEver);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(4, 4));
+
+    if (!ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        return;
+    }
+
+    const float iconSize = 24.0f;
+    const ImVec2 btnSize(iconSize + 8.0f, iconSize + 8.0f);
+    const float separatorWidth = 8.0f;
+
+    auto ToolButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, GizmoType type, const char* tooltip) {
+        bool active = (mActiveGizmo == type);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        bool clicked;
+        if (icon.ptr != 0)
+            clicked = ImGui::ImageButton(tooltip, TextureIdFromHandle(icon), ImVec2(iconSize, iconSize));
+        else
+            clicked = ImGui::Button(tooltip, btnSize);
+        if (active) ImGui::PopStyleColor();
+        if (clicked) mActiveGizmo = active ? GizmoType::None : type;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    };
+
+    auto ToggleButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, bool& value, const char* tooltip)
+    {
+        if (value) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        const bool clicked = (icon.ptr != 0)
+            ? ImGui::ImageButton(tooltip, TextureIdFromHandle(icon), ImVec2(iconSize, iconSize))
+            : ImGui::Button(tooltip, btnSize);
+        if (value) ImGui::PopStyleColor();
+        if (clicked) value = !value;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    };
+
+    const float totalButtonsWidth =
+        btnSize.x * 6.0f +
+        ImGui::GetStyle().ItemSpacing.x * 5.0f +
+        separatorWidth;
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    if (availableWidth > totalButtonsWidth)
+    {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - totalButtonsWidth) * 0.5f);
+    }
+
+    ToolButton(selectIcon, GizmoType::None,      "Select  (Q)");
+    ImGui::SameLine();
+    ToolButton(moveIcon,   GizmoType::Translate,  "Move    (W)");
+    ImGui::SameLine();
+    ToolButton(rotateIcon, GizmoType::Rotate,     "Rotate  (E)");
+    ImGui::SameLine();
+    ToolButton(scaleIcon,  GizmoType::Scale,      "Scale   (R)");
+    ImGui::SameLine();
+    ImGui::Dummy(ImVec2(separatorWidth, 0.0f));
+    ImGui::SameLine();
+    ToggleButton(wireframeIcon, mWireframeEnabled, "Wireframe");
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
+// ---------------------------------------------------------------------------
+// DrawViewport
+// ---------------------------------------------------------------------------
+
+void Editor::DrawViewport(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    Entity* selectedEntity)
+{
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowSize(mainViewport->WorkSize, ImGuiCond_FirstUseEver);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("Viewport", nullptr,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_MenuBar);
+
+    if (ImGui::BeginMenuBar())
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 8.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+
+        if (ImGui::BeginMenu("Viewport"))
+        {
+            if (ImGui::MenuItem("Resolution..."))
+                mShowViewportResolutionDialog = true;
+            if (ImGui::MenuItem("Screenshot..."))
+                mShowScreenshotDialog = true;
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Options"))
+        {
+            ImGui::MenuItem("Renderer Statistics", nullptr, &mShowViewportStatistics);
+            ImGui::MenuItem("Placement Icons", nullptr, &mShowViewportPlacementIcons);
+            ImGui::MenuItem("Grid", nullptr, &mShowViewportGrid);
+            ImGui::EndMenu();
+        }
+
+        ImGui::PopStyleVar(3);
+        ImGui::EndMenuBar();
+    }
+
+    const ImVec2 viewportOrigin = ImGui::GetCursorScreenPos();
+    const ImVec2 viewportSize   = ImGui::GetContentRegionAvail();
+    mLastViewportContentOrigin = viewportOrigin;
+    mLastViewportContentSize = viewportSize;
+
+    if (viewportSize.x > 1.0f && viewportSize.y > 1.0f && sceneTextureHandle.ptr != 0)
+        ImGui::Image(TextureIdFromHandle(sceneTextureHandle), viewportSize);
+
+    DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
+
+    const bool viewportHovered = ImGui::IsWindowHovered();
+    HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
+
+    // ImGuizmo gizmo for the selected entity
+    if (false && selectedEntity && !mGeometryPrototypeSelected && !mPointLightPrototypeSelected && !mAudioEmitterPrototypeSelected)
+    {
+        ImGuizmo::BeginFrame();
+        ImGuizmo::Enable(true);
+        ImGuizmo::SetID(mSelectedEntityIndex >= 0 ? mSelectedEntityIndex + 1 : 0);
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(viewportOrigin.x, viewportOrigin.y, viewportSize.x, viewportSize.y);
+
+        using namespace DirectX;
+
+        XMFLOAT4X4 view4x4, proj4x4;
+        XMStoreFloat4x4(&view4x4, XMMatrixTranspose(camera.GetViewMatrix()));
+        XMStoreFloat4x4(&proj4x4, XMMatrixTranspose(camera.GetProjectionMatrix()));
+
+        XMMATRIX entityMatrix = selectedEntity->Transform.GetTransform();
+        XMFLOAT4X4 entityFloat;
+        XMStoreFloat4x4(&entityFloat, XMMatrixTranspose(entityMatrix));
+
+        if (mActiveGizmo != GizmoType::None)
+        {
+            ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
+            if (mActiveGizmo == GizmoType::Rotate) op = ImGuizmo::ROTATE;
+            if (mActiveGizmo == GizmoType::Scale)  op = ImGuizmo::SCALE;
+
+            float delta[16];
+            if (ImGuizmo::Manipulate(&view4x4.m[0][0], &proj4x4.m[0][0],
+                                      op, ImGuizmo::WORLD, &entityFloat.m[0][0], delta))
+            {
+                XMMATRIX updated = XMMatrixTranspose(XMLoadFloat4x4(&entityFloat));
+                XMVECTOR scale, rot, trans;
+                XMMatrixDecompose(&scale, &rot, &trans, updated);
+
+                XMStoreFloat3(&selectedEntity->Transform.Position, trans);
+
+                XMFLOAT4 rotQ;
+                XMStoreFloat4(&rotQ, rot);
+                // Convert quaternion to Euler (approximate)
+                float sinr = 2.0f * (rotQ.w * rotQ.x + rotQ.y * rotQ.z);
+                float cosr = 1.0f - 2.0f * (rotQ.x * rotQ.x + rotQ.y * rotQ.y);
+                selectedEntity->Transform.Rotation.x = std::atan2(sinr, cosr);
+
+                float sinp = 2.0f * (rotQ.w * rotQ.y - rotQ.z * rotQ.x);
+                selectedEntity->Transform.Rotation.y = std::abs(sinp) >= 1.0f ? std::copysign(DirectX::XM_PIDIV2, sinp) : std::asin(sinp);
+
+                float siny = 2.0f * (rotQ.w * rotQ.z + rotQ.x * rotQ.y);
+                float cosy = 1.0f - 2.0f * (rotQ.y * rotQ.y + rotQ.z * rotQ.z);
+                selectedEntity->Transform.Rotation.z = std::atan2(siny, cosy);
+
+                XMFLOAT3 sc;
+                XMStoreFloat3(&sc, scale);
+                // Undo the MeshWorldScale
+                constexpr float invMeshScale = 1.0f / TransformComponent::MeshWorldScale;
+                selectedEntity->Transform.Scale = { sc.x * invMeshScale, sc.y * invMeshScale, sc.z * invMeshScale };
+            }
+        }
+    }
+
+    DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+
+    if (mActiveGizmo == GizmoType::None && mViewportSelection.IsDragging)
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 selectionMin((std::min)(mViewportSelection.Start.x, mViewportSelection.Current.x), (std::min)(mViewportSelection.Start.y, mViewportSelection.Current.y));
+        ImVec2 selectionMax((std::max)(mViewportSelection.Start.x, mViewportSelection.Current.x), (std::max)(mViewportSelection.Start.y, mViewportSelection.Current.y));
+        drawList->AddRectFilled(selectionMin, selectionMax, IM_COL32(255, 180, 80, 40));
+        drawList->AddRect(selectionMin, selectionMax, IM_COL32(255, 210, 120, 220), 0.0f, 0, 1.5f);
+    }
+
+    HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
+
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// ---------------------------------------------------------------------------
+// DrawLevelExplorerPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawLevelExplorerPanel()
+{
+    if (!ImGui::Begin("Level Explorer", &mShowLevelExplorerPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
+    {
+        const bool selected = (mSelectedEntityIndex == i);
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_SpanLabelWidth;
+        if (selected) flags |= ImGuiTreeNodeFlags_Selected;
+
+        ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(i)), flags,
+                          "%s", mEntities[i].Name.c_str());
+        if (ImGui::IsItemClicked())
+            mSelectedEntityIndex = i;
+        ImGui::TreePop();
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawComponentsPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawComponentsPanel()
+{
+    if (!ImGui::Begin("Components", &mShowComponentsPanel,
+        ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Selectable("Geometry", mGeometryPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mGeometryPrototypeSelected;
+        mGeometryPrototypeSelected = shouldSelect;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Point Light", mPointLightPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mPointLightPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = shouldSelect;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Audio Emitter", mAudioEmitterPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mAudioEmitterPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = shouldSelect;
+        mDecalPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Decal", mDecalPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mDecalPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = shouldSelect;
+        mRainPrototypeSelected = false;
+    }
+
+    if (ImGui::Selectable("Rain", mRainPrototypeSelected, ImGuiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mRainPrototypeSelected;
+        mGeometryPrototypeSelected = false;
+        mPointLightPrototypeSelected = false;
+        mAudioEmitterPrototypeSelected = false;
+        mDecalPrototypeSelected = false;
+        mRainPrototypeSelected = shouldSelect;
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawPropertiesPanel
+// ---------------------------------------------------------------------------
+
+void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager)
+{
+    if (!ImGui::Begin("Properties", &mShowPropertiesPanel,
+        ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (!selectedEntity)
+    {
+        ImGui::TextDisabled("No entity selected.");
+        ImGui::End();
+        return;
+    }
+
+    static char entityNameBuffer[256] = {};
+    strcpy_s(entityNameBuffer, selectedEntity->Name.c_str());
+    if (ImGui::InputText("Name", entityNameBuffer, IM_ARRAYSIZE(entityNameBuffer)))
+    {
+        selectedEntity->Name = entityNameBuffer;
+        mSceneDirty = true;
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (ImGui::DragFloat3("Position", &selectedEntity->Transform.Position.x, 0.01f))
+            mSceneDirty = true;
+        float rotationDegrees[3]
+        {
+            RadiansToDegrees(selectedEntity->Transform.Rotation.x),
+            RadiansToDegrees(selectedEntity->Transform.Rotation.y),
+            RadiansToDegrees(selectedEntity->Transform.Rotation.z)
+        };
+        if (ImGui::DragFloat3("Rotation", rotationDegrees, 0.5f))
+        {
+            selectedEntity->Transform.Rotation.x = DegreesToRadians(rotationDegrees[0]);
+            selectedEntity->Transform.Rotation.y = DegreesToRadians(rotationDegrees[1]);
+            selectedEntity->Transform.Rotation.z = DegreesToRadians(rotationDegrees[2]);
+            mSceneDirty = true;
+        }
+        if (ImGui::DragFloat3("Scale",    &selectedEntity->Transform.Scale.x,    0.01f))
+            mSceneDirty = true;
+    }
+
+    if (selectedEntity->PointLight.has_value())
+    {
+        if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& pl = *selectedEntity->PointLight;
+            if (ImGui::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f)) mSceneDirty = true;
+            if (ImGui::DragFloat("Radius",         &pl.Radius,          0.1f,  0.0f, 1000.0f)) mSceneDirty = true;
+            float col[3] = { pl.ColorR, pl.ColorG, pl.ColorB };
+            if (ImGui::ColorEdit3("Color##pl", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; mSceneDirty = true; }
+            if (ImGui::Checkbox("Cast Shadows##pl",          &pl.CastShadows)) mSceneDirty = true;
+            if (ImGui::Checkbox("Affect Volumetric Fog##pl", &pl.AffectVolumetricFog)) mSceneDirty = true;
+            if (ImGui::DragFloat("Falloff Exponent", &pl.FalloffExponent, 0.01f, 0.1f, 10.0f)) mSceneDirty = true;
+            if (ImGui::DragFloat("Source Radius",    &pl.SourceRadius,    0.001f, 0.0f, 1.0f)) mSceneDirty = true;
+            if (ImGui::Checkbox("Use Temperature",   &pl.UseTemperature)) mSceneDirty = true;
+            if (pl.UseTemperature)
+                if (ImGui::DragFloat("Temperature (K)", &pl.TemperatureKelvin, 100.0f, 1000.0f, 20000.0f)) mSceneDirty = true;
+        }
+    }
+
+    if (selectedEntity->Mesh.has_value())
+    {
+        if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            MeshComponent& meshComponent = *selectedEntity->Mesh;
+
+            ImGui::TextWrapped("Geometry: %s", meshComponent.MeshPath.empty() ? "(none)" : meshComponent.MeshPath.c_str());
+            if (ImGui::Button("Select Geometry (.ptero)"))
+            {
+                std::string updatedMeshPath = meshComponent.MeshPath;
+                if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Geometry", "Ptero Geometry\0*.ptero\0All Files\0*.*\0", updatedMeshPath))
+                {
+                    meshComponent.MeshPath = updatedMeshPath;
+                    meshComponent.MeshAsset.reset();
+                    mSceneDirty = true;
+
+                    const std::string defaultMaterialPath = FindDefaultMaterialPathForMesh(meshComponent.MeshPath);
+                    if (!defaultMaterialPath.empty())
+                    {
+                        meshComponent.MaterialPath = defaultMaterialPath;
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Geometry"))
+            {
+                meshComponent.MeshPath.clear();
+                meshComponent.MeshAsset.reset();
+                mSceneDirty = true;
+            }
+
+            ImGui::Spacing();
+            ImGui::TextWrapped("Material: %s", meshComponent.MaterialPath.empty() ? "(none)" : meshComponent.MaterialPath.c_str());
+            if (ImGui::Button("Select Material"))
+            {
+                std::string updatedMaterialPath = meshComponent.MaterialPath;
+                if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Material", "Material JSON\0*.json\0All Files\0*.*\0", updatedMaterialPath))
+                {
+                    meshComponent.MaterialPath = updatedMaterialPath;
+                    mSceneDirty = true;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Material"))
+            {
+                meshComponent.MaterialPath.clear();
+                mSceneDirty = true;
+            }
+
+            if (!meshComponent.MeshPath.empty())
+            {
+                const std::string defaultMaterialPath = FindDefaultMaterialPathForMesh(meshComponent.MeshPath);
+                if (!defaultMaterialPath.empty() && meshComponent.MaterialPath != defaultMaterialPath)
+                {
+                    if (ImGui::Button("Use Geometry Default Material"))
+                    {
+                        meshComponent.MaterialPath = defaultMaterialPath;
+                        mSceneDirty = true;
+                    }
+                }
+            }
+
+            ImGui::Spacing();
+            if (ImGui::DragFloat("LOD Usage Scale", &meshComponent.LodUsageScale, 0.01f, 0.1f, 8.0f, "%.2f"))
+            {
+                meshComponent.LodUsageScale = (std::clamp)(meshComponent.LodUsageScale, 0.1f, 8.0f);
+                mSceneDirty = true;
+            }
+
+            const char* lodDebugModes[] = { "Automatic", "LOD 0", "LOD 1", "LOD 2", "LOD 3" };
+            int lodDebugMode = meshComponent.DebugForcedLod + 1;
+            if (ImGui::Combo("LOD Debug View", &lodDebugMode, lodDebugModes, IM_ARRAYSIZE(lodDebugModes)))
+            {
+                meshComponent.DebugForcedLod = lodDebugMode - 1;
+                mSceneDirty = true;
+            }
+
+            if (meshComponent.MeshAsset)
+            {
+                ImGui::Text("Available LODs: %zu", meshComponent.MeshAsset->GetLodCount());
+            }
+        }
+    }
+
+    if (selectedEntity->AudioEmitter.has_value())
+    {
+        if (ImGui::CollapsingHeader("Audio Emitter", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& ae = *selectedEntity->AudioEmitter;
+            static char epBuf[512];
+            strncpy_s(epBuf, ae.EventPath.c_str(), sizeof(epBuf) - 1);
+            if (ImGui::InputText("Event Path##ae", epBuf, sizeof(epBuf)))
+            {
+                ae.EventPath = epBuf;
+                mSceneDirty = true;
+            }
+
+            if (audioManager != nullptr)
+            {
+                const std::vector<AudioEvent>& availableEvents = audioManager->GetEvents();
+                if (!availableEvents.empty())
+                {
+                    int selectedEventIndex = -1;
+                    for (int eventIndex = 0; eventIndex < static_cast<int>(availableEvents.size()); ++eventIndex)
+                    {
+                        if (availableEvents[eventIndex].Path == ae.EventPath)
+                        {
+                            selectedEventIndex = eventIndex;
+                            break;
+                        }
+                    }
+
+                    const char* previewValue = selectedEventIndex >= 0
+                        ? availableEvents[selectedEventIndex].Path.c_str()
+                        : (ae.EventPath.empty() ? "Select Event" : ae.EventPath.c_str());
+
+                    if (ImGui::BeginCombo("Select Event##ae", previewValue))
+                    {
+                        for (int eventIndex = 0; eventIndex < static_cast<int>(availableEvents.size()); ++eventIndex)
+                        {
+                            const bool isSelected = (selectedEventIndex == eventIndex);
+                            if (ImGui::Selectable(availableEvents[eventIndex].Path.c_str(), isSelected))
+                            {
+                                ae.EventPath = availableEvents[eventIndex].Path;
+                                strcpy_s(epBuf, ae.EventPath.c_str());
+                                mSceneDirty = true;
+                            }
+
+                            if (isSelected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+
+                        ImGui::EndCombo();
+                    }
+                }
+                else
+                {
+                    const std::filesystem::path audioDataPath = audioManager->GetAudioDataPath();
+                    if (!audioDataPath.empty())
+                    {
+                        ImGui::TextWrapped("No audio events loaded from %s", audioDataPath.string().c_str());
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("No audio events loaded.");
+                    }
+                }
+            }
+
+            if (ImGui::Checkbox("Auto Play##ae", &ae.AutoPlay))
+                mSceneDirty = true;
+        }
+    }
+
+    if (selectedEntity->Decal.has_value())
+    {
+        if (ImGui::CollapsingHeader("Decal", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& dc = *selectedEntity->Decal;
+
+            static char matBuf[512];
+            strncpy_s(matBuf, dc.MaterialPath.c_str(), sizeof(matBuf) - 1);
+            if (ImGui::InputText("Material##dc", matBuf, sizeof(matBuf)))
+            {
+                dc.MaterialPath = matBuf;
+                mSceneDirty = true;
+            }
+
+            if (ImGui::DragFloat("Size X##dc", &dc.SizeX, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Size Y##dc", &dc.SizeY, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Size Z##dc", &dc.SizeZ, 0.01f, 0.001f, 1000.0f))
+                mSceneDirty = true;
+        }
+    }
+
+    if (selectedEntity->Rain.has_value())
+    {
+        if (ImGui::CollapsingHeader("Rain", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            auto& rc = *selectedEntity->Rain;
+
+            if (ImGui::Checkbox("Enabled##rain", &rc.Enabled))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Physics");
+            float wind[3] = { rc.WindX, rc.WindY, rc.WindZ };
+            if (ImGui::DragFloat3("Wind##rain", wind, 0.05f, -20.0f, 20.0f))
+            {
+                rc.WindX = wind[0]; rc.WindY = wind[1]; rc.WindZ = wind[2];
+                mSceneDirty = true;
+            }
+            if (ImGui::DragFloat("Gravity##rain", &rc.Gravity, 0.1f, 0.0f, 50.0f))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Bounding Box");
+            if (ImGui::DragFloat("Extent X##rain", &rc.BoxExtentX, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Extent Y##rain", &rc.BoxExtentY, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Extent Z##rain", &rc.BoxExtentZ, 0.5f, 1.0f, 200.0f))
+                mSceneDirty = true;
+
+            ImGui::SeparatorText("Visual");
+            if (ImGui::DragFloat("Intensity##rain", &rc.Intensity, 0.01f, 0.0f, 8.0f))
+                mSceneDirty = true;
+            if (ImGui::DragFloat("Streak Length##rain", &rc.StreakLength, 0.005f, 0.01f, 2.0f))
+                mSceneDirty = true;
+            float col[4] = { rc.ColorR, rc.ColorG, rc.ColorB, rc.ColorA };
+            if (ImGui::ColorEdit4("Color##rain", col))
+            {
+                rc.ColorR = col[0]; rc.ColorG = col[1];
+                rc.ColorB = col[2]; rc.ColorA = col[3];
+                mSceneDirty = true;
+            }
+            if (ImGui::DragFloat("Wetness##rain", &rc.WetnessIntensity, 0.01f, 0.0f, 1.0f))
+                mSceneDirty = true;
+        }
+    }
+
+    ImGui::End();
+}
+
+void Editor::DrawViewportResolutionWindow()
+{
+    if (!mShowViewportResolutionDialog)
+        return;
+
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Viewport Resolution", &mShowViewportResolutionDialog, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::InputInt("Width", &mViewportResolutionWidth);
+    ImGui::InputInt("Height", &mViewportResolutionHeight);
+    mViewportResolutionWidth = (std::max)(1, mViewportResolutionWidth);
+    mViewportResolutionHeight = (std::max)(1, mViewportResolutionHeight);
+
+    ImGui::SeparatorText("Presets");
+    struct ResolutionPreset
+    {
+        const char* Label;
+        int Width;
+        int Height;
+    };
+
+    static constexpr ResolutionPreset presets[] =
+    {
+        { "1280 x 720", 1280, 720 },
+        { "1600 x 900", 1600, 900 },
+        { "1920 x 1080", 1920, 1080 },
+        { "2560 x 1440", 2560, 1440 },
+        { "3840 x 2160", 3840, 2160 }
+    };
+
+    for (int presetIndex = 0; presetIndex < static_cast<int>(std::size(presets)); ++presetIndex)
+    {
+        if (ImGui::Button(presets[presetIndex].Label, ImVec2(140.0f, 0.0f)))
+        {
+            mViewportResolutionWidth = presets[presetIndex].Width;
+            mViewportResolutionHeight = presets[presetIndex].Height;
+        }
+
+        if ((presetIndex & 1) == 0 && presetIndex + 1 < static_cast<int>(std::size(presets)))
+            ImGui::SameLine();
+    }
+
+    if (ImGui::Button("Window Resolution"))
+    {
+        UINT windowWidth = 0;
+        UINT windowHeight = 0;
+        if (DX12Context_GetRenderSize(&windowWidth, &windowHeight) && windowWidth > 0 && windowHeight > 0)
+        {
+            mViewportResolutionWidth = static_cast<int>(windowWidth);
+            mViewportResolutionHeight = static_cast<int>(windowHeight);
+        }
+    }
+
+    ImGui::Spacing();
+
+    if (ImGui::Button("Apply"))
+    {
+        mRequestViewportResolutionChange = true;
+        mShowViewportResolutionDialog = false;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+    {
+        mShowViewportResolutionDialog = false;
+    }
+
+    ImGui::End();
+}
+
+void Editor::DrawScreenshotWindow()
+{
+    if (!mShowScreenshotDialog)
+        return;
+
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Screenshot", &mShowScreenshotDialog, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+
+    static char folderBuffer[MAX_PATH] = {};
+    if (folderBuffer[0] == '\0')
+    {
+        const std::string defaultFolder = mScreenshotOutputFolder.empty() ? std::string("Screenshots") : mScreenshotOutputFolder;
+        strcpy_s(folderBuffer, defaultFolder.c_str());
+    }
+
+    ImGui::InputText("Output Folder", folderBuffer, IM_ARRAYSIZE(folderBuffer));
+
+    if (ImGui::Button("Capture"))
+    {
+        mScreenshotOutputFolder = folderBuffer;
+        mRequestScreenshot = !mScreenshotOutputFolder.empty();
+        mShowScreenshotDialog = false;
+        folderBuffer[0] = '\0';
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+    {
+        mShowScreenshotDialog = false;
+        folderBuffer[0] = '\0';
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// DrawAudioManagerWindow
+// ---------------------------------------------------------------------------
+
+void Editor::DrawAudioManagerWindow(AudioManager* audioManager)
+{
+    if (!ImGui::Begin("Audio Manager", &mShowAudioManagerPanel))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (!audioManager || !audioManager->IsInitialized())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Audio system not initialised.");
+        ImGui::End();
+        return;
+    }
+
+    // Summary line
+    const auto& loadedBanks   = audioManager->GetLoadedBanks();
+    const auto& bankFailures  = audioManager->GetBankLoadFailures();
+    const auto& events        = audioManager->GetEvents();
+    ImGui::TextDisabled("Loaded Banks: %d  |  Failed: %d  |  Events: %d",
+                        static_cast<int>(loadedBanks.size()),
+                        static_cast<int>(bankFailures.size()),
+                        static_cast<int>(events.size()));
+    ImGui::TextDisabled("Path: %s", audioManager->GetAudioDataPath().string().c_str());
+    ImGui::Separator();
+
+    // ---- HRTF Spatialization --------------------------------------------------
+    if (ImGui::CollapsingHeader("HRTF Spatialization", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        bool hrtfEnabled = audioManager->IsHRTFEnabled();
+        if (ImGui::Checkbox("Enable HRTF", &hrtfEnabled))
+            audioManager->SetHRTFEnabled(hrtfEnabled);
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+            ImGui::TextUnformatted(
+                "Head-Related Transfer Function (HRTF) spatialization.\n"
+                "Convolves mono audio sources with measured head-related\n"
+                "impulse responses to produce binaural stereo output.\n\n"
+                "Uses zero-allocation Overlap-Add FFT convolution.\n"
+                "HRIR can be updated at runtime via AudioManager::GetHRTFNode().");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+
+        if (hrtfEnabled)
+        {
+            HRTFSpatializationNode* node = audioManager->GetHRTFNode();
+            if (node && node->IsInitialized())
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Node active  |  crossfade on HRIR change: enabled");
+            }
+        }
+
+        // ---- HRIR Database (MIT KEMAR) ----------------------------------------
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("HRIR Database (MIT KEMAR)");
+        ImGui::Spacing();
+
+        const HRIRDatabase* db = audioManager->GetHRIRDatabase();
+        if (!db->IsLoaded())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Not loaded");
+            ImGui::SameLine();
+            if (ImGui::Button("Load KEMAR Dataset"))
+            {
+                std::filesystem::path hrtfPath =
+                    std::filesystem::path(audioManager->GetAudioDataPath()).parent_path() / "HRTF";
+                std::string err;
+                if (!audioManager->LoadHRIRDatabase(hrtfPath, err))
+                {
+                    static std::string s_hrirError;
+                    s_hrirError = err;
+                    ImGui::OpenPopup("HRIRLoadError");
+                }
+            }
+            if (ImGui::BeginPopupModal("HRIRLoadError", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                static std::string s_hrirError;
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Failed to load HRIR database:");
+                ImGui::TextWrapped("%s", s_hrirError.c_str());
+                if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Loaded  (%d measurements)",
+                               db->EntryCount());
+            ImGui::Spacing();
+
+            float elev = audioManager->GetHRTFElevation();
+            float azim = audioManager->GetHRTFAzimuth();
+            bool dirChanged = false;
+            dirChanged |= ImGui::SliderFloat("Elevation (deg)", &elev, -90.0f, 90.0f,  "%.1f");
+            dirChanged |= ImGui::SliderFloat("Azimuth (deg)",   &azim,   0.0f, 360.0f, "%.1f");
+            if (dirChanged)
+                audioManager->SetHRTFDirection(elev, azim);
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Bilinear interpolation across KEMAR measurements.");
+        }
+    }
+
+    ImGui::Separator();
+
+    // ---- Loaded banks ---------------------------------------------------------
+    if (ImGui::CollapsingHeader("Loaded Banks", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (loadedBanks.empty())
+        {
+            ImGui::TextDisabled("No banks loaded.");
+        }
+        else
+        {
+            for (const auto& bank : loadedBanks)
+                ImGui::BulletText("%s", bank.c_str());
+        }
+    }
+
+    // ---- Bank load failures ---------------------------------------------------
+    if (!bankFailures.empty() && ImGui::CollapsingHeader("Bank Load Failures"))
+    {
+        for (const auto& fail : bankFailures)
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", fail.c_str());
+    }
+
+    // ---- Event list -----------------------------------------------------------
+    if (ImGui::CollapsingHeader("Events", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (events.empty())
+        {
+            ImGui::TextDisabled("No FMOD events were discovered in the loaded banks.");
+        }
+        else
+        {
+            for (int i = 0; i < static_cast<int>(events.size()); ++i)
+            {
+                ImGui::PushID(i);
+                ImGui::TextUnformatted(events[i].Path.c_str());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Play"))  audioManager->PlayEvent(i);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Stop"))  audioManager->StopEvent(i);
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Stop All"))
+            audioManager->StopAll();
+    }
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Draw (main entry called each frame by DX12RendererAPI)
+// ---------------------------------------------------------------------------
+
+void Editor::Draw(
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+    const EditorCamera& camera,
+    const char* sceneStatusMessage,
+    const char* statisticsText,
+    bool showStatistics,
+    AudioManager* audioManager)
+{
+    mSceneStatusMessage     = sceneStatusMessage;
+    mViewportStatisticsText = statisticsText;
+    mSavedCameraPosition    = camera.GetPosition();
+    mSavedCameraRotation    = camera.GetRotation();
+    if (!mViewportStatisticsInitialized)
+    {
+        mShowViewportStatistics = showStatistics;
+        mViewportStatisticsInitialized = true;
+    }
+
+    UpdateSceneLoading();
+    HandleKeyboardShortcuts();
+
+    Entity* selectedEntity = GetSelectedEntity();
+
+    DrawViewport(sceneTextureHandle, camera, selectedEntity);
+    selectedEntity = GetSelectedEntity();
+    DrawToolbar(mSelectIcon.GpuHandle, mMoveIcon.GpuHandle, mRotateIcon.GpuHandle, mScaleIcon.GpuHandle, mWireframeIcon.GpuHandle);
+
+    if (mShowComponentsPanel)   DrawComponentsPanel();
+    if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();
+    if (mShowPropertiesPanel)    DrawPropertiesPanel(selectedEntity, audioManager);
+    if (mShowAudioManagerPanel)  DrawAudioManagerWindow(audioManager);
+    if (mShowResourceDebugPanel) DrawResourceDebugWindow();
+    DrawViewportResolutionWindow();
+    DrawScreenshotWindow();
+
+    DrawViewportStatisticsOverlay();
+    DrawSceneLoadingOverlay();
+}

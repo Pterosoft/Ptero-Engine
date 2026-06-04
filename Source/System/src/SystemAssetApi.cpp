@@ -3,6 +3,7 @@
 #include "System/SystemAssetApi.h"
 
 #include "System/AssetManager.h"
+#include "System/CollisionGenerator.h"
 #include "System/FbxCompiler.h"
 
 #include <algorithm>
@@ -156,5 +157,26 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateMeshLods(
     }
 
     WriteStatusMessage(statusMessage, statusMessageCapacity, "Regenerated mesh LODs: " + pteroPath.string());
+    return true;
+}
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateCollisions(
+    const char* fbxOrPteroPath,
+    char* statusMessage,
+    int statusMessageCapacity)
+{
+    if (fbxOrPteroPath == nullptr || fbxOrPteroPath[0] == '\0')
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Choose a geometry asset before generating collisions.");
+        return false;
+    }
+
+    if (!CollisionGenerator::GenerateCollisions(fbxOrPteroPath))
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Failed to generate collision hulls for the selected geometry asset.");
+        return false;
+    }
+
+    WriteStatusMessage(statusMessage, statusMessageCapacity, std::string("Generated collision hulls for: ") + fbxOrPteroPath);
     return true;
 }

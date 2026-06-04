@@ -16,6 +16,9 @@
     <Filter Include="Source Files\DDS">
       <UniqueIdentifier>{bd321b1f-477d-4a7c-a94a-a9b792c00874}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CoACD">
+      <UniqueIdentifier>{0fdf559c-cbc4-4d19-80f3-d649df62b4c0}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -43,6 +46,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="include\System\TextureImporter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\System\CollisionGenerator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -116,8 +125,115 @@
     <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\DirectXTexWIC.cpp">
       <Filter>Source Files\DDS</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BCDirectCompute.cpp">
+    <ClCompile Include="src\CollisionGenerator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\allocator.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\clusterizer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\indexanalyzer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\indexcodec.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\indexgenerator.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\meshletcodec.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\meshletutils.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\opacitymap.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\overdrawoptimizer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\partition.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\quantization.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\rasterizer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\simplifier.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\spatialorder.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\stripifier.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\vcacheoptimizer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\vertexcodec.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\vertexfilter.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer\src\vfetchoptimizer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btAlignedAllocator.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btConvexHullComputer.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\bvh.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\clip.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\cost.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\public\coacd.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\io.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\logger.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\mcts.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\model_obj.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\preprocess.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\process.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\quickhull\QuickHull.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\shape.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+    <ClCompile Include="..\SDKs\CoACD\src\sobol.cpp">
+      <Filter>Source Files\CoACD</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="System.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>

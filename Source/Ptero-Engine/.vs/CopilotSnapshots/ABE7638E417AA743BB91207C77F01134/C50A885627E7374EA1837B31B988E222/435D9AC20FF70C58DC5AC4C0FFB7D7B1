@@ -1,0 +1,162 @@
+﻿#define NOMINMAX
+#define DISABLE_SPDLOG
+#include "System/CollisionGenerator.h"
+#include "System/PteroMeshFormat.h"
+
+#include "coacd.h"
+#include "../../../SDKs/nlohmann/json.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <cstring>
+
+namespace
+{
+	struct VertexPos
+	{
+		float x, y, z;
+		// pad fields so we can skip the full Vertex stride
+	};
+
+	// Minimal vertex stride in the .ptero binary: Position(12) + Normal(12) + TexCoord(8) + Color(16) = 48 bytes
+	static constexpr std::size_t kVertexStride = 48;
+
+	std::filesystem::path GetCollisionJsonPathForMeshInput(const std::filesystem::path& inputPath)
+	{
+		std::filesystem::path baseName = inputPath.filename();
+		if (_stricmp(baseName.extension().string().c_str(), ".ptero") == 0)
+		{
+			baseName = baseName.stem();
+		}
+
+		if (_stricmp(baseName.extension().string().c_str(), ".fbx") == 0)
+		{
+			baseName = baseName.stem();
+		}
+
+		return inputPath.parent_path() / (baseName.string() + ".collisions.json");
+	}
+
+	bool LoadPteroBaseVerticesAndIndices(
+		const std::string& pteroPath,
+		std::vector<std::array<double, 3>>& outVertices,
+		std::vector<std::array<int, 3>>& outIndices)
+	{
+		std::ifstream f(pteroPath, std::ios::binary);
+		if (!f) return false;
+
+		// Read header (matches PteroMeshFormat.h)
+		char magic[4] = {};
+		f.read(magic, 4);
+		if (std::memcmp(magic, "PTRO", 4) != 0) return false;
+
+		std::uint32_t version = 0, vertexCount = 0, indexCount = 0, subMeshCount = 0;
+		f.read(reinterpret_cast<char*>(&version), 4);
+		f.read(reinterpret_cast<char*>(&vertexCount), 4);
+		f.read(reinterpret_cast<char*>(&indexCount), 4);
+		f.read(reinterpret_cast<char*>(&subMeshCount), 4);
+
+		std::uint32_t lodCount = 1;
+		if (version >= 3)
+		{
+			f.read(reinterpret_cast<char*>(&lodCount), 4);
+		}
+
+		// Skip sub-mesh table (12 bytes per entry)
+		if (subMeshCount > 0)
+		{
+			f.seekg(static_cast<std::streamoff>(subMeshCount) * 12, std::ios::cur);
+		}
+
+		// Read vertex positions (stride = 48 bytes, position is first 12)
+		outVertices.resize(vertexCount);
+		for (std::uint32_t i = 0; i < vertexCount; ++i)
+		{
+			float pos[3] = {};
+			f.read(reinterpret_cast<char*>(pos), 12);
+			// Skip rest of vertex (Normal 12 + TexCoord 8 + Color 16 = 36 bytes)
+			f.seekg(36, std::ios::cur);
+			outVertices[i] = { static_cast<double>(pos[0]), static_cast<double>(pos[1]), static_cast<double>(pos[2]) };
+		}
+
+		// Read indices and form triangles
+		const std::uint32_t triangleCount = indexCount / 3;
+		std::vector<std::uint32_t> rawIndices(indexCount);
+		f.read(reinterpret_cast<char*>(rawIndices.data()), static_cast<std::streamsize>(indexCount * 4));
+
+		outIndices.resize(triangleCount);
+		for (std::uint32_t i = 0; i < triangleCount; ++i)
+		{
+			outIndices[i] = { static_cast<int>(rawIndices[i * 3 + 0]),
+							  static_cast<int>(rawIndices[i * 3 + 1]),
+							  static_cast<int>(rawIndices[i * 3 + 2]) };
+		}
+
+		return f.good() || f.eof();
+	}
+}
+
+bool CollisionGenerator::GenerateCollisions(const std::string& fbxOrPteroPath)
+{
+	if (fbxOrPteroPath.empty()) return false;
+
+	const std::filesystem::path inputPath(fbxOrPteroPath);
+	const std::filesystem::path pteroPath =
+		_stricmp(inputPath.extension().string().c_str(), ".ptero") == 0
+		? inputPath
+		: std::filesystem::path(fbxOrPteroPath + ".ptero");
+
+	if (!std::filesystem::exists(pteroPath)) return false;
+
+	const std::filesystem::path outputPath = GetCollisionJsonPathForMeshInput(pteroPath);
+
+	// Load mesh data
+	coacd::Mesh input;
+	if (!LoadPteroBaseVerticesAndIndices(pteroPath.string(), input.vertices, input.indices))
+	{
+		return false;
+	}
+
+	if (input.vertices.empty() || input.indices.empty()) return false;
+
+	// Suppress verbose CoACD logging
+	coacd::set_log_level("error");
+
+	// Run convex decomposition with default parameters
+	std::vector<coacd::Mesh> parts;
+	try
+	{
+		parts = coacd::CoACD(input);
+	}
+	catch (...)
+	{
+		return false;
+	}
+
+	// Serialize result to JSON
+	nlohmann::json j = nlohmann::json::array();
+	for (const coacd::Mesh& hull : parts)
+	{
+		nlohmann::json hullJson;
+		nlohmann::json verts = nlohmann::json::array();
+		for (const auto& v : hull.vertices)
+		{
+			verts.push_back({ v[0], v[1], v[2] });
+		}
+		nlohmann::json tris = nlohmann::json::array();
+		for (const auto& t : hull.indices)
+		{
+			tris.push_back({ t[0], t[1], t[2] });
+		}
+		hullJson["vertices"] = std::move(verts);
+		hullJson["triangles"] = std::move(tris);
+		j.push_back(std::move(hullJson));
+	}
+
+	std::ofstream out(outputPath);
+	if (!out) return false;
+	out << j.dump(2);
+	return true;
+}

@@ -7,6 +7,12 @@
 #include <utility>
 #include <vector>
 
+struct CollisionHull
+{
+    std::vector<DirectX::XMFLOAT3> Vertices;
+    std::vector<std::uint32_t> Indices;
+};
+
 struct Vertex
 {
     DirectX::XMFLOAT3 Position{};
@@ -34,9 +40,28 @@ struct MeshLod
 class Mesh
 {
 public:
+    Mesh(
+        std::vector<Vertex> vertices,
+        std::vector<std::uint32_t> indices,
+        std::vector<CollisionHull> collisionHulls)
+        : mCollisionHulls(std::move(collisionHulls))
+    {
+        mLods.push_back({ std::move(vertices), std::move(indices), {} });
+    }
+
     Mesh(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices)
     {
         mLods.push_back({ std::move(vertices), std::move(indices), {} });
+    }
+
+    Mesh(
+        std::vector<Vertex> vertices,
+        std::vector<std::uint32_t> indices,
+        std::vector<SubMesh> subMeshes,
+        std::vector<CollisionHull> collisionHulls)
+        : mCollisionHulls(std::move(collisionHulls))
+    {
+        mLods.push_back({ std::move(vertices), std::move(indices), std::move(subMeshes) });
     }
 
     Mesh(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices, std::vector<SubMesh> subMeshes)
@@ -44,8 +69,9 @@ public:
         mLods.push_back({ std::move(vertices), std::move(indices), std::move(subMeshes) });
     }
 
-    explicit Mesh(std::vector<MeshLod> lods)
+    Mesh(std::vector<MeshLod> lods, std::vector<CollisionHull> collisionHulls = {})
         : mLods(std::move(lods))
+        , mCollisionHulls(std::move(collisionHulls))
     {
         if (mLods.empty())
         {
@@ -96,6 +122,16 @@ public:
         return mLods.size();
     }
 
+    const std::vector<CollisionHull>& GetCollisionHulls() const
+    {
+        return mCollisionHulls;
+    }
+
+    bool HasCollisionHulls() const
+    {
+        return !mCollisionHulls.empty();
+    }
+
     bool IsUploadedToGpu() const
     {
         return mIsUploadedToGpu;
@@ -103,5 +139,6 @@ public:
 
 private:
     std::vector<MeshLod> mLods;
+    std::vector<CollisionHull> mCollisionHulls;
     bool mIsUploadedToGpu = false;
 };

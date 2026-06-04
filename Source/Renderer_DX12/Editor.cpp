@@ -4,6 +4,8 @@
 #include "ImGuizmoCompat.h"
 #include "SceneSerializer.h"
 
+#include "..\SDKs\nlohmann\json.hpp"
+
 #include <commdlg.h>
 #include <wincodec.h>
 #include <shlobj.h>
@@ -19,6 +21,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -40,6 +43,27 @@ extern "C"
 
 namespace
 {
+    // Project a 3D world-space point onto the 2D viewport.
+    // Returns false if the point is behind the camera.
+    bool ProjectPoint(
+        const DirectX::XMMATRIX& viewProj,
+        const ImVec2& vpOrigin,
+        const ImVec2& vpSize,
+        const DirectX::XMFLOAT3& worldPos,
+        ImVec2& outScreen)
+    {
+        using namespace DirectX;
+        const XMVECTOR clip = XMVector4Transform(
+            XMVectorSet(worldPos.x, worldPos.y, worldPos.z, 1.0f), viewProj);
+        const float w = XMVectorGetW(clip);
+        if (w <= 0.0f) return false;
+        const float ndcX = XMVectorGetX(clip) / w;
+        const float ndcY = XMVectorGetY(clip) / w;
+        outScreen.x = vpOrigin.x + (ndcX  * 0.5f + 0.5f) * vpSize.x;
+        outScreen.y = vpOrigin.y + (-ndcY * 0.5f + 0.5f) * vpSize.y;
+        return true;
+    }
+
     bool PromptForSceneOpenPath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
     {
         OPENFILENAMEA openFileName{};
@@ -272,6 +296,7 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
     LoadIconTexture(L"Rotate.png", mRotateIcon, &iconStatus, commandList);
     LoadIconTexture(L"Scale.png", mScaleIcon, &iconStatus, commandList);
     LoadIconTexture(L"Wireframe.png", mWireframeIcon, &iconStatus, commandList);
+    LoadIconTexture(L"Proxy.png", mProxyIcon, &iconStatus, commandList);
     ReportProgress(L"Editor UI assets ready.");
     mIsInitialized = true;
     return true;
@@ -295,6 +320,7 @@ void Editor::Shutdown()
     ReleaseIconTexture(mRotateIcon);
     ReleaseIconTexture(mScaleIcon);
     ReleaseIconTexture(mWireframeIcon);
+    ReleaseIconTexture(mProxyIcon);
     mIsInitialized = false;
 }
 
@@ -1885,7 +1911,8 @@ void Editor::DrawToolbar(
     D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
     D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
     D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon)
+    D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
+    D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon)
 {
     ImGui::SetNextWindowSize(ImVec2(280.0f, 56.0f), ImGuiCond_FirstUseEver);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
@@ -1927,8 +1954,8 @@ void Editor::DrawToolbar(
     };
 
     const float totalButtonsWidth =
-        btnSize.x * 5.0f +
-        ImGui::GetStyle().ItemSpacing.x * 4.0f +
+        btnSize.x * 6.0f +
+        ImGui::GetStyle().ItemSpacing.x * 5.0f +
         separatorWidth;
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     if (availableWidth > totalButtonsWidth)
@@ -1947,6 +1974,8 @@ void Editor::DrawToolbar(
     ImGui::Dummy(ImVec2(separatorWidth, 0.0f));
     ImGui::SameLine();
     ToggleButton(wireframeIcon, mWireframeEnabled, "Wireframe");
+    ImGui::SameLine();
+    ToggleButton(proxyIcon, mProxyEnabled, "Proxy");
 
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -2070,6 +2099,56 @@ void Editor::DrawViewport(
     }
 
     DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+
+    // -----------------------------------------------------------------------
+    // Proxy view: draw convex hull wireframes for all entities with collision data.
+    // -----------------------------------------------------------------------
+    if (mProxyEnabled)
+    {
+        using namespace DirectX;
+        const XMMATRIX viewProjMatrix = XMMatrixMultiply(
+            camera.GetViewMatrix(), camera.GetProjectionMatrix());
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImU32 hullColor = IM_COL32(80, 220, 80, 200);
+
+        for (const Entity& entity : mEntities)
+        {
+            if (!entity.Mesh.has_value()) continue;
+            const MeshComponent& mesh = *entity.Mesh;
+            if (!mesh.MeshAsset || !mesh.MeshAsset->HasCollisionHulls()) continue;
+
+            const XMMATRIX worldMatrix = entity.Transform.GetTransform();
+            const XMMATRIX worldViewProj = XMMatrixMultiply(worldMatrix, viewProjMatrix);
+
+            for (const CollisionHull& hull : mesh.MeshAsset->GetCollisionHulls())
+            {
+                for (std::size_t index = 0; index + 2 < hull.Indices.size(); index += 3)
+                {
+                    const std::uint32_t i0 = hull.Indices[index + 0];
+                    const std::uint32_t i1 = hull.Indices[index + 1];
+                    const std::uint32_t i2 = hull.Indices[index + 2];
+                    if (i0 >= hull.Vertices.size() ||
+                        i1 >= hull.Vertices.size() ||
+                        i2 >= hull.Vertices.size())
+                        continue;
+
+                    const XMFLOAT3& p0 = hull.Vertices[i0];
+                    const XMFLOAT3& p1 = hull.Vertices[i1];
+                    const XMFLOAT3& p2 = hull.Vertices[i2];
+
+                    ImVec2 s0, s1, s2;
+                    const bool ok0 = ProjectPoint(worldViewProj, viewportOrigin, viewportSize, p0, s0);
+                    const bool ok1 = ProjectPoint(worldViewProj, viewportOrigin, viewportSize, p1, s1);
+                    const bool ok2 = ProjectPoint(worldViewProj, viewportOrigin, viewportSize, p2, s2);
+
+                    if (ok0 && ok1) drawList->AddLine(s0, s1, hullColor, 1.0f);
+                    if (ok1 && ok2) drawList->AddLine(s1, s2, hullColor, 1.0f);
+                    if (ok0 && ok2) drawList->AddLine(s0, s2, hullColor, 1.0f);
+                }
+            }
+        }
+    }
 
     if (mActiveGizmo == GizmoType::None && mViewportSelection.IsDragging)
     {
@@ -2779,7 +2858,7 @@ void Editor::Draw(
 
     DrawViewport(sceneTextureHandle, camera, selectedEntity);
     selectedEntity = GetSelectedEntity();
-    DrawToolbar(mSelectIcon.GpuHandle, mMoveIcon.GpuHandle, mRotateIcon.GpuHandle, mScaleIcon.GpuHandle, mWireframeIcon.GpuHandle);
+    DrawToolbar(mSelectIcon.GpuHandle, mMoveIcon.GpuHandle, mRotateIcon.GpuHandle, mScaleIcon.GpuHandle, mWireframeIcon.GpuHandle, mProxyIcon.GpuHandle);
 
     if (mShowComponentsPanel)   DrawComponentsPanel();
     if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();
