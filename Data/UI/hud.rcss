@@ -1,0 +1,69 @@
+/* Styling for the sample HUD. RCSS is RmlUi's CSS dialect: most of CSS 2.1 plus a
+   subset of CSS 3, with lengths in px, dp and %. */
+
+body
+{
+	font-family: "Playfair Display";
+	font-size: 16dp;
+	color: #e8e8ecff;
+	/* The document fills the UI target; the target itself is cleared transparent, so
+	   anything not painted here shows the scene underneath. */
+	width: 100%;
+	height: 100%;
+}
+
+#hud-panel
+{
+	position: absolute;
+	top: 24dp;
+	left: 24dp;
+	width: 320dp;
+	padding: 18dp 20dp;
+
+	background-color: #12141ad8;
+	border: 1dp #4a5570ff;
+	border-radius: 6dp;
+
+	/* Transitions exercise the animation path, which is driven by the elapsed time the
+	   engine's system interface reports. */
+	transition: background-color 0.2s cubic-in-out, border-color 0.2s cubic-in-out;
+}
+
+#hud-panel:hover
+{
+	background-color: #1b1f2ae8;
+	border-color: #7d8cb4ff;
+}
+
+#hud-title
+{
+	font-size: 22dp;
+	font-weight: bold;
+	color: #ffffffff;
+	margin-bottom: 14dp;
+}
+
+.readout
+{
+	display: block;
+	margin-bottom: 6dp;
+}
+
+.readout .label
+{
+	color: #9aa3b8ff;
+}
+
+.readout .value
+{
+	color: #f0f3ffff;
+	float: right;
+}
+
+#hud-hint
+{
+	margin-top: 14dp;
+	font-size: 13dp;
+	font-style: italic;
+	color: #7f879bff;
+}

@@ -4,7 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "TaaSettings.h"
 
-#include "imgui.h"
+#include "../QtUi/UiTypes.h"
 
 #include <string>
 
@@ -13,7 +13,7 @@
 // Design notes:
 //   - A private 3-slot shader-visible descriptor heap is used so the SRV table
 //     layout is always predictable and independent of the shared context heap.
-//   - The ImGui-visible output SRV is kept in the shared context heap so ImGui
+//   - The Ui-visible output SRV is kept in the shared context heap so Ui
 //     can display it using its normal draw call without switching heaps.
 //   - History and output textures are re-created on resize; the pipeline and
 //     constant buffer survive resizes.
@@ -36,11 +36,11 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE currentFrameColorCpuSrv,
         TaaSettings&               settings);
 
-    // ImGui-displayable GPU handle of the resolved output (shared heap slot).
-    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()    const { return mOutputImGuiSrvGpu; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv()    const { return mOutputImGuiSrvCpu; }
+    // Ui-displayable GPU handle of the resolved output (shared heap slot).
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()    const { return mOutputUiSrvGpu; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv()    const { return mOutputUiSrvCpu; }
     ID3D12Resource*             GetOutputResource()  const { return mOutputTexture.Get(); }
-    ImTextureID                 GetOutputTextureId()  const { return mOutputTextureId; }
+    UiTextureID                 GetOutputTextureId()  const { return mOutputTextureId; }
 
     bool IsInitialized() const { return mIsInitialized; }
 
@@ -57,13 +57,9 @@ private:
     struct alignas(256) TaaCbData
     {
         float BlendFactor;
-        float SharpeningStrength;
-        int   ApplySharpening;
-        float Pad0;
         UINT  FrameWidth;
         UINT  FrameHeight;
-        float Pad1;
-        float Pad2;
+        float Pad0;
     };
 
     // ---- pipeline ---------------------------------------------------
@@ -87,11 +83,11 @@ private:
     // Non-shader-visible UAV for ClearUnorderedAccessViewFloat (required by DX12).
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mNsUavHeap;
 
-    // Shared-context-heap slot for the ImGui display SRV (allocated once, never freed).
-    D3D12_CPU_DESCRIPTOR_HANDLE mOutputImGuiSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE mOutputImGuiSrvGpu{};
-    ImTextureID mOutputTextureId = ImTextureID_Invalid;
-    bool mImGuiSlotAllocated = false;
+    // Shared-context-heap slot for the Ui display SRV (allocated once, never freed).
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUiSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputUiSrvGpu{};
+    UiTextureID mOutputTextureId = UiTextureID_Invalid;
+    bool mUiSlotAllocated = false;
 
     UINT mWidth  = 0;
     UINT mHeight = 0;

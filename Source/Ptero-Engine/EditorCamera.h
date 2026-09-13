@@ -8,6 +8,7 @@
 namespace
 {
     constexpr float EditorCameraPitchLimit = DirectX::XM_PIDIV2 - 0.01f;
+    constexpr float EditorCameraDefaultFarPlane = 8000.0f;
 
     inline DirectX::XMVECTOR GetEditorCameraForwardVector(float pitch, float yaw)
     {
@@ -32,7 +33,7 @@ class EditorCamera
 public:
     EditorCamera()
     {
-        SetLens(DirectX::XM_PIDIV4, 16.0f / 9.0f, 0.1f, 100.0f);
+        SetLens(DirectX::XM_PIDIV4, 16.0f / 9.0f, 0.1f, EditorCameraDefaultFarPlane);
     }
 
     void Update(
@@ -41,6 +42,8 @@ public:
         bool moveBackward,
         bool moveLeft,
         bool moveRight,
+        bool moveUp,
+        bool moveDown,
         bool rightMouseButtonDown,
         float mouseX,
         float mouseY)
@@ -69,6 +72,7 @@ public:
         const float moveDistance = mMovementSpeed * deltaTime;
         const DirectX::XMVECTOR forward = GetEditorCameraForwardVector(mPitch, mYaw);
         const DirectX::XMVECTOR right = GetEditorCameraRightVector(mPitch, mYaw);
+        const DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
         const DirectX::XMVECTOR moveScale = DirectX::XMVectorReplicate(moveDistance);
 
         DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&mPosition);
@@ -87,6 +91,14 @@ public:
         if (moveRight)
         {
             position = DirectX::XMVectorAdd(position, DirectX::XMVectorMultiply(right, moveScale));
+        }
+        if (moveUp)
+        {
+            position = DirectX::XMVectorAdd(position, DirectX::XMVectorMultiply(up, moveScale));
+        }
+        if (moveDown)
+        {
+            position = DirectX::XMVectorSubtract(position, DirectX::XMVectorMultiply(up, moveScale));
         }
 
         DirectX::XMStoreFloat3(&mPosition, position);
@@ -122,6 +134,21 @@ public:
         mAspectRatio = aspectRatio;
         mNearPlane = nearPlane;
         mFarPlane = farPlane;
+    }
+
+    void SetFarPlane(float farPlane)
+    {
+        mFarPlane = (std::max)(farPlane, mNearPlane + 0.001f);
+    }
+
+    float GetFarPlane() const
+    {
+        return mFarPlane;
+    }
+
+    float GetNearPlane() const
+    {
+        return mNearPlane;
     }
 
     void SetMovementSpeed(float movementSpeed)
@@ -192,7 +219,7 @@ private:
     float mFovYRadians = DirectX::XM_PIDIV4;
     float mAspectRatio = 16.0f / 9.0f;
     float mNearPlane = 0.1f;
-    float mFarPlane = 100.0f;
+    float mFarPlane = EditorCameraDefaultFarPlane;
     float mLastMouseX = 0.0f;
     float mLastMouseY = 0.0f;
     bool mHasLastMousePosition = false;

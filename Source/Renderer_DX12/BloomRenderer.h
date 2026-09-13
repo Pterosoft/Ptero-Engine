@@ -4,7 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "BloomSettings.h"
 
-#include "imgui.h"
+#include "../QtUi/UiTypes.h"
 
 #include <array>
 #include <string>
@@ -37,11 +37,11 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE sourceCpuSrv,
         const BloomSettings&       settings);
 
-    // ImGui-displayable GPU SRV of the composited output.
-    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()   const { return mOutputImGuiSrvGpu; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv()   const { return mOutputImGuiSrvCpu; }
+    // Ui-displayable GPU SRV of the composited output.
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()   const { return mOutputUiSrvGpu; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv()   const { return mOutputUiSrvCpu; }
     ID3D12Resource*             GetOutputResource() const { return mOutputTexture.Get(); }
-    ImTextureID                 GetOutputTextureId() const { return mOutputTextureId; }
+    UiTextureID                 GetOutputTextureId() const { return mOutputTextureId; }
 
     bool IsInitialized() const { return mIsInitialized; }
 
@@ -121,11 +121,11 @@ private:
     UINT mComputeHeapStride  = 0;
     UINT mComputeHeapSlots   = 0; // total slots allocated
 
-    // Shared-context-heap slot for ImGui display of the output.
-    D3D12_CPU_DESCRIPTOR_HANDLE mOutputImGuiSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE mOutputImGuiSrvGpu{};
-    ImTextureID mOutputTextureId  = ImTextureID_Invalid;
-    bool mImGuiSlotAllocated      = false;
+    // Shared-context-heap slot for Ui display of the output.
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUiSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputUiSrvGpu{};
+    UiTextureID mOutputTextureId  = UiTextureID_Invalid;
+    bool mUiSlotAllocated      = false;
     bool mDescriptorsAllocated    = false;
 
     UINT mWidth  = 0;

@@ -237,11 +237,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     }
 
     float4 materialSample = t_Material.Load(int3(pixel, 0));
-    float roughness = materialSample.r;
+    float roughness = saturate(materialSample.r);
     float metallic  = materialSample.g;
 
     // Surfaces rougher than the threshold skip dedicated specular rays.
-    if (roughness >= g_SpecularRoughnessThreshold)
+    if (roughness > saturate(g_SpecularRoughnessThreshold))
     {
         u_SpecularOutput[pixel] = float4(0, 0, 0, 0);
         return;

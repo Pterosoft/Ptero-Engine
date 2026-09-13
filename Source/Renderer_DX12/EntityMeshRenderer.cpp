@@ -1,9 +1,12 @@
 #include "pch.h"
 #include "EntityMeshRenderer.h"
 
+#include "System/PteroLog.h"
+
 #include "d3dx12.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -20,11 +23,6 @@ using namespace DirectX;
 // ---------------------------------------------------------------------------
 namespace
 {
-    std::uint64_t MakeEntityMeshCacheKey(std::size_t entityIndex, std::size_t lodIndex)
-    {
-        return (static_cast<std::uint64_t>(entityIndex) << 32) | static_cast<std::uint64_t>(lodIndex);
-    }
-
     // Vertex layout that matches System/Mesh.h :: Vertex
     struct GpuVertex
     {
@@ -38,9 +36,7 @@ namespace
 
     void LogEntityMeshRendererDiagnostic(const std::string& message)
     {
-        OutputDebugStringA("[EntityMeshRenderer] ");
-        OutputDebugStringA(message.c_str());
-        OutputDebugStringA("\n");
+        PteroLog::Write(PteroLog::Level::Debug, "Meshes", message.c_str());
     }
 
     bool CreateCommittedBuffer(
@@ -150,6 +146,9 @@ void EntityMeshRenderer::SetEntities(std::vector<Entity>* entities)
     {
         mSceneContentChanged = true;
         mLoggedDrawEntities.clear();
+        // Entity indices are about to mean something different, so last frame's
+        // LOD choices no longer apply to them.
+        mEntityLodState.clear();
     }
     mEntities = entities;
 }
@@ -161,7 +160,8 @@ void EntityMeshRenderer::Render(
     DXGI_FORMAT albedoFormat,
     DXGI_FORMAT normalFormat,
     DXGI_FORMAT materialFormat,
-    DXGI_FORMAT depthFormat)
+    DXGI_FORMAT depthFormat,
+    UINT msaaSampleCount)
 {
     if (commandList == nullptr || mEntities == nullptr || mEntities->empty())
     {
@@ -173,13 +173,15 @@ void EntityMeshRenderer::Render(
         || albedoFormat   != mAlbedoFormat
         || normalFormat   != mNormalFormat
         || materialFormat != mMaterialFormat
-        || depthFormat    != mDepthFormat)
+        || depthFormat    != mDepthFormat
+        || msaaSampleCount != mMsaaSampleCount)
     {
         mAlbedoFormat   = albedoFormat;
         mNormalFormat   = normalFormat;
         mMaterialFormat = materialFormat;
         mDepthFormat    = depthFormat;
-        if (!CreatePipeline(albedoFormat, normalFormat, materialFormat, depthFormat))
+        mMsaaSampleCount = msaaSampleCount;
+        if (!CreatePipeline(albedoFormat, normalFormat, materialFormat, depthFormat, msaaSampleCount))
             return;
     }
 
@@ -235,7 +237,7 @@ void EntityMeshRenderer::Render(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        const std::size_t selectedLodIndex = SelectLodIndex(entity, *meshPtr, cameraPosition);
+        const std::size_t selectedLodIndex = SelectLodIndex(i, entity, *meshPtr, cameraPosition);
 
         if (!EnsureEntityGpuMesh(commandList, i, meshPtr, selectedLodIndex))
         {
@@ -243,7 +245,8 @@ void EntityMeshRenderer::Render(
             continue;
         }
 
-        EntityGpuMesh& selectedGpuMesh = mGpuMeshes.at(MakeEntityMeshCacheKey(i, selectedLodIndex));
+        EntityGpuMesh& selectedGpuMesh = mGpuMeshes.at(MeshCacheKey{ meshPtr, selectedLodIndex });
+        selectedGpuMesh.LastUsedFrame = mFrameCounter;
         if (selectedGpuMesh.IndexCount == 0)
         {
             ++cbSlot;
@@ -255,10 +258,13 @@ void EntityMeshRenderer::Render(
         // Write per-entity MVP + model matrix into the constant buffer.
         const XMMATRIX model = entity.Transform.GetTransform();
         const XMMATRIX mvp   = XMMatrixTranspose(model * viewProjection);
-        XMStoreFloat4x4(&mMappedCB[cbSlot].MVP,   mvp);
-        XMStoreFloat4x4(&mMappedCB[cbSlot].Model, XMMatrixTranspose(model));
+        // Index into this frame's copy of the slot range, so the write cannot
+        // land on constants an in-flight earlier frame is still drawing with.
+        const std::size_t cbIndex = mFrameSlot * mCBCapacity + cbSlot;
+        XMStoreFloat4x4(&mMappedCB[cbIndex].MVP,   mvp);
+        XMStoreFloat4x4(&mMappedCB[cbIndex].Model, XMMatrixTranspose(model));
 
-        const UINT64 cbOffset = static_cast<UINT64>(cbSlot) * sizeof(EntityConstants);
+        const UINT64 cbOffset = static_cast<UINT64>(cbIndex) * sizeof(EntityConstants);
         // Slot 0: per-entity transform CBV (b0).
         commandList->SetGraphicsRootConstantBufferView(
             0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
@@ -320,7 +326,7 @@ void EntityMeshRenderer::Render(
         }
 
         // Load all texture paths for every sub-material in this entity's JSON.
-        const auto allTextures = ResolveAllSubMaterialTextures(materialPath);
+        const auto& allTextures = ResolveAllSubMaterialTextures(materialPath);
         auto hasAnyResolvedTexture = [](const SubMaterialTextures& textures)
         {
             return !textures.baseColor.empty()
@@ -328,7 +334,9 @@ void EntityMeshRenderer::Render(
                 || !textures.metallic.empty()
                 || !textures.roughness.empty()
                 || !textures.ao.empty()
-                || !textures.emissive.empty();
+                || !textures.emissive.empty()
+                || !textures.opacity.empty()
+                || !textures.height.empty();
         };
         const EntityMeshRenderer::SubMaterialTextures* defaultResolvedTextures = nullptr;
         for (const auto& [resolvedMaterialId, resolvedTextures] : allTextures)
@@ -353,6 +361,23 @@ void EntityMeshRenderer::Render(
             matOut.RoughnessFactor = texPaths.roughnessFactor;
             matOut.NormalScale     = texPaths.normalScale;
             matOut.AoStrength      = texPaths.aoStrength;
+            matOut.OpacityFactor   = texPaths.opacityFactor;
+            matOut.AlphaCutoff     = texPaths.alphaCutoff;
+            matOut.UseAlphaCutout  = texPaths.useAlphaCutout ? 1 : 0;
+            matOut.UseTransparentBlend = texPaths.useTransparentBlend ? 1 : 0;
+
+            matOut.UvTiling = { texPaths.uvTilingU, texPaths.uvTilingV };
+            matOut.UvOffset = { texPaths.uvOffsetU, texPaths.uvOffsetV };
+            const float uvRotationRadians = DirectX::XMConvertToRadians(texPaths.uvRotationDegrees);
+            matOut.UvRotationSin = std::sin(uvRotationRadians);
+            matOut.UvRotationCos = std::cos(uvRotationRadians);
+
+            matOut.UseParallaxOcclusion = texPaths.useParallaxOcclusion ? 1 : 0;
+            matOut.ParallaxHeightScale  = texPaths.parallaxHeightScale;
+            matOut.ParallaxMinSteps     = (std::max)(1, texPaths.parallaxMinSteps);
+            matOut.ParallaxMaxSteps     = (std::max)(matOut.ParallaxMinSteps, texPaths.parallaxMaxSteps);
+            matOut.ParallaxFadeDistance = texPaths.parallaxFadeDistance;
+            matOut.CameraPositionWS     = cameraPosition;
 
             std::string metallicPath = texPaths.metallic;
             std::string roughnessPath = texPaths.roughness;
@@ -368,25 +393,29 @@ void EntityMeshRenderer::Render(
                 matOut.HasPackedMaterialMap = 1;
             }
 
-            // Ordered: baseColor, normal, metallic, roughness, ao, emissive.
-            const std::string* paths[6] = {
+            // Ordered: baseColor, normal, metallic, roughness, ao, emissive, opacity, height.
+            const std::string* paths[8] = {
                 &texPaths.baseColor, &texPaths.normal, &metallicPath,
-                &roughnessPath,      &aoPath,          &texPaths.emissive
+                &roughnessPath,      &aoPath,          &texPaths.emissive,
+                &texPaths.opacity,   &texPaths.height
             };
-            int* flags[6] = {
+            int* flags[8] = {
                 nullptr,               &matOut.HasNormalMap,    &matOut.HasMetallicMap,
-                &matOut.HasRoughnessMap, &matOut.HasAoMap,       &matOut.HasEmissiveMap
+                &matOut.HasRoughnessMap, &matOut.HasAoMap,       &matOut.HasEmissiveMap,
+                &matOut.HasOpacityMap,   &matOut.HasHeightMap
             };
-            const TextureSemantic semantics[6] = {
+            const TextureSemantic semantics[8] = {
                 TextureSemantic::Color,
                 TextureSemantic::Normal,
                 TextureSemantic::MaterialMask,
                 TextureSemantic::MaterialMask,
                 TextureSemantic::MaterialMask,
                 TextureSemantic::Color,
+                TextureSemantic::MaterialMask,
+                TextureSemantic::MaterialMask,
             };
 
-            for (int s = 0; s < 6; ++s)
+            for (int s = 0; s < 8; ++s)
             {
                 D3D12_GPU_DESCRIPTOR_HANDLE handle = mFallbackGpuHandle;
                 if (!paths[s]->empty())
@@ -397,7 +426,7 @@ void EntityMeshRenderer::Render(
                         if (flags[s]) *flags[s] = 1;
                     }
                 }
-                // Root slots 3–8 correspond to t0–t5.
+                // Root slots 3–10 correspond to t0–t7.
                 if (handle.ptr != 0)
                     commandList->SetGraphicsRootDescriptorTable(3 + s, handle);
             }
@@ -408,13 +437,20 @@ void EntityMeshRenderer::Render(
             // Multi-material: draw each sub-mesh with its own textures and material params.
             for (const SubMesh& subMesh : subMeshes)
             {
-                MaterialConstants& mat = mMappedMatCB[matSlot];
+                const std::size_t matIndex = mFrameSlot * mMatCBCapacity + matSlot;
+                MaterialConstants& mat = mMappedMatCB[matIndex];
                 mat = MaterialConstants{}; // reset to defaults
 
                 auto texIt = allTextures.find(subMesh.materialId);
                 SubMaterialTextures texPaths;
-                if (texIt != allTextures.end()) texPaths = texIt->second;
-                if (!hasAnyResolvedTexture(texPaths) && defaultResolvedTextures)
+                if (texIt != allTextures.end())
+                {
+                    // A present multi-material slot is authoritative even when
+                    // it intentionally has no textures. Falling back in that
+                    // case leaks another slot's opacity map across the mesh.
+                    texPaths = texIt->second;
+                }
+                else if (defaultResolvedTextures)
                 {
                     texPaths = *defaultResolvedTextures;
                 }
@@ -423,7 +459,7 @@ void EntityMeshRenderer::Render(
 
                 // Slot 1: per-draw material CBV (b1).
                 commandList->SetGraphicsRootConstantBufferView(
-                    1, mMaterialCB->GetGPUVirtualAddress() + matSlot * sizeof(MaterialConstants));
+                    1, mMaterialCB->GetGPUVirtualAddress() + matIndex * sizeof(MaterialConstants));
                 commandList->DrawIndexedInstanced(subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
                 ++matSlot;
             }
@@ -431,13 +467,17 @@ void EntityMeshRenderer::Render(
         else
         {
             // Single-material or no submesh info.
-            MaterialConstants& mat = mMappedMatCB[matSlot];
+            const std::size_t matIndex = mFrameSlot * mMatCBCapacity + matSlot;
+            MaterialConstants& mat = mMappedMatCB[matIndex];
             mat = MaterialConstants{};
 
             SubMaterialTextures texPaths;
             auto texIt = allTextures.find(0u);
-            if (texIt != allTextures.end()) texPaths = texIt->second;
-            if (!hasAnyResolvedTexture(texPaths) && defaultResolvedTextures)
+            if (texIt != allTextures.end())
+            {
+                texPaths = texIt->second;
+            }
+            else if (defaultResolvedTextures)
             {
                 texPaths = *defaultResolvedTextures;
             }
@@ -445,7 +485,7 @@ void EntityMeshRenderer::Render(
             bindTextures(texPaths, mat);
 
             commandList->SetGraphicsRootConstantBufferView(
-                1, mMaterialCB->GetGPUVirtualAddress() + matSlot * sizeof(MaterialConstants));
+                1, mMaterialCB->GetGPUVirtualAddress() + matIndex * sizeof(MaterialConstants));
             commandList->DrawIndexedInstanced(selectedGpuMesh.IndexCount, 1, 0, 0, 0);
             ++matSlot;
         }
@@ -454,9 +494,9 @@ void EntityMeshRenderer::Render(
     }
 }
 
-bool EntityMeshRenderer::GetGpuMeshInfo(std::size_t entityIndex, GpuMeshInfo& outInfo) const
+bool EntityMeshRenderer::GetGpuMeshInfo(const Mesh* mesh, std::size_t lodIndex, GpuMeshInfo& outInfo) const
 {
-    const auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(entityIndex, 0));
+    const auto it = mGpuMeshes.find(MeshCacheKey{ mesh, lodIndex });
     if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         return false;
 
@@ -577,7 +617,7 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
             continue;
         }
 
-        auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(i, 0));
+        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, 0 });
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -585,15 +625,18 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
         }
 
         EntityGpuMesh& gpuMesh = it->second;
+        gpuMesh.LastUsedFrame = mFrameCounter;
 
         const XMMATRIX model = entity.Transform.GetTransform();
         const XMMATRIX mvp   = XMMatrixTranspose(model * lightVP);
-        XMStoreFloat4x4(&mMappedDepthPassCB[slot].MVP, mvp);
-        XMStoreFloat4x4(&mMappedDepthPassCB[slot].Model, XMMatrixTranspose(model));
+        const std::size_t depthIndex = mFrameSlot * mDepthPassCBCapacity + slot;
+
+        XMStoreFloat4x4(&mMappedDepthPassCB[depthIndex].MVP, mvp);
+        XMStoreFloat4x4(&mMappedDepthPassCB[depthIndex].Model, XMMatrixTranspose(model));
 
         commandList->SetGraphicsRootConstantBufferView(
             0,
-            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(slot) * sizeof(EntityConstants));
+            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(depthIndex) * sizeof(EntityConstants));
         commandList->SetGraphicsRootConstantBufferView(
             1,
             mPointShadowFaceConstantBuffer->GetGPUVirtualAddress());
@@ -641,7 +684,7 @@ void EntityMeshRenderer::RenderDepthOnly(
             continue;
         }
 
-        auto it = mGpuMeshes.find(MakeEntityMeshCacheKey(i, 0));
+        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, 0 });
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -649,14 +692,17 @@ void EntityMeshRenderer::RenderDepthOnly(
         }
 
         EntityGpuMesh& gpuMesh = it->second;
+        gpuMesh.LastUsedFrame = mFrameCounter;
 
         const XMMATRIX model = entity.Transform.GetTransform();
         const XMMATRIX mvp   = XMMatrixTranspose(model * lightVP);
-        XMStoreFloat4x4(&mMappedDepthPassCB[slot].MVP, mvp);
+        const std::size_t depthIndex = mFrameSlot * mDepthPassCBCapacity + slot;
+
+        XMStoreFloat4x4(&mMappedDepthPassCB[depthIndex].MVP, mvp);
 
         commandList->SetGraphicsRootConstantBufferView(
             0,
-            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(slot) * sizeof(EntityConstants));
+            mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(depthIndex) * sizeof(EntityConstants));
 
         commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
         commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
@@ -674,7 +720,8 @@ bool EntityMeshRenderer::CreatePipeline(
     DXGI_FORMAT albedoFormat,
     DXGI_FORMAT normalFormat,
     DXGI_FORMAT materialFormat,
-    DXGI_FORMAT depthFormat)
+    DXGI_FORMAT depthFormat,
+    UINT msaaSampleCount)
 {
     mPipelineReady = false;
 
@@ -718,12 +765,13 @@ bool EntityMeshRenderer::CreatePipeline(
     //   slot 0 – root CBV  (b0, VS) per-entity MVP + model matrix
     //   slot 1 – root CBV  (b1, PS) per-draw material constants
     //   slot 2 – root CBV  (b2, PS) frame rain surface constants
-    //   slots 3–8 – individual 1-SRV descriptor tables (PS):
+    //   slots 3–10 – individual 1-SRV descriptor tables (PS):
     //              3=t0 baseColor, 4=t1 normal, 5=t2 metallic,
-    //              6=t3 roughness, 7=t4 ao, 8=t5 emissive
-    // Using 6 individual tables (instead of one 6-SRV table) means each texture
+    //              6=t3 roughness, 7=t4 ao, 8=t5 emissive, 9=t6 opacity,
+    //              10=t7 height (parallax occlusion)
+    // Using individual tables means each texture
     // can be bound directly from its pre-allocated GPU handle without copying.
-    D3D12_ROOT_PARAMETER rootParams[9]{};
+    D3D12_ROOT_PARAMETER rootParams[11]{};
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0
@@ -740,13 +788,13 @@ bool EntityMeshRenderer::CreatePipeline(
     rootParams[2].Descriptor.RegisterSpace  = 0;
     rootParams[2].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // One D3D12_DESCRIPTOR_RANGE per texture slot (t0–t5).
-    D3D12_DESCRIPTOR_RANGE srvRanges[6]{};
-    for (int i = 0; i < 6; ++i)
+    // One D3D12_DESCRIPTOR_RANGE per texture slot (t0–t7).
+    D3D12_DESCRIPTOR_RANGE srvRanges[8]{};
+    for (int i = 0; i < 8; ++i)
     {
         srvRanges[i].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors                    = 1;
-        srvRanges[i].BaseShaderRegister                = static_cast<UINT>(i); // t0..t5
+        srvRanges[i].BaseShaderRegister                = static_cast<UINT>(i); // t0..t7
         srvRanges[i].RegisterSpace                     = 0;
         srvRanges[i].OffsetInDescriptorsFromTableStart = 0;
 
@@ -762,7 +810,7 @@ bool EntityMeshRenderer::CreatePipeline(
     staticSampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     staticSampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    staticSampler.MipLODBias       = -1.5f;
+    staticSampler.MipLODBias       = mTextureMipLODBias;
     staticSampler.MaxAnisotropy    = 16;
     staticSampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_ALWAYS;
     staticSampler.MinLOD           = 0.0f;
@@ -814,7 +862,8 @@ bool EntityMeshRenderer::CreatePipeline(
     psoDesc.RTVFormats[1]         = normalFormat;
     psoDesc.RTVFormats[2]         = materialFormat;
     psoDesc.DSVFormat             = depthFormat;
-    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleDesc.Count      = msaaSampleCount;
+    psoDesc.SampleDesc.Quality    = 0;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
     // Opaque blend for all three G-Buffer outputs.
@@ -911,30 +960,25 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     const Mesh* mesh,
     std::size_t lodIndex)
 {
-    const std::uint64_t cacheKey = MakeEntityMeshCacheKey(entityIndex, lodIndex);
+    const MeshCacheKey cacheKey{ mesh, lodIndex };
     auto it = mGpuMeshes.find(cacheKey);
-    if (it != mGpuMeshes.end() && it->second.SourceMesh == mesh && it->second.LodIndex == lodIndex)
+    if (it != mGpuMeshes.end())
     {
-        // Buffers are already up to date for this mesh.
+        // Buffers are already up to date for this asset and LOD, whichever
+        // entity asked for them.
+        it->second.LastUsedFrame = mFrameCounter;
         return true;
     }
 
-    // Remove stale entries if the mesh pointer changed.
-    if (mesh != nullptr)
-    {
-        for (auto gpuMeshIt = mGpuMeshes.begin(); gpuMeshIt != mGpuMeshes.end(); )
-        {
-            if ((gpuMeshIt->first >> 32) == entityIndex && gpuMeshIt->second.SourceMesh != mesh)
-            {
-                gpuMeshIt = mGpuMeshes.erase(gpuMeshIt);
-                mLoggedDrawEntities.erase(entityIndex);
-            }
-            else
-            {
-                ++gpuMeshIt;
-            }
-        }
-    }
+    // No stale-entry sweep here, deliberately. The key is the asset, so an
+    // entry can never come to describe a different mesh than the one it was
+    // built from, and nothing has to be thrown away to correct it. The sweep
+    // that used to live here keyed on entity index, so deleting one entity
+    // shifted every later index down and made this erase live buffers that
+    // in-flight frames were still drawing from - a released resource under a
+    // running command list, which the driver reports as a device hang. Entries
+    // that really do fall out of use are retired by EvictUnusedMeshes, through
+    // the frame-delayed retire list.
 
     const MeshLod* meshLod = mesh != nullptr ? &mesh->GetLod(lodIndex) : nullptr;
 
@@ -974,21 +1018,26 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     {
         return false;
     }
+    // The staging buffer is needed only until the copy recorded below retires.
+    // Holding it on the cache entry, as this used to, meant every mesh cost its
+    // own size twice for the rest of the session.
+    Microsoft::WRL::ComPtr<ID3D12Resource> vertexUpload;
     if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_UPLOAD,
-        D3D12_RESOURCE_STATE_GENERIC_READ, gpuMesh.VertexUpload))
+        D3D12_RESOURCE_STATE_GENERIC_READ, vertexUpload))
     {
         return false;
     }
 
     void* mappedVB = nullptr;
-    if (FAILED(gpuMesh.VertexUpload->Map(0, nullptr, &mappedVB)))
+    if (FAILED(vertexUpload->Map(0, nullptr, &mappedVB)))
     {
         return false;
     }
     std::memcpy(mappedVB, meshLod->Vertices.data(), static_cast<std::size_t>(vbSize));
-    gpuMesh.VertexUpload->Unmap(0, nullptr);
+    vertexUpload->Unmap(0, nullptr);
 
-    commandList->CopyBufferRegion(gpuMesh.VertexBuffer.Get(), 0, gpuMesh.VertexUpload.Get(), 0, vbSize);
+    commandList->CopyBufferRegion(gpuMesh.VertexBuffer.Get(), 0, vertexUpload.Get(), 0, vbSize);
+    RetireBuffer(std::move(vertexUpload));
     auto vbBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         gpuMesh.VertexBuffer.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1005,21 +1054,23 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     {
         return false;
     }
+    Microsoft::WRL::ComPtr<ID3D12Resource> indexUpload;
     if (!CreateCommittedBuffer(device, ibSize, D3D12_HEAP_TYPE_UPLOAD,
-        D3D12_RESOURCE_STATE_GENERIC_READ, gpuMesh.IndexUpload))
+        D3D12_RESOURCE_STATE_GENERIC_READ, indexUpload))
     {
         return false;
     }
 
     void* mappedIB = nullptr;
-    if (FAILED(gpuMesh.IndexUpload->Map(0, nullptr, &mappedIB)))
+    if (FAILED(indexUpload->Map(0, nullptr, &mappedIB)))
     {
         return false;
     }
     std::memcpy(mappedIB, meshLod->Indices.data(), static_cast<std::size_t>(ibSize));
-    gpuMesh.IndexUpload->Unmap(0, nullptr);
+    indexUpload->Unmap(0, nullptr);
 
-    commandList->CopyBufferRegion(gpuMesh.IndexBuffer.Get(), 0, gpuMesh.IndexUpload.Get(), 0, ibSize);
+    commandList->CopyBufferRegion(gpuMesh.IndexBuffer.Get(), 0, indexUpload.Get(), 0, ibSize);
+    RetireBuffer(std::move(indexUpload));
     auto ibBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         gpuMesh.IndexBuffer.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1042,11 +1093,16 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
         LogEntityMeshRendererDiagnostic(logStream.str());
     }
 
+    gpuMesh.LastUsedFrame = mFrameCounter;
     mGpuMeshes.insert_or_assign(cacheKey, std::move(gpuMesh));
     return true;
 }
 
-std::size_t EntityMeshRenderer::SelectLodIndex(const Entity& entity, const Mesh& mesh, const DirectX::XMFLOAT3& cameraPosition) const
+std::size_t EntityMeshRenderer::SelectLodIndex(
+    std::size_t entityIndex,
+    const Entity& entity,
+    const Mesh& mesh,
+    const DirectX::XMFLOAT3& cameraPosition) const
 {
     if (!entity.Mesh.has_value())
     {
@@ -1072,8 +1128,55 @@ std::size_t EntityMeshRenderer::SelectLodIndex(const Entity& entity, const Mesh&
     const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
     const float scaledDistance = distance * (std::max)(meshComponent.LodUsageScale, 0.1f);
 
-    std::size_t lodIndex = static_cast<std::size_t>(scaledDistance / 25.0f);
-    return (std::min)(lodIndex, lodCount - 1);
+    const std::size_t desiredLod =
+        (std::min)(static_cast<std::size_t>(scaledDistance / kLodDistanceStep), lodCount - 1);
+
+    // Hysteresis around the switch distance.
+    //
+    // Without it a bare threshold makes an entity parked near a boundary flip
+    // LOD on sub-millimetre camera movement, every frame, for as long as the
+    // camera is moving. That is not just a popping artifact: a different LOD is
+    // different triangles, so the G-Buffer's depth and normals change with it,
+    // and anything that reconstructs world position from them - ray traced GI
+    // above all - sees its ray origins jump between two surfaces and flickers.
+    // Deferred shading hides it because both LODs carry the same albedo.
+    //
+    // The dead band is asymmetric by construction: a level is only entered once
+    // clearly past its threshold, and only left once clearly back inside the
+    // previous one, so no single distance can satisfy both tests.
+    const auto previousIt = mEntityLodState.find(entityIndex);
+    if (previousIt != mEntityLodState.end())
+    {
+        const std::size_t previousLod = (std::min)(previousIt->second, lodCount - 1);
+
+        if (desiredLod > previousLod)
+        {
+            // Going coarser: require the distance to be past the boundary by
+            // the margin before accepting it.
+            const float switchDistance =
+                static_cast<float>(previousLod + 1) * kLodDistanceStep * (1.0f + kLodHysteresis);
+            if (scaledDistance < switchDistance)
+            {
+                mEntityLodState[entityIndex] = previousLod;
+                return previousLod;
+            }
+        }
+        else if (desiredLod < previousLod)
+        {
+            // Going finer: require the distance to be back inside the previous
+            // level's threshold by the same margin.
+            const float switchDistance =
+                static_cast<float>(previousLod) * kLodDistanceStep * (1.0f - kLodHysteresis);
+            if (scaledDistance > switchDistance)
+            {
+                mEntityLodState[entityIndex] = previousLod;
+                return previousLod;
+            }
+        }
+    }
+
+    mEntityLodState[entityIndex] = desiredLod;
+    return desiredLod;
 }
 
 bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
@@ -1083,17 +1186,18 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
         return true;
     }
 
-    if (mConstantBuffer && !DX12Context_WaitForGPU())
+    // The outgoing buffer goes to the retire list rather than forcing a GPU
+    // flush here. Unmap is a CPU-side operation and the resource stays alive
+    // through the retained reference, so draws already recorded against it keep
+    // reading valid memory.
+    if (mConstantBuffer)
     {
-        mLastError = "EntityMeshRenderer: timed out while resizing the entity constant buffer.";
-        return false;
-    }
-
-    // Unmap old buffer before releasing it.
-    if (mConstantBuffer && mMappedCB != nullptr)
-    {
-        mConstantBuffer->Unmap(0, nullptr);
-        mMappedCB = nullptr;
+        if (mMappedCB != nullptr)
+        {
+            mConstantBuffer->Unmap(0, nullptr);
+            mMappedCB = nullptr;
+        }
+        RetireBuffer(std::move(mConstantBuffer));
     }
     mConstantBuffer.Reset();
     mCBCapacity = 0;
@@ -1106,7 +1210,7 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
 
     // Allocate with some headroom so frequent entity additions don't cause re-allocs.
     const std::size_t newCapacity = requiredEntityCount + 16;
-    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * sizeof(EntityConstants);
+    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * kFramesInFlight * sizeof(EntityConstants);
 
     D3D12_HEAP_PROPERTIES uploadHeap{};
     uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
@@ -1143,6 +1247,10 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
         return false;
     }
 
+    PTERO_LOG_INFO("Meshes", "Entity constant buffer grown to %llu slots x %llu frames (%llu bytes).",
+                   static_cast<unsigned long long>(newCapacity),
+                   static_cast<unsigned long long>(kFramesInFlight),
+                   static_cast<unsigned long long>(cbSize));
     mCBCapacity = newCapacity;
     return true;
 }
@@ -1154,16 +1262,14 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
         return true;
     }
 
-    if (mDepthPassConstantBuffer && !DX12Context_WaitForGPU())
+    if (mDepthPassConstantBuffer)
     {
-        mLastError = "EntityMeshRenderer: timed out while resizing the shadow-pass constant buffer.";
-        return false;
-    }
-
-    if (mDepthPassConstantBuffer && mMappedDepthPassCB != nullptr)
-    {
-        mDepthPassConstantBuffer->Unmap(0, nullptr);
-        mMappedDepthPassCB = nullptr;
+        if (mMappedDepthPassCB != nullptr)
+        {
+            mDepthPassConstantBuffer->Unmap(0, nullptr);
+            mMappedDepthPassCB = nullptr;
+        }
+        RetireBuffer(std::move(mDepthPassConstantBuffer));
     }
     mDepthPassConstantBuffer.Reset();
     mDepthPassCBCapacity = 0;
@@ -1175,7 +1281,7 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
     }
 
     const std::size_t newCapacity = requiredEntityCount + 16;
-    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * sizeof(EntityConstants);
+    const UINT64 cbSize = static_cast<UINT64>(newCapacity) * kFramesInFlight * sizeof(EntityConstants);
 
     D3D12_HEAP_PROPERTIES uploadHeap{};
     uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
@@ -1212,6 +1318,9 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
         return false;
     }
 
+    PTERO_LOG_INFO("Meshes", "Shadow-pass constant buffer grown to %llu slots x %llu frames.",
+                   static_cast<unsigned long long>(newCapacity),
+                   static_cast<unsigned long long>(kFramesInFlight));
     mDepthPassCBCapacity = newCapacity;
     return true;
 }
@@ -1418,16 +1527,14 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
     if (requiredDrawCount <= mMatCBCapacity)
         return true;
 
-    if (mMaterialCB && !DX12Context_WaitForGPU())
+    if (mMaterialCB)
     {
-        mLastError = "EntityMeshRenderer: timed out while resizing the material constant buffer.";
-        return false;
-    }
-
-    if (mMaterialCB && mMappedMatCB != nullptr)
-    {
-        mMaterialCB->Unmap(0, nullptr);
-        mMappedMatCB = nullptr;
+        if (mMappedMatCB != nullptr)
+        {
+            mMaterialCB->Unmap(0, nullptr);
+            mMappedMatCB = nullptr;
+        }
+        RetireBuffer(std::move(mMaterialCB));
     }
     mMaterialCB.Reset();
     mMatCBCapacity = 0;
@@ -1436,7 +1543,7 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
     if (!device) return false;
 
     const std::size_t newCapacity = requiredDrawCount + 64;
-    const UINT64 size = static_cast<UINT64>(newCapacity) * sizeof(MaterialConstants);
+    const UINT64 size = static_cast<UINT64>(newCapacity) * kFramesInFlight * sizeof(MaterialConstants);
 
     D3D12_HEAP_PROPERTIES uploadHeap{};
     uploadHeap.Type                 = D3D12_HEAP_TYPE_UPLOAD;
@@ -1466,6 +1573,9 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
         mLastError = "EntityMeshRenderer: Failed to map material constant buffer.";
         return false;
     }
+    PTERO_LOG_INFO("Meshes", "Material constant buffer grown to %llu draws x %llu frames.",
+                   static_cast<unsigned long long>(newCapacity),
+                   static_cast<unsigned long long>(kFramesInFlight));
     mMatCBCapacity = newCapacity;
     return true;
 }
@@ -1475,9 +1585,78 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
 // Reads a material JSON file and returns a map of materialId ->
 // SubMaterialTextures (all texture paths resolved to absolute paths, plus
 // scalar factors stored in the struct fields).
+//
+// The result is cached per material path. The geometry pass calls this once per
+// entity per frame, and doing the work each time meant opening and parsing the
+// JSON plus a filesystem probe for every texture path - hundreds of blocking
+// metadata syscalls per frame across a scene, which does not show up as CPU
+// load because the thread spends it waiting. The cache is revalidated against
+// the file's write time, throttled so the check itself does not reintroduce the
+// per-frame filesystem traffic it exists to remove.
+// ---------------------------------------------------------------------------
+const std::unordered_map<uint32_t, EntityMeshRenderer::SubMaterialTextures>&
+EntityMeshRenderer::ResolveAllSubMaterialTextures(const std::string& materialPath) const
+{
+    static const std::unordered_map<uint32_t, SubMaterialTextures> kEmptyResult;
+    if (materialPath.empty()) return kEmptyResult;
+
+    const auto now = std::chrono::steady_clock::now();
+
+    if (auto cached = mMaterialTextureCache.find(materialPath); cached != mMaterialTextureCache.end())
+    {
+        CachedMaterialTextures& entry = cached->second;
+
+        if (now - entry.LastCheckTime < kMaterialRevalidateInterval)
+        {
+            return entry.Textures;
+        }
+
+        entry.LastCheckTime = now;
+
+        // Due a revalidation: one filesystem call, and only if the file has
+        // actually changed do we pay for the reparse.
+        std::error_code writeTimeError;
+        const std::filesystem::path absolutePath = ResolveMaterialFilePath(materialPath);
+        const bool exists = !absolutePath.empty();
+        const auto writeTime = exists
+            ? std::filesystem::last_write_time(absolutePath, writeTimeError)
+            : std::filesystem::file_time_type{};
+
+        if (exists == entry.FileExists && (writeTimeError || writeTime == entry.LastWriteTime))
+        {
+            return entry.Textures;
+        }
+
+        entry.FileExists = exists;
+        entry.LastWriteTime = writeTimeError ? std::filesystem::file_time_type{} : writeTime;
+        entry.Textures = ParseSubMaterialTextures(materialPath);
+        return entry.Textures;
+    }
+
+    CachedMaterialTextures entry;
+    entry.LastCheckTime = now;
+    {
+        std::error_code writeTimeError;
+        const std::filesystem::path absolutePath = ResolveMaterialFilePath(materialPath);
+        entry.FileExists = !absolutePath.empty();
+        if (entry.FileExists)
+        {
+            const auto writeTime = std::filesystem::last_write_time(absolutePath, writeTimeError);
+            entry.LastWriteTime = writeTimeError ? std::filesystem::file_time_type{} : writeTime;
+        }
+    }
+    entry.Textures = ParseSubMaterialTextures(materialPath);
+
+    return mMaterialTextureCache.insert_or_assign(materialPath, std::move(entry)).first->second.Textures;
+}
+
+// ---------------------------------------------------------------------------
+// ParseSubMaterialTextures
+// The uncached parse. Only reached on a cache miss or when the material file
+// has changed on disk.
 // ---------------------------------------------------------------------------
 std::unordered_map<uint32_t, EntityMeshRenderer::SubMaterialTextures>
-EntityMeshRenderer::ResolveAllSubMaterialTextures(const std::string& materialPath) const
+EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) const
 {
     std::unordered_map<uint32_t, SubMaterialTextures> result;
     if (materialPath.empty()) return result;
@@ -1526,6 +1705,8 @@ EntityMeshRenderer::ResolveAllSubMaterialTextures(const std::string& materialPat
                 t.ao = resolve("ambientOcclusion");
             }
             t.emissive   = resolve("emissive");
+            t.opacity    = resolve("opacity");
+            t.height     = resolve("height");
         }
 
         // Read scalar parameters; use safe value() calls with sensible defaults.
@@ -1534,6 +1715,30 @@ EntityMeshRenderer::ResolveAllSubMaterialTextures(const std::string& materialPat
         t.normalScale     = node.value("normalScale",             1.f);
         // JSON uses "ambientOcclusionStrength" for the AO multiplier.
         t.aoStrength      = node.value("ambientOcclusionStrength", 1.f);
+        t.opacityFactor   = node.value("opacity",                  1.f);
+        t.alphaCutoff     = node.value("alphaCutoff",              0.5f);
+        t.useAlphaCutout  = node.value("useAlphaCutout",           false);
+        t.useTransparentBlend = node.value("useTransparentBlend",  false);
+
+        t.uvRotationDegrees     = node.value("uvRotationDegrees",    0.f);
+        t.useParallaxOcclusion  = node.value("useParallaxOcclusion", false);
+        t.parallaxHeightScale   = node.value("heightScale",          0.05f);
+        t.parallaxMinSteps      = node.value("parallaxMinSteps",     8);
+        t.parallaxMaxSteps      = node.value("parallaxMaxSteps",     32);
+        t.parallaxFadeDistance  = node.value("parallaxFadeDistance", 30.f);
+
+        // UV tiling and offset are stored as two-element arrays [u, v].
+        auto readFloat2 = [&node](const char* key, float& outU, float& outV)
+        {
+            auto it = node.find(key);
+            if (it != node.end() && it->is_array() && it->size() >= 2)
+            {
+                outU = (*it)[0].get<float>();
+                outV = (*it)[1].get<float>();
+            }
+        };
+        readFloat2("uvTiling", t.uvTilingU, t.uvTilingV);
+        readFloat2("uvOffset", t.uvOffsetU, t.uvOffsetV);
 
         // Base color tint is stored as an RGBA array [r,g,b,a] in 0–1 range.
         auto tintIt = node.find("baseColorTint");
@@ -1589,10 +1794,8 @@ std::unordered_map<uint32_t, std::string>
 EntityMeshRenderer::ResolveSubMaterialDdsPaths(const std::string& materialPath) const
 {
     std::unordered_map<uint32_t, std::string> result;
-    const auto all = ResolveAllSubMaterialTextures(materialPath);
+    const auto& all = ResolveAllSubMaterialTextures(materialPath);
     for (const auto& [id, tex] : all)
         result[id] = tex.baseColor;
     return result;
 }
-
-

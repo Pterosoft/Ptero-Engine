@@ -1,0 +1,42 @@
+{
+    "alphaCutoff": 0.49900001287460327,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.550000011920929,
+    "glassDispersion": 1.0700000524520874,
+    "glassIor": 1.7200000286102295,
+    "glassThickness": 0.503000020980835,
+    "heightScale": 0.05000000074505806,
+    "isDecalMaterial": false,
+    "metallicFactor": 1.0,
+    "name": "GlassTest",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "roughnessFactor": 0.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "",
+        "opacity": "",
+        "roughness": ""
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": true,
+    "useThinGlass": false,
+    "useTransparentBlend": false
+}

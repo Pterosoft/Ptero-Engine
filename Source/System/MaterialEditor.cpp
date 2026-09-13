@@ -89,10 +89,32 @@ namespace
             { "heightScale", materialDefinition.HeightScale },
             { "opacity", materialDefinition.Opacity },
             { "alphaCutoff", materialDefinition.AlphaCutoff },
+            { "glassIor", materialDefinition.GlassIor },
+            { "glassThickness", materialDefinition.GlassThickness },
+            { "glassDispersion", materialDefinition.GlassDispersion },
+            { "glassCausticStrength", materialDefinition.GlassCausticStrength },
+            { "uvTiling", materialDefinition.UvTiling },
+            { "uvOffset", materialDefinition.UvOffset },
+            { "uvRotationDegrees", materialDefinition.UvRotationDegrees },
+            { "useParallaxOcclusion", materialDefinition.UseParallaxOcclusion },
+            { "parallaxMinSteps", materialDefinition.ParallaxMinSteps },
+            { "parallaxMaxSteps", materialDefinition.ParallaxMaxSteps },
+            { "parallaxFadeDistance", materialDefinition.ParallaxFadeDistance },
             { "doubleSided", materialDefinition.IsDoubleSided },
             { "useAlphaCutout", materialDefinition.UseAlphaCutout },
             { "useTransparentBlend", materialDefinition.UseTransparentBlend },
+            { "useGlassRendering", materialDefinition.UseGlassRendering },
+            { "useThinGlass", materialDefinition.UseThinGlass },
             { "isDecalMaterial", materialDefinition.IsDecalMaterial },
+            { "isParticleMaterial", materialDefinition.IsParticleMaterial },
+            { "particleBlendMode", static_cast<int>(materialDefinition.ParticleBlend) },
+            { "particleEmissiveIntensity", materialDefinition.ParticleEmissiveIntensity },
+            { "particleLightingInfluence", materialDefinition.ParticleLightingInfluence },
+            { "particleSphericalNormal", materialDefinition.ParticleSphericalNormal },
+            { "particleCameraFadeDistance", materialDefinition.ParticleCameraFadeDistance },
+            { "particleFlipbookColumns", materialDefinition.ParticleFlipbookColumns },
+            { "particleFlipbookRows", materialDefinition.ParticleFlipbookRows },
+            { "particleAlphaFromLuminance", materialDefinition.ParticleAlphaFromLuminance },
             {
                 "textures",
                 {
@@ -108,6 +130,27 @@ namespace
                 }
             }
         };
+    }
+
+    bool TryReadOptionalFloatArray2(const json& sourceJson, const char* propertyName, std::array<float, 2>& outValues)
+    {
+        if (!sourceJson.contains(propertyName))
+        {
+            return true;
+        }
+
+        const json& propertyJson = sourceJson.at(propertyName);
+        if (!propertyJson.is_array() || propertyJson.size() != outValues.size())
+        {
+            return false;
+        }
+
+        for (size_t elementIndex = 0; elementIndex < outValues.size(); ++elementIndex)
+        {
+            outValues[elementIndex] = propertyJson.at(elementIndex).get<float>();
+        }
+
+        return true;
     }
 
     bool TryReadOptionalFloatArray4(const json& sourceJson, const char* propertyName, std::array<float, 4>& outValues)
@@ -180,10 +223,59 @@ namespace
             outMaterialDefinition.HeightScale = sourceJson.value("heightScale", outMaterialDefinition.HeightScale);
             outMaterialDefinition.Opacity = sourceJson.value("opacity", outMaterialDefinition.Opacity);
             outMaterialDefinition.AlphaCutoff = sourceJson.value("alphaCutoff", outMaterialDefinition.AlphaCutoff);
+            outMaterialDefinition.GlassIor = sourceJson.value("glassIor", outMaterialDefinition.GlassIor);
+            outMaterialDefinition.GlassThickness = sourceJson.value("glassThickness", outMaterialDefinition.GlassThickness);
+            outMaterialDefinition.GlassDispersion = sourceJson.value("glassDispersion", outMaterialDefinition.GlassDispersion);
+            outMaterialDefinition.GlassCausticStrength = sourceJson.value("glassCausticStrength", outMaterialDefinition.GlassCausticStrength);
+
+            if (!TryReadOptionalFloatArray2(sourceJson, "uvTiling", outMaterialDefinition.UvTiling))
+            {
+                outErrorMessage = "uvTiling must be an array with 2 float values.";
+                return false;
+            }
+
+            if (!TryReadOptionalFloatArray2(sourceJson, "uvOffset", outMaterialDefinition.UvOffset))
+            {
+                outErrorMessage = "uvOffset must be an array with 2 float values.";
+                return false;
+            }
+
+            outMaterialDefinition.UvRotationDegrees = sourceJson.value("uvRotationDegrees", outMaterialDefinition.UvRotationDegrees);
+            outMaterialDefinition.UseParallaxOcclusion = sourceJson.value("useParallaxOcclusion", outMaterialDefinition.UseParallaxOcclusion);
+            outMaterialDefinition.ParallaxMinSteps = sourceJson.value("parallaxMinSteps", outMaterialDefinition.ParallaxMinSteps);
+            outMaterialDefinition.ParallaxMaxSteps = sourceJson.value("parallaxMaxSteps", outMaterialDefinition.ParallaxMaxSteps);
+            outMaterialDefinition.ParallaxFadeDistance = sourceJson.value("parallaxFadeDistance", outMaterialDefinition.ParallaxFadeDistance);
             outMaterialDefinition.IsDoubleSided = sourceJson.value("doubleSided", outMaterialDefinition.IsDoubleSided);
             outMaterialDefinition.UseAlphaCutout = sourceJson.value("useAlphaCutout", outMaterialDefinition.UseAlphaCutout);
             outMaterialDefinition.UseTransparentBlend = sourceJson.value("useTransparentBlend", outMaterialDefinition.UseTransparentBlend);
+            outMaterialDefinition.UseGlassRendering = sourceJson.value("useGlassRendering", outMaterialDefinition.UseGlassRendering);
+            outMaterialDefinition.UseThinGlass = sourceJson.value("useThinGlass", outMaterialDefinition.UseThinGlass);
             outMaterialDefinition.IsDecalMaterial = sourceJson.value("isDecalMaterial", outMaterialDefinition.IsDecalMaterial);
+
+            outMaterialDefinition.IsParticleMaterial = sourceJson.value("isParticleMaterial", outMaterialDefinition.IsParticleMaterial);
+            {
+                const int blendMode = sourceJson.value("particleBlendMode", static_cast<int>(outMaterialDefinition.ParticleBlend));
+                outMaterialDefinition.ParticleBlend = (blendMode >= 0 && blendMode <= static_cast<int>(ParticleBlendMode::Premultiplied))
+                    ? static_cast<ParticleBlendMode>(blendMode)
+                    : ParticleBlendMode::Additive;
+            }
+            outMaterialDefinition.ParticleEmissiveIntensity = sourceJson.value("particleEmissiveIntensity", outMaterialDefinition.ParticleEmissiveIntensity);
+            outMaterialDefinition.ParticleLightingInfluence = sourceJson.value("particleLightingInfluence", outMaterialDefinition.ParticleLightingInfluence);
+            outMaterialDefinition.ParticleSphericalNormal = sourceJson.value("particleSphericalNormal", outMaterialDefinition.ParticleSphericalNormal);
+            outMaterialDefinition.ParticleCameraFadeDistance = sourceJson.value("particleCameraFadeDistance", outMaterialDefinition.ParticleCameraFadeDistance);
+            outMaterialDefinition.ParticleFlipbookColumns = sourceJson.value("particleFlipbookColumns", outMaterialDefinition.ParticleFlipbookColumns);
+            outMaterialDefinition.ParticleFlipbookRows = sourceJson.value("particleFlipbookRows", outMaterialDefinition.ParticleFlipbookRows);
+            outMaterialDefinition.ParticleAlphaFromLuminance = sourceJson.value("particleAlphaFromLuminance", outMaterialDefinition.ParticleAlphaFromLuminance);
+
+            if (outMaterialDefinition.ParticleFlipbookColumns < 1)
+            {
+                outMaterialDefinition.ParticleFlipbookColumns = 1;
+            }
+
+            if (outMaterialDefinition.ParticleFlipbookRows < 1)
+            {
+                outMaterialDefinition.ParticleFlipbookRows = 1;
+            }
 
             if (sourceJson.contains("textures"))
             {
@@ -410,6 +502,37 @@ bool MaterialEditor::SaveMaterialToFile(const std::filesystem::path& materialFil
         return false;
     }
 
+    nlohmann::json materialJson = SerializeMaterialDefinition(mCurrentMaterial);
+
+    // Carry over any keys this editor doesn't model (for example the "water"
+    // block consumed by WaterRenderer).  Without this, simply opening and
+    // saving such a material here silently deletes those settings, because the
+    // serializer rebuilds the document from its own known fields only.
+    // Read before opening the output stream, which truncates the file.
+    {
+        std::ifstream existingStream(materialFilePath);
+        if (existingStream)
+        {
+            try
+            {
+                nlohmann::json existingJson;
+                existingStream >> existingJson;
+                if (existingJson.is_object())
+                {
+                    for (auto it = existingJson.begin(); it != existingJson.end(); ++it)
+                    {
+                        if (!materialJson.contains(it.key()))
+                            materialJson[it.key()] = it.value();
+                    }
+                }
+            }
+            catch (...)
+            {
+                // Unreadable or corrupt: fall through and write a fresh document.
+            }
+        }
+    }
+
     std::ofstream outputStream(materialFilePath);
     if (!outputStream)
     {
@@ -417,7 +540,7 @@ bool MaterialEditor::SaveMaterialToFile(const std::filesystem::path& materialFil
         return false;
     }
 
-    outputStream << SerializeMaterialDefinition(mCurrentMaterial).dump(4);
+    outputStream << materialJson.dump(4);
     if (!outputStream.good())
     {
         mLastErrorMessage = "The material JSON file could not be fully written to disk.";
@@ -488,6 +611,11 @@ bool MaterialEditor::BrowseForTexture(HWND ownerWindowHandle, const MaterialText
         mLastErrorMessage))
     {
         return false;
+    }
+
+    if (textureSlot == MaterialTextureSlot::Opacity && !mCurrentMaterial.UseAlphaCutout)
+    {
+        mCurrentMaterial.UseTransparentBlend = true;
     }
 
     mLastErrorMessage.clear();
@@ -780,6 +908,11 @@ bool MaterialEditor::BrowseForSubMaterialTexture(HWND ownerWindowHandle, int sub
         mLastErrorMessage))
     {
         return false;
+    }
+
+    if (textureSlot == MaterialTextureSlot::Opacity && !subMat.UseAlphaCutout)
+    {
+        subMat.UseTransparentBlend = true;
     }
 
     mLastErrorMessage.clear();

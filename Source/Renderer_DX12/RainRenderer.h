@@ -9,7 +9,7 @@
 #include <string>
 #include <cstdint>
 
-// Settings that map to the RainComponent and are also exposed through ImGui.
+// Settings that map to the RainComponent and are also exposed through Ui.
 struct RainSettings
 {
 	// Maximum number of active rain particles.

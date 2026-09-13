@@ -1,24 +1,34 @@
-﻿#pragma once
+#pragma once
 
 #include "Components.h"
 #include "DX12Helper.h"
+#include "TerrainRenderer.h"
 #include "TaaSettings.h"
+#include "SMAASettings.h"
+#include "SharpenSettings.h"
 #include "DlssSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
+#include "RadianceCascadesSettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
+#include "SsrSettings.h"
+#include "ChromaticAberrationSettings.h"
 #include "AgxTonemapSettings.h"
 #include "VolumetricFogSettings.h"
+#include "VolumetricCloudSettings.h"
 #include "BloomSettings.h"
+#include "RendererTimingSnapshot.h"
 #include "AudioManager.h"
 #include "..\Ptero-Engine\EditorCamera.h"
+#include "System/NodeGraphEditor.h"
 
-#include "imgui.h"
+#include "../QtUi/QtUi.h"
 
 #include <DirectXMath.h>
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -81,6 +91,29 @@ public:
         mProgressCallback = callback;
     }
 
+    // The editor drives the terrain renderer for heightmap painting and
+    // height-picking; the renderer DLL hands the pointer in once it has
+    // finished creating the scene renderer.
+    void SetTerrainRenderer(TerrainRenderer* terrainRenderer)
+    {
+        mTerrainRenderer = terrainRenderer;
+    }
+
+    // The editor can also frame the camera on a new entity so the artist
+    // doesn't have to hunt for it in the viewport.  Set by the DLL
+    // alongside SetTerrainRenderer.
+    void SetSceneRenderer(class DX12SceneRenderer* sceneRenderer)
+    {
+        mSceneRenderer = sceneRenderer;
+    }
+
+    // Brush-mode flag: when true, a left click inside the viewport applies
+    // the active terrain brush at the picked world XY ground-plane position.
+    void SetTerrainBrushModeActive(bool active) { mTerrainBrushModeActive = active; }
+    bool IsTerrainBrushModeActive() const { return mTerrainBrushModeActive; }
+    bool* GetShowTerrainToolWindowPointer() { return &mShowTerrainToolWindow; }
+    const std::string& GetLastTerrainBrushMessage() const { return mLastTerrainBrushMessage; }
+
     void SetShowViewportPlacementIcons(bool shouldShow)
     {
         mShowViewportPlacementIcons = shouldShow;
@@ -136,6 +169,16 @@ public:
         return &mShowResourceDebugPanel;
     }
 
+    bool* GetShowConsolePanelPointer()
+    {
+        return &mShowConsolePanel;
+    }
+
+    bool* GetShowUiEditorPanelPointer()
+    {
+        return &mShowUiEditorPanel;
+    }
+
     bool SaveSceneToFile(const std::string& filepath);
     bool LoadSceneFromFile(const std::string& filepath);
     bool BeginLoadSceneFromFile(const std::string& filepath);
@@ -150,22 +193,36 @@ public:
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
+        SMAASettings* smaaSettings,
+        SharpenSettings* sharpenSettings,
         DlssSettings* dlssSettings,
+        GlobalIlluminationMode* globalIlluminationMode,
         RtGISettings* rtgiSettings,
+        RadianceCascadesSettings* radianceCascadesSettings,
         RtAOSettings* rtaoSettings,
         GtaoSettings* gtaoSettings,
+        SsrSettings* ssrSettings,
+        ChromaticAberrationSettings* chromaticAberrationSettings,
         AgxTonemapSettings* agxSettings,
         VolumetricFogSettings* volumetricFogSettings,
+        VolumetricCloudSettings* volumetricCloudSettings,
         BloomSettings* bloomSettings)
     {
         mTimeOfDaySettings = timeOfDaySettings;
         mTaaSettings = taaSettings;
+        mSmaaSettings = smaaSettings;
+        mSharpenSettings = sharpenSettings;
         mDlssSettings = dlssSettings;
+        mGlobalIlluminationMode = globalIlluminationMode;
         mRtgiSettings = rtgiSettings;
+        mRadianceCascadesSettings = radianceCascadesSettings;
         mRtaoSettings = rtaoSettings;
         mGtaoSettings = gtaoSettings;
+        mSsrSettings = ssrSettings;
+        mChromaticAberrationSettings = chromaticAberrationSettings;
         mAgxSettings = agxSettings;
         mVolumetricFogSettings = volumetricFogSettings;
+        mVolumetricCloudSettings = volumetricCloudSettings;
         mBloomSettings = bloomSettings;
     }
     bool CanCopySelectedEntity() const;
@@ -176,7 +233,9 @@ public:
     bool DeleteSelectedEntity();
     bool HasUnsavedChanges() const
     {
-        return mSceneDirty;
+        // The node graph is part of the level even though the Node Graph window owns the
+        // editing session, so an edit there has to count as an unsaved level change.
+        return mSceneDirty || NodeGraphEditor::Revision() != mNodeGraphRevisionAtSave;
     }
 
     void MarkSceneDirty()
@@ -213,7 +272,8 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
         D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
         D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon);
+        D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE gameIcon);
 
     void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
     void DrawAudioManagerWindow(AudioManager* audioManager);
@@ -242,11 +302,27 @@ public:
         mViewportResolutionWidth = width;
         mViewportResolutionHeight = height;
     }
+    void RequestViewportResolution(int width, int height)
+    {
+        SetViewportResolution(width, height);
+        mRequestViewportResolutionChange = true;
+    }
+    bool GetLastViewportContentResolution(int& width, int& height) const
+    {
+        if (mLastViewportContentSize.x <= 1.0f || mLastViewportContentSize.y <= 1.0f)
+            return false;
+
+        const float framebufferScale = QtUi::FramebufferScale();
+        width = static_cast<int>(mLastViewportContentSize.x * framebufferScale + 0.5f);
+        height = static_cast<int>(mLastViewportContentSize.y * framebufferScale + 0.5f);
+        return width > 0 && height > 0;
+    }
     bool HasPendingCameraRestore() const { return mRequestCameraRestore; }
     const DirectX::XMFLOAT3& GetPendingCameraRestorePosition() const { return mSavedCameraPosition; }
     const DirectX::XMFLOAT3& GetPendingCameraRestoreRotation() const { return mSavedCameraRotation; }
     void ConsumePendingCameraRestore() { mRequestCameraRestore = false; }
     void SetResourceUsageSnapshot(const EngineResourceUsageSnapshot& snapshot) { mResourceUsageSnapshot = snapshot; }
+    void SetRendererTimingSnapshot(const RendererTimingSnapshot& snapshot) { mRendererTimingSnapshot = snapshot; }
 
 private:
     void ReportProgress(const wchar_t* message) const;
@@ -261,15 +337,15 @@ private:
     struct ViewportSelectionState
     {
         bool IsDragging = false;
-        ImVec2 Start{};
-        ImVec2 Current{};
+        UiVec2 Start{};
+        UiVec2 Current{};
     };
 
     struct ManualGizmoState
     {
         bool IsActive = false;
         ManualGizmoHandle ActiveHandle = ManualGizmoHandle::None;
-        ImVec2 StartMouse{};
+        UiVec2 StartMouse{};
         DirectX::XMFLOAT3 StartPosition{};
         DirectX::XMFLOAT3 StartRotation{};
         DirectX::XMFLOAT3 StartScale{ 1.0f, 1.0f, 1.0f };
@@ -277,8 +353,8 @@ private:
         DirectX::XMFLOAT3 SecondaryAxisWorldDirection{};
         DirectX::XMFLOAT3 PlaneNormal{};
         DirectX::XMFLOAT3 StartPlaneHit{};
-        ImVec2 AxisScreenDirection{};
-        ImVec2 SecondaryAxisScreenDirection{};
+        UiVec2 AxisScreenDirection{};
+        UiVec2 SecondaryAxisScreenDirection{};
         float PixelsPerWorldUnit = 1.0f;
         float SecondaryPixelsPerWorldUnit = 1.0f;
         float StartAngle = 0.0f;
@@ -287,27 +363,41 @@ private:
     struct SceneLoadData
     {
         std::vector<Entity> Entities;
+        NodeGraphDocument NodeGraph;
         DirectX::XMFLOAT3 CameraPosition{};
         DirectX::XMFLOAT3 CameraRotation{};
         TimeOfDaySettings TimeOfDay{};
         TaaSettings Taa{};
+        SMAASettings Smaa{};
+        SharpenSettings Sharpen{};
         DlssSettings Dlss{};
+        GlobalIlluminationMode GlobalIlluminationMode = GlobalIlluminationMode::Rtgi;
         RtGISettings Rtgi{};
+        RadianceCascadesSettings RadianceCascades{};
         RtAOSettings Rtao{};
         GtaoSettings Gtao{};
+        SsrSettings Ssr{};
+        ChromaticAberrationSettings ChromaticAberration{};
         AgxTonemapSettings Agx{};
         VolumetricFogSettings VolumetricFog{};
+        VolumetricCloudSettings VolumetricCloud{};
         BloomSettings Bloom{};
         bool HasCameraPosition = false;
         bool HasCameraRotation = false;
         bool HasTimeOfDay = false;
         bool HasTaa = false;
+        bool HasSmaa = false;
         bool HasDlss = false;
+        bool HasGlobalIlluminationMode = false;
         bool HasRtgi = false;
+        bool HasRadianceCascades = false;
         bool HasRtao = false;
         bool HasGtao = false;
+        bool HasSsr = false;
+        bool HasChromaticAberration = false;
         bool HasAgx = false;
         bool HasVolumetricFog = false;
+        bool HasVolumetricCloud = false;
         bool HasBloom = false;
     };
 
@@ -327,40 +417,65 @@ private:
     DirectX::XMFLOAT3 mSavedCameraPosition = DirectX::XMFLOAT3(0.0f, -6.0f, 1.5f);
     DirectX::XMFLOAT3 mSavedCameraRotation = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 
+    // Light style editor, shared by the point light inspector and the particle
+    // system's proxy light so the two cannot drift apart. Sets mSceneDirty on
+    // any change; idSuffix disambiguates the widget ids between the two uses.
+    void DrawLightStyleControls(
+        const char*   idSuffix,
+        LightStyleId& style,
+        float&        styleSpeed,
+        float&        styleAmplitude,
+        float&        stylePhaseOffset,
+        std::string&  customStylePattern);
+
     void DrawComponentsPanel();
+    // Defined in EditorConsole.cpp.
+    void DrawConsolePanel();
+    // Defined in EditorUiViewer.cpp.
+    void DrawUiEditorPanel();
     void DrawLevelExplorerPanel();
+    void DrawTerrainToolWindow(Entity* selectedEntity);
+
+    // Prompts the user to pick a .raw heightmap, then a width/height dialog,
+    // and finally creates a new entity with a TerrainComponent that the
+    // terrain renderer can pick up.  Used by the "Create Terrain..." button
+    // in the Components panel.
+    void CreateTerrainFromRawFile(const DirectX::XMFLOAT3* placementPosition = nullptr);
     void DrawSceneLoadingOverlay();
     bool LoadGeometryIcon(ID3D12GraphicsCommandList* commandList);
     bool LoadIconTexture(const wchar_t* fileName, IconTexture& iconTexture, std::string* statusMessage, ID3D12GraphicsCommandList* commandList);
     void ReleaseIconTexture(IconTexture& iconTexture);
-    void DrawViewportPlacementIcons(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera);
-    void DrawManualGizmoPivot(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const;
+    void DrawViewportPlacementIcons(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera);
+    // Composites the RmlUi target over the viewport image and forwards pointer input to it.
+    void DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewportSize);
+    void DrawTerrainViewportOverlay(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+    void DrawManualGizmoPivot(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const;
     bool TryProjectWorldToViewport(
         const DirectX::XMFLOAT3& worldPosition,
-        const ImVec2& viewportOrigin,
-        const ImVec2& viewportSize,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
         const EditorCamera& camera,
-        ImVec2& outScreenPosition,
+        UiVec2& outScreenPosition,
         bool clampToViewport = false) const;
     bool TryGetViewportWorldPositionOnGrid(
-        const ImVec2& mousePosition,
-        const ImVec2& viewportOrigin,
-        const ImVec2& viewportSize,
+        const UiVec2& mousePosition,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
         const EditorCamera& camera,
         DirectX::XMFLOAT3& outWorldPosition) const;
     bool IsEntitySelected(int entityIndex) const;
     void HandleViewportInteraction(
-        const ImVec2& viewportOrigin,
-        const ImVec2& viewportSize,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
         const EditorCamera& camera,
         bool viewportHovered);
     void HandleManualGizmoInteraction(
-        const ImVec2& viewportOrigin,
-        const ImVec2& viewportSize,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
         const EditorCamera& camera,
         bool viewportHovered,
         Entity* selectedEntity);
-    void FinishViewportSelection(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera);
+    void FinishViewportSelection(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera);
     void CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition);
     void DrawViewportStatisticsOverlay() const;
     void SetViewportStatisticsText(const char* text);
@@ -370,7 +485,7 @@ private:
     void SetSceneLoadProgress(float progress, const char* statusMessage);
     static bool SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData);
 
-    static ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+    static UiTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
 
     std::vector<Entity> mEntities;
     int mSelectedEntityIndex = -1;
@@ -378,15 +493,56 @@ private:
     GizmoType mActiveGizmo = GizmoType::None;
     mutable bool mGeometryPrototypeSelected = false;
     mutable bool mPointLightPrototypeSelected = false;
+    mutable bool mSpotLightPrototypeSelected = false;
+    mutable bool mRectLightPrototypeSelected = false;
     mutable bool mAudioEmitterPrototypeSelected = false;
     mutable bool mDecalPrototypeSelected = false;
     mutable bool mRainPrototypeSelected = false;
+    mutable bool mParticleSystemPrototypeSelected = false;
+    mutable bool mTerrainPrototypeSelected = false;
+    mutable bool mWaterPrototypeSelected = false;
+    mutable bool mVegetationPrototypeSelected = false;
+    // Hides the side panels and tool windows so the viewport fills the window.
+    // Toggled by F11 or the toolbar button; the toolbar itself stays visible.
+    bool mViewportFullscreen = false;
     bool mShowViewportPlacementIcons = true;
+    bool mShowGameUi = true;
     bool mShowComponentsPanel = true;
     bool mShowLevelExplorerPanel = false;
     bool mShowPropertiesPanel = true;
     bool mShowAudioManagerPanel = false;
     bool mShowResourceDebugPanel = false;
+    bool mShowConsolePanel = true;
+    bool mShowUiEditorPanel = false;
+
+    // UI Editor state. All buffer sizes are generous rather than tight: these
+    // hold RML ids, property names and CSS values, none of which is worth
+    // truncating to save bytes in an editor panel.
+    int  mUiEditorDocumentIndex = 0;
+    int  mUiEditorPreviewSizeIndex = 1;      // 640 x 360
+    bool mUiEditorInteractive = true;
+    bool mUiEditorHadPointer = false;
+    char mUiEditorElementId[128] = {};
+    char mUiEditorElementText[256] = {};
+    char mUiEditorPropertyName[64] = {};
+    char mUiEditorPropertyValue[128] = {};
+    char mUiEditorClassName[64] = {};
+
+    // Console panel state. The rendered document is cached because the widget
+    // behind it re-parses the whole thing on every change, so it is rebuilt only
+    // when the log or a filter actually moves.
+    int          mConsoleMinimumLevel = 1;      // PteroLog::Level::Debug
+    int          mConsoleCategoryIndex = 0;     // 0 = all categories
+    std::size_t  mConsoleCategoryCount = 0;
+    bool         mConsoleAutoScroll = true;
+    bool         mConsoleDocumentDirty = true;
+    std::uint64_t mConsoleLastTotal = 0;
+    std::uint64_t mConsoleLastEvicted = 0;
+    std::string  mConsoleDocument;
+    std::vector<UiCompletion> mConsoleCompletions;
+    char         mConsoleFilter[128] = {};
+    char         mConsoleInput[512] = {};
+    bool mShowTerrainToolWindow = false;
     bool mBlockViewportSelection = false;
     int mNextGeometryInstanceId = 1;
     ViewportSelectionState mViewportSelection;
@@ -397,12 +553,17 @@ private:
     IconTexture mAudioEmitterIcon;
     IconTexture mDecalIcon;
     IconTexture mRainIcon;
+    IconTexture mParticleSystemIcon;
     IconTexture mSelectIcon;
     IconTexture mMoveIcon;
     IconTexture mRotateIcon;
     IconTexture mScaleIcon;
     IconTexture mWireframeIcon;
     IconTexture mProxyIcon;
+    IconTexture mGameIcon;
+
+    // Sticky message from the last failed play attempt, shown on the Play button tooltip.
+    std::string mGameStartErrorMessage;
     bool mIsInitialized = false;
     bool mGeometryIconLoadAttempted = false;
     std::string mGeometryIconStatus;
@@ -410,23 +571,40 @@ private:
     std::string mLastSceneStatusMessage;
     std::optional<Entity> mCopiedEntity;
     bool mSceneDirty = false;
+    // NodeGraphEditor::Revision() as it was when the level was last saved or loaded.
+    unsigned mNodeGraphRevisionAtSave = 0;
 
     TimeOfDaySettings* mTimeOfDaySettings = nullptr;
     TaaSettings* mTaaSettings = nullptr;
+    SMAASettings* mSmaaSettings = nullptr;
+    SharpenSettings* mSharpenSettings = nullptr;
     DlssSettings* mDlssSettings = nullptr;
+    GlobalIlluminationMode* mGlobalIlluminationMode = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
+    RadianceCascadesSettings* mRadianceCascadesSettings = nullptr;
     RtAOSettings* mRtaoSettings = nullptr;
     GtaoSettings* mGtaoSettings = nullptr;
+    SsrSettings* mSsrSettings = nullptr;
+    ChromaticAberrationSettings* mChromaticAberrationSettings = nullptr;
     AgxTonemapSettings* mAgxSettings = nullptr;
     VolumetricFogSettings* mVolumetricFogSettings = nullptr;
+    VolumetricCloudSettings* mVolumetricCloudSettings = nullptr;
     BloomSettings* mBloomSettings = nullptr;
     ProgressCallback mProgressCallback = nullptr;
+    TerrainRenderer* mTerrainRenderer = nullptr;
+    class DX12SceneRenderer* mSceneRenderer = nullptr;
+    bool mTerrainBrushModeActive = false;
+    std::string mLastTerrainBrushMessage;
 
     const char* mSceneStatusMessage = nullptr;
     const char* mViewportStatisticsText = nullptr;
     bool mShowViewportStatistics = true;
     bool mViewportStatisticsInitialized = false;
     bool mShowViewportGrid = true;
+    bool mMovementSnapEnabled = true;
+    float mMovementSnapStep = 1.0f;
+    bool mRotationSnapEnabled = true;
+    float mRotationSnapDegrees = 15.0f;
     bool mWireframeEnabled = false;
     bool mProxyEnabled = false;
 
@@ -438,14 +616,15 @@ private:
     bool mRequestCameraRestore = false;
 
     EngineResourceUsageSnapshot mResourceUsageSnapshot;
+    RendererTimingSnapshot mRendererTimingSnapshot;
 
     // Screenshot functionality
     std::string mScreenshotOutputFolder;
     bool mShowScreenshotDialog = false;
     bool mRequestScreenshot = false;
 
-    ImVec2 mLastViewportContentOrigin{};
-    ImVec2 mLastViewportContentSize{};
+    UiVec2 mLastViewportContentOrigin{};
+    UiVec2 mLastViewportContentSize{};
 
     SceneLoadState mSceneLoadState;
     std::thread mSceneLoadWorker;

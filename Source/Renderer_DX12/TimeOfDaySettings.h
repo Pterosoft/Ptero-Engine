@@ -6,6 +6,12 @@
 // DX12SceneRenderer every frame.
 struct TimeOfDaySettings
 {
+    // Turns the whole time-of-day system off: no sun light, no sky ambient, no
+    // procedural sky behind the scene and no cloud layer. The scene is then lit purely
+    // by the lights placed in it, which is what an interior or a fully artificially lit
+    // set wants. Everything below is ignored while this is false.
+    bool Enabled = true;
+
     // Time in hours [0, 24).  Noon = 12.0.
     float TimeOfDay = 12.0f;
 

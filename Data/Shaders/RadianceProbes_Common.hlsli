@@ -6,17 +6,11 @@
 
 #define MAX_RADIANCE_PROBE_POINT_LIGHTS 16
 
-struct ProbePointLightData
-{
-    float3 Position;
-    float  Radius;
-    float3 Color;
-    float  InvRadiusSq;
-    float  FalloffExponent;
-    float  SourceRadius;
-    float  CastShadows;
-    float  _Pad0;
-};
+// The light record and the emitter-shape resolution are shared with the
+// deferred, GI and cascade passes so all of them agree on the layout and on
+// where a spot cone ends.
+#include "LightShapes.hlsli"
+#include "ShaderSafeMath.hlsli"
 
 // ─── Constant buffer (matches RadianceProbeConstants in RadianceProbeRenderer.h) ──
 cbuffer RadianceProbeConstants : register(b0)
@@ -51,7 +45,7 @@ cbuffer RadianceProbeConstants : register(b0)
     int    g_NumPointLights;
     float2 g_Pad3;
 
-    ProbePointLightData g_PointLights[MAX_RADIANCE_PROBE_POINT_LIGHTS];
+    PteroLightData g_PointLights[MAX_RADIANCE_PROBE_POINT_LIGHTS];
 
     float4x4 g_ViewProj;        // for debug sphere MVP
     float4x4 g_ViewProjInv;

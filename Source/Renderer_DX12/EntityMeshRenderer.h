@@ -17,8 +17,13 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <cmath>
 #include <memory>
+#include <chrono>
+#include <filesystem>
 #include <string>
+#include <map>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -55,7 +60,8 @@ public:
         DXGI_FORMAT albedoFormat,
         DXGI_FORMAT normalFormat,
         DXGI_FORMAT materialFormat,
-        DXGI_FORMAT depthFormat);
+        DXGI_FORMAT depthFormat,
+        UINT msaaSampleCount = 1);
 
     // Render a depth-only pass using an external root signature and pipeline.
     // rootSignature/pipelineState must have a single root CBV at slot 0 (b0, VS)
@@ -91,9 +97,21 @@ public:
         const void*     MeshKey      = nullptr;
     };
 
-    // Returns GPU mesh info for the entity at the given index.
-    // Returns false if the entity does not have an uploaded mesh yet.
-    bool GetGpuMeshInfo(std::size_t entityIndex, GpuMeshInfo& outInfo) const;
+    // GPU buffers for one LOD of one mesh asset, or false if that LOD has not
+    // been uploaded yet. Keyed by the asset because the buffers are shared by
+    // every entity placed from it.
+    bool GetGpuMeshInfo(const Mesh* mesh, std::size_t lodIndex, GpuMeshInfo& outInfo) const;
+
+    // Advance the constant-buffer frame slot. Call exactly once per frame,
+    // before any of this renderer's passes record, so the shadow, depth and
+    // G-Buffer passes all write into the same frame's copy.
+    void BeginFrame()
+    {
+        ++mFrameCounter;
+        mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+        RetireExpiredBuffers();
+        EvictUnusedMeshes();
+    }
 
     bool ConsumeSceneContentChangedFlag()
     {
@@ -118,6 +136,20 @@ public:
         return mWireframeEnabled;
     }
 
+    // Direct handles for the cvar registry, which writes the flag itself and then
+    // asks for the pipeline rebuild that SetWireframeEnabled would have done.
+    bool& GetWireframeEnabledRef() { return mWireframeEnabled; }
+    void InvalidatePipeline() { mPipelineReady = false; }
+
+    void SetTextureMipLODBias(float bias)
+    {
+        if ((std::fabs)(mTextureMipLODBias - bias) > 0.001f)
+        {
+            mTextureMipLODBias = bias;
+            mPipelineReady = false;
+        }
+    }
+
     const char* GetLastErrorMessage() const
     {
         return mLastError.empty() ? nullptr : mLastError.c_str();
@@ -128,9 +160,12 @@ private:
     struct EntityGpuMesh
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> VertexUpload;   // kept alive until upload fence
         Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> IndexUpload;
+        // The staging buffers are not here on purpose. They used to be held for
+        // the life of the entry, which doubled the memory every mesh cost - an
+        // upload-heap copy of geometry nothing reads again after the first
+        // frame. They go to the retire list instead, which frees them once the
+        // copy they feed has certainly completed.
         D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         UINT                     IndexCount = 0;
@@ -138,6 +173,9 @@ private:
         // The MeshAsset pointer used when these buffers were built; used to
         // detect when the mesh has been replaced and buffers must be rebuilt.
         const Mesh*              SourceMesh = nullptr;
+        // Frame this entry was last drawn from, for evicting geometry a level
+        // reload left behind.
+        std::uint64_t            LastUsedFrame = 0;
     };
 
     // Constant buffer layout – must be 256-byte aligned.
@@ -198,7 +236,28 @@ private:
         int    HasEmissiveMap   = 0;
         int    HasPackedMaterialMap = 0;
         float  _Pad1[2]         = {};
-        std::byte Padding[160]{};
+        float  OpacityFactor    = 1.f;
+        float  AlphaCutoff      = 0.5f;
+        int    HasOpacityMap    = 0;
+        int    UseAlphaCutout   = 0;
+        int    UseTransparentBlend = 0;
+        float  _Pad2[3]         = {};
+        // UV transform: rotate about (0.5, 0.5), then scale by tiling, then offset.
+        // The rotation is pre-resolved to sin/cos so the shader does no trigonometry.
+        DirectX::XMFLOAT2 UvTiling = { 1.f, 1.f };
+        DirectX::XMFLOAT2 UvOffset = { 0.f, 0.f };
+        float  UvRotationSin    = 0.f;
+        float  UvRotationCos    = 1.f;
+        int    HasHeightMap     = 0;
+        int    UseParallaxOcclusion = 0;
+        float  ParallaxHeightScale  = 0.05f;
+        int    ParallaxMinSteps     = 8;
+        int    ParallaxMaxSteps     = 32;
+        float  ParallaxFadeDistance = 30.f;
+        // Needed to build the tangent-space view ray the parallax march walks along.
+        DirectX::XMFLOAT3 CameraPositionWS = { 0.f, 0.f, 0.f };
+        float  _Pad3            = 0.f;
+        std::byte Padding[80]{};
     };
     static_assert(sizeof(MaterialConstants) == 256);
 
@@ -222,6 +281,8 @@ private:
         std::string roughness;
         std::string ao;
         std::string emissive;
+        std::string opacity;
+        std::string height;
         // Scalar factors from JSON (default to 1 so they are safe even if not present).
         float baseColorTintR  = 1.f;
         float baseColorTintG  = 1.f;
@@ -231,10 +292,26 @@ private:
         float roughnessFactor = 1.f;
         float normalScale     = 1.f;
         float aoStrength      = 1.f;
+        float opacityFactor   = 1.f;
+        float alphaCutoff     = 0.5f;
+        bool  useAlphaCutout  = false;
+        bool  useTransparentBlend = false;
+        // UV transform and parallax settings, straight from the material JSON.
+        float uvTilingU       = 1.f;
+        float uvTilingV       = 1.f;
+        float uvOffsetU       = 0.f;
+        float uvOffsetV       = 0.f;
+        float uvRotationDegrees = 0.f;
+        bool  useParallaxOcclusion = false;
+        float parallaxHeightScale  = 0.05f;
+        int   parallaxMinSteps     = 8;
+        int   parallaxMaxSteps     = 32;
+        float parallaxFadeDistance = 30.f;
     };
 
     bool CreatePipeline(DXGI_FORMAT albedoFormat, DXGI_FORMAT normalFormat,
-                        DXGI_FORMAT materialFormat, DXGI_FORMAT depthFormat);
+                        DXGI_FORMAT materialFormat, DXGI_FORMAT depthFormat,
+                        UINT msaaSampleCount);
     bool EnsureEntityGpuMesh(
         ID3D12GraphicsCommandList* commandList,
         std::size_t entityIndex,
@@ -247,16 +324,131 @@ private:
     bool EnsureRainSurfaceConstantBuffer();
 
     // Resolve all texture paths for every sub-material in a JSON file.
-    std::unordered_map<uint32_t, SubMaterialTextures>
+    //
+    // Returns a reference into the cache below rather than a fresh map: this is
+    // called once per entity per frame from the geometry pass, and the
+    // underlying work - opening the JSON, parsing it, and probing the
+    // filesystem for every texture path - is far too expensive to repeat at
+    // frame rate. See mMaterialTextureCache.
+    const std::unordered_map<uint32_t, SubMaterialTextures>&
         ResolveAllSubMaterialTextures(const std::string& materialPath) const;
 
-    // key = entity index + lod index
-    std::unordered_map<std::uint64_t, EntityGpuMesh> mGpuMeshes;
+    // The uncached parse behind it. Only reached on a cache miss or when the
+    // material file has changed on disk.
+    std::unordered_map<uint32_t, SubMaterialTextures>
+        ParseSubMaterialTextures(const std::string& materialPath) const;
+
+    // Parsed material, cached by the path the entity refers to.
+    //
+    // Materials are re-read when the file changes on disk so the editor keeps
+    // live material editing, but the staleness check itself costs a filesystem
+    // call, so it is throttled: an entry is only re-checked once the interval
+    // below has elapsed. A quarter second is imperceptible when saving from the
+    // material editor and reduces the geometry pass's filesystem traffic from
+    // hundreds of calls per frame to effectively none.
+    struct CachedMaterialTextures
+    {
+        std::unordered_map<uint32_t, SubMaterialTextures> Textures;
+        std::filesystem::file_time_type LastWriteTime{};
+        std::chrono::steady_clock::time_point LastCheckTime{};
+        bool FileExists = false;
+    };
+    static constexpr std::chrono::milliseconds kMaterialRevalidateInterval{ 250 };
+    mutable std::unordered_map<std::string, CachedMaterialTextures> mMaterialTextureCache;
+
+    // Keyed by the mesh asset itself, never by entity index. Twenty entities
+    // placed from one asset then share one set of GPU buffers instead of each
+    // uploading a private copy of the same geometry - and, just as importantly,
+    // deleting an entity cannot invalidate anyone else's entry. While this was
+    // keyed by index, a delete shifted every later entity down one, so every
+    // cached entry above the deletion suddenly named the wrong mesh and was
+    // erased mid-frame while in-flight frames were still drawing from it.
+    using MeshCacheKey = std::pair<const Mesh*, std::size_t>;   // asset, LOD
+    std::map<MeshCacheKey, EntityGpuMesh> mGpuMeshes;
     std::unordered_set<std::size_t> mLoggedDrawEntities;
+
+    // Per-frame constant storage.
+    //
+    // Every one of these buffers is an UPLOAD-heap block the CPU writes each
+    // frame and the GPU reads while rasterising. The engine keeps three frames
+    // in flight, so a single copy is overwritten while an earlier frame is
+    // still drawing from it - and because these carry the MVP and model
+    // matrices, a torn read rasterises geometry with a mixture of two frames'
+    // transforms. That lands directly in the G-Buffer as wrong depth and wrong
+    // normals, which anything reconstructing world position from it then
+    // amplifies.
+    //
+    // It is invisible while the camera is still, because consecutive frames
+    // then write identical matrices, and it is invisible whenever the CPU is
+    // slow enough that it cannot run ahead of the GPU.
+    //
+    // Each buffer therefore holds kFramesInFlight copies of its slot range, and
+    // the frame slot selects which copy this frame uses. BeginFrame() advances
+    // it once per frame so every pass within a frame agrees.
+    static constexpr std::size_t kFramesInFlight = 3;
+    std::size_t                                  mFrameSlot = 0;
+
+    // Growing a constant buffer used to flush the GPU mid-frame so the old one
+    // could be released safely. That stall is what made adding or copying an
+    // entity hitch, and a flush that timed out left the renderer convinced the
+    // GPU was idle when it was not. Nothing has to wait: hand the replaced
+    // buffer to this list instead and let it die once every frame that could
+    // still be reading it has retired.
+    struct RetiredBuffer
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Resource;
+        int FramesRemaining = 0;
+    };
+    std::vector<RetiredBuffer> mRetiredBuffers;
+
+    void RetireBuffer(Microsoft::WRL::ComPtr<ID3D12Resource> resource)
+    {
+        if (!resource) return;
+        // One extra frame of slack over the number in flight, because the buffer
+        // is retired part-way through a frame that has already recorded draws
+        // referencing it.
+        mRetiredBuffers.push_back({ std::move(resource), static_cast<int>(kFramesInFlight) + 1 });
+    }
+
+    void RetireExpiredBuffers()
+    {
+        for (auto it = mRetiredBuffers.begin(); it != mRetiredBuffers.end(); )
+        {
+            if (--it->FramesRemaining <= 0)
+                it = mRetiredBuffers.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    // Geometry a level reload or a deleted entity left behind would otherwise
+    // sit in VRAM for the rest of the session. Entries go through the retire
+    // list rather than being destroyed here, because an in-flight frame may
+    // still be drawing from them.
+    static constexpr std::uint64_t kMeshEvictionFrames = 600;
+    void EvictUnusedMeshes()
+    {
+        if (mFrameCounter % 120 != 0) return;
+        for (auto it = mGpuMeshes.begin(); it != mGpuMeshes.end(); )
+        {
+            if (mFrameCounter - it->second.LastUsedFrame > kMeshEvictionFrames)
+            {
+                RetireBuffer(std::move(it->second.VertexBuffer));
+                RetireBuffer(std::move(it->second.IndexBuffer));
+                it = mGpuMeshes.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    std::uint64_t mFrameCounter = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
     EntityConstants*                             mMappedCB      = nullptr;
-    std::size_t                                  mCBCapacity    = 0; // slots allocated
+    std::size_t                                  mCBCapacity    = 0; // slots per frame
 
     // Per-draw material constants (one slot per submesh draw call per entity).
     Microsoft::WRL::ComPtr<ID3D12Resource>      mMaterialCB;
@@ -294,7 +486,21 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE            mFallbackGpuHandle{};
 
     bool CreateFallbackTexture(ID3D12GraphicsCommandList* commandList);
-    std::size_t SelectLodIndex(const Entity& entity, const Mesh& mesh, const DirectX::XMFLOAT3& cameraPosition) const;
+    // Distance between LOD levels, and the fraction of it that must be crossed
+    // before a switch is accepted. The margin is what stops an entity parked on
+    // a boundary from flipping LOD every frame the camera moves.
+    static constexpr float kLodDistanceStep = 25.0f;
+    static constexpr float kLodHysteresis   = 0.15f;
+
+    std::size_t SelectLodIndex(
+        std::size_t entityIndex,
+        const Entity& entity,
+        const Mesh& mesh,
+        const DirectX::XMFLOAT3& cameraPosition) const;
+
+    // LOD chosen for each entity last frame, so selection can hysteresis rather
+    // than oscillate. Mutable because selection is logically a const query.
+    mutable std::unordered_map<std::size_t, std::size_t> mEntityLodState;
 
     // Resolve a single-material file path to its base-color DDS path.
     // Returns an empty string if the material cannot be read or has no base-color texture.
@@ -314,11 +520,12 @@ private:
     DXGI_FORMAT mNormalFormat   = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT mMaterialFormat = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT mDepthFormat    = DXGI_FORMAT_UNKNOWN;
+    UINT        mMsaaSampleCount = 1;
     bool        mSceneContentChanged = false;
     bool        mWireframeEnabled = false;
+    float       mTextureMipLODBias = -1.5f;
     std::string mLastError;
 
 public:
     void SetRainSurfaceState(bool enabled, float wetnessIntensity);
 };
-

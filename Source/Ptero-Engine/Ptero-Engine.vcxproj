@@ -78,10 +78,12 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\Renderer_DX12;$(ProjectDir)..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -99,7 +101,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\Renderer_DX12;$(ProjectDir)..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -112,15 +114,19 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;PTERO_FBX_SDK_AVAILABLE;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\Renderer_DX12;$(ProjectDir)..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\debug;$(ProjectDir)..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- Release FBX: the x64\debug libs are MDd builds, and this configuration now
+           compiles against the release CRT so it can share a runtime with release Qt. -->
+      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;$(ProjectDir)..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;Renderer_DX12.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
@@ -139,7 +145,7 @@
       <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\\SDKs\\imgui-docking;..\\SDKs\\imgui;$(ProjectDir)..\Renderer_DX12;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Editor\include;$(ProjectDir)AssetPipeline\include;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs;$(ProjectDir)..\Renderer_DX12;$(ProjectDir)..\System\include;..\Audio;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -156,7 +162,6 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="EditorMain.h" />
     <ClInclude Include="GridGeometry.h" />
-    <ClInclude Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.h" />
     <ClInclude Include="RenderInterfaces.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="SceneTypes.h" />
@@ -168,23 +173,17 @@
     <ClCompile Include="..\Renderer_DX12\SceneSerializer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
+    <!-- The launcher links the scene serializer directly, and a level now carries its
+         node graph, so the document type has to come along. Nothing else from the node
+         graph - neither the Qt editor nor the runtime - is needed here. -->
+    <ClCompile Include="..\System\src\NodeGraphCatalog.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
+    <ClCompile Include="..\System\src\NodeGraphDocument.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="EditorMain.cpp" />
     <ClCompile Include="GridGeometry.cpp" />
-    <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\DX12SceneRenderer.cpp" />
-    <ClCompile Include="Ptero-Engine\Source\Renderer_DX12\EditorMainMenu.cpp" />
-    <ClCompile Include="Source\Renderer_DX12\DX12RendererAPI.cpp" />
     <ClCompile Include="SplashScreen.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -195,9 +194,6 @@
     <Image Include="Ptero-Engine.ico" />
     <Image Include="ptero-icon.ico" />
     <Image Include="small.ico" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include=".github\copilot-instructions.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

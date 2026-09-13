@@ -4,7 +4,10 @@
 #include <d3dcompiler.h>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <optional>
 #include <sstream>
+#include <unordered_set>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -13,6 +16,9 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
+    constexpr const char* ShaderCacheVersion = "PteroShaderCacheV1";
+    std::mutex gShaderCacheMutex;
+
     std::filesystem::path GetCurrentModuleDirectory()
     {
         wchar_t moduleFilePath[MAX_PATH]{};
@@ -219,6 +225,33 @@ namespace
         return bytes;
     }
 
+    void WriteBinaryFile(const std::filesystem::path& filePath, const std::vector<std::uint8_t>& bytes)
+    {
+        std::ofstream file(filePath, std::ios::binary | std::ios::trunc);
+        if (!file.is_open())
+        {
+            throw std::runtime_error("Failed to open the shader cache output file.");
+        }
+
+        if (!bytes.empty())
+        {
+            file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+    }
+
+    std::string ReadTextFile(const std::filesystem::path& filePath)
+    {
+        std::ifstream file(filePath, std::ios::binary);
+        if (!file.is_open())
+        {
+            return {};
+        }
+
+        std::ostringstream stream;
+        stream << file.rdbuf();
+        return stream.str();
+    }
+
     std::wstring ResolveShaderPath(const std::wstring& shaderPath)
     {
         namespace fs = std::filesystem;
@@ -296,6 +329,387 @@ namespace
         return result;
     }
 
+    uint64_t Fnv1aAppend(uint64_t hash, const char* text, const size_t length)
+    {
+        constexpr uint64_t prime = 1099511628211ull;
+        for (size_t i = 0; i < length; ++i)
+        {
+            hash ^= static_cast<unsigned char>(text[i]);
+            hash *= prime;
+        }
+
+        return hash;
+    }
+
+    void AppendHashString(uint64_t& hash, const std::string& value)
+    {
+        hash = Fnv1aAppend(hash, value.data(), value.size());
+        hash = Fnv1aAppend(hash, "\n", 1);
+    }
+
+    std::string ToHex(const uint64_t value)
+    {
+        constexpr char digits[] = "0123456789abcdef";
+        std::string result(16, '0');
+        for (size_t i = 0; i < result.size(); ++i)
+        {
+            const size_t shift = (result.size() - 1 - i) * 4;
+            result[i] = digits[(value >> shift) & 0x0f];
+        }
+
+        return result;
+    }
+
+    std::string HexEncode(const std::string& value)
+    {
+        constexpr char digits[] = "0123456789abcdef";
+        std::string result;
+        result.reserve(value.size() * 2);
+        for (const unsigned char character : value)
+        {
+            result.push_back(digits[character >> 4]);
+            result.push_back(digits[character & 0x0f]);
+        }
+
+        return result;
+    }
+
+    std::string BuildShaderCacheKey(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
+    {
+        constexpr uint64_t offsetBasis = 14695981039346656037ull;
+        uint64_t hash = offsetBasis;
+
+        AppendHashString(hash, ShaderCacheVersion);
+#if defined(PTERO_DEBUG)
+        AppendHashString(hash, "Debug");
+#else
+        AppendHashString(hash, "Release");
+#endif
+        AppendHashString(hash, NarrowString(resolvedPath));
+        AppendHashString(hash, NarrowString(request.EntryPoint));
+        AppendHashString(hash, NarrowString(request.TargetProfile));
+        AppendHashString(hash, std::to_string(static_cast<int>(request.Stage)));
+
+        for (const std::wstring& define : request.Defines)
+        {
+            AppendHashString(hash, "D:" + NarrowString(define));
+        }
+
+        for (const std::wstring& includeDirectory : request.IncludeDirectories)
+        {
+            AppendHashString(hash, "I:" + NarrowString(includeDirectory));
+        }
+
+        return ToHex(hash);
+    }
+
+    std::filesystem::path FindProjectRootFromShaderPath(const std::filesystem::path& resolvedShaderPath)
+    {
+        namespace fs = std::filesystem;
+
+        fs::path currentDirectory = resolvedShaderPath.parent_path();
+        while (!currentDirectory.empty())
+        {
+            if (_wcsicmp(currentDirectory.filename().wstring().c_str(), L"Shaders") == 0)
+            {
+                const fs::path dataDirectory = currentDirectory.parent_path();
+                if (_wcsicmp(dataDirectory.filename().wstring().c_str(), L"Data") == 0)
+                {
+                    return dataDirectory.parent_path();
+                }
+            }
+
+            const fs::path candidateDataShaders = currentDirectory / L"Data" / L"Shaders";
+            if (fs::exists(candidateDataShaders) && fs::is_directory(candidateDataShaders))
+            {
+                return currentDirectory;
+            }
+
+            const fs::path parentDirectory = currentDirectory.parent_path();
+            if (parentDirectory == currentDirectory)
+            {
+                break;
+            }
+
+            currentDirectory = parentDirectory;
+        }
+
+        const fs::path moduleDirectory = GetCurrentModuleDirectory();
+        if (!moduleDirectory.empty())
+        {
+            const fs::path dataShaders = FindAssetFromDirectory(moduleDirectory, { fs::path(L"Data") / L"Shaders" });
+            if (!dataShaders.empty())
+            {
+                return dataShaders.parent_path().parent_path();
+            }
+        }
+
+        return fs::current_path();
+    }
+
+    std::filesystem::path GetShaderCacheDirectory(const std::wstring& resolvedPath)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path projectRoot = FindProjectRootFromShaderPath(fs::path(resolvedPath));
+        fs::path cacheDirectory = projectRoot / L"Cache" / L"Shaders";
+        std::error_code createError;
+        fs::create_directories(cacheDirectory, createError);
+        if (createError)
+        {
+            OutputDebugStringA("Failed to create shader cache directory: ");
+            OutputDebugStringA(createError.message().c_str());
+            OutputDebugStringA("\n");
+        }
+
+        return cacheDirectory;
+    }
+
+    struct ShaderDependencyStamp
+    {
+        std::filesystem::path Path;
+        uintmax_t Size = 0;
+        long long WriteTime = 0;
+    };
+
+    ShaderDependencyStamp MakeDependencyStamp(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        ShaderDependencyStamp stamp{};
+        stamp.Path = std::filesystem::weakly_canonical(path, error);
+        if (error)
+        {
+            stamp.Path = path.lexically_normal();
+        }
+
+        error.clear();
+        stamp.Size = std::filesystem::file_size(stamp.Path, error);
+        if (error)
+        {
+            stamp.Size = 0;
+        }
+
+        error.clear();
+        const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(stamp.Path, error);
+        stamp.WriteTime = error ? 0 : writeTime.time_since_epoch().count();
+        return stamp;
+    }
+
+    std::optional<std::filesystem::path> ResolveIncludePath(
+        const std::string& includePath,
+        const std::filesystem::path& sourceDirectory,
+        const std::vector<std::filesystem::path>& includeDirectories)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path requestedPath = fs::path(includePath);
+        std::vector<fs::path> candidates;
+        if (requestedPath.is_absolute())
+        {
+            candidates.push_back(requestedPath);
+        }
+        else
+        {
+            candidates.push_back(sourceDirectory / requestedPath);
+            for (const fs::path& includeDirectory : includeDirectories)
+            {
+                candidates.push_back(includeDirectory / requestedPath);
+            }
+        }
+
+        for (const fs::path& candidate : candidates)
+        {
+            std::error_code statusError;
+            if (fs::exists(candidate, statusError) && !statusError)
+            {
+                std::error_code canonicalError;
+                fs::path canonicalPath = fs::weakly_canonical(candidate, canonicalError);
+                return canonicalError ? candidate.lexically_normal() : canonicalPath;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    std::vector<std::string> ExtractIncludePaths(const std::string& sourceText)
+    {
+        std::vector<std::string> includes;
+        size_t searchOffset = 0;
+        while (true)
+        {
+            const size_t includePosition = sourceText.find("#include", searchOffset);
+            if (includePosition == std::string::npos)
+            {
+                break;
+            }
+
+            const size_t delimiterPosition = sourceText.find_first_of("\"<", includePosition + 8);
+            if (delimiterPosition == std::string::npos)
+            {
+                break;
+            }
+
+            const char closingDelimiter = sourceText[delimiterPosition] == '"' ? '"' : '>';
+            const size_t endPosition = sourceText.find(closingDelimiter, delimiterPosition + 1);
+            if (endPosition == std::string::npos)
+            {
+                break;
+            }
+
+            includes.push_back(sourceText.substr(delimiterPosition + 1, endPosition - delimiterPosition - 1));
+            searchOffset = endPosition + 1;
+        }
+
+        return includes;
+    }
+
+    void CollectShaderDependencies(
+        const std::filesystem::path& sourcePath,
+        const std::vector<std::filesystem::path>& includeDirectories,
+        std::unordered_set<std::wstring>& visitedPaths,
+        std::vector<ShaderDependencyStamp>& dependencies)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code canonicalError;
+        fs::path canonicalPath = fs::weakly_canonical(sourcePath, canonicalError);
+        if (canonicalError)
+        {
+            canonicalPath = sourcePath.lexically_normal();
+        }
+
+        const std::wstring canonicalKey = canonicalPath.wstring();
+        if (!visitedPaths.insert(canonicalKey).second)
+        {
+            return;
+        }
+
+        dependencies.push_back(MakeDependencyStamp(canonicalPath));
+
+        const std::string sourceText = ReadTextFile(canonicalPath);
+        if (sourceText.empty())
+        {
+            return;
+        }
+
+        const fs::path sourceDirectory = canonicalPath.parent_path();
+        for (const std::string& includePath : ExtractIncludePaths(sourceText))
+        {
+            const std::optional<fs::path> resolvedIncludePath = ResolveIncludePath(includePath, sourceDirectory, includeDirectories);
+            if (resolvedIncludePath.has_value())
+            {
+                CollectShaderDependencies(*resolvedIncludePath, includeDirectories, visitedPaths, dependencies);
+            }
+        }
+    }
+
+    std::vector<ShaderDependencyStamp> BuildShaderDependencySnapshot(
+        const ShaderCompileRequest& request,
+        const std::wstring& resolvedPath)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path resolvedShaderPath(resolvedPath);
+        std::vector<fs::path> includeDirectories;
+        includeDirectories.push_back(resolvedShaderPath.parent_path());
+
+        for (const std::wstring& includeDirectory : request.IncludeDirectories)
+        {
+            if (!includeDirectory.empty())
+            {
+                includeDirectories.emplace_back(includeDirectory);
+            }
+        }
+
+        const fs::path projectRoot = FindProjectRootFromShaderPath(resolvedShaderPath);
+        includeDirectories.push_back(projectRoot / L"Data" / L"Shaders");
+
+        std::unordered_set<std::wstring> visitedPaths;
+        std::vector<ShaderDependencyStamp> dependencies;
+        CollectShaderDependencies(resolvedShaderPath, includeDirectories, visitedPaths, dependencies);
+
+        std::sort(
+            dependencies.begin(),
+            dependencies.end(),
+            [](const ShaderDependencyStamp& left, const ShaderDependencyStamp& right)
+            {
+                return left.Path.wstring() < right.Path.wstring();
+            });
+
+        return dependencies;
+    }
+
+    std::string BuildShaderCacheMetadata(
+        const std::string& cacheKey,
+        const std::vector<ShaderDependencyStamp>& dependencies)
+    {
+        std::ostringstream metadata;
+        metadata << ShaderCacheVersion << "\n";
+        metadata << "key=" << cacheKey << "\n";
+        metadata << "dependencies=" << dependencies.size() << "\n";
+        for (const ShaderDependencyStamp& dependency : dependencies)
+        {
+            metadata
+                << HexEncode(NarrowString(dependency.Path.wstring()))
+                << "|" << dependency.Size
+                << "|" << dependency.WriteTime
+                << "\n";
+        }
+
+        return metadata.str();
+    }
+
+    bool TryLoadShaderFromCache(
+        const std::filesystem::path& bytecodePath,
+        const std::filesystem::path& metadataPath,
+        const std::string& expectedMetadata,
+        std::vector<std::uint8_t>& outBytecode)
+    {
+        namespace fs = std::filesystem;
+
+        std::error_code existsError;
+        if (!fs::exists(bytecodePath, existsError) || existsError
+            || !fs::exists(metadataPath, existsError) || existsError)
+        {
+            return false;
+        }
+
+        const std::string actualMetadata = ReadTextFile(metadataPath);
+        if (actualMetadata != expectedMetadata)
+        {
+            return false;
+        }
+
+        outBytecode = ReadBinaryFile(bytecodePath.wstring());
+        return !outBytecode.empty();
+    }
+
+    void StoreShaderInCache(
+        const std::filesystem::path& bytecodePath,
+        const std::filesystem::path& metadataPath,
+        const std::string& metadata,
+        const std::vector<std::uint8_t>& bytecode)
+    {
+        try
+        {
+            WriteBinaryFile(bytecodePath, bytecode);
+
+            std::ofstream metadataFile(metadataPath, std::ios::binary | std::ios::trunc);
+            if (!metadataFile.is_open())
+            {
+                throw std::runtime_error("Failed to open the shader cache metadata file.");
+            }
+
+            metadataFile << metadata;
+        }
+        catch (const std::exception& exception)
+        {
+            OutputDebugStringA("Failed to write shader cache entry: ");
+            OutputDebugStringA(exception.what());
+            OutputDebugStringA("\n");
+        }
+    }
+
     std::vector<std::uint8_t> CompileShaderBlobWithDxc(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
     {
         namespace fs = std::filesystem;
@@ -312,7 +726,7 @@ namespace
             L"-I", resolvedShaderPath.parent_path().wstring(),
             L"-WX",
             L"-all_resources_bound",
-#if defined(_DEBUG)
+#if defined(PTERO_DEBUG)
             L"-Zi",
             L"-Qembed_debug",
             L"-Od",
@@ -379,7 +793,7 @@ namespace
     std::vector<std::uint8_t> CompileShaderBlobWithD3DCompile(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
     {
         UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
+#if defined(PTERO_DEBUG)
         compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #else
         compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -431,8 +845,26 @@ bool DX12Shader::Compile(const ShaderCompileRequest& request)
     try
     {
         mLastErrorMessage.clear();
+        mLoadedFromCache = false;
         mSourcePath = ResolveShaderPath(request.FilePath);
+
+        const std::string cacheKey = BuildShaderCacheKey(request, mSourcePath);
+        const std::filesystem::path cacheDirectory = GetShaderCacheDirectory(mSourcePath);
+        const std::filesystem::path bytecodeCachePath = cacheDirectory / (cacheKey + ".dxil");
+        const std::filesystem::path metadataCachePath = cacheDirectory / (cacheKey + ".meta");
+        const std::vector<ShaderDependencyStamp> dependencies = BuildShaderDependencySnapshot(request, mSourcePath);
+        const std::string expectedMetadata = BuildShaderCacheMetadata(cacheKey, dependencies);
+
+        std::lock_guard<std::mutex> cacheLock(gShaderCacheMutex);
+        if (TryLoadShaderFromCache(bytecodeCachePath, metadataCachePath, expectedMetadata, mBytecode))
+        {
+            mLoadedFromCache = true;
+            return true;
+        }
+
         mBytecode = CompileShaderBytecode(request, mSourcePath);
+        mLoadedFromCache = false;
+        StoreShaderInCache(bytecodeCachePath, metadataCachePath, expectedMetadata, mBytecode);
         return true;
     }
     catch (const std::exception& exception)
@@ -443,6 +875,7 @@ bool DX12Shader::Compile(const ShaderCompileRequest& request)
         OutputDebugStringA("\n");
         mSourcePath.clear();
         mBytecode.clear();
+        mLoadedFromCache = false;
         return false;
     }
     catch (...)
@@ -451,6 +884,7 @@ bool DX12Shader::Compile(const ShaderCompileRequest& request)
         OutputDebugStringA("DX12Shader::Compile failed with an unknown error.\n");
         mSourcePath.clear();
         mBytecode.clear();
+        mLoadedFromCache = false;
         return false;
     }
 }

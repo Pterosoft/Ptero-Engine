@@ -1,0 +1,38 @@
+Ptero Engine session log
+Started 2026-09-13 17:17:30
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-13_17-17-30.txt
+----------------------------------------------------------------------
+[17:17:30.482] [INFO ] [Log         ] Logging to disk started.
+[17:17:30.482] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-13_17-17-30.txt
+[17:17:30.482] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[17:17:39.665] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[17:17:39.683] [INFO ] [CVar        ] 323 cvars registered. Type 'list' in the console to see them.
+[17:17:39.683] [INFO ] [Renderer    ] Renderer initialized.
+[17:17:56.869] [INFO ] [Console     ] > help
+[17:17:56.869] [INFO ] [Console     ] Commands:
+[17:17:56.869] [INFO ] [Console     ]   <cvar>              show a setting's value, range and default
+[17:17:56.869] [INFO ] [Console     ]   <cvar> <value>      change it
+[17:17:56.869] [INFO ] [Console     ]   list [text]         list cvars matching text (all of them if omitted)
+[17:17:56.870] [INFO ] [Console     ]   find <text>         same as list
+[17:17:56.870] [INFO ] [Console     ]   help <cvar>         describe one cvar
+[17:17:56.870] [INFO ] [Console     ]   reset <cvar>|all    restore the startup default
+[17:17:56.870] [INFO ] [Console     ]   dumpcvars           print every cvar and its value
+[17:17:56.870] [INFO ] [Console     ]   log <level>         trace|debug|info|warning|error|fatal
+[17:17:56.870] [INFO ] [Console     ]   logpath             where this session's .txt is being written
+[17:17:56.870] [INFO ] [Console     ]   clear               empty the console (the file keeps everything)
+[17:17:56.870] [INFO ] [Console     ]   echo <text>         print text
+[17:17:56.870] [INFO ] [Console     ] 323 cvars registered.
+[17:17:58.622] [INFO ] [Console     ] > help
+[17:17:58.622] [INFO ] [Console     ] Commands:
+[17:17:58.623] [INFO ] [Console     ]   <cvar>              show a setting's value, range and default
+[17:17:58.623] [INFO ] [Console     ]   <cvar> <value>      change it
+[17:17:58.623] [INFO ] [Console     ]   list [text]         list cvars matching text (all of them if omitted)
+[17:17:58.623] [INFO ] [Console     ]   find <text>         same as list
+[17:17:58.623] [INFO ] [Console     ]   help <cvar>         describe one cvar
+[17:17:58.623] [INFO ] [Console     ]   reset <cvar>|all    restore the startup default
+[17:17:58.623] [INFO ] [Console     ]   dumpcvars           print every cvar and its value
+[17:17:58.623] [INFO ] [Console     ]   log <level>         trace|debug|info|warning|error|fatal
+[17:17:58.623] [INFO ] [Console     ]   logpath             where this session's .txt is being written
+[17:17:58.623] [INFO ] [Console     ]   clear               empty the console (the file keeps everything)
+[17:17:58.623] [INFO ] [Console     ]   echo <text>         print text
+[17:17:58.623] [INFO ] [Console     ] 323 cvars registered.

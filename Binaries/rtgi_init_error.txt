@@ -1,1 +1,0 @@
-RTGI init failed: RtGlobalIllumination: CreateComputePipelineState failed.

@@ -16,6 +16,7 @@
 #include "Components.h"         // Entity, Mesh
 #include "NrdDenoiser.h"        // NVIDIA NRD RELAX_DIFFUSE wrapper
 #include "TextureManager.h"
+#include "VegetationRenderer.h" // RayTracingBatch
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -164,7 +165,15 @@ public:
     bool EnsureSize(UINT width, UINT height);
 
     // Build / update the TLAS from the current entity list.  Call once per frame before Dispatch.
-    void BuildTlas(ID3D12GraphicsCommandList4* cmdList, const std::vector<Entity>& entities);
+    // Build / update the TLAS from the current entity list, plus any vegetation
+    // instances whose layer opted into ray tracing (see
+    // VegetationRenderer::CollectRayTracingBatches).  Vegetation is passed in
+    // rather than pulled from the entity list because its instances are
+    // procedural and have no entity of their own.
+    void BuildTlas(
+        ID3D12GraphicsCommandList4* cmdList,
+        const std::vector<Entity>&  entities,
+        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches = nullptr);
 
     // Release all GPU resources.
     void Shutdown();
@@ -275,8 +284,35 @@ private:
     ComPtr<ID3D12RootSignature>  mRootSignatureSpecular;
 
     // Persistently-mapped 256-byte upload constant buffer.
+    // One RtGIConstants block per frame in flight, in a single upload buffer.
+    //
+    // A single block was being overwritten by the CPU while the GPU was still
+    // executing an earlier frame's RTGI passes, so the shaders could read a
+    // mixture of two frames' camera matrices. Standing still that is harmless -
+    // consecutive frames hold identical matrices - but under camera motion the
+    // inconsistent ViewProjInv and CameraPos put reconstructed world positions
+    // off the surface, and the GI rays then either self-intersect or escape.
+    // That showed up as black and bright patches that flickered only while the
+    // camera moved, and only once the CPU was fast enough to run ahead of the
+    // GPU; before that, CPU stalls had been hiding it by acting as a
+    // synchroniser.
     ComPtr<ID3D12Resource>  mConstantBuffer;
-    void*                   mMappedCb = nullptr;
+    uint8_t*                mMappedCb = nullptr;
+    uint32_t                mConstantFrameSlot = 0;
+    // Offset between consecutive blocks; constant buffers need 256-byte alignment.
+    static constexpr UINT64 kConstantStride = (sizeof(RtGIConstants) + 255ull) & ~255ull;
+
+    // Byte offset of the block this frame's passes should bind.
+    UINT64 CurrentConstantOffset() const
+    {
+        return static_cast<UINT64>(mConstantFrameSlot) * kConstantStride;
+    }
+
+    // GPU address of that block, for SetComputeRootConstantBufferView.
+    D3D12_GPU_VIRTUAL_ADDRESS CurrentConstantAddress() const
+    {
+        return mConstantBuffer->GetGPUVirtualAddress() + CurrentConstantOffset();
+    }
 
     // Ping-pong reservoir structured buffers (read/write swap each frame).
     ComPtr<ID3D12Resource>  mReservoirBuffer[2];
@@ -378,6 +414,23 @@ private:
     std::vector<uint32_t>        mCpuIndices;
     bool                         mGeometryDirty = false;  // true when the pools grew this frame
 
+    // Folds everything that affects the acceleration structure's contents into
+    // one value, so an unchanged scene can be detected before any work is done.
+    std::uint64_t ComputeSceneSignature(
+        const std::vector<Entity>& entities,
+        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches) const;
+
+    // Signature of the scene the current TLAS was built from: entity count,
+    // mesh identity, world transforms and material assignment, plus the same
+    // for any ray-traced vegetation.
+    //
+    // A top-level acceleration structure only describes where instances are, so
+    // rebuilding it when nothing has moved produces a bit-identical result at
+    // full cost. An editor scene is static most of the time - the camera moves,
+    // the geometry does not - so comparing this signature first turns the
+    // common case into no work at all. Zero means "nothing built yet".
+    std::uint64_t                mSceneSignature = 0;
+
     // Per-frame instance info rebuilt every BuildTlas call.
     std::vector<GpuInstanceInfo> mCpuInstanceInfo;
     std::vector<GpuMaterialRange> mCpuMaterialRanges;
@@ -447,6 +500,13 @@ private:
     // Two-frame ring: index 0 is being built this frame, index 1 was the previous frame.
     // We only release index 1 at the START of each BuildTlas (safe because the GPU
     // will have finished the frame-N-1 commands by the time frame N+1 starts).
-    std::vector<ComPtr<ID3D12Resource>> mPendingUploads[2];
+    // Upload buffers kept alive until the GPU has finished consuming them.
+    //
+    // Depth must match the engine's frames in flight (DX12Context's FrameCount),
+    // not two: with three frames queued the CPU can be three frames ahead of the
+    // GPU, and a two-slot ring would free a BLAS's vertex or index upload while
+    // an earlier frame's acceleration-structure build was still reading it.
+    static constexpr uint32_t kFramesInFlight = 3;
+    std::vector<ComPtr<ID3D12Resource>> mPendingUploads[kFramesInFlight];
     uint32_t mUploadRingIdx = 0;
 };

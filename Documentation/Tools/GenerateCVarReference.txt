@@ -1,0 +1,198 @@
+# Regenerates the "CVar reference" tables in Documentation/Console.md from
+# Source/Renderer_DX12/EngineCVars.cpp and the settings headers, so the table
+# cannot drift from what the engine actually registers. Run it after adding or
+# renaming a cvar, from the repository root:
+#
+#   perl Documentation/Tools/GenerateCVarReference.pl > /tmp/table.md
+#
+# then replace everything from the first "### Renderer" heading onwards.
+
+use strict;
+use warnings;
+
+my $root = "K:/Ptero-Engine/Source/Renderer_DX12";
+
+# ---- 1. local settings variable -> struct type -------------------------------
+open my $cf, '<', "$root/EngineCVars.cpp" or die $!;
+my $src = do { local $/; <$cf> };
+close $cf;
+$src =~ s/\r//g;
+
+my %varType;
+while ($src =~ /^\s*(\w+)&\s+(\w+)\s*=\s*renderer\.Get\w+\(\);/gm) {
+    $varType{$2} = $1;
+}
+
+# ---- 2. struct field defaults ------------------------------------------------
+my %defaults;   # "StructName::Field" => default text
+for my $h (glob("$root/*.h")) {
+    open my $fh, '<', $h or next;
+    my $t = do { local $/; <$fh> };
+    close $fh;
+    $t =~ s/\r//g;
+    while ($t =~ /struct\s+(\w+)\s*\{(.*?)\n\};/gs) {
+        my ($name, $body) = ($1, $2);
+        for my $line (split /\n/, $body) {
+            next if $line =~ m{^\s*//};
+            if ($line =~ /^\s*(?:const\s+)?[\w:]+\s+(\w+)\s*=\s*([^;,]+?)\s*;/) {
+                $defaults{"$name\::$1"} = $2;
+            }
+            # multiple declarators: float A = 1, B = 2;
+            while ($line =~ /(\w+)\s*=\s*([^;,]+?)\s*[,;]/g) {
+                $defaults{"$name\::$1"} //= $2;
+            }
+        }
+    }
+}
+
+sub pretty_default {
+    my ($d) = @_;
+    return '' unless defined $d;
+    $d =~ s/f$//;
+    $d =~ s/^\s+|\s+$//g;
+    return $d;
+}
+
+# ---- 3. register calls ------------------------------------------------------
+my %manualDefault = (
+    "r.viewdistance" => "10000", "r.grid" => "true", "r.wireframe" => "false",
+    "gi.mode" => "rtgi",
+);
+my @rows;
+while ($src =~ /CVar::Register(Bool|Int|Float|Enum|String)\s*\(\s*"([^"]+)"\s*,\s*(.*?)\);\n/gs) {
+    my ($kind, $name, $rest) = ($1, $2, $3);
+
+    # pointer expression is up to the first top-level comma
+    my ($expr, $tail) = $rest =~ /^([^,]+),\s*(.*)$/s;
+    next unless defined $expr;
+    $expr =~ s/^\s+|\s+$//g;
+
+    # description is the first quoted string in the tail
+    my ($desc) = $tail =~ /"((?:[^"\\]|\\.)*)"/s;
+    $desc = '' unless defined $desc;
+    # a description split across source lines
+    my $after = $tail;
+    $after =~ s/^.*?"(?:[^"\\]|\\.)*"//s;
+
+    my ($min, $max) = ('', '');
+    if ($kind eq 'Int' || $kind eq 'Float') {
+        if ($after =~ /,\s*(-?[\d.]+f?)\s*,\s*(-?[\d.]+f?)/) {
+            ($min, $max) = ($1, $2);
+            $min =~ s/f$//; $max =~ s/f$//;
+        }
+    }
+
+    my @labels;
+    if ($kind eq 'Enum') {
+        my ($block) = $after =~ /\{(.*?)\}/s;
+        @labels = $block =~ /"([^"]+)"/g if defined $block;
+    }
+
+    # default, via the pointed-at field
+    my $default = '';
+    my $e = $expr;
+    $e =~ s/^AsIntPointer\(//; $e =~ s/\)$//;
+    if ($e =~ /^&(\w+)\.(\w+)$/ && exists $varType{$1}) {
+        $default = pretty_default($defaults{"$varType{$1}\::$2"});
+    }
+
+    $default = $manualDefault{$name} if $default eq "" && exists $manualDefault{$name};
+
+    # An enum's default reads better as its label than as its index. A manual
+    # default is already a label, so only a numeric one is translated.
+    if ($kind eq "Enum" && @labels && $default =~ /^\d+$/) {
+        $default = $labels[$default] // $default;
+    }
+
+    push @rows, {
+        name => $name, kind => $kind, desc => $desc,
+        min => $min, max => $max, labels => \@labels, default => $default,
+    };
+}
+
+# ---- 4. AgX colour-grade expansion ------------------------------------------
+# RegisterColorGradeRegion generates 5 controls x 5 channels per region.
+my @regions = (
+    ['agx.global',     'whole image'],
+    ['agx.shadows',    'shadows only'],
+    ['agx.midtones',   'midtones only'],
+    ['agx.highlights', 'highlights only'],
+);
+# AgxTonemapSettings' constructor is the only place these start non-zero.
+my %agxDefault = ('agx.global.contrast.total' => '0.10',
+                  'agx.global.saturation.total' => '0.12');
+for my $r (@regions) {
+    my ($prefix, $where) = @$r;
+    for my $control (qw(contrast gamma gain saturation vibrance)) {
+        for my $channel (qw(total red green blue yellow)) {
+            my $cvarName = "$prefix.$control.$channel";
+            push @rows, {
+                name => $cvarName,
+                kind => 'Float', desc => "\u$control, $where ($channel).",
+                min => '-2', max => '2', labels => [],
+                default => $agxDefault{$cvarName} // '0',
+            };
+        }
+    }
+}
+
+# ---- 5. emit ----------------------------------------------------------------
+my %groupTitle = (
+    'r'       => 'Renderer',
+    'gi'      => 'Global illumination mode',
+    'rtgi'    => 'Ray-traced global illumination',
+    'rc'      => 'Radiance cascades',
+    'probes'  => 'Irradiance probe grid',
+    'rtao'    => 'Ray-traced ambient occlusion',
+    'gtao'    => 'Ground-truth ambient occlusion',
+    'ssr'     => 'Screen-space reflections',
+    'taa'     => 'Temporal anti-aliasing',
+    'smaa'    => 'SMAA',
+    'msaa'    => 'MSAA',
+    'dlss'    => 'DLSS',
+    'sharpen' => 'Sharpening',
+    'bloom'   => 'Bloom',
+    'chroma'  => 'Chromatic aberration',
+    'agx'     => 'AgX tonemapping and colour grading',
+    'tod'     => 'Time of day',
+    'wind'    => 'Wind',
+    'fog'     => 'Volumetric fog',
+    'clouds'  => 'Volumetric clouds',
+    'shadow'  => 'Point shadows',
+);
+my @order = qw(r gi rtgi rc probes rtao gtao ssr taa smaa msaa dlss sharpen
+               bloom chroma agx tod wind fog clouds shadow);
+
+my %byGroup;
+for my $row (@rows) {
+    my ($g) = $row->{name} =~ /^([^.]+)/;
+    push @{$byGroup{$g}}, $row;
+}
+
+my $out = '';
+my $total = scalar @rows;
+for my $g (@order) {
+    next unless $byGroup{$g};
+    $out .= "### " . ($groupTitle{$g} // $g) . "\n\n";
+    $out .= "| CVar | Type | Default | Range | Meaning |\n";
+    $out .= "|---|---|---|---|---|\n";
+    for my $row (sort { $a->{name} cmp $b->{name} } @{$byGroup{$g}}) {
+        my $type = lc $row->{kind};
+        my $range = '';
+        if ($row->{kind} eq 'Enum') {
+            $range = join ' \| ', @{$row->{labels}};
+            $type = 'enum';
+        } elsif ($row->{min} ne '' && $row->{min} ne $row->{max}) {
+            $range = "$row->{min} .. $row->{max}";
+        }
+        my $default = $row->{default};
+        $default = '`' . $default . '`' if $default ne '';
+        $range = '`' . $range . '`' if $range ne '';
+        $out .= sprintf("| `%s` | %s | %s | %s | %s |\n",
+                        $row->{name}, $type, $default, $range, $row->{desc});
+    }
+    $out .= "\n";
+}
+
+print "TOTAL $total\n" if $ENV{COUNT_ONLY};
+print $out unless $ENV{COUNT_ONLY};

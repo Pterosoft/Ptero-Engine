@@ -13,23 +13,30 @@
         0.0,
         0.0
     ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
     "heightScale": 0.05000000074505806,
-    "metallicFactor": 0.0,
+    "isDecalMaterial": false,
+    "metallicFactor": 1.0,
     "name": "NewMaterial",
     "normalScale": 1.0,
     "opacity": 1.0,
     "roughnessFactor": 1.0,
     "textures": {
         "ambientOcclusion": "",
-        "baseColor": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_BaseColor.dds",
+        "baseColor": "",
         "emissive": "",
         "height": "",
         "metallic": "",
         "metallicRoughness": "",
-        "normal": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_Normal.dds",
+        "normal": "",
         "opacity": "",
-        "roughness": "Geometry/rusty_bulkhead_light_vgy_extracted/Rusty_Bulkhead_Light_vgyidfpaw_High_4K_Roughness.dds"
+        "roughness": ""
     },
     "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useThinGlass": true,
     "useTransparentBlend": false
 }

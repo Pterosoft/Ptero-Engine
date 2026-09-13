@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "DX12Helper.h"
+#include "System/PteroLog.h"
 
 #include "..\SDKs\Streamline\include\sl.h"
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <filesystem>
@@ -15,7 +17,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-    constexpr UINT FrameCount = 2;
+    // Triple buffered: with two buffers the CPU reaches BeginFrame and immediately waits
+    // on the back buffer the GPU is still drawing, so the two never overlap for long.
+    // Must stay in step with EditorFrameCount in DX12RendererAPI.cpp.
+    constexpr UINT FrameCount = 3;
 
     std::string gLastContextError;
     using ContextProgressFn = void(__stdcall*)(const wchar_t*);
@@ -62,6 +67,10 @@ namespace
     struct DX12ContextState
     {
         HWND WindowHandle = nullptr;
+        // Device removal is terminal: the device never comes back without being
+        // recreated from scratch. Latching it lets the caller report the reason
+        // once and stop, instead of failing every frame forever.
+        bool DeviceRemoved = false;
         UINT Width = 1280;
         UINT Height = 720;
 
@@ -74,7 +83,7 @@ namespace
         ComPtr<ID3D12DescriptorHeap> SrvHeap;
         UINT RtvDescriptorSize = 0;
         UINT SrvDescriptorSize = 0;
-        UINT SrvDescriptorCapacity = 256; // increased to accommodate TAA, GI, and other pass descriptors
+        UINT SrvDescriptorCapacity = 512; // increased to accommodate TAA, GI, volumetric cloud, and other pass descriptors
         UINT NextAvailableSrvDescriptor = 1;
         std::array<ComPtr<ID3D12Resource>, FrameCount> RenderTargets;
 
@@ -87,6 +96,7 @@ namespace
         UINT64 NextFenceValue = 1;
 
         UINT FrameIndex = 0;
+        bool CommandListOpen = false;
         bool StreamlineCoreInitialized = false;
         bool StreamlineInitialized = false;
     };
@@ -112,6 +122,38 @@ namespace
         return std::string(prefix) + " Device status: " + FormatDeviceStatus(removeReason) + ".";
     }
 
+    // D3D12 has no name-for-op helper, so the ones a scene renderer can
+    // plausibly hang inside are spelled out and the rest fall through to the
+    // raw value.
+    const char* BreadcrumbOpName(D3D12_AUTO_BREADCRUMB_OP op)
+    {
+        switch (op)
+        {
+        case D3D12_AUTO_BREADCRUMB_OP_SETMARKER:                return "SetMarker";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT:               return "BeginEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT:                 return "EndEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED:            return "DrawInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED:     return "DrawIndexedInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_EXECUTEINDIRECT:          return "ExecuteIndirect";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCH:                 return "Dispatch";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION:         return "CopyBufferRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION:        return "CopyTextureRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE:             return "CopyResource";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOLVESUBRESOURCE:       return "ResolveSubresource";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW:    return "ClearRenderTargetView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW: return "ClearUnorderedAccessView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW:    return "ClearDepthStencilView";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER:          return "ResourceBarrier";
+        case D3D12_AUTO_BREADCRUMB_OP_PRESENT:                  return "Present";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCHRAYS:             return "DispatchRays";
+        case D3D12_AUTO_BREADCRUMB_OP_BUILDRAYTRACINGACCELERATIONSTRUCTURE:
+                                                                return "BuildRaytracingAccelerationStructure";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYRAYTRACINGACCELERATIONSTRUCTURE:
+                                                                return "CopyRaytracingAccelerationStructure";
+        default:                                                return "other";
+        }
+    }
+
     bool WaitForFenceValue(UINT64 fenceValue, DWORD timeoutMs)
     {
         auto& ctx = g_Context;
@@ -126,12 +168,47 @@ namespace
             return true;
         }
 
+        // One auto-reset event serves every wait in the process, and a
+        // SetEventOnCompletion registration outlives a wait that gives up on it.
+        // So a wait that times out leaves its value armed; when the GPU reaches
+        // that older value later, the event is signalled with nobody waiting and
+        // stays signalled. Without the reset below, the next wait - for a
+        // different, higher value - would return WAIT_OBJECT_0 immediately and
+        // report the GPU finished when it had not, and the caller would go on to
+        // reset an allocator and overwrite constants the GPU was still reading.
+        //
+        // Reset before arming, never after: arming can signal immediately when
+        // the fence crosses the value in between, and that signal must survive.
+        ResetEvent(ctx.FenceEvent);
+
         if (FAILED(ctx.Fence->SetEventOnCompletion(fenceValue, ctx.FenceEvent)))
         {
             return false;
         }
 
-        return WaitForSingleObject(ctx.FenceEvent, timeoutMs) == WAIT_OBJECT_0;
+        // A wake-up can still come from an older registration on the shared
+        // event, so treat the event as a hint and the fence as the answer.
+        const ULONGLONG deadline = GetTickCount64() + timeoutMs;
+        for (;;)
+        {
+            if (ctx.Fence->GetCompletedValue() >= fenceValue)
+            {
+                return true;
+            }
+
+            const ULONGLONG now = GetTickCount64();
+            if (now >= deadline)
+            {
+                return false;
+            }
+
+            if (WaitForSingleObject(ctx.FenceEvent, static_cast<DWORD>(deadline - now)) != WAIT_OBJECT_0)
+            {
+                // Timed out or failed. The fence is the only thing worth
+                // believing, and our registration stays armed for the next wait.
+                return ctx.Fence->GetCompletedValue() >= fenceValue;
+            }
+        }
     }
 
     bool IsFenceValueCompleted(UINT64 fenceValue)
@@ -310,6 +387,20 @@ extern "C"
             ReportContextProgress(L"Creating DXGI factory...");
             ThrowIfFailedWithContext(CreateDXGIFactory2(0, IID_PPV_ARGS(&ctx.Factory)), "CreateDXGIFactory2");
 
+            // DRED costs a little per command list and is the only thing that
+            // turns a device hang from "something timed out" into a named GPU
+            // operation plus the address of the page fault. Enable it before the
+            // device exists, which is the only point at which it can be.
+            {
+                ComPtr<ID3D12DeviceRemovedExtendedDataSettings1> dredSettings;
+                if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings))))
+                {
+                    dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                    dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                    dredSettings->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                }
+            }
+
             ReportContextProgress(L"Creating D3D12 device...");
             ThrowIfFailedWithContext(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&ctx.Device)), "D3D12CreateDevice");
 
@@ -349,7 +440,7 @@ extern "C"
             rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
             ThrowIfFailedWithContext(ctx.Device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&ctx.RtvHeap)), "CreateDescriptorHeap(RTV)");
 
-            // Reserve a shader-visible descriptor heap that can serve both Dear ImGui and editor-owned
+            // Reserve a shader-visible descriptor heap that can serve both Dear Ui and editor-owned
             // render targets, such as the off-screen scene texture shown in the viewport panel.
             D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
             srvHeapDesc.NumDescriptors = ctx.SrvDescriptorCapacity;
@@ -419,7 +510,10 @@ extern "C"
         {
             auto& ctx = g_Context;
 
-            if (!(ctx.SwapChain && ctx.CommandList && ctx.CommandAllocators[0] && ctx.CommandAllocators[1]))
+            const bool allocatorsReady = std::all_of(
+                ctx.CommandAllocators.begin(), ctx.CommandAllocators.end(),
+                [](const ComPtr<ID3D12CommandAllocator>& allocator) { return allocator != nullptr; });
+            if (!(ctx.SwapChain && ctx.CommandList && allocatorsReady))
             {
                 SetContextError("DX12Context_BeginFrame was called before the DX12 context finished initializing.");
                 return false;
@@ -427,11 +521,15 @@ extern "C"
 
             ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
 
+            // Block until this back buffer's last frame retires. Reporting failure instead
+            // turned the caller into a busy-wait that threw the frame away and immediately
+            // rebuilt it, so the editor burned a full CPU core re-running per-frame work it
+            // then discarded. Only a wait that actually times out is an error.
             const UINT64 fenceValue = ctx.FenceValues[ctx.FrameIndex];
-            if (fenceValue != 0 && !IsFenceValueCompleted(fenceValue))
+            if (fenceValue != 0 && !WaitForFenceValue(fenceValue, 5000))
             {
                 std::ostringstream stream;
-                stream << "Current frame resources are still in flight. targetFence=" << fenceValue;
+                stream << "Timed out waiting for the previous frame to retire. targetFence=" << fenceValue;
                 if (ctx.Fence)
                 {
                     stream << ", completedFence=" << ctx.Fence->GetCompletedValue();
@@ -443,6 +541,7 @@ extern "C"
 
             ThrowIfFailedWithContext(ctx.CommandAllocators[ctx.FrameIndex]->Reset(), "ID3D12CommandAllocator::Reset");
             ThrowIfFailedWithContext(ctx.CommandList->Reset(ctx.CommandAllocators[ctx.FrameIndex].Get(), nullptr), "ID3D12GraphicsCommandList::Reset");
+            ctx.CommandListOpen = true;
 
             *commandList = ctx.CommandList.Get();
             *backBuffer = ctx.RenderTargets[ctx.FrameIndex].Get();
@@ -479,6 +578,7 @@ extern "C"
             }
 
             ThrowIfFailedWithContext(ctx.CommandList->Close(), "ID3D12GraphicsCommandList::Close(frame)");
+            ctx.CommandListOpen = false;
 
             ID3D12CommandList* commandLists[] = { ctx.CommandList.Get() };
             ctx.CommandQueue->ExecuteCommandLists(1, commandLists);
@@ -486,6 +586,7 @@ extern "C"
             const HRESULT deviceStatusAfterExecute = ctx.Device ? ctx.Device->GetDeviceRemovedReason() : S_OK;
             if (FAILED(deviceStatusAfterExecute))
             {
+                ctx.DeviceRemoved = true;
                 SetContextError(std::string("DX12Context_EndFrame detected a device problem after command execution. ")
                     + FormatDeviceStatus(deviceStatusAfterExecute));
                 return false;
@@ -511,6 +612,38 @@ extern "C"
         {
             SetContextError("DX12Context_EndFrame failed with an unknown exception.");
             return false;
+        }
+    }
+
+    __declspec(dllexport) void __stdcall DX12Context_AbortFrame()
+    {
+        auto& ctx = g_Context;
+        if (ctx.CommandList && ctx.CommandListOpen)
+        {
+            const HRESULT closeHr = ctx.CommandList->Close();
+            ctx.CommandListOpen = false;
+            if (FAILED(closeHr))
+            {
+                SetContextError("DX12Context_AbortFrame failed to close the in-progress command list. HRESULT: " + std::to_string(closeHr));
+                ctx.CommandList.Reset();
+                if (ctx.Device && ctx.CommandAllocators[ctx.FrameIndex])
+                {
+                    const HRESULT createHr = ctx.Device->CreateCommandList(
+                        0,
+                        D3D12_COMMAND_LIST_TYPE_DIRECT,
+                        ctx.CommandAllocators[ctx.FrameIndex].Get(),
+                        nullptr,
+                        IID_PPV_ARGS(&ctx.CommandList));
+                    if (SUCCEEDED(createHr) && ctx.CommandList)
+                    {
+                        ctx.CommandList->Close();
+                    }
+                    else
+                    {
+                        SetContextError("DX12Context_AbortFrame failed to recreate the command list. HRESULT: " + std::to_string(createHr));
+                    }
+                }
+            }
         }
     }
 
@@ -730,6 +863,83 @@ extern "C"
     __declspec(dllexport) UINT __stdcall DX12Context_GetSrvDescriptorSize()
     {
         return g_Context.SrvDescriptorSize;
+    }
+
+    // Everything DRED knows about why the device went away: the last GPU
+    // operations each command list actually completed, and the page fault that
+    // killed it if there was one. This is the difference between "the device
+    // hung" and knowing which pass and which address did it.
+    __declspec(dllexport) void __stdcall DX12Context_LogDeviceRemovedDiagnostics()
+    {
+        auto& ctx = g_Context;
+        if (!ctx.Device) return;
+
+        const HRESULT reason = ctx.Device->GetDeviceRemovedReason();
+        PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                         "Device removed. %s", FormatDeviceStatus(reason).c_str());
+
+        ComPtr<ID3D12DeviceRemovedExtendedData1> dred;
+        if (FAILED(ctx.Device->QueryInterface(IID_PPV_ARGS(&dred))))
+        {
+            PteroLog::Write(PteroLog::Level::Warning, "Device",
+                            "DRED is not available on this device, so there are no breadcrumbs to show.");
+            return;
+        }
+
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 breadcrumbs{};
+        if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&breadcrumbs)))
+        {
+            int listIndex = 0;
+            for (const D3D12_AUTO_BREADCRUMB_NODE1* node = breadcrumbs.pHeadAutoBreadcrumbNode;
+                 node != nullptr; node = node->pNext, ++listIndex)
+            {
+                const UINT completed = (node->pLastBreadcrumbValue != nullptr) ? *node->pLastBreadcrumbValue : 0;
+                // A node that completed everything it was given did not hang;
+                // the one that stopped part-way through is the culprit.
+                if (completed == node->BreadcrumbCount) continue;
+
+                char listName[128] = {};
+                if (node->pCommandListDebugNameA != nullptr)
+                    std::snprintf(listName, sizeof(listName), "%s", node->pCommandListDebugNameA);
+
+                PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                 "Command list %d ('%s') stopped after %u of %u operations.",
+                                 listIndex, listName[0] ? listName : "unnamed",
+                                 completed, node->BreadcrumbCount);
+
+                // The few operations either side of where it stopped are what
+                // identify the pass.
+                const UINT first = (completed > 4) ? completed - 4 : 0;
+                const UINT last = (std::min)(node->BreadcrumbCount, completed + 4);
+                for (UINT op = first; op < last; ++op)
+                {
+                    PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                     "    %s op %u: %s",
+                                     op == completed ? "->" : "  ", op,
+                                     BreadcrumbOpName(node->pCommandHistory[op]));
+                }
+            }
+        }
+
+        D3D12_DRED_PAGE_FAULT_OUTPUT pageFault{};
+        if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&pageFault)))
+        {
+            PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                             "Page fault at GPU virtual address 0x%llx.",
+                             static_cast<unsigned long long>(pageFault.PageFaultVA));
+            for (const D3D12_DRED_ALLOCATION_NODE* node = pageFault.pHeadRecentFreedAllocationNode;
+                 node != nullptr; node = node->pNext)
+            {
+                PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                 "    recently freed: %s",
+                                 node->ObjectNameA ? node->ObjectNameA : "(unnamed)");
+            }
+        }
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_IsDeviceRemoved()
+    {
+        return g_Context.DeviceRemoved;
     }
 
     __declspec(dllexport) bool __stdcall DX12Context_WaitForGPU()

@@ -1,0 +1,64 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightScale": 0.07850000262260437,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "M_rock_wall_17",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 300.0,
+    "parallaxMaxSteps": 256,
+    "parallaxMinSteps": 64,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "roughnessFactor": 1.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "Textures/Modular/rock_wall_17/rock_wall_17_diff_4k.dds",
+        "emissive": "",
+        "height": "Textures/Modular/rock_wall_17/rock_wall_17_disp_4k.dds",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Textures/rock_wall_17_nor_dx_4k.dds",
+        "opacity": "",
+        "roughness": "Textures/rock_wall_17_rough_4k.dds"
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": true,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
+    ]
+}

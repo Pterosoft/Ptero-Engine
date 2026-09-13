@@ -340,7 +340,7 @@ bool DlssRenderer::EnsureOutputDescriptors()
         return false;
     }
 
-    mOutputTextureId = static_cast<ImTextureID>(mOutputSrvGpu.ptr);
+    mOutputTextureId = static_cast<UiTextureID>(mOutputSrvGpu.ptr);
     mOutputSrvAllocated = true;
     return true;
 }

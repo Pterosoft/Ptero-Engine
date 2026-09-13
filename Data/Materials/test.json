@@ -1,0 +1,64 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        0.5607843399047852,
+        0.5607843399047852,
+        0.5607843399047852,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightScale": 0.05000000074505806,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "test",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "roughnessFactor": 1.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "",
+        "opacity": "",
+        "roughness": ""
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
+    ]
+}

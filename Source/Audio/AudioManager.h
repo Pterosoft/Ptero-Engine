@@ -1,13 +1,11 @@
 #pragma once
 
 #include <string>
-#include "HRTFSpatializationNode.h"
-#include "HRIRDatabase.h"
 #include <vector>
 #include <filesystem>
 
 // Forward-declare FMOD types so callers do not need to include fmod headers.
-namespace FMOD { class System; namespace Studio { class System; class EventInstance; class Bank; } }
+namespace FMOD { class DSP; class System; namespace Studio { class System; class EventInstance; class Bank; } }
 
 #ifdef AUDIO_EXPORTS
 #define AUDIO_API __declspec(dllexport)
@@ -100,21 +98,11 @@ public:
     // Returns true when the system was successfully initialised.
     bool IsInitialized() const { return m_initialized; }
 
-    // HRTF spatialization control.
-    // EnableHRTF initialises the node on first call (uses default 128-tap HRIR).
-    void SetHRTFEnabled(bool enabled);
-    bool IsHRTFEnabled() const;
-    HRTFSpatializationNode* GetHRTFNode() { return &m_hrtfNode; }
-
-    // HRIR dataset loading.
-    bool LoadHRIRDatabase(const std::filesystem::path& rootDir, std::string& outError);
-
-    // Set source direction (degrees) and update the HRIR pair.
-    void SetHRTFDirection(float elevationDeg, float azimuthDeg);
-
-    const HRIRDatabase* GetHRIRDatabase() const { return &m_hrirDb; }
-    float GetHRTFElevation() const { return m_hrtfElevation; }
-    float GetHRTFAzimuth()   const { return m_hrtfAzimuth; }
+    // Resonance Audio is implemented as native FMOD source/listener DSPs.
+    void SetResonanceAudioEnabled(bool enabled);
+    bool IsResonanceAudioEnabled() const { return m_resonanceAudioEnabled; }
+    bool IsResonanceAudioAvailable() const { return m_resonanceAudioAvailable; }
+    const std::string& GetResonanceAudioStatus() const { return m_resonanceAudioStatus; }
 
 private:
     struct EmitterState
@@ -124,6 +112,7 @@ private:
         float PositionX = 0.0f;
         float PositionY = 0.0f;
         float PositionZ = 0.0f;
+        void* ResonanceDsp = nullptr;
         bool Allocated = false;
         bool Playing = false;
     };
@@ -133,17 +122,24 @@ private:
 
     // Refresh m_events from all loaded banks.
     void RefreshEventList();
+    bool InitializeResonanceAudio(FMOD::System* coreSystem, std::string& outError);
+    FMOD::DSP* AttachResonanceSource(FMOD::Studio::EventInstance* instance);
+    static void ReleaseResonanceDsp(void*& dsp);
 
     #pragma warning(push)
     #pragma warning(disable: 4251)
         FMOD::Studio::System*  m_studioSystem = nullptr;
+        FMOD::System*          m_coreSystem = nullptr;
         std::vector<FMOD::Studio::Bank*>          m_banks;
         std::vector<FMOD::Studio::EventInstance*> m_instances;
+        std::vector<void*>                         m_instanceResonanceDsps;
+        std::vector<void*>                         m_oneShotResonanceDsps;
         std::vector<AudioEvent>                   m_events;
         std::filesystem::path                     m_audioDataPath;
         std::vector<std::string>                  m_loadedBanks;
         std::vector<std::string>                  m_bankLoadFailures;
         std::string                               m_lastStatus;
+        std::string                               m_resonanceAudioStatus;
         std::vector<EmitterState>                 m_emitters;
         bool                                      m_initialized = false;
         float m_listenerPosX = 0.0f, m_listenerPosY = 0.0f, m_listenerPosZ = 0.0f;
@@ -151,8 +147,9 @@ private:
         float m_listenerUpX  = 0.0f, m_listenerUpY  = 1.0f, m_listenerUpZ  = 0.0f;
     #pragma warning(pop)
 
-    HRTFSpatializationNode m_hrtfNode;
-    HRIRDatabase           m_hrirDb;
-    float                  m_hrtfElevation = 0.0f;
-    float                  m_hrtfAzimuth   = 0.0f;
+    void*        m_resonanceListenerDsp = nullptr;
+    unsigned int m_resonancePluginHandle = 0;
+    unsigned int m_resonanceSourcePluginHandle = 0;
+    bool          m_resonanceAudioEnabled = true;
+    bool          m_resonanceAudioAvailable = false;
 };

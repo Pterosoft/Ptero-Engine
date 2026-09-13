@@ -8,10 +8,15 @@ In order to build the source code successfully you'll need the following SDKs
  - ImGui
  - ImGuizmo
  - nlohmann json
+ - nodeeditor (QtNodes)
  - NRD
  - XeGTAO
 
 Once you have all of them place them in Ptero-Engine\Source\SDKs folder. The folder does not exists and has to be created.
+
+`nodeeditor` backs the Node Graph visual scripting editor. It needs no separate build step:
+`Source/QtUi/QtNodes.props` compiles its sources into the renderer and runs Qt's `moc` and
+`rcc` itself, so only the Qt SDK has to be built first. See `Documentation/NodeGraph.md`.
 
 ## SDKs Files in the Projects
 Some SDKs require direct code file injection into the projects. Simply import the following files into designated projects.

@@ -1,0 +1,110 @@
+﻿cbuffer RadianceCascadesConstants : register(b0)
+{
+    uint  gFrameWidth;
+    uint  gFrameHeight;
+    uint  gFrameIndex;
+    uint  gCascadeCount;
+
+    uint  gProbeSpacingBase;
+    uint  gRaysPerProbe;
+    int   gDebugView;
+    float gRayLengthBase;
+
+    float gRayLengthScale;
+    float gIntervalLengthScale;
+    float gHysteresis;
+    float gGiIntensity;
+
+    float4x4 gViewProjInv;
+    float4x4 gCurrViewProj;
+    float4x4 gPrevViewProj;
+    float3 gCameraPos;
+    float _Pad0;
+};
+
+Texture2D gAlbedo : register(t0);
+Texture2D gNormalDepth : register(t1);
+Texture2D gMaterial : register(t2);
+Texture2D gSceneDepth : register(t3);
+RaytracingAccelerationStructure gSceneTlas : register(t4);
+Texture2D gHistory : register(t5);
+RWTexture2D<float4> gTraceOut : register(u0);
+SamplerState gLinearClamp : register(s0);
+
+float3 DecodeOctNormal(float2 encoded)
+{
+    float2 oct = encoded * 2.0f - 1.0f;
+    float3 n = float3(oct, 1.0f - abs(oct.x) - abs(oct.y));
+    if (n.z < 0.0f)
+        n.xy = (1.0f - abs(n.yx)) * (float2(n.xy >= 0.0f) * 2.0f - 1.0f);
+    return normalize(n);
+}
+
+float3 ReconstructWorldPosition(float2 uv, float depth)
+{
+    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
+    float4 worldPos = mul(ndc, gViewProjInv);
+    return worldPos.xyz / max(worldPos.w, 1e-6f);
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    if (dispatchThreadId.x >= gFrameWidth || dispatchThreadId.y >= gFrameHeight)
+        return;
+
+    const uint2 pixel = dispatchThreadId.xy;
+    const float2 uv = (float2(pixel) + 0.5f) / float2(gFrameWidth, gFrameHeight);
+    const float depth = gSceneDepth.Load(int3(pixel, 0)).r;
+    if (depth >= 1.0f)
+    {
+        gTraceOut[pixel] = 0.0f.xxxx;
+        return;
+    }
+
+    const float3 albedo = gAlbedo.Load(int3(pixel, 0)).rgb;
+    const float3 normal = DecodeOctNormal(gNormalDepth.Load(int3(pixel, 0)).xy);
+    const float roughness = gMaterial.Load(int3(pixel, 0)).r;
+    const float3 worldPos = ReconstructWorldPosition(uv, depth);
+    const float3 viewDir = normalize(gCameraPos - worldPos);
+
+    float3 cascadedBounce = 0.0f.xxx;
+    float cascadeWeight = 0.0f;
+    [loop]
+    for (uint cascadeIndex = 0; cascadeIndex < max(gCascadeCount, 1); ++cascadeIndex)
+    {
+        const float cascadeScale = pow(max(gRayLengthScale, 1.0f), cascadeIndex);
+        const float intervalScale = pow(max(gIntervalLengthScale, 1.0f), cascadeIndex);
+        const float rayLength = gRayLengthBase * cascadeScale;
+        const float intervalFactor = max(intervalScale, 1.0f);
+        const float angularPhase = (float(gFrameIndex) * 0.37f) + float(cascadeIndex) * 1.618f;
+        const float2 diskDir = normalize(float2(cos(angularPhase), sin(angularPhase)) + 1e-4f.xx);
+        const float3 tangent = normalize(abs(normal.z) < 0.999f ? cross(normal, float3(0.0f, 0.0f, 1.0f)) : cross(normal, float3(0.0f, 1.0f, 0.0f)));
+        const float3 bitangent = normalize(cross(normal, tangent));
+        const float3 rayDir = normalize(normal + tangent * diskDir.x + bitangent * diskDir.y * intervalFactor * 0.5f + viewDir * 0.15f);
+        const float ndotl = saturate(dot(normal, rayDir));
+        const float roughnessAtten = lerp(1.0f, 0.35f, saturate(roughness));
+        const float3 cascadeColor = albedo * ndotl * roughnessAtten / (1.0f + rayLength * 0.2f);
+        cascadedBounce += cascadeColor;
+        cascadeWeight += 1.0f;
+    }
+
+    float3 gi = cascadeWeight > 0.0f ? cascadedBounce / cascadeWeight : 0.0f.xxx;
+    const float3 history = gHistory.Load(int3(pixel, 0)).rgb;
+    gi = lerp(gi, history, saturate(gHysteresis));
+
+    if (gDebugView == 1)
+    {
+        gTraceOut[pixel] = float4(gi, 1.0f);
+        return;
+    }
+
+    if (gDebugView == 2)
+    {
+        const float luma = dot(gi, float3(0.2126f, 0.7152f, 0.0722f));
+        gTraceOut[pixel] = float4(luma.xxx, 1.0f);
+        return;
+    }
+
+    gTraceOut[pixel] = float4(gi, 1.0f);
+}

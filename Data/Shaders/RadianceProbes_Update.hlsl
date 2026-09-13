@@ -148,7 +148,13 @@ float3 EvaluateProbePointLights(float3 hitPos, float3 hitNormal, float3 hitGeoNo
     [loop]
     for (int i = 0; i < min(g_NumPointLights, MAX_RADIANCE_PROBE_POINT_LIGHTS); ++i)
     {
-        const float3 toLight = g_PointLights[i].Position - hitPos;
+        // Resolve the emitter shape so a spot's cone and a rect's facing bound
+        // the probe's gather exactly as they bound the direct light.
+        const PteroResolvedLight shape = PteroResolveLightShape(g_PointLights[i], hitPos);
+        if (shape.ShapeMask <= 0.0f)
+            continue;
+
+        const float3 toLight = shape.Position - hitPos;
         const float distSq = dot(toLight, toLight);
         const float normDistSq = saturate(distSq * g_PointLights[i].InvRadiusSq);
         if (normDistSq >= 1.0f)
@@ -172,7 +178,7 @@ float3 EvaluateProbePointLights(float3 hitPos, float3 hitNormal, float3 hitGeoNo
             visibility = lerp(0.35f, 1.0f, visibility);
         }
 
-        const float falloff = (1.0f - normDistSq) * (1.0f - normDistSq);
+        const float falloff = (1.0f - normDistSq) * (1.0f - normDistSq) * shape.ShapeMask;
         pointLightSum += hitAlbedo * g_PointLights[i].Color * ndotL * falloff * visibility;
     }
 
@@ -290,8 +296,12 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
                 dot(o2w[0], float4(localPos2, 1.0f)),
                 dot(o2w[1], float4(localPos2, 1.0f)),
                 dot(o2w[2], float4(localPos2, 1.0f)));
-            float3 geoNormal = normalize(cross(worldPos1 - worldPos0, worldPos2 - worldPos0));
-            float3 worldNormal = normalize(mul(o2wRot, localNormal));
+            // Same degeneracy guard as the RTGI ray generation: a sliver
+            // triangle collapses this cross product and an unguarded normalize
+            // would hand NaN to the next bounce's ray origin and direction.
+            float3 geoNormal = SafeNormalizeOr(
+                cross(worldPos1 - worldPos0, worldPos2 - worldPos0), -rayDir);
+            float3 worldNormal = SafeNormalizeOr(mul(o2wRot, localNormal), geoNormal);
             if (dot(worldNormal, -rayDir) < 0.0f)
                 worldNormal = -worldNormal;
             float3 worldGeoNormal = dot(geoNormal, -rayDir) >= 0.0f ? geoNormal : -geoNormal;
@@ -310,9 +320,16 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
             float2 bounceXi = float2(ProbeRandFloat(rng), ProbeRandFloat(rng));
             float3 bounceDir = CosineSampleHemisphere(bounceXi, worldNormal);
-            rayOrigin = hp + worldNormal * 0.01f + bounceDir * 0.01f;
+
+            const float3 nextOrigin = hp + worldNormal * 0.01f + bounceDir * 0.01f;
+            if (!IsFinitePosition(nextOrigin) || !IsFinitePosition(bounceDir))
+                break;
+
+            rayOrigin = nextOrigin;
             rayDir = bounceDir;
         }
+
+        radiance = SanitizeRadiance(radiance);
 
         if (max(radiance.r, max(radiance.g, radiance.b)) <= 0.0f)
         {

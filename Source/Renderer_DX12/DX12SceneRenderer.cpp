@@ -1,8 +1,11 @@
 #include "pch.h"
 #include "DX12SceneRenderer.h"
+#include "../QtUi/QtUi.h"
 
 #include "..\System\include\System\AssetManager.h"
 
+#include <algorithm>
+#include <cmath>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -151,9 +154,9 @@ float DX12SceneRenderer::ComputeSceneBoundRadius() const
     return sceneRadius * 1.1f;
 }
 
-bool DX12SceneRenderer::IsSceneContentDirtyForTemporal() const
+bool DX12SceneRenderer::IsSceneContentDirtyForTemporal()
 {
-    return mEntityMeshRenderer.IsSceneContentDirty();
+    return mEntityMeshRenderer.ConsumeSceneContentChangedFlag();
 }
 
 void DX12SceneRenderer::ReportProgress(const wchar_t* message) const
@@ -258,6 +261,42 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+        // Initialize the terrain renderer.  Non-fatal if it fails -- the
+        // engine still renders the rest of the scene without terrain, and the
+        // Terrain panel surfaces the error string to the artist.
+        ReportProgress(L"Initializing terrain renderer...");
+        if (!mTerrainRenderer.Initialize(commandList))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Terrain renderer initialization failed.\n");
+            if (const char* terrainInitError = mTerrainRenderer.GetLastErrorMessage())
+                OutputDebugStringA(terrainInitError);
+        }
+
+        // Initialize the vegetation renderer.  Non-fatal if it fails -- areas
+        // simply produce nothing and the Vegetation panel shows the error.
+        // Terrain must already be initialized, since vegetation snaps onto it
+        // and polls its revision counter to know when to re-scatter.
+        ReportProgress(L"Initializing vegetation renderer...");
+        mVegetationRenderer.SetTerrainRenderer(&mTerrainRenderer);
+        mVegetationRenderer.SetWindSettings(&mWindSettings);
+        if (!mVegetationRenderer.Initialize(commandList))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Vegetation renderer initialization failed.\n");
+            if (const char* vegetationInitError = mVegetationRenderer.GetLastErrorMessage())
+                OutputDebugStringA(vegetationInitError);
+        }
+
+        // Initialize the water renderer.  Non-fatal if it fails -- the rest of
+        // the scene still renders; the water PSO is created lazily on the first
+        // frame a WaterComponent is present.
+        ReportProgress(L"Initializing water renderer...");
+        if (!mWaterRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Water renderer initialization failed.\n");
+            if (const char* waterInitError = mWaterRenderer.GetLastErrorMessage())
+                OutputDebugStringA(waterInitError);
+        }
+
         // Initialize the TAA renderer.  Non-fatal if it fails – TAA is a quality feature
         // and the engine still renders correctly without it.
         ReportProgress(L"Initializing temporal anti-aliasing...");
@@ -274,6 +313,37 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             // first resolve to use only the current frame instead of blending
             // against uninitialized history data.
             mTaaSettings.ResetHistory = true;
+        }
+
+        ReportProgress(L"Initializing subpixel morphological anti-aliasing...");
+        if (!mSmaaRenderer.Initialize(mSceneWidth, mSceneHeight, commandList))
+        {
+            OutputDebugStringA("DX12SceneRenderer: SMAA initialization failed - SMAA disabled.\n");
+            if (mSmaaRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mSmaaRenderer.GetLastErrorMessage());
+            mSmaaSettings.Enabled = false;
+        }
+
+        ReportProgress(L"Initializing image sharpening...");
+        if (!mImageSharpenRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: image sharpening initialization failed - image sharpening disabled.\n");
+            if (mImageSharpenRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mImageSharpenRenderer.GetLastErrorMessage());
+            mSharpenSettings.ImageSharpeningEnabled = false;
+        }
+
+        // Bring the RmlUi subsystem up with the rest of the renderer - shaders, pipeline
+        // and context - but deliberately load no document. What the UI shows is the game's
+        // decision, made from game code once a play session starts; the editor only
+        // provides the machinery. Non-fatal: a renderer without a UI is still a usable
+        // editor, and the failure reason is reported on the log.
+        ReportProgress(L"Initializing RmlUi user interface...");
+        if (!mRmlUiRenderer.Initialize(mSceneWidth, mSceneHeight, commandList))
+        {
+            OutputDebugStringA("DX12SceneRenderer: RmlUi initialization failed - the game UI is disabled.\n");
+            if (mRmlUiRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mRmlUiRenderer.GetLastErrorMessage());
         }
 
         // Initialize the AgX tonemapper.  Non-fatal if it fails.
@@ -337,7 +407,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         // Initialize the deferred lighting pass (G-Buffer RTs + fullscreen lighting resolve).
         // Non-fatal — the scene will be black if this fails but won't crash.
         ReportProgress(L"Initializing deferred lighting...");
-        if (!mDeferredLightingPass.Initialize(mSceneWidth, mSceneHeight, SceneDepthFormat))
+        if (!mDeferredLightingPass.Initialize(mSceneWidth, mSceneHeight, SceneDepthFormat, mMsaaSettings))
         {
             OutputDebugStringA("DX12SceneRenderer: Deferred lighting pass initialization failed.\n");
             if (mDeferredLightingPass.GetLastError())
@@ -352,12 +422,48 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mVolumetricFogRenderer.GetLastError());
         }
 
+        ReportProgress(L"Initializing volumetric clouds...");
+        if (!mVolumetricCloudRenderer.Initialize(mSceneWidth, mSceneHeight, SceneColorFormat))
+        {
+            OutputDebugStringA("DX12SceneRenderer: Volumetric cloud initialization failed.\n");
+            if (mVolumetricCloudRenderer.GetLastError())
+                OutputDebugStringA(mVolumetricCloudRenderer.GetLastError());
+        }
+
         ReportProgress(L"Initializing rain renderer...");
         if (!mRainRenderer.Initialize())
         {
             OutputDebugStringA("DX12SceneRenderer: Rain renderer initialization failed.\n");
             if (mRainRenderer.GetLastError())
                 OutputDebugStringA(mRainRenderer.GetLastError());
+        }
+
+        ReportProgress(L"Initializing particle systems...");
+        if (!mParticleRenderer.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: Particle renderer initialization failed.\n");
+            if (mParticleRenderer.GetLastError())
+                OutputDebugStringA(mParticleRenderer.GetLastError());
+        }
+
+        // Chromatic aberration. Non-fatal if it fails.
+        ReportProgress(L"Initializing chromatic aberration...");
+        if (!mChromaticAberrationRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: chromatic aberration initialization failed - effect disabled.\n");
+            if (mChromaticAberrationRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mChromaticAberrationRenderer.GetLastErrorMessage());
+            mChromaticAberrationSettings.Enabled = false;
+        }
+
+        // Screen-space reflections. Non-fatal if it fails.
+        ReportProgress(L"Initializing screen-space reflections...");
+        if (!mSsrRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: SSR initialization failed - reflections disabled.\n");
+            if (mSsrRenderer.GetLastErrorMessage())
+                OutputDebugStringA(mSsrRenderer.GetLastErrorMessage());
+            mSsrSettings.Enabled = false;
         }
 
         // Initialize the bloom renderer. Non-fatal if it fails.
@@ -403,11 +509,38 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         return;
     }
 
+    BeginTimingFrame();
+    const auto frameTimingStart = std::chrono::steady_clock::now();
+
+    // Advance the mesh renderer's constant-buffer ring before any of its passes
+    // record. The shadow, depth and G-Buffer passes must all land in the same
+    // frame's copy, and none of them may write over constants an earlier
+    // in-flight frame is still drawing from.
+    mEntityMeshRenderer.BeginFrame();
+
+    mMsaaSettings.Validate();
+    const UINT desiredMsaaSampleCount = mMsaaSettings.GetEffectiveSampleCount();
+    const UINT desiredMsaaQuality = mMsaaSettings.GetEffectiveQuality();
+    if (mSceneColorTarget
+        && (desiredMsaaSampleCount != mSceneTargetMsaaSampleCount
+            || desiredMsaaQuality != mSceneTargetMsaaQuality))
+    {
+        // MSAA resource changes must be applied before DX12Context_BeginFrame.
+        // Recording a frame while replacing depth/G-buffer sample layouts can
+        // leave the shared command list in an invalid state.
+        return;
+    }
+
     const uint32_t renderFrameIndex = mRenderFrameIndex++;
 
     // Drive the editor camera once per frame so the constant buffer reflects live input.
     UpdateCamera();
     UpdateSceneConstants();
+
+    mSharpenSettings.Validate();
+    const float textureMipLODBias = mSharpenSettings.GetEffectiveTextureMipLODBias();
+    mEntityMeshRenderer.SetTextureMipLODBias(textureMipLODBias);
+    mTerrainRenderer.SetTextureMipLODBias(textureMipLODBias);
 
     const bool rtaoDebugViewActive = (mRtaoSettings.DebugView > 0);
     if (rtaoDebugViewActive != mRtaoDebugViewWasActive)
@@ -423,18 +556,26 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     constexpr float kRefSkyLux = 20000.0f;
     constexpr float kRefSunLux = 100000.0f;
 
-    const float sunR = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorR : mHosekResult.SunR)
-                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
-    const float sunG = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorG : mHosekResult.SunG)
-                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
-    const float sunB = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorB : mHosekResult.SunB)
-                       * (mTimeOfDaySettings.SunIntensityLux / kRefSunLux);
-    const float skyR = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorR : mHosekResult.SkyR)
-                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
-    const float skyG = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorG : mHosekResult.SkyG)
-                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
-    const float skyB = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorB : mHosekResult.SkyB)
-                       * (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux);
+    // Disabling time of day is expressed as zero sun and sky intensity. Every consumer of
+    // these six values - deferred lighting, volumetric fog and clouds, and the forward
+    // water pass through mFrameSunColor - then contributes nothing, so the switch does not
+    // have to be threaded through each of those passes separately.
+    const float sunLuxScale = mTimeOfDaySettings.Enabled
+        ? (mTimeOfDaySettings.SunIntensityLux / kRefSunLux) : 0.0f;
+    const float skyLuxScale = mTimeOfDaySettings.Enabled
+        ? (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux) : 0.0f;
+
+    const float sunR = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorR : mHosekResult.SunR) * sunLuxScale;
+    const float sunG = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorG : mHosekResult.SunG) * sunLuxScale;
+    const float sunB = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorB : mHosekResult.SunB) * sunLuxScale;
+    const float skyR = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorR : mHosekResult.SkyR) * skyLuxScale;
+    const float skyG = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorG : mHosekResult.SkyG) * skyLuxScale;
+    const float skyB = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorB : mHosekResult.SkyB) * skyLuxScale;
+
+    // Cache lux-scaled sun/sky colour for the forward water pass (runs later in
+    // Dispatch, after these locals are gone).
+    mFrameSunColor = XMFLOAT3(sunR, sunG, sunB);
+    mFrameSkyColor = XMFLOAT3(skyR, skyG, skyB);
 
     // ---- Upload per-frame lighting data to the deferred lighting pass ----
     mDeferredLightingPass.SetSceneLighting(
@@ -459,16 +600,75 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         mDeferredLightingPass.SetCameraData(invVP, camPos);
     }
 
+    // -----------------------------------------------------------------------
+    // Particle systems.
+    //
+    // Synced before the light array is assembled, because an emissive system
+    // contributes an analytic proxy light that has to be in that array: one
+    // array feeds the deferred shading, the RTGI point-light set and the
+    // volumetric fog, so registering the fire's light here is what makes the
+    // flame light the room, bounce off its walls and glow through smoke without
+    // any of those passes knowing a particle system exists.
+    // -----------------------------------------------------------------------
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Particle system sync");
+        const float deltaSeconds = mFrameDeltaTimeMs * 0.001f;
+
+        mParticleSystems.clear();
+        if (mEntities != nullptr)
+        {
+            for (const Entity& entity : *mEntities)
+            {
+                if (!entity.HasParticleSystemComponent())
+                    continue;
+                if (mParticleSystems.size() >= static_cast<size_t>(kParticleMaxSystems))
+                    break;
+
+                ParticleSystemInstance instance;
+                instance.Settings = *entity.ParticleSystem;
+                instance.EmitterPosition = entity.Transform.Position;
+                instance.DebugName = entity.Name;
+
+                // Rotation and translation only. The global mesh scale that
+                // TransformComponent bakes in exists for imported geometry; a
+                // particle system's sizes are authored in metres and must not
+                // be divided by ten behind the artist's back.
+                instance.EmitterToWorld =
+                    PteroTransform::ComposeRotation(entity.Transform.Rotation) *
+                    XMMatrixTranslation(
+                        entity.Transform.Position.x,
+                        entity.Transform.Position.y,
+                        entity.Transform.Position.z);
+
+                mParticleSystems.push_back(std::move(instance));
+            }
+        }
+
+        if (mParticleRenderer.IsInitialized())
+        {
+            mParticleRenderer.SetSystems(mParticleSystems, deltaSeconds);
+        }
+    }
+
     // Gather point lights from the entity list and upload to the deferred lighting pass.
     VolumetricFogRenderer::FogPointLight fogPointLights[VolumetricFogRenderer::kMaxPointLights]{};
     uint32_t numFogPointLights = 0;
     if (mEntities != nullptr)
     {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Light gather");
+
         // Normalise against 800 lm (standard 60W-equivalent LED) so default lights = 1.0 brightness.
         constexpr float kRefLumens = 800.0f;
 
         DeferredLightingPass::PointLightGpu gpuLights[DeferredLightingPass::kMaxPointLights]{};
         int numLights = 0;
+
+        // Per-light weight applied to indirect lighting only. Entity lights set
+        // it from their own GI settings, particle proxies from theirs; 1 leaves
+        // a light's bounce matching its direct contribution.
+        float lightGiScale[DeferredLightingPass::kMaxPointLights];
+        for (int i = 0; i < DeferredLightingPass::kMaxPointLights; ++i)
+            lightGiScale[i] = 1.0f;
 
         for (const Entity& entity : *mEntities)
         {
@@ -476,12 +676,29 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 continue;
 
             const PointLightComponent& pl = *entity.PointLight;
-            const float brightness = pl.IntensityLumens / kRefLumens;
+
+            // The light style multiplier is folded into the colour here, once,
+            // rather than being threaded through each consumer: the deferred
+            // shading, the RTGI bounce and the fog scattering all read the same
+            // array, so a flickering torch flickers in all three together.
+            const float styleMultiplier = LightStyles::Evaluate(
+                pl.Style,
+                mSceneTimeSeconds,
+                pl.StyleSpeed,
+                pl.StyleAmplitude,
+                pl.StylePhaseOffset,
+                pl.CustomStylePattern);
+
+            const float brightness = (pl.IntensityLumens / kRefLumens) * styleMultiplier;
             const DirectX::XMFLOAT3 lightColor = pl.UseTemperature
                 ? KelvinToLinearRgb(pl.TemperatureKelvin)
                 : DirectX::XMFLOAT3(pl.ColorR, pl.ColorG, pl.ColorB);
 
-            DeferredLightingPass::PointLightGpu& gpu = gpuLights[numLights++];
+            const int entityLightIndex = numLights++;
+            lightGiScale[entityLightIndex] =
+                pl.AffectGlobalIllumination ? (std::max)(pl.GiContribution, 0.0f) : 0.0f;
+
+            DeferredLightingPass::PointLightGpu& gpu = gpuLights[entityLightIndex];
             gpu.Position    = entity.Transform.Position;
             gpu.Radius      = pl.Radius > 0.0f ? pl.Radius : 0.001f;
             gpu.Color       = { lightColor.x * brightness, lightColor.y * brightness, lightColor.z * brightness };
@@ -490,6 +707,29 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             gpu.SourceRadius = pl.SourceRadius;
             gpu.CastShadows = pl.CastShadows ? 1.0f : 0.0f;
             gpu._Pad0 = 0.0f;
+
+            // Spot and rect lights take their orientation from the entity's
+            // rotation: they emit along local -Z and the rectangle lies in the
+            // local XY plane, so an unrotated light points straight down.
+            {
+                const XMMATRIX lightRotation = PteroTransform::ComposeRotation(entity.Transform.Rotation);
+                XMStoreFloat3(
+                    &gpu.Direction,
+                    XMVector3Normalize(XMVector3TransformNormal(g_XMNegIdentityR2, lightRotation)));
+                XMStoreFloat3(
+                    &gpu.RectRight,
+                    XMVector3Normalize(XMVector3TransformNormal(g_XMIdentityR0, lightRotation)));
+            }
+
+            gpu.LightType = static_cast<float>(static_cast<int>(pl.Type));
+
+            // Half-angle cosines: the component stores full cone angles, which
+            // is what an artist measures, but the shader compares a dot product.
+            gpu.SpotCosInner = std::cos(XMConvertToRadians(pl.SpotInnerConeDegrees * 0.5f));
+            gpu.SpotCosOuter = std::cos(XMConvertToRadians(pl.SpotOuterConeDegrees * 0.5f));
+            gpu.RectHalfWidth = pl.RectWidth * 0.5f;
+            gpu.RectHalfHeight = pl.RectHeight * 0.5f;
+            gpu.RectTwoSided = pl.RectTwoSided ? 1.0f : 0.0f;
 
             if (pl.AffectVolumetricFog && numFogPointLights < VolumetricFogRenderer::kMaxPointLights)
             {
@@ -502,6 +742,64 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 fogLight.Color[1] = gpu.Color.y;
                 fogLight.Color[2] = gpu.Color.z;
                 fogLight.InvRadiusSq = gpu.InvRadiusSq;
+                fogLight.Direction[0] = gpu.Direction.x;
+                fogLight.Direction[1] = gpu.Direction.y;
+                fogLight.Direction[2] = gpu.Direction.z;
+                fogLight.LightType = gpu.LightType;
+                fogLight.SpotCosInner = gpu.SpotCosInner;
+                fogLight.SpotCosOuter = gpu.SpotCosOuter;
+            }
+        }
+
+        // Append the particle systems' emissive proxy lights. They are ordinary
+        // point lights from here on, so nothing downstream needs to special-case
+        // them - but each carries its own GI weight, applied to the RTGI copy
+        // below so a fire can be toned down in the bounce without dimming the
+        // pool of light it throws on the floor.
+        for (const ParticleProxyLight& proxy : mParticleRenderer.GetProxyLights())
+        {
+            if (numLights >= DeferredLightingPass::kMaxPointLights)
+                break;
+
+            const int lightIndex = numLights++;
+            DeferredLightingPass::PointLightGpu& gpu = gpuLights[lightIndex];
+            gpu.Position = proxy.Position;
+            gpu.Radius = proxy.Radius;
+            gpu.Color = proxy.Color;
+            gpu.InvRadiusSq = proxy.InvRadiusSq;
+            // A flame is a volume, not a point: inverse-square from its centre
+            // is far too sharp up close, and it has a real source radius that
+            // softens the shadows it casts.
+            gpu.FalloffExponent = 2.0f;
+            gpu.SourceRadius = 0.15f;
+            gpu.CastShadows = proxy.CastShadows ? 1.0f : 0.0f;
+            gpu._Pad0 = 0.0f;
+
+            // A flame radiates in every direction, so the proxy is always a
+            // point light and the shape fields go unread. Set them anyway so a
+            // reused array slot cannot leave a stale cone behind.
+            gpu.Direction = { 0.0f, 0.0f, -1.0f };
+            gpu.RectRight = { 1.0f, 0.0f, 0.0f };
+            gpu.LightType = static_cast<float>(static_cast<int>(LightType::Point));
+            gpu.SpotCosInner = 1.0f;
+            gpu.SpotCosOuter = -1.0f;
+            gpu.RectHalfWidth = 0.0f;
+            gpu.RectHalfHeight = 0.0f;
+            gpu.RectTwoSided = 0.0f;
+
+            lightGiScale[lightIndex] = proxy.GiContribution;
+
+            if (proxy.AffectVolumetricFog && numFogPointLights < VolumetricFogRenderer::kMaxPointLights)
+            {
+                VolumetricFogRenderer::FogPointLight& fogLight = fogPointLights[numFogPointLights++];
+                fogLight.Position[0] = proxy.Position.x;
+                fogLight.Position[1] = proxy.Position.y;
+                fogLight.Position[2] = proxy.Position.z;
+                fogLight.Radius = proxy.Radius;
+                fogLight.Color[0] = proxy.Color.x;
+                fogLight.Color[1] = proxy.Color.y;
+                fogLight.Color[2] = proxy.Color.z;
+                fogLight.InvRadiusSq = proxy.InvRadiusSq;
             }
         }
 
@@ -510,6 +808,13 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         // Cache for the RT GI pass (which runs later in the same frame).
         mNumCachedPointLights = numLights;
         memcpy(mCachedPointLights, gpuLights, numLights * sizeof(DeferredLightingPass::PointLightGpu));
+
+        // Keep the indirect-only weights rather than applying them here: the
+        // point shadow pass writes shadow indices into mCachedPointLights and
+        // re-uploads that same array to the deferred pass, so scaling it in
+        // place would dim the direct lighting too. BuildGiPointLights() applies
+        // them to a separate copy once the shadow indices are in.
+        memcpy(mPointLightGiScale, lightGiScale, sizeof(lightGiScale));
 
         mRainSettings = RainSettings{};
         mRainSettings.Enabled = false;
@@ -523,7 +828,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             const RainComponent& rc = *entity.Rain;
             foundRainComponent = true;
             mRainSettings.Enabled           = rc.Enabled;
-            mRainSettings.WindVector        = { rc.WindX, rc.WindY, rc.WindZ };
+            // Wind now comes from the scene-wide WindSettings rather than the
+            // rain component's own vector, so rain and vegetation cannot end up
+            // blowing in different directions.  The component's WindX/Y/Z are
+            // still serialized for older levels but no longer drive anything.
+            mRainSettings.WindVector        = mWindSettings.GetVelocityVector();
             mRainSettings.Gravity           = rc.Gravity;
             mRainSettings.BoundingBoxExtents = { rc.BoxExtentX, rc.BoxExtentY, rc.BoxExtentZ };
             mRainSettings.Intensity          = rc.Intensity;
@@ -551,11 +860,34 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     mEntityMeshRenderer.SetRainSurfaceState(mRainSettings.Enabled, mRainSettings.WetnessIntensity);
 
     // -----------------------------------------------------------------------
+    // PASS 0 – Vegetation update, interaction map and GPU culling.
+    //
+    // All three must run before the shadow pass, because the shadow draws
+    // consume the same compacted visible-index list and indirect arguments the
+    // cull pass produces.  Culling uses the non-jittered view-projection so the
+    // set of visible instances does not flicker with the TAA jitter.
+    // -----------------------------------------------------------------------
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Vegetation update + cull");
+        const float deltaSeconds = mFrameDeltaTimeMs * 0.001f;
+
+        mVegetationRenderer.Update(commandList, mCamera.GetPosition(), deltaSeconds);
+        mVegetationRenderer.DispatchInteraction(commandList, mCamera.GetPosition(), deltaSeconds);
+        mVegetationRenderer.DispatchCull(
+            commandList,
+            XMLoadFloat4x4(&mNonJitteredViewProjection),
+            mCamera.GetPosition());
+    }
+
+    // -----------------------------------------------------------------------
     // PASS 1 – Shadow pass (unchanged from forward renderer)
     // Render scene depth from the sun's perspective before touching the scene RT.
     // -----------------------------------------------------------------------
-    if (mShadowMapRenderer.IsInitialized())
+    // A black sun casts no visible shadow, so with time of day off this whole pass is
+    // cost for nothing. Point lights keep their own shadow pass further down.
+    if (mShadowMapRenderer.IsInitialized() && mTimeOfDaySettings.Enabled)
     {
+        PTERO_SCOPED_PASS_TIMER("Shadows", "Sun shadow map");
         const XMFLOAT3 sunDir(mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ);
         const float kSceneBoundRadius = ComputeSceneBoundRadius();
         mShadowMapRenderer.BeginShadowPass(commandList, sunDir, kSceneBoundRadius);
@@ -565,6 +897,14 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             mShadowMapRenderer.GetRootSignature(),
             mShadowMapRenderer.GetPipelineState(),
             mShadowMapRenderer.GetLightViewProjection());
+
+        // Vegetation casts through its own alpha-tested depth pipeline rather
+        // than the shared one, because a leaf card has to clip to its texture
+        // or it would cast the shadow of a solid rectangle.
+        mVegetationRenderer.RenderShadowDepth(
+            commandList,
+            mShadowMapRenderer.GetLightViewProjection(),
+            kShadowDepthFormat);
 
         mShadowMapRenderer.EndShadowPass(commandList);
 
@@ -624,6 +964,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             ++pointLightIndex;
         }
 
+        PTERO_SCOPED_PASS_TIMER("Shadows", "Point shadow cubemaps");
         mPointShadowMapRenderer.BeginFrame(shadowLights);
         for (int lightIndex = 0; lightIndex < mPointShadowMapRenderer.GetActiveLightCount(); ++lightIndex)
         {
@@ -656,6 +997,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         mDeferredLightingPass.SetPointShadowSrv({}, 0, 0.0f, 0.0f);
     }
 
+    // The shadow indices are final now, so derive the indirect-lighting copy the
+    // GI passes use. Doing it here rather than at collection time is what keeps
+    // a particle system's GI Contribution out of the direct lighting.
+    BuildGiPointLights();
+
     // Bind the shared shader-visible SRV heap for all subsequent passes.
     ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
     commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
@@ -668,19 +1014,26 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // lighting passes.
     // -----------------------------------------------------------------------
 
-    // Ensure the G-Buffer is the correct resolution.
-    mDeferredLightingPass.EnsureSize(mSceneWidth, mSceneHeight);
+    // Ensure the G-Buffer agrees with the current MSAA configuration.
+    mDeferredLightingPass.EnsureSize(mSceneWidth, mSceneHeight, mMsaaSettings);
 
-    // Transition the scene depth to DEPTH_WRITE if it's still in SRV state
-    // from the previous frame's lighting resolve.
-    if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+    ID3D12Resource* geometryDepthResource = mMsaaSettings.Enabled
+        ? mMsaaSceneDepthTarget.Get()
+        : mSceneDepthTarget.Get();
+    D3D12_RESOURCE_STATES& geometryDepthState = mMsaaSettings.Enabled
+        ? mMsaaDepthBufferState
+        : mDepthBufferState;
+
+    // Transition the writable geometry depth target to DEPTH_WRITE if it was
+    // left in a shader-readable state by the previous frame.
+    if (geometryDepthResource && geometryDepthState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
     {
         const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
-            mSceneDepthTarget.Get(),
-            mDepthBufferState,
+            geometryDepthResource,
+            geometryDepthState,
             D3D12_RESOURCE_STATE_DEPTH_WRITE);
         commandList->ResourceBarrier(1, &toDepthWrite);
-        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        geometryDepthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     }
 
     // Clear scene depth and begin the G-Buffer geometry pass.
@@ -689,20 +1042,61 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
     // G-Buffer formats: albedo (RGBA8), normal (RGBA16F), material (RGBA8).
     constexpr DXGI_FORMAT kAlbedoFmt   = DXGI_FORMAT_R8G8B8A8_UNORM;
-    constexpr DXGI_FORMAT kNormalFmt   = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    // Must match kGBufferFormats[1] in DeferredLightingPass.cpp, which explains
+    // why the normal target is 32-bit: it also carries device depth, and fp16
+    // has nowhere near the precision that needs.
+    constexpr DXGI_FORMAT kNormalFmt   = DXGI_FORMAT_R32G32B32A32_FLOAT;
     constexpr DXGI_FORMAT kMaterialFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    mEntityMeshRenderer.Render(
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Entity meshes (G-Buffer)");
+        mEntityMeshRenderer.Render(
+            commandList,
+            XMLoadFloat4x4(&mJitteredViewProjection),
+            mCamera.GetPosition(),
+            kAlbedoFmt,
+            kNormalFmt,
+            kMaterialFmt,
+            SceneDepthFormat,
+            mDeferredLightingPass.GetMsaaSampleCount());
+    }
+
+    // Terrain patches write into the same G-Buffer MRTs, sharing the depth
+    // buffer with the entity meshes.  Render() internally syncs from the
+    // entity list and rebuilds any dirty terrain mesh before drawing, so it
+    // must run inside the geometry pass while the MRTs are still bound.
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Terrain");
+        mTerrainRenderer.Render(
+            commandList,
+            XMLoadFloat4x4(&mJitteredViewProjection),
+            kAlbedoFmt,
+            kNormalFmt,
+            kMaterialFmt,
+            SceneDepthFormat,
+            mDeferredLightingPass.GetMsaaSampleCount());
+    }
+
+    // Vegetation draws last in the geometry pass.  It is alpha-tested and
+    // two-sided, so letting the opaque terrain and meshes lay down depth first
+    // lets early-Z reject most of the foliage pixels that would be hidden
+    // anyway -- which matters, because foliage is the heaviest overdraw in the
+    // scene.
+    mVegetationRenderer.Render(
         commandList,
         XMLoadFloat4x4(&mJitteredViewProjection),
         mCamera.GetPosition(),
         kAlbedoFmt,
         kNormalFmt,
         kMaterialFmt,
-        SceneDepthFormat);
+        SceneDepthFormat,
+        mDeferredLightingPass.GetMsaaSampleCount());
 
     // Close the G-Buffer pass: transition G-Buffer RTs to SRV state.
     mDeferredLightingPass.EndGeometryPass(commandList);
+    mDeferredLightingPass.ResolveGBuffer(commandList);
+    ResolveMsaaDepth(commandList);
+    mMsaaResolveTimeMs = mDeferredLightingPass.GetLastResolveTimeMs();
 
     // Reset TAA history on scene content changes.
     const bool sceneContentChanged = IsSceneContentDirtyForTemporal();
@@ -728,7 +1122,12 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     const bool rtaoWillRun = mRtaoSettings.Enabled && mEntities != nullptr;
     const bool gtaoWillRun = mGtaoSettings.Enabled;
     const bool volumetricFogWillRun = mVolumetricFogSettings.Enabled && mVolumetricFogRenderer.IsInitialized();
-    if (rtgiWillRun || rtaoWillRun || gtaoWillRun || volumetricFogWillRun || probesEnabled || probesDebugEnabled)
+    // Clouds are part of the sky, so they go away with it rather than being left to
+    // composite an unlit black layer over the scene.
+    const bool volumetricCloudsWillRun = mVolumetricCloudSettings.Enabled
+        && mVolumetricCloudRenderer.IsInitialized()
+        && mTimeOfDaySettings.Enabled;
+    if (rtgiWillRun || rtaoWillRun || gtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || probesEnabled || probesDebugEnabled)
     {
         D3D12_RESOURCE_BARRIER toNonPixel[3];
         for (UINT i = 0; i < 3; ++i)
@@ -740,11 +1139,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         }
         commandList->ResourceBarrier(3, toNonPixel);
 
-        if (mDepthBufferState == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+        if (mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
         {
             auto toDepthSrv = CD3DX12_RESOURCE_BARRIER::Transition(
                 mSceneDepthTarget.Get(),
-                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                mDepthBufferState,
                 D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
             commandList->ResourceBarrier(1, &toDepthSrv);
             mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
@@ -778,7 +1177,6 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 mVolumetricFogRenderer.Dispatch(
                     cmdList4.Get(),
                     mDepthSrvGpuHandle,
-                    mRtgiRenderer.GetTlasSrv(),
                     mVolumetricFogSettings,
                     invVP.m[0],
                     currJitteredVP.m[0],
@@ -840,6 +1238,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         && (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || probesEnabled);
     if (sharedTlasNeeded)
     {
+        PTERO_SCOPED_PASS_TIMER("GI", "TLAS build");
         if (!mRtgiRenderer.IsInitialized() && !mRtgiRenderer.HasInitFailed())
         {
             mRtgiRenderer.Initialize(mSceneWidth, mSceneHeight);
@@ -852,13 +1251,30 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> sharedRtCmdList;
             if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&sharedRtCmdList))))
             {
-                mRtgiRenderer.BuildTlas(sharedRtCmdList.Get(), *mEntities);
+                // Only layers explicitly marked ContributeToRayTracing enter the
+                // acceleration structure, and only near the camera.  Tracing a
+                // whole field of alpha-tested grass would cost far more than the
+                // bounce light it contributes; distant and unmarked vegetation
+                // is lit by the radiance probe grid instead.
+                std::vector<VegetationRenderer::RayTracingBatch> vegetationBatches;
+                if (mVegetationRenderer.HasRayTracedLayers())
+                {
+                    constexpr float kVegetationRayTracingRadius = 60.0f;
+                    mVegetationRenderer.CollectRayTracingBatches(
+                        mCamera.GetPosition(), kVegetationRayTracingRadius, vegetationBatches);
+                }
+
+                mRtgiRenderer.BuildTlas(
+                    sharedRtCmdList.Get(),
+                    *mEntities,
+                    vegetationBatches.empty() ? nullptr : &vegetationBatches);
             }
         }
     }
 
     if (rtgiWillRun && mRtgiRenderer.IsInitialized() && mEntities != nullptr)
     {
+        PTERO_SCOPED_PASS_TIMER("GI", "RTGI");
         mRtgiRenderer.EnsureSize(mSceneWidth, mSceneHeight);
 
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> cmdList4;
@@ -901,7 +1317,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
                 sunR, sunG, sunB,
                 skyR, skyG, skyB,
-                mCachedPointLights,
+                mGiPointLights,
                 static_cast<uint32_t>(mNumCachedPointLights),
                 worldToView.m[0],
                 viewToClip.m[0],
@@ -941,6 +1357,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     if (probesEnabled)
     {
+        PTERO_SCOPED_PASS_TIMER("GI", "Radiance probes");
         if (!mProbeRenderer.IsInitialized() && !mProbeRenderer.HasInitFailed())
         {
             if (!mProbeRenderer.Initialize(mProbeSettings))
@@ -992,7 +1409,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                         mProbeSettings,
                         mRtgiSettings.ColorLeakIntensity,
                         mRtgiSettings.MaxBounces,
-                        mCachedPointLights,
+                        mGiPointLights,
                         static_cast<uint32_t>(mNumCachedPointLights),
                         &camPos.x,
                         mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
@@ -1025,6 +1442,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     if (rtaoWillRun && mEntities != nullptr)
     {
+        PTERO_SCOPED_PASS_TIMER("AO", "RTAO");
         // Lazy-initialize once; stop retrying after a permanent failure.
         if (!mRtaoRenderer.IsInitialized() && !mRtaoRenderer.HasInitFailed())
         {
@@ -1119,6 +1537,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     if (gtaoWillRun)
     {
+        PTERO_SCOPED_PASS_TIMER("AO", "XeGTAO");
         if (!mGtaoRenderer.IsInitialized() && !mGtaoRenderer.HasInitFailed())
         {
             if (!mGtaoRenderer.Initialize(mSceneWidth, mSceneHeight))
@@ -1135,18 +1554,22 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             mGtaoRenderer.EnsureSize(mSceneWidth, mSceneHeight);
 
             // Depth must be in ALL_SHADER_RESOURCE for compute (may already be there from RTAO/RTGI).
-            if (mDepthBufferState == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+            if (mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
             {
                 auto b = CD3DX12_RESOURCE_BARRIER::Transition(
                     mSceneDepthTarget.Get(),
-                    D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                    mDepthBufferState,
                     D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
                 commandList->ResourceBarrier(1, &b);
                 mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
             }
 
-            // Projection matrix (row-major, non-jittered) for GTAOUpdateConstants.
-            const float* projMat    = mNonJitteredProjectionMatrix.m[0];
+            // XeGTAO reconstructs view-space positions from the depth buffer, and that
+            // buffer was rasterised with the TAA jitter applied - so it has to be given the
+            // jittered projection, not the clean one. Handing it the non-jittered matrix is
+            // what forced the jitter to be switched off whenever AO was on, which in turn
+            // left TAA with nothing to accumulate. The view matrix carries no jitter.
+            const float* projMat    = mJitteredProjection.m[0];
             const float* worldToView = mNonJitteredViewMatrix.m[0];
 
             mGtaoRenderer.Dispatch(
@@ -1166,7 +1589,59 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // Consume the scene-content changed flag once at the end of temporal pass setup.
     mEntityMeshRenderer.ConsumeSceneContentChangedFlag();
 
-    dispatchVolumetricFog();
+    {
+        PTERO_SCOPED_PASS_TIMER("Volumetrics", "Fog inject");
+        dispatchVolumetricFog();
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 2f – Volumetric clouds
+    // Raymarches the cloud shell at reduced resolution against the scene depth
+    // buffer and reconstructs a full resolution result.  Runs here while depth
+    // is still readable from compute; the composite happens after the deferred
+    // lighting resolve, once the scene colour target holds the lit scene.
+    // -----------------------------------------------------------------------
+    if (volumetricCloudsWillRun)
+    {
+        PTERO_SCOPED_PASS_TIMER("Volumetrics", "Clouds");
+        mVolumetricCloudRenderer.EnsureSize(mSceneWidth, mSceneHeight, mVolumetricCloudSettings);
+
+        const XMMATRIX cloudViewProjection = XMLoadFloat4x4(&mNonJitteredViewProjection);
+        XMFLOAT4X4 cloudInvViewProjection;
+        XMStoreFloat4x4(
+            &cloudInvViewProjection,
+            XMMatrixTranspose(XMMatrixInverse(nullptr, cloudViewProjection)));
+
+        XMFLOAT4X4 cloudPrevViewProjection;
+        XMStoreFloat4x4(
+            &cloudPrevViewProjection,
+            XMMatrixTranspose(XMLoadFloat4x4(
+                mHasPreviousCloudViewProjection ? &mPreviousViewProjectionForClouds : &mNonJitteredViewProjection)));
+
+        const XMFLOAT3 cloudCameraPosition = mCamera.GetPosition();
+        const float cloudSunDirection[3] = { mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ };
+        const float cloudSunColor[3] = { sunR, sunG, sunB };
+        const float cloudSkyColor[3] = { skyR, skyG, skyB };
+
+        mVolumetricCloudRenderer.Dispatch(
+            commandList,
+            mDepthSrvGpuHandle,
+            mVolumetricCloudSettings,
+            cloudInvViewProjection.m[0],
+            cloudPrevViewProjection.m[0],
+            &cloudCameraPosition.x,
+            cloudSunDirection,
+            cloudSunColor,
+            cloudSkyColor,
+            mFrameDeltaTimeMs * 0.001f,
+            !mHasPreviousCloudViewProjection || mTaaSettings.ResetHistory);
+
+        if (mVolumetricCloudRenderer.GetLastError())
+        {
+            OutputDebugStringA(mVolumetricCloudRenderer.GetLastError());
+            OutputDebugStringA("\n");
+        }
+    }
 
     // Dispatch the rain particle physics compute shader.
     if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
@@ -1198,11 +1673,31 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                     XMLoadFloat3(&camUp),
                     XMLoadFloat3(&camForward))));
         const float deltaTimeSec = mFrameDeltaTimeMs * 0.001f;
+        PTERO_SCOPED_PASS_TIMER("Scene", "Rain (simulate)");
         mRainRenderer.Dispatch(commandList, mRainSettings, camPos, camRight, camForward, camUp, deltaTimeSec);
     }
 
+    // Simulate the authored particle systems. Runs alongside the rain, before
+    // the G-Buffer goes back to being a pixel-shader resource, so the compute
+    // work overlaps the rest of the frame's shading rather than stalling the
+    // transparent pass that draws it.
+    if (mParticleRenderer.IsInitialized() && !mParticleSystems.empty())
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Particles (simulate)");
+        mParticleRenderer.Dispatch(
+            commandList,
+            mWindSettings.GetVelocityVector(),
+            mFrameDeltaTimeMs * 0.001f);
+
+        if (mParticleRenderer.GetLastError())
+        {
+            OutputDebugStringA(mParticleRenderer.GetLastError());
+            OutputDebugStringA("\n");
+        }
+    }
+
     // Restore G-Buffer and depth back to PIXEL_SHADER_RESOURCE for the deferred lighting pass.
-    if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || gtaoWillRun || probesEnabled || probesDebugEnabled)
+    if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || gtaoWillRun || probesEnabled || probesDebugEnabled)
     {
         D3D12_RESOURCE_BARRIER toPixel[3];
         for (UINT i = 0; i < 3; ++i)
@@ -1216,12 +1711,15 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
         if (mDepthBufferState == D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
         {
-            auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+            const D3D12_RESOURCE_STATES restoredDepthState = mMsaaSettings.Enabled
+                ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                : D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            auto restoreDepth = CD3DX12_RESOURCE_BARRIER::Transition(
                 mSceneDepthTarget.Get(),
                 D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            commandList->ResourceBarrier(1, &toDepthWrite);
-            mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                restoredDepthState);
+            commandList->ResourceBarrier(1, &restoreDepth);
+            mDepthBufferState = restoredDepthState;
         }
     }
 
@@ -1246,8 +1744,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     commandList->RSSetViewports(1, &vpFull);
     commandList->RSSetScissorRects(1, &srFull);
 
-    if (mSkyRenderer.IsInitialized())
+    // With time of day off there is no sky to draw; the scene target's black clear stands
+    // in as the background.
+    if (mSkyRenderer.IsInitialized() && mTimeOfDaySettings.Enabled)
     {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Sky");
         mSkyRenderer.Render(
             commandList,
             mHosekResult,
@@ -1263,10 +1764,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // Transition scene depth to SRV state, then run the fullscreen lighting
     // quad that samples the G-Buffer + depth + shadow map.
     // -----------------------------------------------------------------------
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
     {
         const auto toDepthSrv = CD3DX12_RESOURCE_BARRIER::Transition(
             mSceneDepthTarget.Get(),
-            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            mDepthBufferState,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         commandList->ResourceBarrier(1, &toDepthSrv);
         mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -1277,6 +1779,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, shaderVisibleHeaps);
 
+        PTERO_SCOPED_PASS_TIMER("Lighting", "Deferred resolve");
         mDeferredLightingPass.ResolveLight(
             commandList,
             mSceneRtvHandle,
@@ -1286,14 +1789,57 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             mSceneHeight);
     }
 
+    // -----------------------------------------------------------------------
+    // PASS 4a – Volumetric cloud composite
+    // Blends the resolved cloud layer over the lit scene with
+    // (ONE, SRC_ALPHA), i.e. scene * transmittance + in-scattered luminance.
+    // The raymarch already clipped against opaque depth, so nearby geometry
+    // correctly occludes the layer without a depth test here.
+    // -----------------------------------------------------------------------
+    if (volumetricCloudsWillRun && mVolumetricCloudRenderer.DidDispatchThisFrame())
+    {
+        mVolumetricCloudRenderer.Composite(commandList, mSceneRtvHandle, mSceneWidth, mSceneHeight);
+    }
+
     // Build a remapped depth preview texture for the editor debug window.
     RenderDepthDebugPreview(commandList);
+
+    // -----------------------------------------------------------------------
+    // PASS 4a – Refractive water
+    // Forward pass over the lit opaque scene.  Reads a copy of the scene colour
+    // (refraction) and the opaque depth (occlusion + absorption thickness), and
+    // composites water with wave animation, Fresnel sky/sun reflection and foam
+    // straight into the scene-colour RT.  Runs here while the scene colour is a
+    // render target and the depth is still readable as an SRV.
+    // -----------------------------------------------------------------------
+    {
+        mWaterTimeSeconds += mFrameDeltaTimeMs * 0.001f;
+        const XMFLOAT3 waterSunDir(mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ);
+        PTERO_SCOPED_PASS_TIMER("Scene", "Water");
+        mWaterRenderer.Render(
+            commandList,
+            mSceneRtvHandle,
+            mSceneColorTarget.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            mDepthSrvGpuHandle,
+            XMLoadFloat4x4(&mJitteredViewProjection),
+            mInvViewProjection,
+            mCamera.GetPosition(),
+            waterSunDir,
+            mFrameSunColor,
+            mFrameSkyColor,
+            mWaterTimeSeconds,
+            mSceneWidth,
+            mSceneHeight,
+            SceneColorFormat);
+    }
 
     // -----------------------------------------------------------------------
     // PASS 4b – Radiance Probe Debug Overlay
     // Draws coloured spheres at each probe position if debug visualisation is on.
     // -----------------------------------------------------------------------
-    if (mProbeSettings.Enabled && mProbeSettings.DebugShowProbes
+    if (!mMsaaSettings.Enabled
+        && mProbeSettings.Enabled && mProbeSettings.DebugShowProbes
         && mProbeRenderer.IsInitialized())
     {
         const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -1334,7 +1880,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // Transition depth back to DEPTH_WRITE and bind it so the grid and gizmos
     // correctly depth-test against the geometry already rendered.
     // -----------------------------------------------------------------------
-    if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
+    const bool depthTestedOverlaysAvailable = !mMsaaSettings.Enabled;
+    if (depthTestedOverlaysAvailable && mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE)
     {
         const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
             mSceneDepthTarget.Get(),
@@ -1344,41 +1891,45 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     }
 
-    commandList->SetGraphicsRootSignature(mPipeline.GetRootSignature());
-    commandList->SetPipelineState(mPipeline.GetPipelineState());
-    // Bind the scene colour RTV AND the depth buffer so depth-testing works.
-    commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
-    commandList->RSSetViewports(1, &vpFull);
-    commandList->RSSetScissorRects(1, &srFull);
-
-    if (mGridEnabled)
+    if (depthTestedOverlaysAvailable)
     {
-        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        commandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
-        commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
-        commandList->DrawInstanced(mVertexCount, 1, 0, 0);
-    }
+        commandList->SetGraphicsRootSignature(mPipeline.GetRootSignature());
+        commandList->SetPipelineState(mPipeline.GetPipelineState());
+        // Bind the scene colour RTV AND the depth buffer so depth-testing works.
+        commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneDsvHandle);
+        commandList->RSSetViewports(1, &vpFull);
+        commandList->RSSetScissorRects(1, &srFull);
 
-    // -----------------------------------------------------------------------
-    // PASS 6 – Point light gizmos (editor wireframe spheres)
-    // -----------------------------------------------------------------------
-    if (mPointLightRenderer.IsInitialized() && mEntities != nullptr)
-    {
-        mPointLightRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
-    }
+        if (mGridEnabled)
+        {
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+            commandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+            commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+            commandList->DrawInstanced(mVertexCount, 1, 0, 0);
+        }
 
-    // -----------------------------------------------------------------------
-    // PASS 7 – Decal gizmos (wireframe box + facing arrow)
-    // -----------------------------------------------------------------------
-    if (mDecalRenderer.IsInitialized() && mEntities != nullptr)
-    {
-        mDecalRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+        // -----------------------------------------------------------------------
+        // PASS 6 – Point light gizmos (editor wireframe spheres)
+        // -----------------------------------------------------------------------
+        if (mPointLightRenderer.IsInitialized() && mEntities != nullptr)
+        {
+            mPointLightRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+        }
+
+        // -----------------------------------------------------------------------
+        // PASS 7 – Decal gizmos (wireframe box + facing arrow)
+        // -----------------------------------------------------------------------
+        if (mDecalRenderer.IsInitialized() && mEntities != nullptr)
+        {
+            mDecalRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+            mDecalRenderer.RenderVegetationAreas(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
+        }
     }
 
     // -----------------------------------------------------------------------
     // Rain streak draw pass – additive transparent pass over the full scene.
     // -----------------------------------------------------------------------
-    if (mRainRenderer.IsInitialized() && mRainSettings.Enabled)
+    if (depthTestedOverlaysAvailable && mRainRenderer.IsInitialized() && mRainSettings.Enabled)
     {
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -1425,6 +1976,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             }
         }
 
+        PTERO_SCOPED_PASS_TIMER("Scene", "Rain (draw)");
         mRainRenderer.Draw(
             commandList,
             mRainSettings,
@@ -1438,13 +1990,202 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // -----------------------------------------------------------------------
-    // Transition scene colour to SRV for ImGui display (and TAA input).
+    // Particle sprite draw - additive/alpha transparent pass over the lit scene.
+    //
+    // Two depth strategies, because MSAA changes what can be bound:
+    //
+    //   No MSAA - depth moves to a read-only state and the pass binds the
+    //     read-only DSV, so sprites depth-test in hardware while the pixel
+    //     shader samples that same depth for the soft fade. Without the
+    //     read-only view the two uses would conflict, and without the fade a
+    //     flame cuts a hard line where it meets the floor.
+    //
+    //   MSAA - the depth-stencil is the multisampled target while the scene
+    //     colour target stays single-sample, so no pipeline state can be bound
+    //     against both, and the resolved depth everything else reads has no
+    //     depth-stencil view (D3D12 forbids ALLOW_DEPTH_STENCIL together with
+    //     the ALLOW_UNORDERED_ACCESS the resolve needs). So the pass binds no
+    //     depth at all and the shader tests the resolved depth itself.
+    // -----------------------------------------------------------------------
+    if (mParticleRenderer.IsInitialized() && !mParticleSystems.empty())
+    {
+        const bool manualDepthTest = mMsaaSettings.Enabled;
+
+        if (manualDepthTest)
+        {
+            // Only the resolved depth is read, and as an ordinary texture.
+            if (mDepthBufferState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE &&
+                mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+            {
+                const auto toPixelShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+                    mSceneDepthTarget.Get(),
+                    mDepthBufferState,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                commandList->ResourceBarrier(1, &toPixelShaderResource);
+                mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            }
+        }
+        else
+        {
+            constexpr D3D12_RESOURCE_STATES kDepthReadState =
+                D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+            if (mDepthBufferState != kDepthReadState)
+            {
+                const auto toDepthRead = CD3DX12_RESOURCE_BARRIER::Transition(
+                    mSceneDepthTarget.Get(),
+                    mDepthBufferState,
+                    kDepthReadState);
+                commandList->ResourceBarrier(1, &toDepthRead);
+                mDepthBufferState = kDepthReadState;
+            }
+        }
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+        if (manualDepthTest)
+        {
+            commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, nullptr);
+        }
+        else
+        {
+            commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, &mSceneReadOnlyDsvHandle);
+        }
+        commandList->RSSetViewports(1, &vpFull);
+        commandList->RSSetScissorRects(1, &srFull);
+
+        ParticleDrawContext particleContext;
+        XMStoreFloat4x4(
+            &particleContext.ViewProjection,
+            XMMatrixTranspose(XMLoadFloat4x4(&mJitteredViewProjection)));
+
+        particleContext.CameraPosition = mCamera.GetPosition();
+        particleContext.CameraUp = mCamera.GetUpVector();
+        particleContext.CameraForward = mCamera.GetForwardVector();
+        XMStoreFloat3(
+            &particleContext.CameraRight,
+            XMVector3Normalize(
+                XMVector3Cross(
+                    XMLoadFloat3(&particleContext.CameraUp),
+                    XMLoadFloat3(&particleContext.CameraForward))));
+
+        particleContext.NearPlane = mCamera.GetNearPlane();
+        particleContext.FarPlane = mCamera.GetFarPlane();
+        particleContext.ScreenWidth = static_cast<float>(mSceneWidth);
+        particleContext.ScreenHeight = static_cast<float>(mSceneHeight);
+        particleContext.SceneDepthSrv = mDepthSrvGpuHandle;
+        particleContext.ManualDepthTest = manualDepthTest;
+
+        particleContext.SunDirection = { mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ };
+        particleContext.SunColor = mFrameSunColor;
+        particleContext.SkyColor = mFrameSkyColor;
+
+        // Scene lights that may illuminate the sprites. This is what lets smoke
+        // rising off a fire glow orange from underneath instead of staying a
+        // flat grey plume - the fire's own proxy light is in this array too.
+        const int sceneLightCount =
+            (std::min)(mNumCachedPointLights, ParticleDrawContext::kMaxSceneLights);
+        for (int i = 0; i < sceneLightCount; ++i)
+        {
+            particleContext.SceneLights[i].Position = mCachedPointLights[i].Position;
+            particleContext.SceneLights[i].Radius = mCachedPointLights[i].Radius;
+            particleContext.SceneLights[i].Color = mCachedPointLights[i].Color;
+            particleContext.SceneLights[i].InvRadiusSq = mCachedPointLights[i].InvRadiusSq;
+        }
+        particleContext.NumSceneLights = sceneLightCount;
+
+        PTERO_SCOPED_PASS_TIMER("Scene", "Particles (draw)");
+        mParticleRenderer.Draw(commandList, particleContext);
+    }
+
+    // -----------------------------------------------------------------------
+    // Transition scene colour to SRV for Ui display (and TAA input).
     // -----------------------------------------------------------------------
     const auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
         mSceneColorTarget.Get(),
         D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     commandList->ResourceBarrier(1, &toShaderResource);
+
+    // -----------------------------------------------------------------------
+    // PASS 6.5 – Screen-space reflections (optional)
+    // Runs last of the shading passes so what it reflects is the finished image -
+    // lighting, sky, clouds and water included - and before anti-aliasing so the
+    // reflections get temporally resolved along with everything else. The pass
+    // composites in place, leaving the scene colour target the current image as before.
+    // -----------------------------------------------------------------------
+    if (mSsrSettings.Enabled && mSsrRenderer.IsInitialized() && mDeferredLightingPass.IsInitialized())
+    {
+        PTERO_SCOPED_PASS_TIMER("Post", "SSR");
+        // The lighting resolve leaves the G-Buffer and depth as pixel-shader resources.
+        // This pass reads them from compute, which needs a state covering non-pixel
+        // stages, so move them across and put them back afterwards.
+        D3D12_RESOURCE_BARRIER ssrToCompute[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            ssrToCompute[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, ssrToCompute);
+
+        const D3D12_RESOURCE_STATES depthStateBeforeSsr = mDepthBufferState;
+        if (mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+        {
+            const auto toAllShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                mDepthBufferState,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &toAllShaderResource);
+            mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        }
+
+        // Same jittered view-projection the frame was rendered with, so the reprojection
+        // of marched points lands on the pixels that actually hold that geometry.
+        const XMMATRIX ssrViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
+        XMFLOAT4X4 ssrViewProj;
+        XMFLOAT4X4 ssrInvViewProj;
+        XMStoreFloat4x4(&ssrViewProj, XMMatrixTranspose(ssrViewProjection));
+        XMStoreFloat4x4(&ssrInvViewProj, XMMatrixTranspose(XMMatrixInverse(nullptr, ssrViewProjection)));
+
+        const GBufferSrvs& gbufferSrvs = mDeferredLightingPass.GetSrvs();
+        mSsrRenderer.Dispatch(
+            commandList,
+            mSceneColorTarget.Get(),
+            mSceneSrvGpuHandle,
+            mDepthSrvGpuHandle,
+            gbufferSrvs.Normal,
+            gbufferSrvs.Material,
+            gbufferSrvs.Albedo,
+            mSsrSettings,
+            ssrViewProj,
+            ssrInvViewProj,
+            mCamera.GetPosition());
+
+        D3D12_RESOURCE_BARRIER ssrToPixel[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            ssrToPixel[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, ssrToPixel);
+
+        if (mDepthBufferState != depthStateBeforeSsr)
+        {
+            const auto restoreDepth = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(),
+                mDepthBufferState,
+                depthStateBeforeSsr);
+            commandList->ResourceBarrier(1, &restoreDepth);
+            mDepthBufferState = depthStateBeforeSsr;
+        }
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
 
     // -----------------------------------------------------------------------
     // PASS 7 – TAA resolve (optional)
@@ -1466,6 +2207,23 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         commandList->SetDescriptorHeaps(1, sharedHeaps);
     }
 
+    if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+    {
+        ID3D12Resource*             smaaInputResource = mSceneColorTarget.Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE smaaInputSrv      = mSceneSrvCpuHandle;
+
+        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            smaaInputResource = mTaaRenderer.GetOutputResource();
+            smaaInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+        }
+
+        mSmaaRenderer.Apply(commandList, smaaInputResource, smaaInputSrv, mSmaaSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
     // -----------------------------------------------------------------------
     // PASS 7.5 – Motion vectors + DLSS SR (optional)
     // Runs after TAA so the temporal resolve can remain available when DLSS is off.
@@ -1482,6 +2240,26 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 mNonJitteredViewProjection,
                 mPreviousViewProjectionForRtgi,
                 mDlssSettings.ResetHistory);
+
+            // Vegetation contributes its own motion vectors, because its
+            // movement comes from the wind bend rather than from an entity
+            // transform.  Skipping this would leave DLSS reprojecting foliage
+            // by camera motion alone, smearing the canopy whenever wind blows.
+            if (mVegetationRenderer.GetTotalInstanceCount() > 0
+                && mMotionVectorRenderer.BeginExternalPass(commandList))
+            {
+                mVegetationRenderer.RenderMotionVectors(
+                    commandList,
+                    XMLoadFloat4x4(&mNonJitteredViewProjection),
+                    XMLoadFloat4x4(&mPreviousViewProjectionForRtgi),
+                    mCamera.GetPosition(),
+                    MotionVectorRenderer::OutputFormat,
+                    // The motion vector target is bound without a depth buffer,
+                    // matching MotionVectorRenderer's own pass.
+                    DXGI_FORMAT_UNKNOWN);
+
+                mMotionVectorRenderer.EndExternalPass(commandList);
+            }
         }
 
         DlssRenderer::CameraFrameData cameraData{};
@@ -1496,7 +2274,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         cameraData.JitterY = mCurrentCameraJitter[1];
         cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
         cameraData.NearPlane = 0.1f;
-        cameraData.FarPlane = 100.0f;
+        cameraData.FarPlane = mViewDistanceMeters;
         cameraData.FovY = XM_PIDIV4;
         cameraData.AspectRatio = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(mSceneHeight, 1u));
 
@@ -1570,23 +2348,71 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // -----------------------------------------------------------------------
+    // PASS 7.75 - Image sharpening (optional)
+    // Runs after the selected AA/upscaling pass and before bloom/tonemapping.
+    // -----------------------------------------------------------------------
+    const bool dlssOutputAvailable = mDlssSettings.Enabled
+        && mDlssRenderer.IsInitialized()
+        && !mDlssRenderer.IsEvaluationBypassed();
+    const bool imageSharpenWillApply = !rtaoDebugViewActive
+        && mSharpenSettings.ImageSharpeningEnabled
+        && mImageSharpenRenderer.IsInitialized();
+
+    if (imageSharpenWillApply)
+    {
+        ID3D12Resource* sharpenInputResource = mSceneColorTarget.Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE sharpenInputSrv = mSceneSrvCpuHandle;
+
+        if (dlssOutputAvailable)
+        {
+            sharpenInputResource = mDlssRenderer.GetOutputResource();
+            sharpenInputSrv = mDlssRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        {
+            sharpenInputResource = mSmaaRenderer.GetOutputResource();
+            sharpenInputSrv = mSmaaRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            sharpenInputResource = mTaaRenderer.GetOutputResource();
+            sharpenInputSrv = mTaaRenderer.GetOutputCpuSrv();
+        }
+
+        mImageSharpenRenderer.Apply(commandList, sharpenInputResource, sharpenInputSrv, mSharpenSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
     // PASS 8 – Bloom (optional, physical mip-chain)
-    // Runs after TAA so the bloom operates on the temporally-stable image.
+    // Runs after AA/upscaling/sharpening so bloom operates on the current image.
     // -----------------------------------------------------------------------
     if (!rtaoDebugViewActive && mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
     {
         ID3D12Resource*             bloomInputResource = mSceneColorTarget.Get();
         D3D12_CPU_DESCRIPTOR_HANDLE bloomInputSrv      = mSceneSrvCpuHandle;
 
-        if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        if (imageSharpenWillApply)
         {
-            bloomInputResource = mTaaRenderer.GetOutputResource();
-            bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+            bloomInputResource = mImageSharpenRenderer.GetOutputResource();
+            bloomInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
         }
-        if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        else if (dlssOutputAvailable)
         {
             bloomInputResource = mDlssRenderer.GetOutputResource();
             bloomInputSrv = mDlssRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        {
+            bloomInputResource = mSmaaRenderer.GetOutputResource();
+            bloomInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            bloomInputResource = mTaaRenderer.GetOutputResource();
+            bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
         mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
@@ -1610,12 +2436,22 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             agxInputResource = mBloomRenderer.GetOutputResource();
             agxInputSrv      = mBloomRenderer.GetOutputCpuSrv();
         }
-        else if (mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed())
+        else if (imageSharpenWillApply)
+        {
+            agxInputResource = mImageSharpenRenderer.GetOutputResource();
+            agxInputSrv = mImageSharpenRenderer.GetOutputCpuSrv();
+        }
+        else if (dlssOutputAvailable)
         {
             agxInputResource = mDlssRenderer.GetOutputResource();
             agxInputSrv = mDlssRenderer.GetOutputCpuSrv();
         }
-        else if (mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        {
+            agxInputResource = mSmaaRenderer.GetOutputResource();
+            agxInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             agxInputResource = mTaaRenderer.GetOutputResource();
             agxInputSrv      = mTaaRenderer.GetOutputCpuSrv();
@@ -1623,6 +2459,80 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
         mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings);
 
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 9.5 – Chromatic aberration (optional)
+    // Last in the chain, on the tonemapped image: it is a lens artefact, so it belongs
+    // after everything that models light reaching the lens. Splitting channels in HDR
+    // instead would let a highlight's fringe survive tone mapping as a saturated band
+    // rather than the subtle edge colouring a real lens gives.
+    // -----------------------------------------------------------------------
+    if (!rtaoDebugViewActive
+        && mChromaticAberrationSettings.Enabled
+        && mChromaticAberrationRenderer.IsInitialized())
+    {
+        // Same precedence the tonemapper uses, with AgX added on top since it now runs
+        // before this stage.
+        ID3D12Resource*             caInputResource = mSceneColorTarget.Get();
+        D3D12_CPU_DESCRIPTOR_HANDLE caInputSrv      = mSceneSrvCpuHandle;
+
+        if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
+        {
+            caInputResource = mAgxTonemapper.GetOutputResource();
+            caInputSrv      = mAgxTonemapper.GetOutputCpuSrv();
+        }
+        else if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+        {
+            caInputResource = mBloomRenderer.GetOutputResource();
+            caInputSrv      = mBloomRenderer.GetOutputCpuSrv();
+        }
+        else if (imageSharpenWillApply)
+        {
+            caInputResource = mImageSharpenRenderer.GetOutputResource();
+            caInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
+        }
+        else if (dlssOutputAvailable)
+        {
+            caInputResource = mDlssRenderer.GetOutputResource();
+            caInputSrv      = mDlssRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        {
+            caInputResource = mSmaaRenderer.GetOutputResource();
+            caInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
+        }
+        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        {
+            caInputResource = mTaaRenderer.GetOutputResource();
+            caInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+        }
+
+        mChromaticAberrationRenderer.Apply(
+            commandList, caInputResource, caInputSrv, mChromaticAberrationSettings);
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 10 - RmlUi
+    // The UI draws into its own target rather than the scene image, so it runs
+    // after the post chain and leaves every earlier pass untouched. The editor
+    // composites the result over the viewport; a standalone game would blit it
+    // onto the swap chain instead.
+    //
+    // Only while a play session is running: the UI belongs to the game, so it has no
+    // business painting over the viewport while the editor is what is being used.
+    // -----------------------------------------------------------------------
+    if (IsGameUiActive() || IsUiPreviewActive())
+    {
+        mRmlUiRenderer.Render(commandList);
+
+        // The UI pass rebinds the render target, viewport and scissor; put the shared
+        // descriptor heap back so anything recorded afterwards sees the state it expects.
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
     }
@@ -1645,6 +2555,12 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     mPreviousViewProjectionForRtgi = mNonJitteredViewProjection;
+    mPreviousViewProjectionForClouds = mNonJitteredViewProjection;
+    mHasPreviousCloudViewProjection = true;
+
+    EndTimingFrame(
+        std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - frameTimingStart).count());
 }
 
 void DX12SceneRenderer::Shutdown()
@@ -1657,10 +2573,19 @@ void DX12SceneRenderer::Shutdown()
     mRtgiRenderer.Shutdown();
     mProbeRenderer.Shutdown();
     mVolumetricFogRenderer.Shutdown();
+    mVolumetricCloudRenderer.Shutdown();
     mRainRenderer.Shutdown();
+    mParticleRenderer.Shutdown();
+    mWaterRenderer.Shutdown();
+    mVegetationRenderer.Shutdown();
     mDlssRenderer.Shutdown();
+    mChromaticAberrationRenderer.Shutdown();
+    mSsrRenderer.Shutdown();
     mTaaRenderer.Shutdown();
+    mSmaaRenderer.Shutdown();
+    mImageSharpenRenderer.Shutdown();
     mBloomRenderer.Shutdown();
+    mRmlUiRenderer.Shutdown();
     mAgxTonemapper.Shutdown();
     mSkyRenderer.Shutdown();
     mShadowMapRenderer.Shutdown();
@@ -1675,8 +2600,17 @@ void DX12SceneRenderer::Shutdown()
         mDepthDebugConstantBuffer->Unmap(0, nullptr);
         mMappedDepthDebugConstants = nullptr;
     }
+    if (mResolveMsaaDepthConstantBuffer && mMappedResolveMsaaDepthConstants != nullptr)
+    {
+        mResolveMsaaDepthConstantBuffer->Unmap(0, nullptr);
+        mMappedResolveMsaaDepthConstants = nullptr;
+    }
 
     mConstantBuffer.Reset();
+    mResolveMsaaDepthConstantBuffer.Reset();
+    mResolveMsaaDepthPipelineState.Reset();
+    mResolveMsaaDepthRootSignature.Reset();
+    mResolveMsaaDepthHeap.Reset();
     mVertexBuffer = {};
     mIndexBuffer = {};
     ReleaseSceneTargetResources();
@@ -1688,7 +2622,7 @@ void DX12SceneRenderer::Shutdown()
     mSceneSrvGpuHandle = {};
     mDepthDebugSrvCpuHandle = {};
     mDepthDebugSrvGpuHandle = {};
-    mSceneTextureId = ImTextureID_Invalid;
+    mSceneTextureId = UiTextureID_Invalid;
     mEntities = nullptr;
     mMeshLocalRadiusCache.clear();
     mIsInitialized = false;
@@ -1748,9 +2682,19 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
             mBloomRenderer.Initialize(outputWidth, outputHeight);
         }
 
+        if (mImageSharpenRenderer.IsInitialized())
+        {
+            mImageSharpenRenderer.Initialize(outputWidth, outputHeight);
+        }
+
         if (mAgxTonemapper.IsInitialized())
         {
             mAgxTonemapper.Initialize(outputWidth, outputHeight);
+        }
+
+        if (mChromaticAberrationRenderer.IsInitialized())
+        {
+            mChromaticAberrationRenderer.Initialize(outputWidth, outputHeight);
         }
 
         mDlssSettings.ResetHistory = true;
@@ -1787,6 +2731,59 @@ bool DX12SceneRenderer::ResizeSceneTarget(UINT width, UINT height)
     return ResizeSceneTargetsTo(width, height);
 }
 
+bool DX12SceneRenderer::ApplyPendingMsaaSettings()
+{
+    if (!mIsInitialized || !mSceneColorTarget)
+    {
+        return true;
+    }
+
+    mMsaaSettings.Validate();
+    const UINT desiredMsaaSampleCount = mMsaaSettings.GetEffectiveSampleCount();
+    const UINT desiredMsaaQuality = mMsaaSettings.GetEffectiveQuality();
+    if (desiredMsaaSampleCount == mSceneTargetMsaaSampleCount
+        && desiredMsaaQuality == mSceneTargetMsaaQuality)
+    {
+        return true;
+    }
+
+    try
+    {
+        ReleaseSceneTargetResources(true);
+        if (!CreateSceneTarget())
+        {
+            if (mLastErrorMessage.empty())
+                mLastErrorMessage = "Failed to apply the pending MSAA setting change.";
+            return false;
+        }
+
+        if (!mDeferredLightingPass.EnsureSize(mSceneWidth, mSceneHeight, mMsaaSettings))
+        {
+            mLastErrorMessage = mDeferredLightingPass.GetLastError()
+                ? std::string("Failed to resize G-buffer for the pending MSAA setting change: ") + mDeferredLightingPass.GetLastError()
+                : "Failed to resize G-buffer for the pending MSAA setting change.";
+            return false;
+        }
+
+        mTaaSettings.ResetHistory = true;
+        mDlssSettings.ResetHistory = true;
+        mMsaaResolveTimeMs = 0.0f;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        mLastErrorMessage = std::string("Failed to apply the pending MSAA setting change: ") + exception.what();
+        OutputDebugStringA((mLastErrorMessage + "\n").c_str());
+        return false;
+    }
+    catch (...)
+    {
+        mLastErrorMessage = "Failed to apply the pending MSAA setting change: unknown exception.";
+        OutputDebugStringA((mLastErrorMessage + "\n").c_str());
+        return false;
+    }
+}
+
 void DX12SceneRenderer::ClearCustomSceneResolution()
 {
     mHasCustomSceneResolution = false;
@@ -1797,7 +2794,11 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
     ReleaseSceneTargetResources();
     mSceneWidth = width;
     mSceneHeight = height;
-    mCamera.SetLens(XM_PIDIV4, static_cast<float>(mSceneWidth) / static_cast<float>(mSceneHeight), 0.1f, 100.0f);
+    mCamera.SetLens(
+        XM_PIDIV4,
+        static_cast<float>(mSceneWidth) / static_cast<float>(mSceneHeight),
+        0.1f,
+        mViewDistanceMeters);
 
     if (!CreateSceneTarget())
     {
@@ -1809,6 +2810,18 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
     {
         mTaaRenderer.Initialize(mSceneWidth, mSceneHeight);
         mTaaSettings.ResetHistory = true;
+    }
+
+    if (mSmaaRenderer.IsInitialized())
+    {
+        mSmaaRenderer.Initialize(mSceneWidth, mSceneHeight);
+    }
+
+    // SSR works on the render-resolution scene colour, not the post-process size, since
+    // it composites back into that target before any upscale.
+    if (mSsrRenderer.IsInitialized())
+    {
+        mSsrRenderer.Initialize(mSceneWidth, mSceneHeight);
     }
 
     if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
@@ -1831,6 +2844,24 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
         mAgxTonemapper.Initialize(postProcessWidth, postProcessHeight);
     }
 
+    // Runs on the tonemapper's output, so it follows the post-process size too.
+    if (mChromaticAberrationRenderer.IsInitialized())
+    {
+        mChromaticAberrationRenderer.Initialize(postProcessWidth, postProcessHeight);
+    }
+
+    if (mImageSharpenRenderer.IsInitialized())
+    {
+        mImageSharpenRenderer.Initialize(postProcessWidth, postProcessHeight);
+    }
+
+    // The UI is authored in the viewport's own pixels, so it follows the post-process
+    // size rather than the (possibly upscaled-from) render size.
+    if (mRmlUiRenderer.IsInitialized())
+    {
+        mRmlUiRenderer.Resize(postProcessWidth, postProcessHeight);
+    }
+
     if (mBloomRenderer.IsInitialized())
     {
         mBloomRenderer.Initialize(postProcessWidth, postProcessHeight);
@@ -1841,26 +2872,81 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
         mVolumetricFogRenderer.Initialize(mSceneWidth, mSceneHeight);
     }
 
+    if (mVolumetricCloudRenderer.IsInitialized())
+    {
+        mVolumetricCloudRenderer.EnsureSize(mSceneWidth, mSceneHeight, mVolumetricCloudSettings);
+        mVolumetricCloudRenderer.ResetHistory();
+    }
+
     mDlssSettings.ResetHistory = true;
 
     return true;
 }
 
-void DX12SceneRenderer::ReleaseSceneTargetResources()
+bool DX12SceneRenderer::RecreateSceneTargetsForMsaaChange()
 {
-    // Flush the GPU before releasing resources to prevent the device from
-    // referencing freed memory, which causes the level to disappear for a frame.
-    DX12Context_WaitForGPU();
+    try
+    {
+        ReleaseSceneTargetResources(false);
+        if (!CreateSceneTarget())
+        {
+            if (mLastErrorMessage.empty())
+                mLastErrorMessage = "Failed to recreate scene targets for the MSAA setting change.";
+            return false;
+        }
+
+        mTaaSettings.ResetHistory = true;
+        mDlssSettings.ResetHistory = true;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        mLastErrorMessage = std::string("Failed to recreate scene targets for the MSAA setting change: ") + exception.what();
+        OutputDebugStringA((mLastErrorMessage + "\n").c_str());
+        return false;
+    }
+    catch (...)
+    {
+        mLastErrorMessage = "Failed to recreate scene targets for the MSAA setting change: unknown exception.";
+        OutputDebugStringA((mLastErrorMessage + "\n").c_str());
+        return false;
+    }
+}
+
+void DX12SceneRenderer::ReleaseSceneTargetResources(bool waitForGpu)
+{
+    if (waitForGpu)
+    {
+        // Flush the GPU before releasing resources to prevent the device from
+        // referencing freed memory, which causes the level to disappear for a frame.
+        DX12Context_WaitForGPU();
+        mRetiredSceneResources.clear();
+        mRetiredSceneDescriptorHeaps.clear();
+    }
+    else
+    {
+        if (mSceneColorTarget) mRetiredSceneResources.push_back(mSceneColorTarget);
+        if (mSceneDepthTarget) mRetiredSceneResources.push_back(mSceneDepthTarget);
+        if (mMsaaSceneDepthTarget) mRetiredSceneResources.push_back(mMsaaSceneDepthTarget);
+        if (mDepthDebugTarget) mRetiredSceneResources.push_back(mDepthDebugTarget);
+        if (mSceneRtvHeap) mRetiredSceneDescriptorHeaps.push_back(mSceneRtvHeap);
+        if (mSceneDsvHeap) mRetiredSceneDescriptorHeaps.push_back(mSceneDsvHeap);
+        if (mDepthDebugRtvHeap) mRetiredSceneDescriptorHeaps.push_back(mDepthDebugRtvHeap);
+    }
 
     mSceneColorTarget.Reset();
     mSceneDepthTarget.Reset();
+    mMsaaSceneDepthTarget.Reset();
     mDepthDebugTarget.Reset();
     mSceneRtvHeap.Reset();
     mSceneDsvHeap.Reset();
     mDepthDebugRtvHeap.Reset();
     mSceneRtvHandle = {};
     mSceneDsvHandle = {};
+    mSceneReadOnlyDsvHandle = {};
     mDepthDebugRtvHandle = {};
+    mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    mMsaaDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
 }
 
 bool DX12SceneRenderer::CreatePipeline()
@@ -1998,13 +3084,15 @@ bool DX12SceneRenderer::CreateSceneTarget()
         return false;
     }
 
+    mMsaaSettings.Validate();
+
     if ((mSceneSrvCpuHandle.ptr == 0 || mSceneSrvGpuHandle.ptr == 0) &&
         !DX12Context_AllocateSrvDescriptor(&mSceneSrvCpuHandle, &mSceneSrvGpuHandle))
     {
         return false;
     }
 
-    mSceneTextureId = static_cast<ImTextureID>(mSceneSrvGpuHandle.ptr);
+    mSceneTextureId = static_cast<UiTextureID>(mSceneSrvGpuHandle.ptr);
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
     rtvHeapDesc.NumDescriptors = 1;
@@ -2012,11 +3100,17 @@ bool DX12SceneRenderer::CreateSceneTarget()
     DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mSceneRtvHeap)));
     mSceneRtvHandle = mSceneRtvHeap->GetCPUDescriptorHandleForHeapStart();
 
+    // Two DSVs over the same depth resource: the writable one the geometry pass
+    // uses, and a read-only one for transparent passes that need to sample depth
+    // while still depth-testing against it.
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
-    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.NumDescriptors = 2;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mSceneDsvHeap)));
     mSceneDsvHandle = mSceneDsvHeap->GetCPUDescriptorHandleForHeapStart();
+    mSceneReadOnlyDsvHandle = mSceneDsvHandle;
+    mSceneReadOnlyDsvHandle.ptr +=
+        device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
     D3D12_RESOURCE_DESC colorTargetDesc{};
     colorTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -2062,6 +3156,17 @@ bool DX12SceneRenderer::CreateSceneTarget()
     srvDesc.Texture2D.MipLevels = 1;
     device->CreateShaderResourceView(mSceneColorTarget.Get(), &srvDesc, mSceneSrvCpuHandle);
 
+    D3D12_CLEAR_VALUE depthClearValue{};
+    depthClearValue.Format = SceneDepthFormat;
+    depthClearValue.DepthStencil.Depth = 1.0f;
+    depthClearValue.DepthStencil.Stencil = 0;
+
+    const UINT msaaSampleCount = mMsaaSettings.GetEffectiveSampleCount();
+    const UINT msaaQuality = mMsaaSettings.GetEffectiveQuality();
+    const bool msaaEnabled = mMsaaSettings.Enabled && msaaSampleCount > 1;
+    mSceneTargetMsaaSampleCount = msaaSampleCount;
+    mSceneTargetMsaaQuality = msaaQuality;
+
     D3D12_RESOURCE_DESC depthTargetDesc{};
     depthTargetDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     depthTargetDesc.Alignment = 0;
@@ -2069,34 +3174,74 @@ bool DX12SceneRenderer::CreateSceneTarget()
     depthTargetDesc.Height = mSceneHeight;
     depthTargetDesc.DepthOrArraySize = 1;
     depthTargetDesc.MipLevels = 1;
-    // Use TYPELESS so we can create both a D32_FLOAT DSV and an R32_FLOAT SRV
-    // for the deferred lighting pass to reconstruct world-space positions.
-    depthTargetDesc.Format = SceneDepthResourceFormat;
     depthTargetDesc.SampleDesc.Count = 1;
     depthTargetDesc.SampleDesc.Quality = 0;
     depthTargetDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    depthTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    D3D12_CLEAR_VALUE depthClearValue{};
-    depthClearValue.Format = SceneDepthFormat;
-    depthClearValue.DepthStencil.Depth = 1.0f;
-    depthClearValue.DepthStencil.Stencil = 0;
+    if (msaaEnabled)
+    {
+        depthTargetDesc.Format = SceneDepthSrvFormat;
+        depthTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    DX12_THROW_IF_FAILED(device->CreateCommittedResource(
-        &defaultHeapProperties,
-        D3D12_HEAP_FLAG_NONE,
-        &depthTargetDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        &depthClearValue,
-        IID_PPV_ARGS(&mSceneDepthTarget)));
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &defaultHeapProperties,
+            D3D12_HEAP_FLAG_NONE,
+            &depthTargetDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            nullptr,
+            IID_PPV_ARGS(&mSceneDepthTarget)));
+        mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
-    // Track the current state so Render() issues the correct barriers.
-    mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        D3D12_RESOURCE_DESC msaaDepthDesc = depthTargetDesc;
+        msaaDepthDesc.Format = SceneDepthResourceFormat;
+        msaaDepthDesc.SampleDesc.Count = msaaSampleCount;
+        msaaDepthDesc.SampleDesc.Quality = msaaQuality;
+        msaaDepthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-    dsvDesc.Format = SceneDepthFormat;
-    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-    device->CreateDepthStencilView(mSceneDepthTarget.Get(), &dsvDesc, mSceneDsvHandle);
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &defaultHeapProperties,
+            D3D12_HEAP_FLAG_NONE,
+            &msaaDepthDesc,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            &depthClearValue,
+            IID_PPV_ARGS(&mMsaaSceneDepthTarget)));
+        mMsaaDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = SceneDepthFormat;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS;
+        device->CreateDepthStencilView(mMsaaSceneDepthTarget.Get(), &dsvDesc, mSceneDsvHandle);
+
+        dsvDesc.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+        device->CreateDepthStencilView(mMsaaSceneDepthTarget.Get(), &dsvDesc, mSceneReadOnlyDsvHandle);
+    }
+    else
+    {
+        // Use TYPELESS so we can create both a D32_FLOAT DSV and an R32_FLOAT SRV
+        // for the deferred lighting pass to reconstruct world-space positions.
+        depthTargetDesc.Format = SceneDepthResourceFormat;
+        depthTargetDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &defaultHeapProperties,
+            D3D12_HEAP_FLAG_NONE,
+            &depthTargetDesc,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            &depthClearValue,
+            IID_PPV_ARGS(&mSceneDepthTarget)));
+
+        // Track the current state so Render() issues the correct barriers.
+        mDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        mMsaaDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = SceneDepthFormat;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device->CreateDepthStencilView(mSceneDepthTarget.Get(), &dsvDesc, mSceneDsvHandle);
+
+        dsvDesc.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+        device->CreateDepthStencilView(mSceneDepthTarget.Get(), &dsvDesc, mSceneReadOnlyDsvHandle);
+    }
 
     // Create an R32_FLOAT SRV for the depth buffer so the deferred lighting pass can
     // sample it to reconstruct world-space positions.  Allocate from the shared
@@ -2147,6 +3292,12 @@ bool DX12SceneRenderer::CreateSceneTarget()
             depthDebugSrvDesc.Texture2D.MipLevels     = 1;
             device->CreateShaderResourceView(mSceneDepthTarget.Get(), &depthDebugSrvDesc, mDepthDebugSrvCpuHandle);
         }
+    }
+
+    if (msaaEnabled && !CreateResolveMsaaDepthResources())
+    {
+        mLastErrorMessage = "Failed to create the MSAA depth resolve resources.";
+        return false;
     }
 
     D3D12_RESOURCE_DESC depthDebugTargetDesc{};
@@ -2321,6 +3472,8 @@ bool DX12SceneRenderer::CreateDepthDebugResources()
     // visible surfaces, so a large scale factor just saturates the preview to
     // white. Keep the scale at 1 so the debug view stays dark/gray instead.
     mMappedDepthDebugConstants->DepthScale = 1.0f;
+    mMappedDepthDebugConstants->NearPlane  = mCamera.GetNearPlane();
+    mMappedDepthDebugConstants->FarPlane   = mCamera.GetFarPlane();
     return true;
 }
 
@@ -2359,6 +3512,205 @@ void DX12SceneRenderer::RenderDepthDebugPreview(ID3D12GraphicsCommandList* comma
     commandList->ResourceBarrier(1, &toDepthDebugSrv);
 }
 
+bool DX12SceneRenderer::CreateResolveMsaaDepthResources()
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr || mMsaaSceneDepthTarget == nullptr || mSceneDepthTarget == nullptr)
+    {
+        return false;
+    }
+
+    if (mResolveMsaaDepthPipelineState == nullptr)
+    {
+        const ShaderCompileRequest csRequest
+        {
+            L"Shaders\\ResolveMsaaDepth.hlsl",
+            L"CSMain",
+            L"cs_5_0",
+            ShaderStage::Compute
+        };
+        if (!mResolveMsaaDepthShader.Compile(csRequest))
+        {
+            mLastErrorMessage = std::string("MSAA depth resolve shader compilation failed: ")
+                + (mResolveMsaaDepthShader.GetLastErrorMessage() ? mResolveMsaaDepthShader.GetLastErrorMessage() : "Unknown shader compiler error.");
+            return false;
+        }
+
+        D3D12_DESCRIPTOR_RANGE srvRange{};
+        srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        srvRange.NumDescriptors = 1;
+        srvRange.BaseShaderRegister = 0;
+        srvRange.OffsetInDescriptorsFromTableStart = 0;
+
+        D3D12_DESCRIPTOR_RANGE uavRange{};
+        uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        uavRange.NumDescriptors = 1;
+        uavRange.BaseShaderRegister = 0;
+        uavRange.OffsetInDescriptorsFromTableStart = 0;
+
+        D3D12_ROOT_PARAMETER params[3]{};
+        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1].DescriptorTable.NumDescriptorRanges = 1;
+        params[1].DescriptorTable.pDescriptorRanges = &srvRange;
+        params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[2].DescriptorTable.NumDescriptorRanges = 1;
+        params[2].DescriptorTable.pDescriptorRanges = &uavRange;
+        params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        D3D12_ROOT_SIGNATURE_DESC rsDesc{};
+        rsDesc.NumParameters = static_cast<UINT>(std::size(params));
+        rsDesc.pParameters = params;
+        rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> serializedRootSignature;
+        ComPtr<ID3DBlob> rootSignatureErrors;
+        DX12_THROW_IF_FAILED(D3D12SerializeRootSignature(
+            &rsDesc,
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &serializedRootSignature,
+            &rootSignatureErrors));
+        DX12_THROW_IF_FAILED(device->CreateRootSignature(
+            0,
+            serializedRootSignature->GetBufferPointer(),
+            serializedRootSignature->GetBufferSize(),
+            IID_PPV_ARGS(&mResolveMsaaDepthRootSignature)));
+
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = mResolveMsaaDepthRootSignature.Get();
+        psoDesc.CS = mResolveMsaaDepthShader.GetBytecode();
+        DX12_THROW_IF_FAILED(device->CreateComputePipelineState(
+            &psoDesc,
+            IID_PPV_ARGS(&mResolveMsaaDepthPipelineState)));
+
+        const UINT64 cbSize = (sizeof(ResolveMsaaDepthConstants) + 255ull) & ~255ull;
+        D3D12_HEAP_PROPERTIES uploadHeap{};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        uploadHeap.CreationNodeMask = 1;
+        uploadHeap.VisibleNodeMask = 1;
+
+        D3D12_RESOURCE_DESC cbDesc{};
+        cbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        cbDesc.Width = cbSize;
+        cbDesc.Height = 1;
+        cbDesc.DepthOrArraySize = 1;
+        cbDesc.MipLevels = 1;
+        cbDesc.Format = DXGI_FORMAT_UNKNOWN;
+        cbDesc.SampleDesc.Count = 1;
+        cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+            &uploadHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &cbDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&mResolveMsaaDepthConstantBuffer)));
+        DX12_THROW_IF_FAILED(mResolveMsaaDepthConstantBuffer->Map(
+            0,
+            nullptr,
+            reinterpret_cast<void**>(&mMappedResolveMsaaDepthConstants)));
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = 2;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mResolveMsaaDepthHeap)));
+    mResolveMsaaDepthHeapStride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpu = mResolveMsaaDepthHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = srvCpu;
+    uavCpu.ptr += mResolveMsaaDepthHeapStride;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC msaaDepthSrvDesc{};
+    msaaDepthSrvDesc.Format = SceneDepthSrvFormat;
+    msaaDepthSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+    msaaDepthSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    device->CreateShaderResourceView(mMsaaSceneDepthTarget.Get(), &msaaDepthSrvDesc, srvCpu);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC resolvedDepthUavDesc{};
+    resolvedDepthUavDesc.Format = SceneDepthSrvFormat;
+    resolvedDepthUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    device->CreateUnorderedAccessView(mSceneDepthTarget.Get(), nullptr, &resolvedDepthUavDesc, uavCpu);
+
+    return true;
+}
+
+void DX12SceneRenderer::ResolveMsaaDepth(ID3D12GraphicsCommandList* commandList)
+{
+    if (!mMsaaSettings.Enabled
+        || commandList == nullptr
+        || mMsaaSceneDepthTarget == nullptr
+        || mSceneDepthTarget == nullptr
+        || mResolveMsaaDepthPipelineState == nullptr
+        || mResolveMsaaDepthRootSignature == nullptr
+        || mResolveMsaaDepthHeap == nullptr
+        || mMappedResolveMsaaDepthConstants == nullptr)
+    {
+        return;
+    }
+
+    if (mMsaaDepthBufferState != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+    {
+        const auto msaaDepthToRead = CD3DX12_RESOURCE_BARRIER::Transition(
+            mMsaaSceneDepthTarget.Get(),
+            mMsaaDepthBufferState,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        commandList->ResourceBarrier(1, &msaaDepthToRead);
+        mMsaaDepthBufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    }
+
+    if (mDepthBufferState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        const auto resolvedDepthToUav = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        commandList->ResourceBarrier(1, &resolvedDepthToUav);
+        mDepthBufferState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    mMappedResolveMsaaDepthConstants->SampleCount = mMsaaSettings.GetEffectiveSampleCount();
+
+    ID3D12DescriptorHeap* resolveHeaps[] = { mResolveMsaaDepthHeap.Get() };
+    commandList->SetDescriptorHeaps(1, resolveHeaps);
+    commandList->SetComputeRootSignature(mResolveMsaaDepthRootSignature.Get());
+    commandList->SetPipelineState(mResolveMsaaDepthPipelineState.Get());
+    commandList->SetComputeRootConstantBufferView(0, mResolveMsaaDepthConstantBuffer->GetGPUVirtualAddress());
+
+    D3D12_GPU_DESCRIPTOR_HANDLE srvGpu = mResolveMsaaDepthHeap->GetGPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = srvGpu;
+    uavGpu.ptr += mResolveMsaaDepthHeapStride;
+    commandList->SetComputeRootDescriptorTable(1, srvGpu);
+    commandList->SetComputeRootDescriptorTable(2, uavGpu);
+    commandList->Dispatch((mSceneWidth + 7) / 8, (mSceneHeight + 7) / 8, 1);
+
+    const auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(mSceneDepthTarget.Get());
+    commandList->ResourceBarrier(1, &uavBarrier);
+
+    D3D12_RESOURCE_BARRIER postResolveBarriers[2]{};
+    postResolveBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
+        mSceneDepthTarget.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    postResolveBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
+        mMsaaSceneDepthTarget.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    commandList->ResourceBarrier(2, postResolveBarriers);
+    mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    mMsaaDepthBufferState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+    commandList->SetDescriptorHeaps(1, sharedHeaps);
+}
+
 void DX12SceneRenderer::TransitionDepthForRead(ID3D12GraphicsCommandList* commandList)
 {
     // Only transition if depth is not already in PIXEL_SHADER_RESOURCE state.
@@ -2375,6 +3727,14 @@ void DX12SceneRenderer::TransitionDepthForRead(ID3D12GraphicsCommandList* comman
 
 void DX12SceneRenderer::TransitionDepthAfterRead(ID3D12GraphicsCommandList* commandList)
 {
+    if (mSceneTargetMsaaSampleCount > 1)
+    {
+        // In MSAA mode mSceneDepthTarget is the resolved single-sample depth SRV,
+        // while the writable DSV is mMsaaSceneDepthTarget and is restored after
+        // ResolveMsaaDepth(). Keep the resolved texture readable for Ui/post.
+        return;
+    }
+
     // Restore depth to DEPTH_WRITE for the next frame's geometry pass.
     if (mDepthBufferState != D3D12_RESOURCE_STATE_DEPTH_WRITE && mSceneDepthTarget)
     {
@@ -2522,6 +3882,132 @@ bool DX12SceneRenderer::CreateBufferWithUpload(
     return true;
 }
 
+bool DX12SceneRenderer::StartGame()
+{
+    if (mGameHost.IsRunning())
+        return true;
+
+    // Remember the editor pose so stopping the session restores the viewport exactly.
+    mEditorCameraPositionBeforePlay = mCamera.GetPosition();
+    mEditorCameraRotationBeforePlay = mCamera.GetRotation();
+
+    GameCameraState initialCamera{};
+    initialCamera.PositionX = mEditorCameraPositionBeforePlay.x;
+    initialCamera.PositionY = mEditorCameraPositionBeforePlay.y;
+    initialCamera.PositionZ = mEditorCameraPositionBeforePlay.z;
+    initialCamera.Pitch = mEditorCameraRotationBeforePlay.x;
+    initialCamera.Yaw = mEditorCameraRotationBeforePlay.y;
+
+    if (!mGameHost.Start(initialCamera))
+        return false;
+
+    // The graph runs on a copy taken here, so On Game Start sees the level exactly as it
+    // was when play was pressed even if the artist keeps editing the graph afterwards.
+    mNodeGraphHost.SetUiRenderer(&mRmlUiRenderer);
+    if (mNodeGraphSource != nullptr)
+    {
+        mNodeGraphRuntime.SetHost(&mNodeGraphHost);
+        mNodeGraphRuntime.Start(*mNodeGraphSource);
+    }
+
+    mGameHasLastMousePosition = false;
+    return true;
+}
+
+void DX12SceneRenderer::StopGame()
+{
+    if (!mGameHost.IsRunning())
+        return;
+
+    // Stop the graph first: On Game Stop is still allowed to touch the UI, and the UI
+    // outlives the game module.
+    mNodeGraphRuntime.Stop();
+    mGameHost.Stop();
+    mGameHasLastMousePosition = false;
+    SetCameraTransform(mEditorCameraPositionBeforePlay, mEditorCameraRotationBeforePlay);
+}
+
+void DX12SceneRenderer::ToggleGame()
+{
+    if (mGameHost.IsRunning())
+        StopGame();
+    else
+        StartGame();
+}
+
+void DX12SceneRenderer::RecordPassTiming(const char* category, const char* name, float milliseconds)
+{
+    // Merge repeats of the same pass rather than appending duplicates: a few
+    // passes record from more than one scope in a frame, and the artist wants
+    // the pass's total, not a list of fragments.
+    for (RendererTimingEntry& entry : mPendingTimingSnapshot.Entries)
+    {
+        if (entry.Name == name && entry.Category == category)
+        {
+            entry.CpuMilliseconds += milliseconds;
+            return;
+        }
+    }
+
+    RendererTimingEntry entry;
+    entry.Category = category;
+    entry.Name = name;
+    entry.CpuMilliseconds = milliseconds;
+    mPendingTimingSnapshot.Entries.push_back(std::move(entry));
+}
+
+void DX12SceneRenderer::BeginTimingFrame()
+{
+    // Keep the vector's capacity: the pass set barely changes between frames,
+    // so this should not allocate after the first few.
+    mPendingTimingSnapshot.Entries.clear();
+    mPendingTimingSnapshot.TotalCpuMilliseconds = 0.0f;
+}
+
+void DX12SceneRenderer::EndTimingFrame(float totalMilliseconds)
+{
+    mPendingTimingSnapshot.TotalCpuMilliseconds = totalMilliseconds;
+
+    // Most expensive first - that is the only order worth reading when the
+    // question is "where did the frame go".
+    std::sort(
+        mPendingTimingSnapshot.Entries.begin(),
+        mPendingTimingSnapshot.Entries.end(),
+        [](const RendererTimingEntry& left, const RendererTimingEntry& right)
+        {
+            return left.CpuMilliseconds > right.CpuMilliseconds;
+        });
+
+    mRendererTimingSnapshot = mPendingTimingSnapshot;
+}
+
+void DX12SceneRenderer::BuildGiPointLights()
+{
+    const int lightCount = (std::min)(mNumCachedPointLights, DeferredLightingPass::kMaxPointLights);
+    if (lightCount <= 0)
+    {
+        return;
+    }
+
+    std::memcpy(
+        mGiPointLights,
+        mCachedPointLights,
+        static_cast<size_t>(lightCount) * sizeof(DeferredLightingPass::PointLightGpu));
+
+    for (int i = 0; i < lightCount; ++i)
+    {
+        const float scale = mPointLightGiScale[i];
+        if (scale == 1.0f)
+        {
+            continue;
+        }
+
+        mGiPointLights[i].Color.x *= scale;
+        mGiPointLights[i].Color.y *= scale;
+        mGiPointLights[i].Color.z *= scale;
+    }
+}
+
 void DX12SceneRenderer::UpdateCamera()
 {
     static auto previousFrameTime = std::chrono::steady_clock::now();
@@ -2531,6 +4017,10 @@ void DX12SceneRenderer::UpdateCamera()
     previousFrameTime = currentFrameTime;
     // Store in ms for NRD's timing expectations.
     mFrameDeltaTimeMs = deltaTime * 1000.0f;
+
+    // Clamped so a level load or a debugger pause does not jump every animated
+    // light style forward by several seconds in one frame.
+    mSceneTimeSeconds += (std::min)(deltaTime, 0.1f);
 
     HWND windowHandle = DX12Context_GetWindowHandle();
     if (windowHandle == nullptr)
@@ -2546,11 +4036,39 @@ void DX12SceneRenderer::UpdateCamera()
 
     ScreenToClient(windowHandle, &mousePosition);
 
-    const bool moveForward = (GetAsyncKeyState('W') & 0x8000) != 0;
-    const bool moveBackward = (GetAsyncKeyState('S') & 0x8000) != 0;
-    const bool moveLeft = (GetAsyncKeyState('A') & 0x8000) != 0;
-    const bool moveRight = (GetAsyncKeyState('D') & 0x8000) != 0;
-    const bool rightMouseButtonDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    // GetAsyncKeyState reports the physical key no matter which window has focus, so every
+    // movement key has to be gated on the editor actually owning the keyboard. Without it
+    // the camera drifts while the user types in another application.
+    const bool keyboardOwned = QtUi::KeyboardCameraInputAllowed();
+    const bool moveForward = keyboardOwned && (GetAsyncKeyState('W') & 0x8000) != 0;
+    const bool moveBackward = keyboardOwned && (GetAsyncKeyState('S') & 0x8000) != 0;
+    const bool moveLeft = keyboardOwned && (GetAsyncKeyState('A') & 0x8000) != 0;
+    const bool moveRight = keyboardOwned && (GetAsyncKeyState('D') & 0x8000) != 0;
+    const bool moveUp = keyboardOwned && (GetAsyncKeyState('E') & 0x8000) != 0;
+    const bool moveDown = keyboardOwned && (GetAsyncKeyState('Q') & 0x8000) != 0;
+    const bool rightMouseButtonDown = QtUi::CameraInputAllowed() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+
+    // While right-dragging to fly the camera, the wheel trims how fast it flies. The step
+    // is multiplicative so one notch means the same relative change whether the camera is
+    // crawling around a prop or crossing a terrain. Drain the wheel either way, otherwise
+    // scrolling outside a drag would bank up and fire the moment one starts.
+    const float cameraSpeedWheelNotches = QtUi::ConsumeViewportWheelDelta();
+    if (rightMouseButtonDown && cameraSpeedWheelNotches != 0.0f)
+    {
+        constexpr float speedStepPerNotch = 1.15f;
+        // Matches the Camera Speed slider's range so the two never disagree.
+        constexpr float minimumSpeed = 0.05f;
+        constexpr float maximumSpeed = 200.0f;
+        const float adjustedSpeed =
+            mCamera.GetMovementSpeed() * std::pow(speedStepPerNotch, cameraSpeedWheelNotches);
+        mCamera.SetMovementSpeed(std::clamp(adjustedSpeed, minimumSpeed, maximumSpeed));
+    }
+
+    if (mGameHost.IsRunning())
+    {
+        UpdateGameCamera(deltaTime, mousePosition, rightMouseButtonDown);
+        return;
+    }
 
     // Feed the current keyboard state and mouse position into the camera every frame.
     mCamera.Update(
@@ -2559,9 +4077,107 @@ void DX12SceneRenderer::UpdateCamera()
         moveBackward,
         moveLeft,
         moveRight,
+        moveUp,
+        moveDown,
         rightMouseButtonDown,
         static_cast<float>(mousePosition.x),
         static_cast<float>(mousePosition.y));
+}
+
+void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosition, bool lookActive)
+{
+    // Escape leaves play mode, but only when the editor is the foreground window so a
+    // background editor cannot swallow the key from whatever the user is actually using.
+    if (GetForegroundWindow() == DX12Context_GetWindowHandle() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0)
+    {
+        StopGame();
+        return;
+    }
+
+    GameFrameContext frame{};
+    frame.DeltaSeconds = deltaTime;
+
+    // Same reasoning as the editor camera: polled keys must not drive the player while the
+    // editor is in the background or a panel is taking text.
+    const bool keyboardOwned = QtUi::KeyboardCameraInputAllowed();
+    GameInputState& input = frame.Input;
+    input.MoveForward = keyboardOwned && (GetAsyncKeyState('W') & 0x8000) != 0;
+    input.MoveBackward = keyboardOwned && (GetAsyncKeyState('S') & 0x8000) != 0;
+    input.MoveLeft = keyboardOwned && (GetAsyncKeyState('A') & 0x8000) != 0;
+    input.MoveRight = keyboardOwned && (GetAsyncKeyState('D') & 0x8000) != 0;
+    input.MoveUp = keyboardOwned && ((GetAsyncKeyState(VK_SPACE) & 0x8000) != 0 || (GetAsyncKeyState('E') & 0x8000) != 0);
+    input.MoveDown = keyboardOwned && ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 || (GetAsyncKeyState('Q') & 0x8000) != 0);
+    input.Sprint = keyboardOwned && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    input.LookActive = lookActive;
+
+    const float mouseX = static_cast<float>(mousePosition.x);
+    const float mouseY = static_cast<float>(mousePosition.y);
+    if (lookActive)
+    {
+        // Only report a delta once a starting position has been captured, otherwise the
+        // first frame of a drag would snap the view by the whole screen offset.
+        if (mGameHasLastMousePosition)
+        {
+            input.LookDeltaX = mouseX - mGameLastMouseX;
+            input.LookDeltaY = mouseY - mGameLastMouseY;
+        }
+
+        mGameLastMouseX = mouseX;
+        mGameLastMouseY = mouseY;
+        mGameHasLastMousePosition = true;
+    }
+    else
+    {
+        mGameHasLastMousePosition = false;
+    }
+
+    GameCameraState cameraState{};
+    const DirectX::XMFLOAT3 position = mCamera.GetPosition();
+    const DirectX::XMFLOAT3 rotation = mCamera.GetRotation();
+    cameraState.PositionX = position.x;
+    cameraState.PositionY = position.y;
+    cameraState.PositionZ = position.z;
+    cameraState.Pitch = rotation.x;
+    cameraState.Yaw = rotation.y;
+
+    mGameHost.Update(frame, cameraState);
+
+    mCamera.SetPosition(cameraState.PositionX, cameraState.PositionY, cameraState.PositionZ);
+    mCamera.SetRotation(cameraState.Pitch, cameraState.Yaw);
+
+    mNodeGraphRuntime.Tick(deltaTime);
+
+    // A Stop Game node only raises a flag; tearing the runtime down from inside its own
+    // execution would destroy the state the current step is still walking.
+    if (mNodeGraphRuntime.ConsumeStopRequest())
+    {
+        StopGame();
+    }
+}
+
+void DX12SceneRenderer::FrameAabbInView(
+    const DirectX::XMFLOAT3& aabbMin,
+    const DirectX::XMFLOAT3& aabbMax)
+{
+    const DirectX::XMFLOAT3 center(
+        (aabbMin.x + aabbMax.x) * 0.5f,
+        (aabbMin.y + aabbMax.y) * 0.5f,
+        (aabbMin.z + aabbMax.z) * 0.5f);
+
+    const float extentX = aabbMax.x - aabbMin.x;
+    const float extentY = aabbMax.y - aabbMin.y;
+    const float extentZ = aabbMax.z - aabbMin.z;
+    const float maxExtent = (std::max)((std::max)(extentX, extentY), extentZ);
+    const float distance = (std::max)(maxExtent * 1.25f, 4.0f);
+
+    const DirectX::XMFLOAT3 position(
+        center.x,
+        center.y - distance,
+        center.z + distance * 0.5f);
+
+    mCamera.SetPosition(position);
+    mCamera.LookAt(center.x, center.y, center.z);
+    mTaaSettings.ResetHistory = true;
 }
 
 void DX12SceneRenderer::UpdateSceneConstants()
@@ -2592,8 +4208,10 @@ void DX12SceneRenderer::UpdateSceneConstants()
         maxViewDiff = (std::max)(maxViewDiff, std::fabs(currentViewElems[i] - previousViewElems[i]));
     }
     mCameraMovedThisFrame = maxViewDiff > 1e-4f;
-    if (mTaaSettings.Enabled && mCameraMovedThisFrame)
+    if (mTaaSettings.Enabled && maxViewDiff > 0.25f)
     {
+        // Treat only large view jumps as cuts. Resetting on every camera update
+        // prevents the TAA resolve from accumulating any history at all.
         mTaaSettings.ResetHistory = true;
     }
     mPreviousViewMatrix = viewF;
@@ -2609,24 +4227,27 @@ void DX12SceneRenderer::UpdateSceneConstants()
     XMStoreFloat4x4(&mNonJitteredViewMatrix,       view);
     XMStoreFloat4x4(&mNonJitteredProjectionMatrix, projection);
 
-    const bool suppressJitterForRtao = mRtaoSettings.Enabled;
-    const bool suppressJitterForGtao = mGtaoSettings.Enabled;
-    if (suppressJitterForRtao != mRtaoJitterSuppressedLastFrame)
+    // Turning either AO pass on or off changes the image enough that the accumulated
+    // history no longer describes it, so drop the history. The jitter itself is no longer
+    // suppressed: XeGTAO is now handed the jittered projection that matches the depth it
+    // samples, and RTAO already passes its jitter through to NRD explicitly.
+    const bool rtaoEnabled = mRtaoSettings.Enabled;
+    const bool gtaoEnabled = mGtaoSettings.Enabled;
+    if (rtaoEnabled != mRtaoEnabledLastFrame)
     {
         mTaaSettings.ResetHistory = true;
-        mRtaoJitterSuppressedLastFrame = suppressJitterForRtao;
+        mRtaoEnabledLastFrame = rtaoEnabled;
     }
-    if (suppressJitterForGtao != mGtaoJitterSuppressedLastFrame)
+    if (gtaoEnabled != mGtaoEnabledLastFrame)
     {
         mTaaSettings.ResetHistory = true;
-        mGtaoJitterSuppressedLastFrame = suppressJitterForGtao;
+        mGtaoEnabledLastFrame = gtaoEnabled;
     }
 
     // Apply a sub-pixel Halton jitter to the projection matrix when TAA is enabled.
     // Jittering causes each frame to sample a slightly different sub-pixel location;
     // the TAA resolve pass then accumulates these into a stable anti-aliased image.
-    const bool suppressProjectionJitter = suppressJitterForRtao || suppressJitterForGtao;
-    if (!suppressProjectionJitter && mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
+    if (mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
     {
         // Halton(2,3) sequence gives a well-distributed low-discrepancy pattern.
         constexpr UINT HaltonSequenceLength = 16;
@@ -2671,4 +4292,72 @@ void DX12SceneRenderer::UpdateSceneConstants()
     // Cache the jittered projection alone so the sky pass uses the same per-frame
     // jitter as geometry, avoiding sky fringing at mesh edges during TAA accumulation.
     XMStoreFloat4x4(&mJitteredProjection, projection);
+}
+
+// ---------------------------------------------------------------------------
+// Node graph host
+// ---------------------------------------------------------------------------
+//
+// Every UI node in a graph funnels through here. The adapter is intentionally thin: it
+// checks that a UI exists and forwards, so a graph that runs before the UI initialised
+// reports a clean failure on its Success pin instead of crashing the play session.
+
+bool DX12SceneRenderer::NodeGraphUiHost::ShowUiDocument(const std::string& fileName)
+{
+    if (mUiRenderer == nullptr || !mUiRenderer->IsInitialized())
+        return false;
+
+    // Showing a document implies the layer is meant to be seen; a graph that hid the UI
+    // earlier should not have to remember to unhide it here.
+    mUiRenderer->SetVisible(true);
+    return mUiRenderer->LoadDocument(fileName);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::CloseUiDocument()
+{
+    if (mUiRenderer != nullptr && mUiRenderer->IsInitialized())
+        mUiRenderer->CloseDocument();
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::ReloadUiDocument()
+{
+    return mUiRenderer != nullptr && mUiRenderer->IsInitialized() && mUiRenderer->ReloadDocument();
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetUiVisible(bool visible)
+{
+    if (mUiRenderer != nullptr)
+        mUiRenderer->SetVisible(visible);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetUiInputEnabled(bool enabled)
+{
+    if (mUiRenderer != nullptr)
+        mUiRenderer->SetInputEnabled(enabled);
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementText(const std::string& elementId, const std::string& text)
+{
+    return mUiRenderer != nullptr && mUiRenderer->SetElementText(elementId, text);
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementProperty(
+    const std::string& elementId,
+    const std::string& property,
+    const std::string& value)
+{
+    return mUiRenderer != nullptr && mUiRenderer->SetElementProperty(elementId, property, value);
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementClass(
+    const std::string& elementId,
+    const std::string& className,
+    bool enabled)
+{
+    return mUiRenderer != nullptr && mUiRenderer->SetElementClass(elementId, className, enabled);
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementVisible(const std::string& elementId, bool visible)
+{
+    return mUiRenderer != nullptr && mUiRenderer->SetElementVisible(elementId, visible);
 }

@@ -210,15 +210,15 @@ bool AgxTonemapper::CreateTextures(UINT width, UINT height)
     if (!device)
         return false;
 
-    if (!mImGuiSlotAllocated)
+    if (!mUiSlotAllocated)
     {
-        if (!DX12Context_AllocateSrvDescriptor(&mOutputImGuiSrvCpu, &mOutputImGuiSrvGpu))
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputUiSrvCpu, &mOutputUiSrvGpu))
         {
-            mLastError = "AgxTonemapper: failed to allocate ImGui SRV slot.";
+            mLastError = "AgxTonemapper: failed to allocate Ui SRV slot.";
             return false;
         }
-        mImGuiSlotAllocated = true;
-        mOutputTextureId = static_cast<ImTextureID>(mOutputImGuiSrvGpu.ptr);
+        mUiSlotAllocated = true;
+        mOutputTextureId = static_cast<UiTextureID>(mOutputUiSrvGpu.ptr);
     }
 
     DX12Context_WaitForGPU();
@@ -251,8 +251,8 @@ bool AgxTonemapper::CreateTextures(UINT width, UINT height)
     slot1.ptr += mComputeHeapStride;
     device->CreateUnorderedAccessView(mOutputTexture.Get(), nullptr, &uavDesc, slot1);
 
-    // ImGui shared-heap SRV
-    device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputImGuiSrvCpu);
+    // Ui shared-heap SRV
+    device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputUiSrvCpu);
 
     return true;
 }

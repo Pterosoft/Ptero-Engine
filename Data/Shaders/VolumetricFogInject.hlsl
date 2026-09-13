@@ -1,7 +1,6 @@
 #include "VolumetricFogCommon.hlsli"
 
 Texture2D            gSceneDepth : register(t0);
-RaytracingAccelerationStructure gSceneTlas : register(t1);
 RWTexture3D<float4>  gLightingVolume : register(u0);
 
 [numthreads(8, 8, 1)]
@@ -14,24 +13,22 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float2 uv = (float2(dispatchThreadId.xy) + 0.5f) / float2(gFroxelWidth, gFroxelHeight);
     float viewDepth = SliceToViewDepth((float)dispatchThreadId.z);
 
+    float surfaceFade = 1.0f;
     float sceneDepth = gSceneDepth.Load(int3(pixel, 0)).r;
     if (sceneDepth < 1.0f)
     {
         float2 pixelUv = (float2(pixel) + 0.5f) / float2(gFrameWidth, gFrameHeight);
         float3 surfaceWorldPos = ReconstructWorldPosition(pixelUv, sceneDepth);
         float surfaceViewDepth = length(surfaceWorldPos - gCameraPos);
-        if (viewDepth > surfaceViewDepth)
-        {
-            gLightingVolume[dispatchThreadId] = float4(0.0f, 0.0f, 0.0f, 0.0f);
-            return;
-        }
+        float fadeWidth = max(1.0f, surfaceViewDepth * 0.02f);
+        surfaceFade = saturate((surfaceViewDepth - viewDepth) / fadeWidth);
     }
 
     float3 worldFar = ReconstructWorldPosition(uv, 1.0f);
     float3 rayDir = normalize(worldFar - gCameraPos);
     float3 worldPos = gCameraPos + rayDir * viewDepth;
 
-    float density = (gDensity * 0.2f) * ComputeHeightDensity(worldPos.z);
+    float density = (gDensity * 0.2f) * ComputeHeightDensity(worldPos.z) * surfaceFade;
 
     float cosTheta = dot(rayDir, normalize(gSunDir));
     float phase = HenyeyGreenstein(cosTheta, gAnisotropy);
@@ -47,6 +44,18 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float normDistSq = saturate(distSq * gPointLights[i].InvRadiusSq);
         float falloff = (1.0f - normDistSq) * (1.0f - normDistSq);
         float3 lightToSample = normalize(worldPos - gPointLights[i].Position);
+
+        // Cone mask for spot lights. This is where a spot earns its keep: the
+        // visible shaft of light in fog only reads as a beam if the froxels
+        // outside the cone stay dark.
+        if ((int)gPointLights[i].LightType == 1)
+        {
+            float cosAngle = dot(lightToSample, gPointLights[i].Direction);
+            float cone = saturate((cosAngle - gPointLights[i].SpotCosOuter) /
+                                  max(gPointLights[i].SpotCosInner - gPointLights[i].SpotCosOuter, 1e-4f));
+            falloff *= cone * cone;
+        }
+
         float pointCosTheta = dot(lightToSample, -rayDir);
         float pointPhase = HenyeyGreenstein(pointCosTheta, gAnisotropy);
         pointScatter += gPointLights[i].Color * (pointPhase * 4.0f) * falloff * active;

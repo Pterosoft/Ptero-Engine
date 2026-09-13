@@ -4,12 +4,21 @@
 
 #include "..\SDKs\nlohmann\json.hpp"
 
+#include <filesystem>
 #include <fstream>
 
 using json = nlohmann::json;
 
 namespace
 {
+    // 1 (or a missing key): entity Euler angles were written for
+    //    XMMatrixRotationRollPitchYaw, whose order suits a Y-up world.
+    // 2: entity Euler angles are composed X then Y then Z, matching Ptero's Z-up world.
+    //    See PteroTransform in Components.h.
+    // Only entity rotations changed meaning. CameraRotation is untouched: the editor
+    // camera consumes it as an explicit pitch/yaw pair, never through a Euler matrix.
+    constexpr int kSceneFormatVersion = 2;
+
     json SerializeVector3(const DirectX::XMFLOAT3& value)
     {
         return json{
@@ -83,6 +92,7 @@ namespace
     json SerializeTimeOfDaySettings(const TimeOfDaySettings& settings)
     {
         return json{
+            { "Enabled", settings.Enabled },
             { "TimeOfDay", settings.TimeOfDay },
             { "Turbidity", settings.Turbidity },
             { "GroundAlbedo", settings.GroundAlbedo },
@@ -101,6 +111,8 @@ namespace
 
     void DeserializeTimeOfDaySettings(const json& settingsJson, TimeOfDaySettings& settings)
     {
+        // Absent in scenes saved before the toggle existed, which were all time-of-day-on.
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
         settings.TimeOfDay = settingsJson.value("TimeOfDay", settings.TimeOfDay);
         settings.Turbidity = settingsJson.value("Turbidity", settings.Turbidity);
         settings.GroundAlbedo = settingsJson.value("GroundAlbedo", settings.GroundAlbedo);
@@ -116,14 +128,66 @@ namespace
         settings.SkyColorB = settingsJson.value("SkyColorB", settings.SkyColorB);
     }
 
+    json SerializeSsrSettings(const SsrSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "Intensity", settings.Intensity },
+            { "MaxSteps", settings.MaxSteps },
+            { "StepSize", settings.StepSize },
+            { "StepGrowth", settings.StepGrowth },
+            { "Thickness", settings.Thickness },
+            { "MaxRoughness", settings.MaxRoughness },
+            { "RefineSteps", settings.RefineSteps },
+            { "MaxDistance", settings.MaxDistance },
+            { "EdgeFadeStart", settings.EdgeFadeStart },
+            { "DebugView", settings.DebugView }
+        };
+    }
+
+    void DeserializeSsrSettings(const json& settingsJson, SsrSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.Intensity = settingsJson.value("Intensity", settings.Intensity);
+        settings.MaxSteps = settingsJson.value("MaxSteps", settings.MaxSteps);
+        settings.StepSize = settingsJson.value("StepSize", settings.StepSize);
+        settings.StepGrowth = settingsJson.value("StepGrowth", settings.StepGrowth);
+        settings.Thickness = settingsJson.value("Thickness", settings.Thickness);
+        settings.MaxRoughness = settingsJson.value("MaxRoughness", settings.MaxRoughness);
+        settings.RefineSteps = settingsJson.value("RefineSteps", settings.RefineSteps);
+        settings.MaxDistance = settingsJson.value("MaxDistance", settings.MaxDistance);
+        settings.EdgeFadeStart = settingsJson.value("EdgeFadeStart", settings.EdgeFadeStart);
+        settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
+    }
+
+    json SerializeChromaticAberrationSettings(const ChromaticAberrationSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "Strength", settings.Strength },
+            { "Falloff", settings.Falloff },
+            { "SampleCount", settings.SampleCount },
+            { "CenterX", settings.CenterX },
+            { "CenterY", settings.CenterY }
+        };
+    }
+
+    void DeserializeChromaticAberrationSettings(const json& settingsJson, ChromaticAberrationSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.Strength = settingsJson.value("Strength", settings.Strength);
+        settings.Falloff = settingsJson.value("Falloff", settings.Falloff);
+        settings.SampleCount = settingsJson.value("SampleCount", settings.SampleCount);
+        settings.CenterX = settingsJson.value("CenterX", settings.CenterX);
+        settings.CenterY = settingsJson.value("CenterY", settings.CenterY);
+    }
+
     json SerializeTaaSettings(const TaaSettings& settings)
     {
         return json{
             { "Enabled", settings.Enabled },
             { "BlendFactor", settings.BlendFactor },
-            { "JitterScale", settings.JitterScale },
-            { "UseSharpening", settings.UseSharpening },
-            { "SharpeningStrength", settings.SharpeningStrength }
+            { "JitterScale", settings.JitterScale }
         };
     }
 
@@ -135,6 +199,47 @@ namespace
         settings.UseSharpening = settingsJson.value("UseSharpening", settings.UseSharpening);
         settings.SharpeningStrength = settingsJson.value("SharpeningStrength", settings.SharpeningStrength);
         settings.ResetHistory = true;
+    }
+
+    json SerializeSharpenSettings(const SharpenSettings& settings)
+    {
+        return json{
+            { "ImageSharpeningEnabled", settings.ImageSharpeningEnabled },
+            { "ImageSharpeningStrength", settings.ImageSharpeningStrength },
+            { "TextureSharpeningEnabled", settings.TextureSharpeningEnabled },
+            { "TextureMipLODBias", settings.TextureMipLODBias }
+        };
+    }
+
+    void DeserializeSharpenSettings(const json& settingsJson, SharpenSettings& settings)
+    {
+        settings.ImageSharpeningEnabled = settingsJson.value("ImageSharpeningEnabled", settings.ImageSharpeningEnabled);
+        settings.ImageSharpeningStrength = settingsJson.value("ImageSharpeningStrength", settings.ImageSharpeningStrength);
+        settings.TextureSharpeningEnabled = settingsJson.value("TextureSharpeningEnabled", settings.TextureSharpeningEnabled);
+        settings.TextureMipLODBias = settingsJson.value("TextureMipLODBias", settings.TextureMipLODBias);
+        settings.Validate();
+    }
+
+    json SerializeSmaaSettings(const SMAASettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "EdgeThreshold", settings.EdgeThreshold },
+            { "MaxSearchSteps", settings.MaxSearchSteps },
+            { "MaxSearchStepsDiag", settings.MaxSearchStepsDiag },
+            { "CornerRounding", settings.CornerRounding },
+            { "DebugView", settings.DebugView }
+        };
+    }
+
+    void DeserializeSmaaSettings(const json& settingsJson, SMAASettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.EdgeThreshold = settingsJson.value("EdgeThreshold", settings.EdgeThreshold);
+        settings.MaxSearchSteps = settingsJson.value("MaxSearchSteps", settings.MaxSearchSteps);
+        settings.MaxSearchStepsDiag = settingsJson.value("MaxSearchStepsDiag", settings.MaxSearchStepsDiag);
+        settings.CornerRounding = settingsJson.value("CornerRounding", settings.CornerRounding);
+        settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
     }
 
     json SerializeDlssSettings(const DlssSettings& settings)
@@ -152,6 +257,29 @@ namespace
         settings.ResetHistory = true;
     }
 
+    json SerializeGlobalIlluminationMode(GlobalIlluminationMode mode)
+    {
+        return json(static_cast<int>(mode));
+    }
+
+    void DeserializeGlobalIlluminationMode(const json& modeJson, GlobalIlluminationMode& mode)
+    {
+        const int serializedMode = modeJson.get<int>();
+        switch (serializedMode)
+        {
+        case static_cast<int>(GlobalIlluminationMode::Disabled):
+            mode = GlobalIlluminationMode::Disabled;
+            break;
+        case static_cast<int>(GlobalIlluminationMode::RadianceCascades):
+            mode = GlobalIlluminationMode::RadianceCascades;
+            break;
+        case static_cast<int>(GlobalIlluminationMode::Rtgi):
+        default:
+            mode = GlobalIlluminationMode::Rtgi;
+            break;
+        }
+    }
+
     json SerializeRtgiSettings(const RtGISettings& settings)
     {
         return json{
@@ -160,6 +288,13 @@ namespace
             { "RaysPerPixel", settings.RaysPerPixel },
             { "MaxBounces", settings.MaxBounces },
             { "NextEventEstimation", settings.NextEventEstimation },
+            { "TemporalReuseEnabled", settings.TemporalReuseEnabled },
+            { "MaxHistoryLength", settings.MaxHistoryLength },
+            { "DepthThreshold", settings.DepthThreshold },
+            { "NormalThreshold", settings.NormalThreshold },
+            { "SpatialReuseEnabled", settings.SpatialReuseEnabled },
+            { "SpatialSamples", settings.SpatialSamples },
+            { "SpatialRadius", settings.SpatialRadius },
             { "RadianceClamp", settings.RadianceClamp },
             { "AccumulationBlend", settings.AccumulationBlend },
             { "NrdMaxAccumulationTime", settings.NrdMaxAccumulationTime },
@@ -168,6 +303,9 @@ namespace
             { "NrdSharpenAmount", settings.NrdSharpenAmount },
             { "GiIntensity", settings.GiIntensity },
             { "ColorLeakIntensity", settings.ColorLeakIntensity },
+            { "SpecularEnabled", settings.SpecularEnabled },
+            { "SpecularRoughnessThreshold", settings.SpecularRoughnessThreshold },
+            { "SpecularIntensity", settings.SpecularIntensity },
             { "DebugView", settings.DebugView }
         };
     }
@@ -179,6 +317,13 @@ namespace
         settings.RaysPerPixel = settingsJson.value("RaysPerPixel", settings.RaysPerPixel);
         settings.MaxBounces = settingsJson.value("MaxBounces", settings.MaxBounces);
         settings.NextEventEstimation = settingsJson.value("NextEventEstimation", settings.NextEventEstimation);
+        settings.TemporalReuseEnabled = settingsJson.value("TemporalReuseEnabled", settings.TemporalReuseEnabled);
+        settings.MaxHistoryLength = settingsJson.value("MaxHistoryLength", settings.MaxHistoryLength);
+        settings.DepthThreshold = settingsJson.value("DepthThreshold", settings.DepthThreshold);
+        settings.NormalThreshold = settingsJson.value("NormalThreshold", settings.NormalThreshold);
+        settings.SpatialReuseEnabled = settingsJson.value("SpatialReuseEnabled", settings.SpatialReuseEnabled);
+        settings.SpatialSamples = settingsJson.value("SpatialSamples", settings.SpatialSamples);
+        settings.SpatialRadius = settingsJson.value("SpatialRadius", settings.SpatialRadius);
         settings.RadianceClamp = settingsJson.value("RadianceClamp", settings.RadianceClamp);
         settings.AccumulationBlend = settingsJson.value("AccumulationBlend", settings.AccumulationBlend);
         settings.NrdMaxAccumulationTime = settingsJson.value("NrdMaxAccumulationTime", settings.NrdMaxAccumulationTime);
@@ -187,6 +332,59 @@ namespace
         settings.NrdSharpenAmount = settingsJson.value("NrdSharpenAmount", settings.NrdSharpenAmount);
         settings.GiIntensity = settingsJson.value("GiIntensity", settings.GiIntensity);
         settings.ColorLeakIntensity = settingsJson.value("ColorLeakIntensity", settings.ColorLeakIntensity);
+        settings.SpecularEnabled = settingsJson.value("SpecularEnabled", settings.SpecularEnabled);
+        settings.SpecularRoughnessThreshold = settingsJson.value("SpecularRoughnessThreshold", settings.SpecularRoughnessThreshold);
+        settings.SpecularIntensity = settingsJson.value("SpecularIntensity", settings.SpecularIntensity);
+        settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
+    }
+
+    json SerializeRadianceCascadesSettings(const RadianceCascadesSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "CascadeCount", settings.CascadeCount },
+            { "ProbeSpacingBase", settings.ProbeSpacingBase },
+            { "RaysPerProbe", settings.RaysPerProbe },
+            { "RayLengthBase", settings.RayLengthBase },
+            { "RayLengthScale", settings.RayLengthScale },
+            { "IntervalLengthScale", settings.IntervalLengthScale },
+            { "Hysteresis", settings.Hysteresis },
+            { "GiIntensity", settings.GiIntensity },
+            { "ColorBleedingStrength", settings.ColorBleedingStrength },
+            { "SparseProbeTableCapacity", settings.SparseProbeTableCapacity },
+            { "SparseProbeCellSize", settings.SparseProbeCellSize },
+            { "SparseProbeSearchSteps", settings.SparseProbeSearchSteps },
+            { "SparseProbeReuseStrength", settings.SparseProbeReuseStrength },
+            { "RayBias", settings.RayBias },
+            { "SpatialFilterStrength", settings.SpatialFilterStrength },
+            { "HistoryClampScale", settings.HistoryClampScale },
+            { "HistoryDepthSensitivity", settings.HistoryDepthSensitivity },
+            { "HistoryNormalThreshold", settings.HistoryNormalThreshold },
+            { "DebugView", settings.DebugView }
+        };
+    }
+
+    void DeserializeRadianceCascadesSettings(const json& settingsJson, RadianceCascadesSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.CascadeCount = settingsJson.value("CascadeCount", settings.CascadeCount);
+        settings.ProbeSpacingBase = settingsJson.value("ProbeSpacingBase", settings.ProbeSpacingBase);
+        settings.RaysPerProbe = settingsJson.value("RaysPerProbe", settings.RaysPerProbe);
+        settings.RayLengthBase = settingsJson.value("RayLengthBase", settings.RayLengthBase);
+        settings.RayLengthScale = settingsJson.value("RayLengthScale", settings.RayLengthScale);
+        settings.IntervalLengthScale = settingsJson.value("IntervalLengthScale", settings.IntervalLengthScale);
+        settings.Hysteresis = settingsJson.value("Hysteresis", settings.Hysteresis);
+        settings.GiIntensity = settingsJson.value("GiIntensity", settings.GiIntensity);
+        settings.ColorBleedingStrength = settingsJson.value("ColorBleedingStrength", settings.ColorBleedingStrength);
+        settings.SparseProbeTableCapacity = settingsJson.value("SparseProbeTableCapacity", settings.SparseProbeTableCapacity);
+        settings.SparseProbeCellSize = settingsJson.value("SparseProbeCellSize", settings.SparseProbeCellSize);
+        settings.SparseProbeSearchSteps = settingsJson.value("SparseProbeSearchSteps", settings.SparseProbeSearchSteps);
+        settings.SparseProbeReuseStrength = settingsJson.value("SparseProbeReuseStrength", settings.SparseProbeReuseStrength);
+        settings.RayBias = settingsJson.value("RayBias", settings.RayBias);
+        settings.SpatialFilterStrength = settingsJson.value("SpatialFilterStrength", settings.SpatialFilterStrength);
+        settings.HistoryClampScale = settingsJson.value("HistoryClampScale", settings.HistoryClampScale);
+        settings.HistoryDepthSensitivity = settingsJson.value("HistoryDepthSensitivity", settings.HistoryDepthSensitivity);
+        settings.HistoryNormalThreshold = settingsJson.value("HistoryNormalThreshold", settings.HistoryNormalThreshold);
         settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
     }
 
@@ -287,6 +485,114 @@ namespace
         };
     }
 
+    json SerializeVolumetricCloudSettings(const VolumetricCloudSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "PlanetRadiusKm", settings.PlanetRadiusKm },
+            { "LayerBottomMeters", settings.LayerBottomMeters },
+            { "LayerThicknessMeters", settings.LayerThicknessMeters },
+            { "Coverage", settings.Coverage },
+            { "CloudType", settings.CloudType },
+            { "Density", settings.Density },
+            { "BaseNoiseScaleMeters", settings.BaseNoiseScaleMeters },
+            { "DetailNoiseScaleMeters", settings.DetailNoiseScaleMeters },
+            { "DetailStrength", settings.DetailStrength },
+            { "CurlStrength", settings.CurlStrength },
+            { "AnvilBias", settings.AnvilBias },
+            { "WeatherScaleMeters", settings.WeatherScaleMeters },
+            { "CloudTopOffsetMeters", settings.CloudTopOffsetMeters },
+            { "WeatherSeed", settings.WeatherSeed },
+            { "WeatherCellSize", settings.WeatherCellSize },
+            { "WeatherCoverageBias", settings.WeatherCoverageBias },
+            { "WeatherTypeBias", settings.WeatherTypeBias },
+            { "WindDirectionDegrees", settings.WindDirectionDegrees },
+            { "WindSpeed", settings.WindSpeed },
+            { "WindSkew", settings.WindSkew },
+            { "DetailWindSpeedScale", settings.DetailWindSpeedScale },
+            { "ScatteringColorR", settings.ScatteringColorR },
+            { "ScatteringColorG", settings.ScatteringColorG },
+            { "ScatteringColorB", settings.ScatteringColorB },
+            { "ExtinctionScale", settings.ExtinctionScale },
+            { "PhaseG0", settings.PhaseG0 },
+            { "PhaseG1", settings.PhaseG1 },
+            { "PhaseBlend", settings.PhaseBlend },
+            { "PowderStrength", settings.PowderStrength },
+            { "MultiScatterOctaves", settings.MultiScatterOctaves },
+            { "MsScatterFalloff", settings.MsScatterFalloff },
+            { "MsExtinctionFalloff", settings.MsExtinctionFalloff },
+            { "MsPhaseFalloff", settings.MsPhaseFalloff },
+            { "SunIntensityScale", settings.SunIntensityScale },
+            { "AmbientIntensityScale", settings.AmbientIntensityScale },
+            { "GroundBounceScale", settings.GroundBounceScale },
+            { "MaxSteps", settings.MaxSteps },
+            { "LightSteps", settings.LightSteps },
+            { "LightMarchDistanceMeters", settings.LightMarchDistanceMeters },
+            { "MaxTraceDistanceMeters", settings.MaxTraceDistanceMeters },
+            { "DistanceFadeStartMeters", settings.DistanceFadeStartMeters },
+            { "DetailFadeDistanceMeters", settings.DetailFadeDistanceMeters },
+            { "ShadowConeSpread", settings.ShadowConeSpread },
+            { "ShadowStepGrowth", settings.ShadowStepGrowth },
+            { "ResolutionDivisor", settings.ResolutionDivisor },
+            { "TemporalUpsampling", settings.TemporalUpsampling },
+            { "TemporalBlend", settings.TemporalBlend },
+            { "DebugView", settings.DebugView }
+        };
+    }
+
+    void DeserializeVolumetricCloudSettings(const json& settingsJson, VolumetricCloudSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.PlanetRadiusKm = settingsJson.value("PlanetRadiusKm", settings.PlanetRadiusKm);
+        settings.LayerBottomMeters = settingsJson.value("LayerBottomMeters", settings.LayerBottomMeters);
+        settings.LayerThicknessMeters = settingsJson.value("LayerThicknessMeters", settings.LayerThicknessMeters);
+        settings.Coverage = settingsJson.value("Coverage", settings.Coverage);
+        settings.CloudType = settingsJson.value("CloudType", settings.CloudType);
+        settings.Density = settingsJson.value("Density", settings.Density);
+        settings.BaseNoiseScaleMeters = settingsJson.value("BaseNoiseScaleMeters", settings.BaseNoiseScaleMeters);
+        settings.DetailNoiseScaleMeters = settingsJson.value("DetailNoiseScaleMeters", settings.DetailNoiseScaleMeters);
+        settings.DetailStrength = settingsJson.value("DetailStrength", settings.DetailStrength);
+        settings.CurlStrength = settingsJson.value("CurlStrength", settings.CurlStrength);
+        settings.AnvilBias = settingsJson.value("AnvilBias", settings.AnvilBias);
+        settings.WeatherScaleMeters = settingsJson.value("WeatherScaleMeters", settings.WeatherScaleMeters);
+        settings.CloudTopOffsetMeters = settingsJson.value("CloudTopOffsetMeters", settings.CloudTopOffsetMeters);
+        settings.WeatherSeed = settingsJson.value("WeatherSeed", settings.WeatherSeed);
+        settings.WeatherCellSize = settingsJson.value("WeatherCellSize", settings.WeatherCellSize);
+        settings.WeatherCoverageBias = settingsJson.value("WeatherCoverageBias", settings.WeatherCoverageBias);
+        settings.WeatherTypeBias = settingsJson.value("WeatherTypeBias", settings.WeatherTypeBias);
+        settings.WindDirectionDegrees = settingsJson.value("WindDirectionDegrees", settings.WindDirectionDegrees);
+        settings.WindSpeed = settingsJson.value("WindSpeed", settings.WindSpeed);
+        settings.WindSkew = settingsJson.value("WindSkew", settings.WindSkew);
+        settings.DetailWindSpeedScale = settingsJson.value("DetailWindSpeedScale", settings.DetailWindSpeedScale);
+        settings.ScatteringColorR = settingsJson.value("ScatteringColorR", settings.ScatteringColorR);
+        settings.ScatteringColorG = settingsJson.value("ScatteringColorG", settings.ScatteringColorG);
+        settings.ScatteringColorB = settingsJson.value("ScatteringColorB", settings.ScatteringColorB);
+        settings.ExtinctionScale = settingsJson.value("ExtinctionScale", settings.ExtinctionScale);
+        settings.PhaseG0 = settingsJson.value("PhaseG0", settings.PhaseG0);
+        settings.PhaseG1 = settingsJson.value("PhaseG1", settings.PhaseG1);
+        settings.PhaseBlend = settingsJson.value("PhaseBlend", settings.PhaseBlend);
+        settings.PowderStrength = settingsJson.value("PowderStrength", settings.PowderStrength);
+        settings.MultiScatterOctaves = settingsJson.value("MultiScatterOctaves", settings.MultiScatterOctaves);
+        settings.MsScatterFalloff = settingsJson.value("MsScatterFalloff", settings.MsScatterFalloff);
+        settings.MsExtinctionFalloff = settingsJson.value("MsExtinctionFalloff", settings.MsExtinctionFalloff);
+        settings.MsPhaseFalloff = settingsJson.value("MsPhaseFalloff", settings.MsPhaseFalloff);
+        settings.SunIntensityScale = settingsJson.value("SunIntensityScale", settings.SunIntensityScale);
+        settings.AmbientIntensityScale = settingsJson.value("AmbientIntensityScale", settings.AmbientIntensityScale);
+        settings.GroundBounceScale = settingsJson.value("GroundBounceScale", settings.GroundBounceScale);
+        settings.MaxSteps = settingsJson.value("MaxSteps", settings.MaxSteps);
+        settings.LightSteps = settingsJson.value("LightSteps", settings.LightSteps);
+        settings.LightMarchDistanceMeters = settingsJson.value("LightMarchDistanceMeters", settings.LightMarchDistanceMeters);
+        settings.MaxTraceDistanceMeters = settingsJson.value("MaxTraceDistanceMeters", settings.MaxTraceDistanceMeters);
+        settings.DistanceFadeStartMeters = settingsJson.value("DistanceFadeStartMeters", settings.DistanceFadeStartMeters);
+        settings.DetailFadeDistanceMeters = settingsJson.value("DetailFadeDistanceMeters", settings.DetailFadeDistanceMeters);
+        settings.ShadowConeSpread = settingsJson.value("ShadowConeSpread", settings.ShadowConeSpread);
+        settings.ShadowStepGrowth = settingsJson.value("ShadowStepGrowth", settings.ShadowStepGrowth);
+        settings.ResolutionDivisor = settingsJson.value("ResolutionDivisor", settings.ResolutionDivisor);
+        settings.TemporalUpsampling = settingsJson.value("TemporalUpsampling", settings.TemporalUpsampling);
+        settings.TemporalBlend = settingsJson.value("TemporalBlend", settings.TemporalBlend);
+        settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
+    }
+
     void DeserializeAgxSettings(const json& settingsJson, AgxTonemapSettings& settings)
     {
         settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
@@ -353,6 +659,10 @@ void SceneSerializer::Serialize(const std::string& filepath)
     }
 
     json sceneJson;
+    // Version 2 switched entity Euler angles from XMMatrixRotationRollPitchYaw's Y-up
+    // order to the Z-up order in PteroTransform::ComposeRotation. A scene without this
+    // key predates that and has its rotations converted on load.
+    sceneJson["FormatVersion"] = kSceneFormatVersion;
     sceneJson["Entities"] = json::array();
 
     if (mScene->CameraPosition != nullptr)
@@ -364,20 +674,40 @@ void SceneSerializer::Serialize(const std::string& filepath)
         sceneJson["TimeOfDaySettings"] = SerializeTimeOfDaySettings(*mScene->TimeOfDay);
     if (mScene->Taa != nullptr)
         sceneJson["TaaSettings"] = SerializeTaaSettings(*mScene->Taa);
+    if (mScene->Smaa != nullptr)
+        sceneJson["SMAASettings"] = SerializeSmaaSettings(*mScene->Smaa);
+    if (mScene->Sharpen != nullptr)
+        sceneJson["SharpenSettings"] = SerializeSharpenSettings(*mScene->Sharpen);
     if (mScene->Dlss != nullptr)
         sceneJson["DlssSettings"] = SerializeDlssSettings(*mScene->Dlss);
+    if (mScene->GlobalIllumination != nullptr)
+        sceneJson["GlobalIlluminationMode"] = SerializeGlobalIlluminationMode(*mScene->GlobalIllumination);
     if (mScene->Rtgi != nullptr)
         sceneJson["RtGISettings"] = SerializeRtgiSettings(*mScene->Rtgi);
+    if (mScene->RadianceCascades != nullptr)
+        sceneJson["RadianceCascadesSettings"] = SerializeRadianceCascadesSettings(*mScene->RadianceCascades);
     if (mScene->Rtao != nullptr)
         sceneJson["RtAOSettings"] = SerializeRtaoSettings(*mScene->Rtao);
     if (mScene->Gtao != nullptr)
         sceneJson["GTAOSettings"] = SerializeGtaoSettings(*mScene->Gtao);
+    if (mScene->Ssr != nullptr)
+        sceneJson["SsrSettings"] = SerializeSsrSettings(*mScene->Ssr);
+    if (mScene->ChromaticAberration != nullptr)
+        sceneJson["ChromaticAberrationSettings"] = SerializeChromaticAberrationSettings(*mScene->ChromaticAberration);
     if (mScene->Agx != nullptr)
         sceneJson["AgxTonemapSettings"] = SerializeAgxSettings(*mScene->Agx);
     if (mScene->VolumetricFog != nullptr)
         sceneJson["VolumetricFogSettings"] = SerializeVolumetricFogSettings(*mScene->VolumetricFog);
+
+    if (mScene->VolumetricCloud != nullptr)
+        sceneJson["VolumetricCloudSettings"] = SerializeVolumetricCloudSettings(*mScene->VolumetricCloud);
     if (mScene->Bloom != nullptr)
         sceneJson["BloomSettings"] = SerializeBloomSettings(*mScene->Bloom);
+
+    // An empty graph writes nothing, so levels made before visual scripting existed keep
+    // round-tripping unchanged.
+    if (mScene->NodeGraph != nullptr && !mScene->NodeGraph->IsEmpty())
+        sceneJson["NodeGraph"] = json::parse(mScene->NodeGraph->ToJsonString());
 
     for (const Entity& entity : *mScene->Entities)
     {
@@ -418,6 +748,26 @@ void SceneSerializer::Serialize(const std::string& filepath)
         if (entity.HasRainComponent())
         {
             entityJson["RainComponent"] = *entity.Rain;
+        }
+
+        if (entity.HasParticleSystemComponent())
+        {
+            entityJson["ParticleSystemComponent"] = *entity.ParticleSystem;
+        }
+
+        if (entity.HasTerrainComponent())
+        {
+            entityJson["TerrainComponent"] = *entity.Terrain;
+        }
+
+        if (entity.HasWaterComponent())
+        {
+            entityJson["WaterComponent"] = *entity.Water;
+        }
+
+        if (entity.HasVegetationAreaComponent())
+        {
+            entityJson["VegetationAreaComponent"] = *entity.VegetationArea;
         }
 
         sceneJson["Entities"].push_back(entityJson);
@@ -497,22 +847,73 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         DeserializeTimeOfDaySettings(sceneJson["TimeOfDaySettings"], *mScene->TimeOfDay);
     if (mScene->Taa != nullptr && sceneJson.contains("TaaSettings"))
         DeserializeTaaSettings(sceneJson["TaaSettings"], *mScene->Taa);
+    if (mScene->Smaa != nullptr && sceneJson.contains("SMAASettings"))
+        DeserializeSmaaSettings(sceneJson["SMAASettings"], *mScene->Smaa);
+    if (mScene->Sharpen != nullptr && sceneJson.contains("SharpenSettings"))
+    {
+        DeserializeSharpenSettings(sceneJson["SharpenSettings"], *mScene->Sharpen);
+    }
+    else if (mScene->Sharpen != nullptr && sceneJson.contains("TaaSettings"))
+    {
+        const json& taaSettingsJson = sceneJson["TaaSettings"];
+        mScene->Sharpen->ImageSharpeningEnabled = taaSettingsJson.value("UseSharpening", mScene->Sharpen->ImageSharpeningEnabled);
+        mScene->Sharpen->ImageSharpeningStrength = taaSettingsJson.value("SharpeningStrength", mScene->Sharpen->ImageSharpeningStrength);
+        mScene->Sharpen->Validate();
+    }
     if (mScene->Dlss != nullptr && sceneJson.contains("DlssSettings"))
         DeserializeDlssSettings(sceneJson["DlssSettings"], *mScene->Dlss);
+    if (mScene->GlobalIllumination != nullptr && sceneJson.contains("GlobalIlluminationMode"))
+        DeserializeGlobalIlluminationMode(sceneJson["GlobalIlluminationMode"], *mScene->GlobalIllumination);
     if (mScene->Rtgi != nullptr && sceneJson.contains("RtGISettings"))
         DeserializeRtgiSettings(sceneJson["RtGISettings"], *mScene->Rtgi);
+    if (mScene->RadianceCascades != nullptr && sceneJson.contains("RadianceCascadesSettings"))
+        DeserializeRadianceCascadesSettings(sceneJson["RadianceCascadesSettings"], *mScene->RadianceCascades);
     if (mScene->Rtao != nullptr && sceneJson.contains("RtAOSettings"))
         DeserializeRtaoSettings(sceneJson["RtAOSettings"], *mScene->Rtao);
     if (mScene->Gtao != nullptr && sceneJson.contains("GTAOSettings"))
         DeserializeGtaoSettings(sceneJson["GTAOSettings"], *mScene->Gtao);
+    if (mScene->Ssr != nullptr && sceneJson.contains("SsrSettings"))
+        DeserializeSsrSettings(sceneJson["SsrSettings"], *mScene->Ssr);
+    if (mScene->ChromaticAberration != nullptr && sceneJson.contains("ChromaticAberrationSettings"))
+        DeserializeChromaticAberrationSettings(sceneJson["ChromaticAberrationSettings"], *mScene->ChromaticAberration);
     if (mScene->Agx != nullptr && sceneJson.contains("AgxTonemapSettings"))
         DeserializeAgxSettings(sceneJson["AgxTonemapSettings"], *mScene->Agx);
     if (mScene->VolumetricFog != nullptr && sceneJson.contains("VolumetricFogSettings"))
         DeserializeVolumetricFogSettings(sceneJson["VolumetricFogSettings"], *mScene->VolumetricFog);
+
+    if (mScene->VolumetricCloud != nullptr && sceneJson.contains("VolumetricCloudSettings"))
+        DeserializeVolumetricCloudSettings(sceneJson["VolumetricCloudSettings"], *mScene->VolumetricCloud);
     if (mScene->Bloom != nullptr && sceneJson.contains("BloomSettings"))
         DeserializeBloomSettings(sceneJson["BloomSettings"], *mScene->Bloom);
 
+    if (mScene->NodeGraph != nullptr)
+    {
+        mScene->NodeGraph->Clear();
+
+        if (sceneJson.contains("NodeGraph"))
+        {
+            const json& nodeGraphJson = sceneJson["NodeGraph"];
+            if (nodeGraphJson.is_string())
+            {
+                // A path instead of a graph: the level shares a .nodegraph that lives
+                // beside it, so several levels can drive the same script.
+                const std::filesystem::path graphPath =
+                    std::filesystem::path(filepath).parent_path() / nodeGraphJson.get<std::string>();
+                mScene->NodeGraph->LoadFromFile(graphPath.string());
+            }
+            else if (nodeGraphJson.is_object())
+            {
+                mScene->NodeGraph->FromJsonString(nodeGraphJson.dump());
+            }
+        }
+    }
+
     mScene->Entities->clear();
+
+    // Scenes written before the Z-up rotation order stored their Euler angles for
+    // XMMatrixRotationRollPitchYaw and have to be converted as they load.
+    const int sceneFormatVersion = sceneJson.value("FormatVersion", 1);
+    const bool needsLegacyRotationConversion = sceneFormatVersion < 2;
 
     const json& entitiesJson = sceneJson["Entities"];
     const size_t entityCount = entitiesJson.size();
@@ -537,7 +938,14 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
 
             if (entityJson.contains("TransformComponent"))
             {
-                entity.AddTransformComponent(entityJson["TransformComponent"].get<TransformComponent>());
+                TransformComponent transform = entityJson["TransformComponent"].get<TransformComponent>();
+                if (needsLegacyRotationConversion)
+                {
+                    // Re-express the saved angles in the current order so the entity keeps
+                    // the orientation it was authored with.
+                    transform.Rotation = PteroTransform::ConvertLegacyRotation(transform.Rotation);
+                }
+                entity.AddTransformComponent(transform);
             }
 
             // Restore mesh/material paths; the asset handle will be lazily loaded on the next render frame.
@@ -565,6 +973,27 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
             if (entityJson.contains("RainComponent"))
             {
                 entity.AddRainComponent() = entityJson["RainComponent"].get<RainComponent>();
+            }
+
+            if (entityJson.contains("ParticleSystemComponent"))
+            {
+                entity.AddParticleSystemComponent() =
+                    entityJson["ParticleSystemComponent"].get<ParticleSystemComponent>();
+            }
+
+            if (entityJson.contains("WaterComponent"))
+            {
+                entity.AddWaterComponent() = entityJson["WaterComponent"].get<WaterComponent>();
+            }
+
+            if (entityJson.contains("TerrainComponent"))
+            {
+                entity.AddTerrainComponent() = entityJson["TerrainComponent"].get<TerrainComponent>();
+            }
+
+            if (entityJson.contains("VegetationAreaComponent"))
+            {
+                entity.AddVegetationAreaComponent() = entityJson["VegetationAreaComponent"].get<VegetationAreaComponent>();
             }
 
             ++entityIndex;

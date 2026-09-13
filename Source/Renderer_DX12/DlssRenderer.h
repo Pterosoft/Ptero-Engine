@@ -3,7 +3,7 @@
 #include "DX12Helper.h"
 #include "DlssSettings.h"
 
-#include "imgui.h"
+#include "../QtUi/UiTypes.h"
 
 #include <DirectXMath.h>
 #include <string>
@@ -55,7 +55,7 @@ public:
     D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv() const { return mOutputSrvGpu; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv() const { return mOutputSrvCpu; }
     ID3D12Resource* GetOutputResource() const { return mOutputTexture.Get(); }
-    ImTextureID GetOutputTextureId() const { return mOutputTextureId; }
+    UiTextureID GetOutputTextureId() const { return mOutputTextureId; }
 
     UINT GetRenderWidth() const { return mRenderWidth; }
     UINT GetRenderHeight() const { return mRenderHeight; }
@@ -91,7 +91,7 @@ private:
     D3D12_RESOURCE_STATES mOutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu{};
-    ImTextureID mOutputTextureId = ImTextureID_Invalid;
+    UiTextureID mOutputTextureId = UiTextureID_Invalid;
     bool mOutputSrvAllocated = false;
 
     int mLastAppliedMode = -1;

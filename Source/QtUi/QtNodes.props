@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Builds the bundled QtNodes SDK (Source/SDKs/nodeeditor) straight into the importing
+       project instead of as a separate library. The engine has no CMake step, and QtNodes
+       is small enough that compiling its 24 translation units alongside the renderer costs
+       less than maintaining a second build system just for it.
+
+       Qt's meta-object and resource compilers are the only thing CMake was doing that
+       MSBuild cannot: the generation target below stands in for AUTOMOC/AUTORCC. The list
+       of headers that need moc is fixed (every header declaring Q_OBJECT or Q_NAMESPACE),
+       so the generated translation units are listed statically and simply produced before
+       ClCompile runs. Engine-side node code deliberately avoids Q_OBJECT so nothing outside
+       this SDK ever needs moc. -->
+  <PropertyGroup>
+    <PteroQtRoot Condition="'$(PteroQtRoot)'==''">$(MSBuildThisFileDirectory)..\SDKs\qt\install</PteroQtRoot>
+    <QtNodesRoot Condition="'$(QtNodesRoot)'==''">$(MSBuildThisFileDirectory)..\SDKs\nodeeditor\</QtNodesRoot>
+    <QtNodesGenDir>$(IntDir)QtNodesGenerated\</QtNodesGenDir>
+    <QtNodesIncludes>$(QtNodesRoot)include;$(QtNodesRoot)include\QtNodes\internal;$(QtNodesRoot)src</QtNodesIncludes>
+    <QtIncludes>$(PteroQtRoot)\include;$(PteroQtRoot)\include\QtCore;$(PteroQtRoot)\include\QtGui;$(PteroQtRoot)\include\QtWidgets;$(PteroQtRoot)\include\QtOpenGL</QtIncludes>
+    <!-- /permissive- and C++20 are not optional here even though the SDK predates both:
+         Qt 6.11 static-asserts on conformance mode, and every Qt inline function these
+         units share with the rest of the DLL has to be compiled the same way or the two
+         copies violate the ODR. Only /sdl and the noisier warnings are dropped. -->
+    <QtNodesDefines>NODE_EDITOR_STATIC;QT_NO_KEYWORDS;NOMINMAX;WIN32;_WINDOWS</QtNodesDefines>
+    <QtNodesDisabledWarnings>4100;4127;4189;4244;4267;4324;4458;4996</QtNodesDisabledWarnings>
+  </PropertyGroup>
+
+  <!-- Importing projects get the public headers; NODE_EDITOR_STATIC has to be visible to
+       engine code too because Export.hpp errors out when neither linkage is declared. -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(QtNodesRoot)include;$(QtIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NODE_EDITOR_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>Qt6OpenGL$(PteroQtSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\AbstractGraphModel.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\BasicGraphicsScene.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\ConnectionGraphicsObject.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\DataFlowGraphModel.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\DataFlowGraphicsScene.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\Definitions.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\GraphicsView.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\NodeDelegateModel.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\NodeGraphicsObject.hpp" />
+    <QtNodesMocHeader Include="$(QtNodesRoot)include\QtNodes\internal\Style.hpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <QtNodesSource Include="$(QtNodesRoot)src\AbstractGraphModel.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\AbstractNodeGeometry.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\BasicGraphicsScene.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\ConnectionGraphicsObject.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\ConnectionState.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\ConnectionStyle.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DataFlowGraphModel.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DataFlowGraphicsScene.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DefaultConnectionPainter.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DefaultHorizontalNodeGeometry.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DefaultNodePainter.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\DefaultVerticalNodeGeometry.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\Definitions.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\GraphicsView.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\GraphicsViewStyle.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeConnectionInteraction.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeDelegateModel.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeDelegateModelRegistry.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeGraphicsObject.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeState.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\NodeStyle.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\StyleCollection.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\UndoCommands.cpp" />
+    <QtNodesSource Include="$(QtNodesRoot)src\locateNode.cpp" />
+    <QtNodesSource Include="$(QtNodesGenDir)qrc_resources.cpp" />
+    <QtNodesSource Include="@(QtNodesMocHeader->'$(QtNodesGenDir)moc_%(Filename).cpp')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="@(QtNodesSource)">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <SDLCheck>false</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <WarningLevel>Level3</WarningLevel>
+      <DisableSpecificWarnings>$(QtNodesDisabledWarnings)</DisableSpecificWarnings>
+      <PreprocessorDefinitions>$(QtNodesDefines)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(QtNodesIncludes);$(QtIncludes)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/Zc:__cplusplus /utf-8 /FS</AdditionalOptions>
+    </ClCompile>
+  </ItemGroup>
+
+  <Target Name="CheckQtNodes" BeforeTargets="QtNodesGenerate">
+    <Error Condition="!Exists('$(QtNodesRoot)src\DataFlowGraphModel.cpp')" Text="The QtNodes SDK is missing. Place it in Source/SDKs/nodeeditor (see SDKs.md)." />
+    <Error Condition="!Exists('$(PteroQtRoot)\bin\moc.exe')" Text="Qt's moc is missing. Run Source/QtUi/BuildQt.ps1 first." />
+  </Target>
+
+  <Target Name="QtNodesGenerate" BeforeTargets="ClCompile"
+          Inputs="@(QtNodesMocHeader);$(QtNodesRoot)resources\resources.qrc"
+          Outputs="@(QtNodesMocHeader->'$(QtNodesGenDir)moc_%(Filename).cpp');$(QtNodesGenDir)qrc_resources.cpp">
+    <MakeDir Directories="$(QtNodesGenDir)" />
+    <Message Importance="high" Text="QtNodes: running moc and rcc" />
+    <Exec Command="&quot;$(PteroQtRoot)\bin\moc.exe&quot; --no-notes -DNODE_EDITOR_STATIC -I&quot;$(QtNodesRoot)include&quot; -I&quot;$(QtNodesRoot)include\QtNodes\internal&quot; -o &quot;$(QtNodesGenDir)moc_%(QtNodesMocHeader.Filename).cpp&quot; &quot;%(QtNodesMocHeader.FullPath)&quot;" />
+    <Exec Command="&quot;$(PteroQtRoot)\bin\rcc.exe&quot; -name resources -o &quot;$(QtNodesGenDir)qrc_resources.cpp&quot; &quot;$(QtNodesRoot)resources\resources.qrc&quot;" />
+  </Target>
+
+  <!-- GraphicsView.cpp includes <QtOpenGL>, so the module comes along even though the
+       view is drawn with the raster engine. Qt.props deploys the rest of the runtime. -->
+  <Target Name="DeployQtNodesRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(PteroQtRoot)\bin\Qt6OpenGL$(PteroQtSuffix).dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

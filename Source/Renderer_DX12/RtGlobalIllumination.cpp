@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 #include <filesystem>
 #include <fstream>
@@ -426,8 +427,10 @@ void RtGlobalIllumination::Shutdown()
     mOutputBufferInSrvState = false;
     mSpecularBufferInSrvState = false;
     mUploadRingIdx = 0;
-    mPendingUploads[0].clear();
-    mPendingUploads[1].clear();
+    for (std::vector<ComPtr<ID3D12Resource>>& slot : mPendingUploads)
+        slot.clear();
+    mConstantFrameSlot = 0;
+    mSceneSignature = 0;
     mBlasCache.clear();
     mMaterialSlotCache.clear();
     mTextureAverageColorCache.clear();
@@ -478,7 +481,7 @@ void RtGlobalIllumination::Dispatch(
     const UINT readIdx  = 1u - writeIdx;
 
     cmdList->SetComputeRootSignature(mRootSignature.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, CurrentConstantAddress());
 
     // Helpers for common barrier patterns.
     auto UavBarrier = [&](ID3D12Resource* resource) {
@@ -529,7 +532,16 @@ void RtGlobalIllumination::Dispatch(
     // Passes 1-3:  either NRD RELAX_DIFFUSE (recommended) or the legacy
     // ReSTIR temporal / spatial / EMA-composite path.
     // -----------------------------------------------------------------------
+    // Diagnostic debug views (>= 10) replace the GI signal with one of its own
+    // inputs, so they must not be denoised: NRD would spatially filter and
+    // temporally reproject the very instability they exist to expose, and the
+    // NRD composite has no debug-view handling to pass them through. Forcing
+    // the non-NRD path here makes the diagnostics correct by construction
+    // rather than depending on the denoiser being switched off by hand.
+    const bool diagnosticViewActive = settings.DebugView >= 10;
+
     const bool useNrd = settings.UseNrdDenoiser
+                     && !diagnosticViewActive
                      && mNrdDenoiser.IsInitialized()
                      && worldToViewMatrix  != nullptr
                      && viewToClipMatrix   != nullptr
@@ -553,7 +565,7 @@ void RtGlobalIllumination::Dispatch(
         // mNrdViewZ, mNrdMotionVectors.
         {
             cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
-            cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+            cmdList->SetComputeRootConstantBufferView(0, CurrentConstantAddress());
             cmdList->SetPipelineState(mPSO_NrdPrepare.Get());
             // param 1: t0 = albedo (not used but bound for root-sig completeness)
             SetTable(cmdList, 1, gbufferAlbedoSrv);
@@ -629,7 +641,7 @@ void RtGlobalIllumination::Dispatch(
         // Step G – NrdComposite: unpack denoised radiance → mOutputBuffer.
         {
             cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
-            cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+            cmdList->SetComputeRootConstantBufferView(0, CurrentConstantAddress());
             cmdList->SetPipelineState(mPSO_NrdComposite.Get());
             SetTable(cmdList, 1, mNrdOutDiffSrvGpu);
             // param 5: u0 = final GI output
@@ -652,10 +664,10 @@ void RtGlobalIllumination::Dispatch(
         // ── Legacy ReSTIR path ─────────────────────────────────────────────
         // Restore the shared RTGI root signature that was set by RayGen.
         cmdList->SetComputeRootSignature(mRootSignature.Get());
-        cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+        cmdList->SetComputeRootConstantBufferView(0, CurrentConstantAddress());
 
         // Pass 1 - Temporal resampling
-        if (settings.TemporalReuseEnabled)
+        if (settings.TemporalReuseEnabled && !diagnosticViewActive)
         {
             ToSrv(mReservoirBuffer[writeIdx].Get());
             ToSrv(mReservoirBuffer[readIdx].Get());
@@ -676,10 +688,10 @@ void RtGlobalIllumination::Dispatch(
             ToUav(mReservoirBuffer[writeIdx].Get());
         }
 
-        const UINT spatialReadIdx = settings.TemporalReuseEnabled ? readIdx : writeIdx;
+        const UINT spatialReadIdx = (settings.TemporalReuseEnabled && !diagnosticViewActive) ? readIdx : writeIdx;
 
         // Pass 2 - Spatial resampling
-        if (settings.SpatialReuseEnabled)
+        if (settings.SpatialReuseEnabled && !diagnosticViewActive)
         {
             const UINT spatialWriteIdx = 1u - spatialReadIdx;
             ToSrv(mReservoirBuffer[spatialReadIdx].Get());
@@ -753,7 +765,7 @@ void RtGlobalIllumination::Dispatch(
         }
 
         cmdList->SetComputeRootSignature(mRootSignatureSpecular.Get());
-        cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+        cmdList->SetComputeRootConstantBufferView(0, CurrentConstantAddress());
         SetTable(cmdList, 1, gbufferAlbedoSrv);
         SetTable(cmdList, 2, gbufferNormalDepthSrv);
         SetTable(cmdList, 3, mTlasSrvGpu);
@@ -1127,10 +1139,14 @@ bool RtGlobalIllumination::CreateResolutionBuffers()
         // and would cause temporal accumulation to always see zero hit distance (black output).
         mNrdOutDiff             = MakeNrdTex(L"NRD_OutDiff",        DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-    // Constant buffer (256 bytes, persistently mapped).
+    // Constant buffer: one block per frame in flight, persistently mapped, so a
+    // frame's constants are not overwritten while the GPU is still reading them.
     if (!mConstantBuffer)
     {
-        mConstantBuffer = MakeConstantBuffer(device, sizeof(RtGIConstants), &mMappedCb);
+        mConstantBuffer = MakeConstantBuffer(
+            device,
+            kConstantStride * kFramesInFlight,
+            reinterpret_cast<void**>(&mMappedCb));
     }
 
     // Small non-shader-visible heap for ClearUnorderedAccessView calls if needed later.
@@ -1426,7 +1442,10 @@ void RtGlobalIllumination::UploadConstants(
         std::memcpy(cb.PointLights, pointLights,
             static_cast<size_t>(cb.NumPointLights) * sizeof(DeferredLightingPass::PointLightGpu));
     }
-    std::memcpy(mMappedCb, &cb, sizeof(cb));
+    // Advance to the next block before writing, so this frame's constants land
+    // somewhere the GPU is not still reading from an earlier frame.
+    mConstantFrameSlot = (mConstantFrameSlot + 1u) % kFramesInFlight;
+    std::memcpy(mMappedCb + CurrentConstantOffset(), &cb, sizeof(cb));
 }
 
 // -----------------------------------------------------------------------
@@ -1467,9 +1486,84 @@ bool RtGlobalIllumination::CreateUploadBuf(ID3D12Device* dev, UINT64 size,
 // BuildTlas – build/update BLAS per unique mesh and assemble the TLAS.
 // Must be called once per frame before Dispatch.
 // -----------------------------------------------------------------------
+// Everything that would change the contents of the acceleration structure,
+// folded into one value. Deliberately cheap: a walk over the entity list with
+// no allocation and no filesystem access, so the check can never cost more than
+// the rebuild it avoids.
+//
+// Note what is absent - the camera. A TLAS is view-independent, which is
+// exactly why a static scene can reuse last frame's.
+std::uint64_t RtGlobalIllumination::ComputeSceneSignature(
+    const std::vector<Entity>& entities,
+    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches) const
+{
+    // FNV-1a: no dependencies, good avalanche for the small mixed-type keys
+    // here, and fast enough to run over every entity each frame.
+    std::uint64_t hash = 1469598103934665603ull;
+
+    const auto mix = [&hash](std::uint64_t value)
+    {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+
+    const auto mixFloat = [&mix](float value)
+    {
+        // Hash the bit pattern, not the value: -0.0f and +0.0f compare equal
+        // but are different transforms to the builder, and NaN compares unequal
+        // to itself, which would force a rebuild every frame.
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        mix(bits);
+    };
+
+    mix(entities.size());
+
+    for (const Entity& entity : entities)
+    {
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        // The mesh pointer covers both which asset is used and whether it has
+        // finished loading - a late async load swaps the pointer and correctly
+        // forces a rebuild.
+        mix(reinterpret_cast<std::uint64_t>(entity.Mesh->MeshAsset.get()));
+        mix(std::hash<std::string>{}(entity.Mesh->MaterialPath));
+
+        const TransformComponent& transform = entity.Transform;
+        mixFloat(transform.Position.x); mixFloat(transform.Position.y); mixFloat(transform.Position.z);
+        mixFloat(transform.Rotation.x); mixFloat(transform.Rotation.y); mixFloat(transform.Rotation.z);
+        mixFloat(transform.Scale.x);    mixFloat(transform.Scale.y);    mixFloat(transform.Scale.z);
+    }
+
+    if (vegetationBatches != nullptr)
+    {
+        // Vegetation instances are procedural and move with wind and with the
+        // camera-relative scatter radius, so this will usually differ every
+        // frame - which is correct, and is why only layers that opted into ray
+        // tracing reach here at all.
+        mix(vegetationBatches->size());
+        for (const VegetationRenderer::RayTracingBatch& batch : *vegetationBatches)
+        {
+            mix(reinterpret_cast<std::uint64_t>(batch.MeshAsset));
+            mix(batch.Transforms.size());
+            for (const DirectX::XMFLOAT4X4& instanceTransform : batch.Transforms)
+            {
+                for (int row = 0; row < 4; ++row)
+                    for (int column = 0; column < 4; ++column)
+                        mixFloat(instanceTransform.m[row][column]);
+            }
+        }
+    }
+
+    // Never return the sentinel that means "nothing built yet".
+    return hash == 0 ? 1ull : hash;
+}
+
 void RtGlobalIllumination::BuildTlas(
     ID3D12GraphicsCommandList4* cmdList,
-    const std::vector<Entity>&  entities)
+    const std::vector<Entity>&  entities,
+    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches)
 {
     ID3D12Device* deviceRaw = DX12Context_GetDevice();
     if (!deviceRaw) return;
@@ -1478,11 +1572,32 @@ void RtGlobalIllumination::BuildTlas(
     ComPtr<ID3D12Device5> device;
     if (FAILED(deviceRaw->QueryInterface(IID_PPV_ARGS(&device)))) return;
 
-    // Two-frame upload ring: advance the slot, then release the OLDEST uploads.
-    // Slot [ringIdx]     = uploads being queued THIS frame.
-    // Slot [ringIdx ^ 1] = uploads queued TWO frames ago — safe to release now
-    //                      because the GPU finishes frame N-1 before we submit frame N+1.
-    mUploadRingIdx ^= 1u;
+    // A TLAS describes only where instances are. If none of that has changed
+    // since the last build, rebuilding produces a bit-identical structure at
+    // full cost - and in an editor the scene is static most of the time while
+    // the camera moves. Checking first costs a walk over the entity list.
+    //
+    // Everything the existing TLAS needs in order to stay valid - the structure
+    // itself, its SRV, and the geometry and material pools - persists across
+    // frames, so there is nothing to re-establish on the skipped path.
+    {
+        const std::uint64_t signature = ComputeSceneSignature(entities, vegetationBatches);
+        if (signature == mSceneSignature && mSceneSignature != 0 && mTlas)
+        {
+            return;
+        }
+        mSceneSignature = signature;
+    }
+
+    // Upload ring, one slot per frame in flight: advance, then release the
+    // oldest uploads.
+    //
+    // This used to be two slots, on the assumption that the GPU finishes frame
+    // N-1 before frame N+1 is submitted. That does not hold - the engine queues
+    // three frames, so the CPU can be three frames ahead, and a two-slot ring
+    // freed a BLAS's vertex or index upload while an earlier frame's
+    // acceleration-structure build was still reading it.
+    mUploadRingIdx = (mUploadRingIdx + 1u) % kFramesInFlight;
     mPendingUploads[mUploadRingIdx].clear();
 
     // Rebuild per-instance info each frame (instance order can change).
@@ -1615,27 +1730,26 @@ void RtGlobalIllumination::BuildTlas(
 
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs;
 
-    for (const Entity& entity : entities)
+    // Build a BLAS for `mesh` if it is not already cached, and record its slice
+    // in the shared geometry pools.  Hoisted out of the entity loop so the
+    // vegetation pass below builds its acceleration structures through exactly
+    // the same path.  Returns false when the mesh has no usable geometry.
+    const auto ensureBlas = [&](const Mesh* mesh, const BlasKey& meshKey) -> bool
     {
-        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
-            continue;
+        if (mBlasCache.find(meshKey) != mBlasCache.end())
+            return true;
 
-        const Mesh* mesh = entity.Mesh->MeshAsset.get();
-        const BlasKey meshKey{ mesh, false };
-
-        // Build a BLAS for this mesh if not already cached.
-        if (mBlasCache.find(meshKey) == mBlasCache.end())
         {
             const auto& verts   = mesh->GetVertices();
             const auto& indices = mesh->GetIndices();
-            if (verts.empty() || indices.empty()) continue;
+            if (verts.empty() || indices.empty()) return false;
 
             const UINT64 vbSize = verts.size()   * sizeof(Vertex);
             const UINT64 ibSize = indices.size()  * sizeof(uint32_t);
 
             ComPtr<ID3D12Resource> vbUp, ibUp;
-            if (!CreateUploadBuf(device.Get(), vbSize, vbUp)) continue;
-            if (!CreateUploadBuf(device.Get(), ibSize, ibUp)) continue;
+            if (!CreateUploadBuf(device.Get(), vbSize, vbUp)) return false;
+            if (!CreateUploadBuf(device.Get(), ibSize, ibUp)) return false;
 
             void* m = nullptr;
             vbUp->Map(0, nullptr, &m); std::memcpy(m, verts.data(),   vbSize); vbUp->Unmap(0, nullptr);
@@ -1664,10 +1778,10 @@ void RtGlobalIllumination::BuildTlas(
 
             BlasEntry& e = mBlasCache[meshKey];
             if (!CreateGpuBuffer(device.Get(), pre.ScratchDataSizeInBytes,
-                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch)) continue;
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch)) return false;
             if (!CreateGpuBuffer(device.Get(), pre.ResultDataMaxSizeInBytes,
                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result)) continue;
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result)) return false;
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bd{};
             bd.Inputs                           = inp;
@@ -1701,6 +1815,19 @@ void RtGlobalIllumination::BuildTlas(
             mPendingUploads[mUploadRingIdx].push_back(std::move(vbUp));
             mPendingUploads[mUploadRingIdx].push_back(std::move(ibUp));
         }
+
+        return true;
+    };
+
+    for (const Entity& entity : entities)
+    {
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* mesh = entity.Mesh->MeshAsset.get();
+        const BlasKey meshKey{ mesh, false };
+
+        if (!ensureBlas(mesh, meshKey)) continue;
 
         const auto it = mBlasCache.find(meshKey);
         if (it == mBlasCache.end() || !it->second.Result) continue;
@@ -1783,20 +1910,104 @@ void RtGlobalIllumination::BuildTlas(
         instanceDescs.push_back(inst);
     }
 
+    // Vegetation instances that opted into ray tracing.  These share the BLAS
+    // cache and geometry pools with mesh entities, but each scattered instance
+    // becomes its own TLAS entry because they differ only by transform.
+    //
+    // The instance count here is deliberately small: VegetationRenderer only
+    // hands over layers with ContributeToRayTracing set, and only within a
+    // short radius, because alpha-tested foliage forces any-hit evaluation on
+    // every ray that touches it.
+    if (vegetationBatches != nullptr)
+    {
+        for (const VegetationRenderer::RayTracingBatch& batch : *vegetationBatches)
+        {
+            if (batch.MeshAsset == nullptr || batch.Transforms.empty())
+                continue;
+
+            const BlasKey meshKey{ batch.MeshAsset, false };
+            if (!ensureBlas(batch.MeshAsset, meshKey)) continue;
+
+            const auto blasIt = mBlasCache.find(meshKey);
+            if (blasIt == mBlasCache.end() || !blasIt->second.Result) continue;
+
+            // One shared material description for the whole batch: every
+            // instance of a vegetation layer uses the same material by
+            // construction, so there is nothing per-instance to vary.
+            const std::size_t materialRangeStart = mCpuMaterialRanges.size();
+
+            GpuMaterialRange range{};
+            range.startPrimitive = 0;
+            range.primitiveCount = blasIt->second.indexCount / 3u;
+
+            const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(batch.MaterialPath, 0);
+            const std::array<float, 3> avgBaseColor = getAverageTextureColor(slotInfo.BaseColorPath);
+            range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
+            range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
+            range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
+            range.baseColorA = slotInfo.BaseColorTint[3];
+            range.opacityFactor = slotInfo.OpacityFactor;
+            range.alphaCutoff = slotInfo.AlphaCutoff;
+            range.baseColorTextureIndex = RegisterRtMaterialTexture(
+                mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.BaseColorPath);
+            range.opacityTextureIndex = RegisterRtMaterialTexture(
+                mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.OpacityPath);
+            range.flags = 0;
+            // Foliage is always alpha-cut and two-sided regardless of what the
+            // material file says, because that is what the raster path does and
+            // a mismatch would show up as traced leaves that are opaque
+            // rectangles or lit from one side only.
+            range.flags |= kRtMaterialFlagAlphaCutout;
+            range.flags |= kRtMaterialFlagDoubleSided;
+            mCpuMaterialRanges.push_back(range);
+
+            for (const DirectX::XMFLOAT4X4& transform : batch.Transforms)
+            {
+                GpuInstanceInfo info{};
+                info.vertexOffset        = blasIt->second.vertexOffset;
+                info.indexOffset         = blasIt->second.indexOffset;
+                info.vertexCount         = blasIt->second.vertexCount;
+                info.indexCount          = blasIt->second.indexCount;
+                info.materialRangeOffset = static_cast<uint32_t>(materialRangeStart);
+                info.materialRangeCount  = 1;
+                mCpuInstanceInfo.push_back(info);
+
+                using namespace DirectX;
+                XMFLOAT4X4 w4;
+                XMStoreFloat4x4(&w4, XMMatrixTranspose(XMLoadFloat4x4(&transform)));
+
+                D3D12_RAYTRACING_INSTANCE_DESC inst{};
+                inst.Transform[0][0] = w4._11; inst.Transform[0][1] = w4._12; inst.Transform[0][2] = w4._13; inst.Transform[0][3] = w4._14;
+                inst.Transform[1][0] = w4._21; inst.Transform[1][1] = w4._22; inst.Transform[1][2] = w4._23; inst.Transform[1][3] = w4._24;
+                inst.Transform[2][0] = w4._31; inst.Transform[2][1] = w4._32; inst.Transform[2][2] = w4._33; inst.Transform[2][3] = w4._34;
+                inst.InstanceMask          = 0xFF;
+                inst.Flags                 = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+                inst.AccelerationStructure = blasIt->second.Result->GetGPUVirtualAddress();
+                instanceDescs.push_back(inst);
+            }
+        }
+    }
+
     if (instanceDescs.empty()) return;
 
     const UINT numInst    = static_cast<UINT>(instanceDescs.size());
     const UINT64 instSize = numInst * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
 
-    // Grow instance upload buffer if needed.
-    if (!mInstanceDescBuffer || mInstanceDescBuffer->GetDesc().Width < instSize)
+    // Instance descriptors, ringed per frame in flight for the same reason as
+    // the pools above: the GPU reads these while building the acceleration
+    // structure, and a single copy was being overwritten by a CPU running up to
+    // three frames ahead. A torn instance descriptor places geometry at a
+    // blend of two frames' transforms.
+    const UINT64 instRingSize = instSize * kFramesInFlight;
+    if (!mInstanceDescBuffer || mInstanceDescBuffer->GetDesc().Width < instRingSize)
     {
         mInstanceDescBuffer.Reset();
-        CreateUploadBuf(device.Get(), instSize, mInstanceDescBuffer);
+        CreateUploadBuf(device.Get(), instRingSize, mInstanceDescBuffer);
     }
+    const UINT64 instOffset = instSize * mUploadRingIdx;
     void* mapped = nullptr;
     if (FAILED(mInstanceDescBuffer->Map(0, nullptr, &mapped)) || !mapped) return;
-    std::memcpy(mapped, instanceDescs.data(), instSize);
+    std::memcpy(static_cast<uint8_t*>(mapped) + instOffset, instanceDescs.data(), instSize);
     mInstanceDescBuffer->Unmap(0, nullptr);
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInp{};
@@ -1804,7 +2015,7 @@ void RtGlobalIllumination::BuildTlas(
     tlasInp.Flags         = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
     tlasInp.NumDescs      = numInst;
     tlasInp.DescsLayout   = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    tlasInp.InstanceDescs = mInstanceDescBuffer->GetGPUVirtualAddress();
+    tlasInp.InstanceDescs = mInstanceDescBuffer->GetGPUVirtualAddress() + instOffset;
 
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasPre{};
     device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInp, &tlasPre);
@@ -1853,7 +2064,20 @@ void RtGlobalIllumination::BuildTlas(
     ID3D12Device* rawDevice = DX12Context_GetDevice();
 
     // Helper: (re)create an UPLOAD-heap structured buffer if it is missing or
-    // too small, write its SRV descriptor, and memcpy the data into it.
+    // too small, point its SRV at this frame's slice, and memcpy the data in.
+    //
+    // The buffer holds one slice per frame in flight rather than a single copy.
+    // A single copy was being rewritten by the CPU while the GPU was still
+    // reading it for an earlier frame - the engine queues three frames, so the
+    // CPU can be that far ahead. A torn instance-info record makes the hit
+    // shader read the wrong material range and the wrong slice of the vertex
+    // and index pools, so a ray returns wildly wrong radiance for that frame.
+    // That is visible as GI flicker even when nothing about the scene, the
+    // camera or the sampling has changed.
+    //
+    // Ringing the slices rather than the resources keeps one descriptor per
+    // buffer: the SRV is simply re-pointed at the current slice each frame,
+    // which costs a descriptor write and avoids allocating N descriptor slots.
     auto SyncUploadBuffer = [&](
         const void*             srcData,
         UINT64                  byteSize,
@@ -1864,29 +2088,36 @@ void RtGlobalIllumination::BuildTlas(
     {
         if (byteSize == 0) return;
 
+        const UINT64 ringBytes = byteSize * kFramesInFlight;
+
         // Recreate if missing or undersized.
-        if (!gpuBuf || gpuBuf->GetDesc().Width < byteSize)
+        if (!gpuBuf || gpuBuf->GetDesc().Width < ringBytes)
         {
             if (gpuBuf && *mappedPtr)
                 gpuBuf->Unmap(0, nullptr);
             gpuBuf.Reset();
             *mappedPtr = nullptr;
 
-            CreateUploadBuf(rawDevice, byteSize, gpuBuf);
+            CreateUploadBuf(rawDevice, ringBytes, gpuBuf);
             gpuBuf->Map(0, nullptr, mappedPtr);
-
-            // Write the SRV descriptor (only needed when the buffer is recreated).
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
-            srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
-            srvDesc.Buffer.StructureByteStride = stride;
-            srvDesc.Buffer.NumElements         = static_cast<UINT>(byteSize / stride);
-            rawDevice->CreateShaderResourceView(gpuBuf.Get(), &srvDesc, srvCpu);
         }
 
-        // Copy data directly into the persistently-mapped buffer.
-        std::memcpy(*mappedPtr, srcData, byteSize);
+        const UINT elementCount = static_cast<UINT>(byteSize / stride);
+        const UINT firstElement = elementCount * mUploadRingIdx;
+
+        // Re-point the SRV at this frame's slice. Must happen every frame, not
+        // only on recreation, because the slice moves with the ring.
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format                     = DXGI_FORMAT_UNKNOWN;
+        srvDesc.Buffer.FirstElement        = firstElement;
+        srvDesc.Buffer.StructureByteStride = stride;
+        srvDesc.Buffer.NumElements         = elementCount;
+        rawDevice->CreateShaderResourceView(gpuBuf.Get(), &srvDesc, srvCpu);
+
+        // Copy into this frame's slice of the persistently-mapped buffer.
+        std::memcpy(static_cast<uint8_t*>(*mappedPtr) + byteSize * mUploadRingIdx, srcData, byteSize);
     };
 
     if (mGeometryDirty && !mCpuVertices.empty())

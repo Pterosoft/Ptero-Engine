@@ -1,0 +1,216 @@
+#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "RadianceCascadesSettings.h"
+#include "DeferredLightingPass.h"
+
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <cstdint>
+
+using Microsoft::WRL::ComPtr;
+
+struct alignas(256) RadianceCascadesConstants
+{
+	uint32_t FrameWidth;
+	uint32_t FrameHeight;
+	uint32_t FrameIndex;
+	uint32_t CascadeCount;
+
+	uint32_t ProbeSpacingBase;
+	uint32_t RaysPerProbe;
+	int32_t  DebugView;
+	float    RayLengthBase;
+
+	float    RayLengthScale;
+	float    IntervalLengthScale;
+	float    Hysteresis;
+	float    GiIntensity;
+
+	float    ViewProjInv[16];
+	float    CurrViewProj[16];
+	float    PrevViewProj[16];
+	float    SunDir[3];
+	float    ProbeSpacingBaseFloat;
+
+	float    SunColor[3];
+	int32_t  NumPointLights;
+
+	float    SkyColor[3];
+	float    SceneMaxDistance;
+
+	float    CameraPos[3];
+	float    ColorBleedingStrength;
+
+	uint32_t SparseProbeTableCapacity;
+	uint32_t SparseProbeCount;
+	uint32_t SparseProbeCellSize;
+	uint32_t SparseProbeSearchSteps;
+
+	float    SparseProbeReuseStrength;
+	float    RayBias;
+	float    SpatialFilterStrength;
+	float    HistoryClampScale;
+
+	float    HistoryDepthSensitivity;
+	float    HistoryNormalThreshold;
+	uint32_t SparseFrameIndex;
+	float    _Padding1;
+
+	DeferredLightingPass::PointLightGpu PointLights[DeferredLightingPass::kMaxPointLights]{};
+};
+
+struct RadianceCascadesSparseProbeGpu
+{
+	int32_t CellX;
+	int32_t CellY;
+	int32_t CellZ;
+	uint32_t State;
+	float Position[3];
+	uint32_t AnchorKey;
+	float Normal[3];
+	uint32_t LastTouchedFrame;
+	float Radiance[4];
+};
+
+class RadianceCascadesRenderer
+{
+public:
+	RadianceCascadesRenderer() = default;
+	~RadianceCascadesRenderer() { Shutdown(); }
+
+	bool Initialize(UINT width, UINT height);
+	bool EnsureSize(UINT width, UINT height);
+	void Shutdown();
+
+	void Dispatch(
+		ID3D12GraphicsCommandList4* cmdList,
+		D3D12_GPU_DESCRIPTOR_HANDLE gbufferAlbedoSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE gbufferNormalDepthSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE gbufferMaterialSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE vertexSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE indexSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE instanceInfoSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE materialRangeSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE baseTextureTableSrv,
+		const RadianceCascadesSettings& settings,
+		const float viewProjInv[16],
+		const float currViewProj[16],
+		const float prevViewProj[16],
+		const float cameraPos[3],
+		float sunDirX,
+		float sunDirY,
+		float sunDirZ,
+		float sunR,
+		float sunG,
+		float sunB,
+		float skyR,
+		float skyG,
+		float skyB,
+		const DeferredLightingPass::PointLightGpu* pointLights,
+		uint32_t numPointLights,
+		float sceneMaxDistance,
+		bool resetHistory);
+
+	bool IsInitialized() const { return mIsInitialized; }
+	bool HasInitFailed() const { return mInitFailed; }
+	const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
+	D3D12_GPU_DESCRIPTOR_HANDLE GetOutputSrv() const { return mOutputSrvGpu; }
+
+private:
+	bool CreateRootSignature();
+	bool CreateTraceRootSignature();
+	bool CreateCommandSignature();
+	bool CreatePipelines();
+	bool CreateResolutionBuffers();
+	bool CreateDescriptors();
+	bool CreateSparseProbeResources(uint32_t tableCapacity);
+	void UploadConstants(
+		const RadianceCascadesSettings& settings,
+		const float viewProjInv[16],
+		const float currViewProj[16],
+		const float prevViewProj[16],
+		const float cameraPos[3],
+		float sunDirX,
+		float sunDirY,
+		float sunDirZ,
+		float sunR,
+		float sunG,
+		float sunB,
+		float skyR,
+		float skyG,
+		float skyB,
+		const DeferredLightingPass::PointLightGpu* pointLights,
+		uint32_t numPointLights,
+		float sceneMaxDistance);
+
+	bool mIsInitialized = false;
+	bool mInitFailed = false;
+	UINT mWidth = 0;
+	UINT mHeight = 0;
+	uint32_t mFrameIndex = 0;
+	uint32_t mSparseFrameIndex = 0;
+	std::string mLastError;
+
+	ComPtr<ID3D12RootSignature> mRootSignature;
+	ComPtr<ID3D12RootSignature> mTraceRootSignature;
+	ComPtr<ID3D12CommandSignature> mDispatchIndirectSignature;
+	ComPtr<ID3D12PipelineState> mClearSparsePso;
+	ComPtr<ID3D12PipelineState> mAllocateSparsePso;
+	ComPtr<ID3D12PipelineState> mResolveSparseAnchorsPso;
+	ComPtr<ID3D12PipelineState> mCompactSparsePso;
+	ComPtr<ID3D12PipelineState> mBuildIndirectPso;
+	ComPtr<ID3D12PipelineState> mTraceSparsePso;
+	ComPtr<ID3D12PipelineState> mGatherSparsePso;
+	ComPtr<ID3D12PipelineState> mCompositePso;
+	ComPtr<ID3D12Resource> mConstantBuffer;
+	RadianceCascadesConstants* mMappedConstants = nullptr;
+
+	ComPtr<ID3D12Resource> mTraceTexture;
+	ComPtr<ID3D12Resource> mHistoryTexture;
+	ComPtr<ID3D12Resource> mOutputTexture;
+	ComPtr<ID3D12Resource> mSparseProbeBuffer;
+	ComPtr<ID3D12Resource> mActiveProbeListBuffer;
+	ComPtr<ID3D12Resource> mActiveProbeCountBuffer;
+	ComPtr<ID3D12Resource> mIndirectArgsBuffer;
+	D3D12_RESOURCE_STATES mTraceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	D3D12_RESOURCE_STATES mHistoryState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+	D3D12_RESOURCE_STATES mOutputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+	D3D12_RESOURCE_STATES mSparseProbeState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	D3D12_RESOURCE_STATES mActiveProbeListState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	D3D12_RESOURCE_STATES mActiveProbeCountState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	D3D12_RESOURCE_STATES mIndirectArgsState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE mTraceSrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mTraceSrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mTraceUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mTraceUavGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mHistorySrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mHistorySrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mSparseProbeSrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mSparseProbeSrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mSparseProbeUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mSparseProbeUavGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mActiveProbeListSrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mActiveProbeListSrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mActiveProbeListUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mActiveProbeListUavGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mActiveProbeCountSrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mActiveProbeCountSrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mActiveProbeCountUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mActiveProbeCountUavGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mIndirectArgsUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mIndirectArgsUavGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu{};
+	D3D12_CPU_DESCRIPTOR_HANDLE mOutputUavCpu{};
+	D3D12_GPU_DESCRIPTOR_HANDLE mOutputUavGpu{};
+
+	bool mDescriptorsAllocated = false;
+	uint32_t mSparseProbeTableCapacity = 0;
+	bool mClearSparseProbeTable = true;
+};

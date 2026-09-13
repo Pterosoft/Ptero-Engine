@@ -53,19 +53,31 @@ namespace
         return attributes;
     }
 
-    std::filesystem::path ResolveFmodPluginPath()
+    std::filesystem::path ResolveResonancePluginPath()
     {
         wchar_t exePath[MAX_PATH] = {};
         if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
             return {};
 
         std::filesystem::path current = std::filesystem::path(exePath).parent_path();
+        const std::filesystem::path deployedPlugin = current / L"resonanceaudio.dll";
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(deployedPlugin, ec))
+            return deployedPlugin;
+
         while (!current.empty())
         {
-            const std::filesystem::path candidate = current / L"Source" / L"SDKs" / L"fmod" / L"plugins";
-            std::error_code ec;
-            if (std::filesystem::is_directory(candidate, ec))
-                return std::filesystem::weakly_canonical(candidate);
+            const std::filesystem::path sourceBuild =
+                current / L"Source" / L"SDKs" / L"resonance-audio" / L"build-ptero" /
+                L"platforms" / L"fmod" / L"Release" / L"resonanceaudio.dll";
+            if (std::filesystem::is_regular_file(sourceBuild, ec))
+                return std::filesystem::weakly_canonical(sourceBuild);
+
+            const std::filesystem::path packagedPlugin =
+                current / L"Source" / L"SDKs" / L"fmod" / L"plugins" /
+                L"resonance_audio" / L"lib" / L"x64" / L"resonanceaudio.dll";
+            if (std::filesystem::is_regular_file(packagedPlugin, ec))
+                return std::filesystem::weakly_canonical(packagedPlugin);
 
             const std::filesystem::path parent = current.parent_path();
             if (parent == current)
@@ -75,6 +87,121 @@ namespace
 
         return {};
     }
+}
+
+bool AudioManager::InitializeResonanceAudio(FMOD::System* coreSystem, std::string& outError)
+{
+    const std::filesystem::path pluginPath = ResolveResonancePluginPath();
+    if (pluginPath.empty())
+    {
+        outError = "Resonance Audio FMOD plugin was not found.";
+        return false;
+    }
+
+    FMOD_RESULT result = coreSystem->loadPlugin(pluginPath.string().c_str(), &m_resonancePluginHandle, 0);
+    if (!FmodOk(result, outError, "FMOD::System::loadPlugin(resonanceaudio.dll)"))
+        return false;
+
+    unsigned int listenerPluginHandle = 0;
+    int nestedPluginCount = 0;
+    result = coreSystem->getNumNestedPlugins(m_resonancePluginHandle, &nestedPluginCount);
+    if (!FmodOk(result, outError, "FMOD::System::getNumNestedPlugins(Resonance Audio)"))
+        return false;
+
+    for (int pluginIndex = 0; pluginIndex < nestedPluginCount; ++pluginIndex)
+    {
+        unsigned int nestedHandle = 0;
+        if (coreSystem->getNestedPlugin(m_resonancePluginHandle, pluginIndex, &nestedHandle) != FMOD_OK)
+            continue;
+
+        FMOD_PLUGINTYPE pluginType = FMOD_PLUGINTYPE_DSP;
+        char pluginName[128] = {};
+        unsigned int pluginVersion = 0;
+        if (coreSystem->getPluginInfo(
+                nestedHandle,
+                &pluginType,
+                pluginName,
+                static_cast<int>(std::size(pluginName)),
+                &pluginVersion) != FMOD_OK)
+        {
+            continue;
+        }
+
+        if (std::string(pluginName) == "Resonance Audio Listener")
+            listenerPluginHandle = nestedHandle;
+        else if (std::string(pluginName) == "Resonance Audio Source")
+            m_resonanceSourcePluginHandle = nestedHandle;
+    }
+
+    if (listenerPluginHandle == 0 || m_resonanceSourcePluginHandle == 0)
+    {
+        outError = "resonanceaudio.dll did not expose the required Listener and Source DSPs.";
+        return false;
+    }
+
+    FMOD::DSP* listenerDsp = nullptr;
+    result = coreSystem->createDSPByPlugin(listenerPluginHandle, &listenerDsp);
+    if (!FmodOk(result, outError, "FMOD::System::createDSPByPlugin(Resonance Audio Listener)"))
+        return false;
+
+    FMOD::ChannelGroup* masterChannelGroup = nullptr;
+    result = coreSystem->getMasterChannelGroup(&masterChannelGroup);
+    if (result != FMOD_OK || masterChannelGroup == nullptr)
+    {
+        listenerDsp->release();
+        outError = result == FMOD_OK
+            ? "FMOD::System::getMasterChannelGroup returned a null channel group."
+            : std::string("FMOD::System::getMasterChannelGroup: ") + FMOD_ErrorString(result);
+        return false;
+    }
+
+    result = masterChannelGroup->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, listenerDsp);
+    if (result != FMOD_OK)
+    {
+        listenerDsp->release();
+        return FmodOk(result, outError, "FMOD::ChannelGroup::addDSP(Resonance Audio Listener)");
+    }
+
+    listenerDsp->setBypass(!m_resonanceAudioEnabled);
+    m_resonanceListenerDsp = listenerDsp;
+    m_resonanceAudioAvailable = true;
+    m_resonanceAudioStatus = "Resonance Audio Listener and Source DSPs loaded from " + pluginPath.string();
+    return true;
+}
+
+FMOD::DSP* AudioManager::AttachResonanceSource(FMOD::Studio::EventInstance* instance)
+{
+    if (!m_resonanceAudioAvailable || m_coreSystem == nullptr || instance == nullptr)
+        return nullptr;
+
+    // Studio creates the event channel group asynchronously. Flush once after
+    // start so the native Resonance source can be inserted before its panner.
+    m_studioSystem->flushCommands();
+
+    FMOD::ChannelGroup* eventChannelGroup = nullptr;
+    if (instance->getChannelGroup(&eventChannelGroup) != FMOD_OK || eventChannelGroup == nullptr)
+        return nullptr;
+
+    FMOD::DSP* sourceDsp = nullptr;
+    if (m_coreSystem->createDSPByPlugin(m_resonanceSourcePluginHandle, &sourceDsp) != FMOD_OK || sourceDsp == nullptr)
+        return nullptr;
+
+    if (eventChannelGroup->addDSP(FMOD_CHANNELCONTROL_DSP_HEAD, sourceDsp) != FMOD_OK)
+    {
+        sourceDsp->release();
+        return nullptr;
+    }
+
+    sourceDsp->setBypass(!m_resonanceAudioEnabled);
+    return sourceDsp;
+}
+
+void AudioManager::ReleaseResonanceDsp(void*& dspHandle)
+{
+    FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle);
+    if (dsp != nullptr)
+        dsp->release();
+    dspHandle = nullptr;
 }
 
 bool AudioManager::PlayEventByPath(const std::string& eventPath)
@@ -110,6 +237,14 @@ bool AudioManager::PlayEventByPath(const std::string& eventPath)
     }
 
     result = inst->start();
+    if (result == FMOD_OK)
+    {
+        if (is3D)
+        {
+            if (FMOD::DSP* resonanceDsp = AttachResonanceSource(inst))
+                m_oneShotResonanceDsps.push_back(resonanceDsp);
+        }
+    }
     inst->release();
     return result == FMOD_OK;
 }
@@ -171,41 +306,9 @@ bool AudioManager::Initialize(std::string& outError)
         return false;
     }
 
-    const std::filesystem::path pluginRoot = ResolveFmodPluginPath();
-    if (!pluginRoot.empty())
-    {
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(pluginRoot, ec))
-        {
-            if (ec)
-                break;
-
-            if (!entry.is_regular_file())
-                continue;
-
-            const auto& path = entry.path();
-            if (_wcsicmp(path.extension().c_str(), L".dll") != 0)
-                continue;
-
-            const std::wstring normalized = path.wstring();
-            if (normalized.find(L"\\x64\\") == std::wstring::npos)
-                continue;
-
-            unsigned int pluginHandle = 0;
-            const std::string pluginPathUtf8 = path.string();
-            const FMOD_RESULT pluginResult = coreSystem->loadPlugin(pluginPathUtf8.c_str(), &pluginHandle, 0);
-            if (pluginResult == FMOD_OK)
-            {
-            }
-            else
-            {
-            }
-        }
-    }
-
     // Initialise with sensible defaults (512 channels, live update in debug).
     FMOD_STUDIO_INITFLAGS studioFlags = FMOD_STUDIO_INIT_NORMAL | FMOD_STUDIO_INIT_ALLOW_MISSING_PLUGINS;
-#ifdef _DEBUG
+#ifdef PTERO_DEBUG
     studioFlags |= FMOD_STUDIO_INIT_LIVEUPDATE;
 #endif
 
@@ -214,6 +317,15 @@ bool AudioManager::Initialize(std::string& outError)
     {
         m_studioSystem->release();
         m_studioSystem = nullptr;
+        return false;
+    }
+
+    m_coreSystem = coreSystem;
+    if (!InitializeResonanceAudio(coreSystem, outError))
+    {
+        m_studioSystem->release();
+        m_studioSystem = nullptr;
+        m_coreSystem = nullptr;
         return false;
     }
 
@@ -295,7 +407,7 @@ bool AudioManager::Initialize(std::string& outError)
                 std::string failure = displayPath + ": " + FMOD_ErrorString(loadResult);
                 if (loadResult == FMOD_ERR_PLUGIN_MISSING)
                 {
-                    failure += " (This bank references an FMOD plugin effect that is not loaded. If the bank was authored with Steam Audio FMOD integration, you need the Steam Audio FMOD Studio plugin runtime DLL, not just phonon.dll.)";
+                    failure += " (The bank references an FMOD effect that is not available. Resonance Audio is loaded as resonanceaudio.dll before bank loading.)";
                 }
                 m_bankLoadFailures.push_back(std::move(failure));
             }
@@ -317,18 +429,11 @@ bool AudioManager::Initialize(std::string& outError)
     m_initialized = true;
     RefreshEventList();
 
-    // Attempt to auto-load the MIT KEMAR HRIR database from Data/HRTF.
-    {
-        std::filesystem::path hrtfPath = m_audioDataPath.parent_path() / "HRTF";
-        std::string hrtfErr;
-        if (!m_hrirDb.Load(hrtfPath, hrtfErr))
-            m_lastStatus += " [HRTF: " + hrtfErr + "]";
-    }
-
     if (m_lastStatus.empty())
     {
         std::ostringstream statusBuilder;
-        statusBuilder << "Loaded " << m_loadedBanks.size() << " bank(s) and discovered " << m_events.size() << " event(s).";
+        statusBuilder << "Loaded " << m_loadedBanks.size() << " bank(s) and discovered " << m_events.size()
+                      << " event(s). Resonance Audio is active.";
         if (!m_bankLoadFailures.empty())
         {
             statusBuilder << " " << m_bankLoadFailures.size() << " bank(s) failed to load.";
@@ -356,12 +461,20 @@ void AudioManager::Shutdown()
 
     StopAll();
 
-    for (FMOD::Studio::EventInstance* inst : m_instances)
+    for (void*& dsp : m_oneShotResonanceDsps)
+        ReleaseResonanceDsp(dsp);
+    m_oneShotResonanceDsps.clear();
+
+    for (std::size_t instanceIndex = 0; instanceIndex < m_instances.size(); ++instanceIndex)
     {
+        FMOD::Studio::EventInstance* inst = m_instances[instanceIndex];
         if (inst)
             inst->release();
+        if (instanceIndex < m_instanceResonanceDsps.size())
+            ReleaseResonanceDsp(m_instanceResonanceDsps[instanceIndex]);
     }
     m_instances.clear();
+    m_instanceResonanceDsps.clear();
 
     for (FMOD::Studio::Bank* bank : m_banks)
         bank->unload();
@@ -369,10 +482,15 @@ void AudioManager::Shutdown()
 
     if (m_studioSystem)
     {
+        ReleaseResonanceDsp(m_resonanceListenerDsp);
         m_studioSystem->release();
         m_studioSystem = nullptr;
     }
 
+    m_coreSystem = nullptr;
+    m_resonanceAudioAvailable = false;
+    m_resonancePluginHandle = 0;
+    m_resonanceSourcePluginHandle = 0;
     m_events.clear();
     m_initialized = false;
 }
@@ -382,6 +500,7 @@ void AudioManager::RefreshEventList()
 {
     m_events.clear();
     m_instances.clear();
+    m_instanceResonanceDsps.clear();
 
     if (!m_studioSystem)
         return;
@@ -420,6 +539,7 @@ void AudioManager::RefreshEventList()
 
     // Resize instance slots to match.
     m_instances.resize(m_events.size(), nullptr);
+    m_instanceResonanceDsps.resize(m_events.size(), nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -468,6 +588,8 @@ bool AudioManager::PlayEvent(int index)
         return false;
     }
 
+    if (is3D)
+        m_instanceResonanceDsps[static_cast<size_t>(index)] = AttachResonanceSource(inst);
     m_instances[static_cast<size_t>(index)] = inst;
     m_events[static_cast<size_t>(index)].IsPlaying = true;
     return true;
@@ -483,6 +605,8 @@ bool AudioManager::StopEvent(int index)
     if (inst)
     {
         inst->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+        if (static_cast<size_t>(index) < m_instanceResonanceDsps.size())
+            ReleaseResonanceDsp(m_instanceResonanceDsps[static_cast<size_t>(index)]);
         inst->release();
         m_instances[static_cast<size_t>(index)] = nullptr;
     }
@@ -502,6 +626,7 @@ void AudioManager::StopAll()
         if (instance)
         {
             instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+            ReleaseResonanceDsp(emitter.ResonanceDsp);
             instance->release();
             emitter.Instance = nullptr;
         }
@@ -523,7 +648,7 @@ void AudioManager::SetListenerTransform(
     if (!m_initialized || !m_studioSystem)
         return;
 
-    // Cache for binaural direction updates
+    // Cache the transform used by FMOD and the Resonance source DSPs.
     m_listenerPosX = positionX; m_listenerPosY = positionY; m_listenerPosZ = positionZ;
     m_listenerFwdX = forwardX;  m_listenerFwdY = forwardY;  m_listenerFwdZ = forwardZ;
     m_listenerUpX  = upX;       m_listenerUpY  = upY;       m_listenerUpZ  = upZ;
@@ -662,6 +787,10 @@ bool AudioManager::PlayEmitter(EmitterHandle handle)
         return false;
     }
 
+    bool is3D = false;
+    if (desc->is3D(&is3D) == FMOD_OK && is3D)
+        emitter.ResonanceDsp = AttachResonanceSource(instance);
+
     return true;
 }
 
@@ -675,6 +804,7 @@ bool AudioManager::StopEmitter(EmitterHandle handle)
     if (instance)
     {
         instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+        ReleaseResonanceDsp(emitter.ResonanceDsp);
         instance->release();
         emitter.Instance = nullptr;
     }
@@ -682,84 +812,33 @@ bool AudioManager::StopEmitter(EmitterHandle handle)
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// HRTF
-// ---------------------------------------------------------------------------
-
-// Default built-in HRIR: a simple minimum-phase approximation that provides
-// a basic left/right head-shadow and pinna delay.  128 taps at 44100 Hz.
-namespace
+void AudioManager::SetResonanceAudioEnabled(bool enabled)
 {
-    constexpr int kDefaultHrirLen = 128;
+    m_resonanceAudioEnabled = enabled;
 
-    static float BuildDefaultHrirSample(int i, float itdSamples, float shadowGain)
+    if (FMOD::DSP* listenerDsp = static_cast<FMOD::DSP*>(m_resonanceListenerDsp))
+        listenerDsp->setBypass(!enabled);
+
+    for (void* dspHandle : m_instanceResonanceDsps)
     {
-        constexpr float pi = 3.14159265358979f;
-        const float t      = static_cast<float>(i) - itdSamples;
-        if (i == 0) return shadowGain;
-        const float hann    = 0.5f * (1.0f - std::cos(2.0f * pi * static_cast<float>(i)
-                                      / static_cast<float>(kDefaultHrirLen - 1)));
-        const float sincVal = (t == 0.0f) ? 1.0f
-                                           : std::sin(pi * t) / (pi * t);
-        return shadowGain * hann * sincVal;
+        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle))
+            dsp->setBypass(!enabled);
     }
 
-    void FillDefaultHRIR(std::vector<float>& left, std::vector<float>& right)
+    for (void* dspHandle : m_oneShotResonanceDsps)
     {
-        left.resize(kDefaultHrirLen);
-        right.resize(kDefaultHrirLen);
-        // Right ear: direct path, no ITD.
-        // Left ear:  ~90 deg contralateral, 13-sample ITD, 6 dB shadow.
-        for (int i = 0; i < kDefaultHrirLen; ++i)
-        {
-            right[i] = BuildDefaultHrirSample(i, 0.0f,  1.0f);
-            left[i]  = BuildDefaultHrirSample(i, 13.0f, 0.5f);
-        }
-    }
-}
-
-void AudioManager::SetHRTFEnabled(bool enabled)
-{
-    if (enabled && !m_hrtfNode.IsInitialized())
-    {
-        constexpr int kBlockSize = 512;
-        constexpr int kCrossfade = 256;
-        m_hrtfNode.Initialize(kDefaultHrirLen, kBlockSize, kCrossfade);
-
-        std::vector<float> left, right;
-        FillDefaultHRIR(left, right);
-        m_hrtfNode.SetHRIR(std::span<const float>(left), std::span<const float>(right));
-    }
-    m_hrtfNode.SetEnabled(enabled);
-}
-
-bool AudioManager::IsHRTFEnabled() const
-{
-    return m_hrtfNode.IsInitialized() && m_hrtfNode.IsEnabled();
-}
-
-bool AudioManager::LoadHRIRDatabase(const std::filesystem::path& rootDir, std::string& outError)
-{
-    return m_hrirDb.Load(rootDir, outError);
-}
-
-void AudioManager::SetHRTFDirection(float elevationDeg, float azimuthDeg)
-{
-    m_hrtfElevation = elevationDeg;
-    m_hrtfAzimuth   = azimuthDeg;
-
-    if (!m_hrirDb.IsLoaded())
-        return;
-
-    std::vector<float> left, right;
-    m_hrirDb.GetHRIR(elevationDeg, azimuthDeg, left, right);
-
-    if (!m_hrtfNode.IsInitialized())
-    {
-        constexpr int kBlockSize = 512;
-        constexpr int kCrossfade = 256;
-        m_hrtfNode.Initialize(static_cast<int>(left.size()), kBlockSize, kCrossfade);
+        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle))
+            dsp->setBypass(!enabled);
     }
 
-    m_hrtfNode.SetHRIR(std::span<const float>(left), std::span<const float>(right));
+    for (EmitterState& emitter : m_emitters)
+    {
+        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(emitter.ResonanceDsp))
+            dsp->setBypass(!enabled);
+    }
+
+    m_resonanceAudioStatus = m_resonanceAudioAvailable
+        ? (enabled ? "Resonance Audio is active for FMOD 3D events."
+                   : "Resonance Audio is loaded but bypassed.")
+        : "Resonance Audio is unavailable.";
 }

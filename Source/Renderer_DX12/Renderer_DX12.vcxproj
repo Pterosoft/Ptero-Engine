@@ -77,19 +77,22 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\\SDKs\\imgui-docking;..\\SDKs\\imgui;..\\SDKs\\imgui\\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\SDKs\NRD\_NRI_SDK\Lib\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>NRD.lib;NRI.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\SDKs\NRD\_NRI_SDK\Lib\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;NRI.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -98,12 +101,13 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\\SDKs\\imgui-docking;..\\SDKs\\imgui;..\\SDKs\\imgui\\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -115,19 +119,22 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\\SDKs\\imgui-docking;..\\SDKs\\imgui;..\\SDKs\\imgui\\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
@@ -140,19 +147,20 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\\SDKs\\imgui-docking;..\\SDKs\\imgui;..\\SDKs\\imgui\\backends;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
@@ -162,17 +170,24 @@
   <ItemGroup>
     <ClInclude Include="AgxTonemapper.h" />
     <ClInclude Include="AgxTonemapSettings.h" />
+    <ClInclude Include="AreaTex.h" />
     <ClInclude Include="BloomRenderer.h" />
     <ClInclude Include="BloomSettings.h" />
     <ClInclude Include="DecalRenderer.h" />
     <ClInclude Include="DlssRenderer.h" />
     <ClInclude Include="DlssSettings.h" />
     <ClInclude Include="GtaoSettings.h" />
+    <ClInclude Include="ImageSharpenRenderer.h" />
     <ClInclude Include="MotionVectorRenderer.h" />
+    <ClInclude Include="MsaaSettings.h" />
     <ClInclude Include="PointShadowMapRenderer.h" />
     <ClInclude Include="PointShadowSettings.h" />
+    <ClInclude Include="RadianceCascadesRenderer.h" />
+    <ClInclude Include="RadianceCascadesSettings.h" />
     <ClInclude Include="RadianceProbeRenderer.h" />
     <ClInclude Include="RadianceProbeSettings.h" />
+    <ClInclude Include="LightStyles.h" />
+    <ClInclude Include="ParticleRenderer.h" />
     <ClInclude Include="RainRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="RtAmbientOcclusion.h" />
@@ -184,24 +199,52 @@
     <ClInclude Include="EntityMeshRenderer.h" />
     <ClInclude Include="DX12ShaderCompiler.h" />
     <ClInclude Include="Editor.h" />
+    <ClInclude Include="..\System\include\System\PteroLog.h" />
+    <ClInclude Include="..\System\include\System\CVar.h" />
+    <ClInclude Include="EngineCVars.h" />
+    <ClInclude Include="GameHost.h" />
+    <ClInclude Include="RmlUiRenderInterface.h" />
+    <ClInclude Include="RmlUiSystemInterface.h" />
+    <ClInclude Include="RmlUiRenderer.h" />
+    <ClInclude Include="..\Game\GameAPI.h" />
     <ClInclude Include="EditorMainMenu.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="GlassRenderer.h" />
     <ClInclude Include="HosekWilkieSky.h" />
-    <ClInclude Include="ImGuizmoCompat.h" />
+    <ClInclude Include="HeightmapImporter.h" />
     <ClInclude Include="NrdDenoiser.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="PointLightRenderer.h" />
+    <ClInclude Include="RendererTimingSnapshot.h" />
     <ClInclude Include="RendererStatisticsText.h" />
     <ClInclude Include="RtAOSettings.h" />
     <ClInclude Include="RtGISettings.h" />
     <ClInclude Include="RtGlobalIllumination.h" />
     <ClInclude Include="SceneSerializer.h" />
     <ClInclude Include="ShadowMapRenderer.h" />
+    <ClInclude Include="SharpenSettings.h" />
     <ClInclude Include="SkyRenderer.h" />
+    <ClInclude Include="SMAARenderer.h" />
+    <ClInclude Include="SMAASettings.h" />
+    <ClInclude Include="SsrRenderer.h" />
+    <ClInclude Include="SsrSettings.h" />
+    <ClInclude Include="ChromaticAberrationRenderer.h" />
+    <ClInclude Include="ChromaticAberrationSettings.h" />
+    <ClInclude Include="SearchTex.h" />
     <ClInclude Include="TAARenderer.h" />
     <ClInclude Include="TaaSettings.h" />
+    <ClInclude Include="TerrainGeometry.h" />
+    <ClInclude Include="TerrainRenderer.h" />
+    <ClInclude Include="GeometryRaycaster.h" />
+    <ClInclude Include="VegetationScatter.h" />
+    <ClInclude Include="VegetationRenderer.h" />
+    <ClInclude Include="WindSettings.h" />
+    <ClInclude Include="OceanSimulation.h" />
+    <ClInclude Include="WaterRenderer.h" />
     <ClInclude Include="TextureManager.h" />
     <ClInclude Include="TimeOfDaySettings.h" />
+    <ClInclude Include="VolumetricCloudRenderer.h" />
+    <ClInclude Include="VolumetricCloudSettings.h" />
     <ClInclude Include="VolumetricFogRenderer.h" />
     <ClInclude Include="VolumetricFogSettings.h" />
     <ClInclude Include="XeGtaoRenderer.h" />
@@ -215,10 +258,21 @@
     <ClCompile Include="DlssRenderer.cpp" />
     <ClCompile Include="DX12Context.cpp" />
     <ClCompile Include="DX12RendererAPI.cpp" />
+    <ClCompile Include="HeightmapImporter.cpp" />
     <ClCompile Include="DX12SceneRenderer.cpp" />
     <ClCompile Include="DX12ShaderCompiler.cpp" />
     <ClCompile Include="Editor.cpp" />
+    <ClCompile Include="GameHost.cpp" />
+    <ClCompile Include="RmlUiRenderInterface.cpp" />
+    <ClCompile Include="RmlUiSystemInterface.cpp" />
+    <ClCompile Include="RmlUiRenderer.cpp" />
     <ClCompile Include="EditorMainMenu.cpp" />
+    <ClCompile Include="EditorConsole.cpp" />
+    <ClCompile Include="EditorUiViewer.cpp" />
+    <ClCompile Include="..\System\src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="EngineCVars.cpp" />
+    <ClCompile Include="GlassRenderer.cpp" />
     <ClCompile Include="..\System\MaterialEditor.cpp" />
     <ClCompile Include="..\System\src\AssetManager.cpp" />
     <ClCompile Include="..\System\src\CollisionGenerator.cpp">
@@ -358,6 +412,7 @@
     <ClCompile Include="..\System\src\SystemAssetApi.cpp" />
     <ClCompile Include="EntityMeshRenderer.cpp" />
     <ClCompile Include="HosekWilkieSky.cpp" />
+    <ClCompile Include="ImageSharpenRenderer.cpp" />
     <ClCompile Include="..\SDKs\HosekWilkie\ArHosekSkyModel.c">
       <CompileAs>CompileAsC</CompileAs>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -370,46 +425,35 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_dx12.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_win32.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_demo.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="PointLightRenderer.cpp" />
+    <ClCompile Include="RadianceCascadesRenderer.cpp" />
     <ClCompile Include="RadianceProbeRenderer.cpp" />
+    <ClCompile Include="ParticleRenderer.cpp" />
     <ClCompile Include="RainRenderer.cpp" />
     <ClCompile Include="RtAmbientOcclusion.cpp" />
     <ClCompile Include="RtGlobalIllumination.cpp" />
     <ClCompile Include="SceneSerializer.cpp" />
     <ClCompile Include="ShadowMapRenderer.cpp" />
     <ClCompile Include="SkyRenderer.cpp" />
+    <ClCompile Include="SMAARenderer.cpp" />
+    <ClCompile Include="SsrRenderer.cpp" />
+    <ClCompile Include="ChromaticAberrationRenderer.cpp" />
+    <ClCompile Include="TerrainGeometry.cpp" />
+    <ClCompile Include="TerrainRenderer.cpp" />
+    <ClCompile Include="GeometryRaycaster.cpp" />
+    <ClCompile Include="VegetationScatter.cpp" />
+    <ClCompile Include="VegetationRenderer.cpp" />
+    <ClCompile Include="OceanSimulation.cpp" />
+    <ClCompile Include="WaterRenderer.cpp" />
     <ClCompile Include="TAARenderer.cpp" />
     <ClCompile Include="TextureManager.cpp" />
     <ClCompile Include="..\SDKs\DirectXTex\DDSTextureLoader\DDSTextureLoader12.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\DirectXTex\Common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <ClCompile Include="VolumetricCloudRenderer.cpp" />
     <ClCompile Include="VolumetricFogRenderer.cpp" />
     <ClCompile Include="XeGtaoRenderer.cpp" />
-    <ClCompile Include="..\SDKs\ImGuizmo\ImGuizmo.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="..\..\Data\Shaders\DeferredLighting.hlsl">
@@ -436,6 +480,9 @@
     <FxCompile Include="..\..\Data\Shaders\TAAResolve.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\Terrain.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\Data\Shaders\RtGI_Common.hlsli">
@@ -457,11 +504,39 @@
     <None Include="..\..\Data\Shaders\RtGI_Composite.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </None>
+    <None Include="..\..\Data\Shaders\RadianceCascadesTrace.hlsl" />
+    <None Include="..\..\Data\Shaders\RadianceCascadesComposite.hlsl" />
+    <None Include="..\..\Data\Shaders\SMAA.hlsl" />
+    <None Include="..\..\Data\Shaders\SMAA_Ptero.hlsl" />
+    <None Include="SMAA.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\QtUi\QtUi.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="QtViewportRenderer.cpp" />
+    <ClInclude Include="..\QtUi\QtUi.h" />
+    <ClInclude Include="..\QtUi\UiTypes.h" />
+    <ClInclude Include="QtViewportRenderer.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The node graph is a System module; the renderer compiles its sources directly the
+         same way it does AssetManager and MaterialEditor. NodeGraphEditorWindow.cpp is
+         built only here, because this is the DLL that owns Qt. -->
+    <ClCompile Include="..\System\src\NodeGraphCatalog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphEditorWindow.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\System\include\System\NodeGraphCatalog.h" />
+    <ClInclude Include="..\System\include\System\NodeGraphDocument.h" />
+    <ClInclude Include="..\System\include\System\NodeGraphEditor.h" />
+    <ClInclude Include="..\System\include\System\NodeGraphRuntime.h" />
+  </ItemGroup>
+  <Import Project="..\QtUi\Qt.props" />
+  <Import Project="..\QtUi\QtNodes.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
+

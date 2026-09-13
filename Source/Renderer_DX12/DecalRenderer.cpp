@@ -371,10 +371,7 @@ void DecalRenderer::Render(
 
         const DecalComponent& dc = *e.Decal;
 
-        const XMMATRIX rotM   = XMMatrixRotationRollPitchYaw(
-            e.Transform.Rotation.x,
-            e.Transform.Rotation.y,
-            e.Transform.Rotation.z);
+        const XMMATRIX rotM   = PteroTransform::ComposeRotation(e.Transform.Rotation);
         const XMMATRIX transM = XMMatrixTranslation(
             e.Transform.Position.x,
             e.Transform.Position.y,
@@ -432,6 +429,93 @@ void DecalRenderer::Render(
         commandList->IASetVertexBuffers(0, 1, &mArrowVBView);
         commandList->IASetIndexBuffer(&mArrowIBView);
         commandList->DrawIndexedInstanced(mArrowIndexCount, 1, 0, 0, 0);
+
+        ++drawIndex;
+    }
+}
+
+void DecalRenderer::RenderVegetationAreas(
+    ID3D12GraphicsCommandList* commandList,
+    const std::vector<Entity>& entities,
+    const XMMATRIX&            viewProjection)
+{
+    if (!mPipelineReady || mBoxIndexCount == 0) return;
+
+    std::size_t areaCount = 0;
+    for (const Entity& e : entities)
+    {
+        if (e.VegetationArea.has_value() && e.VegetationArea->ShowBounds)
+            ++areaCount;
+    }
+
+    if (areaCount == 0) return;
+
+    // One constant slot per area; unlike decals there is no arrow or per-face
+    // shading, so a single colour per box is enough.
+    if (!EnsureConstantBuffer(areaCount)) return;
+
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    commandList->IASetVertexBuffers(0, 1, &mBoxVBView);
+    commandList->IASetIndexBuffer(&mBoxIBView);
+
+    const D3D12_GPU_VIRTUAL_ADDRESS cbBase = mConstantBuffer->GetGPUVirtualAddress();
+
+    std::size_t drawIndex = 0;
+    for (const Entity& e : entities)
+    {
+        if (!e.VegetationArea.has_value() || !e.VegetationArea->ShowBounds) continue;
+
+        const VegetationAreaComponent& va = *e.VegetationArea;
+
+        // Half-extents of the shape, drawn as its bounding box.  A sphere
+        // shows as its enclosing cube and a polygon as the box around its
+        // footprint, which is enough to place and size the volume; the exact
+        // silhouette is confirmed by looking at the instances themselves.
+        float halfX = va.ExtentX;
+        float halfY = va.ExtentY;
+        float halfZ = va.ExtentZ;
+
+        if (va.Shape == VegetationAreaShape::Sphere)
+        {
+            halfX = halfY = halfZ = va.ExtentX;
+        }
+        else if (va.Shape == VegetationAreaShape::Polygon)
+        {
+            halfX = 0.0f;
+            halfY = 0.0f;
+            for (const XMFLOAT2& point : va.PolygonPoints)
+            {
+                halfX = (std::max)(halfX, std::fabs(point.x));
+                halfY = (std::max)(halfY, std::fabs(point.y));
+            }
+            // A polygon with no points yet still needs a visible handle.
+            if (halfX <= 0.0f) halfX = 1.0f;
+            if (halfY <= 0.0f) halfY = 1.0f;
+        }
+
+        // Matches the scatter's convention: rotation and translation only, no
+        // TransformComponent::Scale and no MeshWorldScale, so the gizmo is
+        // exactly the volume the scatter uses.
+        const XMMATRIX rotM = PteroTransform::ComposeRotation(e.Transform.Rotation);
+        const XMMATRIX transM = XMMatrixTranslation(
+            e.Transform.Position.x,
+            e.Transform.Position.y,
+            e.Transform.Position.z);
+
+        // The unit box mesh spans -0.5..0.5, so a full extent of 2*half needs
+        // a scale of 2*half.
+        const XMMATRIX model = XMMatrixScaling(halfX * 2.0f, halfY * 2.0f, halfZ * 2.0f) * rotM * transM;
+
+        GizmoConstants& cb = mMappedCB[drawIndex];
+        XMStoreFloat4x4(&cb.MVP, XMMatrixTranspose(model * viewProjection));
+        cb.Color = va.IsExclusionVolume
+            ? XMFLOAT4(0.95f, 0.35f, 0.30f, 1.0f)    // subtractive
+            : XMFLOAT4(0.40f, 0.85f, 0.35f, 1.0f);   // additive
+
+        commandList->SetGraphicsRootConstantBufferView(0, cbBase + drawIndex * sizeof(GizmoConstants));
+        commandList->DrawIndexedInstanced(mBoxIndexCount, 1, 0, 0, 0);
 
         ++drawIndex;
     }

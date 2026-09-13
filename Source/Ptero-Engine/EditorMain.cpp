@@ -7,6 +7,7 @@
 #include "AudioManager.h"
 #include <string>
 #include <sstream>
+#include <chrono>
 
 static AudioManager gAudioManager;
 
@@ -20,6 +21,7 @@ typedef void(__stdcall* RendererDX12ProgressFn)(const wchar_t* message);
 typedef void(__stdcall* RendererDX12SetProgressCallbackFn)(RendererDX12ProgressFn callback);
 
 typedef void(__stdcall* RendererDX12SetAudioManagerFn)(AudioManager* audioManager);
+typedef void(__stdcall* RendererDX12SetLoopTimingsFn)(float pumpMilliseconds, float audioMilliseconds, unsigned messageCount, unsigned paintMessageCount);
 
 #define MAX_LOADSTRING 100
 
@@ -37,6 +39,7 @@ RendererDX12ShutdownFn gRendererShutdown = nullptr;
 RendererDX12GetLastErrorFn gRendererGetLastError = nullptr;
 RendererDX12SetProgressCallbackFn gRendererSetProgressCallback = nullptr;
 RendererDX12SetAudioManagerFn gRendererSetAudioManager = nullptr;
+RendererDX12SetLoopTimingsFn gRendererSetLoopTimings = nullptr;
 bool gRendererReady = false;
 bool gIsClosing = false;
 bool gRendererFailureReported = false;
@@ -197,9 +200,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     while (!gIsClosing)
     {
         bool processedMessage = false;
+        // Qt's child windows service their paint messages inside DispatchMessage, so this
+        // pump - not the renderer - is where editor UI repaints are actually paid for.
+        const auto pumpStart = std::chrono::steady_clock::now();
+        unsigned messageCount = 0;
+        unsigned paintMessageCount = 0;
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
             processedMessage = true;
+            ++messageCount;
+            // WM_PAINT means Qt is actually redrawing a window; anything else arriving in
+            // bulk (mouse moves, timers, DWM traffic) points somewhere entirely different.
+            if (msg.message == WM_PAINT)
+            {
+                ++paintMessageCount;
+            }
 
             if (msg.message == WM_QUIT)
             {
@@ -213,6 +228,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                 DispatchMessage(&msg);
             }
         }
+        const float pumpMilliseconds =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
 
         if (gIsClosing)
         {
@@ -221,7 +238,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
         if (gRendererReady && gRendererRender)
         {
+            const auto audioStart = std::chrono::steady_clock::now();
             gAudioManager.Update();
+            const float audioMilliseconds =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - audioStart).count();
+            if (gRendererSetLoopTimings)
+            {
+                gRendererSetLoopTimings(pumpMilliseconds, audioMilliseconds, messageCount, paintMessageCount);
+            }
             gRendererRender();
         }
         else if (!processedMessage)
@@ -290,7 +314,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
    hInst = hInstance; // Store instance handle in our global variable
 
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
+   // WS_CLIPCHILDREN keeps the host from painting over the embedded Qt shell and the
+   // DX12 surface, so background fills below can never flicker across the editor UI.
+   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
@@ -329,6 +355,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
         gRendererGetLastError = reinterpret_cast<RendererDX12GetLastErrorFn>(GetProcAddress(gRendererModule, "RendererDX12_GetLastError"));
         gRendererSetProgressCallback = reinterpret_cast<RendererDX12SetProgressCallbackFn>(GetProcAddress(gRendererModule, "RendererDX12_SetProgressCallback"));
         gRendererSetAudioManager = reinterpret_cast<RendererDX12SetAudioManagerFn>(GetProcAddress(gRendererModule, "RendererDX12_SetAudioManager"));
+        gRendererSetLoopTimings = reinterpret_cast<RendererDX12SetLoopTimingsFn>(GetProcAddress(gRendererModule, "RendererDX12_SetLoopTimings"));
 
         if (!(gRendererInitialize && gRendererRender && gRendererResize && gRendererShutdown))
         {
@@ -482,12 +509,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
 
-            if (!gRendererReady)
-            {
-                // Use a non-white fallback fill while diagnosing renderer startup so it is
-                // obvious when the blank client area is coming from default GDI painting.
-                FillRect(hdc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-            }
+            // Always fill: WS_CLIPCHILDREN excludes the Qt shell and the DX12 surface, so
+            // this only covers client area no child window occupies (briefly, while a
+            // resize is in flight). Without it those pixels keep whatever GDI left behind.
+            static HBRUSH backgroundBrush = CreateSolidBrush(RGB(0x19, 0x1a, 0x1c));
+            FillRect(hdc, &ps.rcPaint, backgroundBrush);
 
             EndPaint(hWnd, &ps);
         }

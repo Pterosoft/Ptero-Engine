@@ -70,7 +70,9 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;AUDIO_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;AUDIO_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>..\SDKs\fmod\api\core\inc;..\SDKs\fmod\api\studio\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -102,7 +104,9 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;AUDIO_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;AUDIO_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>..\SDKs\fmod\api\core\inc;..\SDKs\fmod\api\studio\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -115,7 +119,7 @@
       <AdditionalDependencies>fmod_vc.lib;fmodstudio_vc.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\core\lib\x64\fmod.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\studio\lib\x64\fmodstudio.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\core\lib\x64\fmod.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\studio\lib\x64\fmodstudio.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\plugins\resonance_audio\lib\x64\resonanceaudio.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -137,21 +141,17 @@
       <AdditionalDependencies>fmod_vc.lib;fmodstudio_vc.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\core\lib\x64\fmod.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\studio\lib\x64\fmodstudio.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\core\lib\x64\fmod.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\api\studio\lib\x64\fmodstudio.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\fmod\plugins\resonance_audio\lib\x64\resonanceaudio.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>
-    <ClInclude Include="HRIRDatabase.h" />
-    <ClInclude Include="HRTFSpatializationNode.h" />
     <ClInclude Include="AudioManager.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HRIRDatabase.cpp" />
-    <ClCompile Include="HRTFSpatializationNode.cpp" />
     <ClCompile Include="AudioManager.cpp" />
   </ItemGroup>
   <ItemGroup>

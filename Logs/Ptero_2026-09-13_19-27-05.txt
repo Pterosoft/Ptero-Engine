@@ -1,0 +1,374 @@
+Ptero Engine session log
+Started 2026-09-13 19:27:05
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-13_19-27-05.txt
+----------------------------------------------------------------------
+[19:27:05.621] [INFO ] [Log         ] Logging to disk started.
+[19:27:05.621] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-13_19-27-05.txt
+[19:27:05.621] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[19:27:12.485] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[19:27:12.497] [INFO ] [CVar        ] 323 cvars registered. Type 'list' in the console to see them.
+[19:27:12.498] [INFO ] [Renderer    ] Renderer initialized.
+[19:28:23.754] [ERROR] [Watchdog    ] Render thread has not completed frame 19564 for 5.1 s. Everything above this line is what it did last.
+[19:28:26.186] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.188] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.188] [DEBUG] [Renderer    ] Attempting mesh load for entity='Table', meshPath='Geometry/MET_Table/Meshes/SM_MET_Table_c0_LOD0.fbx.ptero', materialPath='Geometry/MET_Table/M_MET_Table.json'
+[19:28:26.208] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Table', vertices=54401, indices=312513, subMeshes=1
+[19:28:26.208] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.208] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.208] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.208] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.208] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.208] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.208] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[19:28:26.210] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[19:28:26.210] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[19:28:26.210] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[19:28:26.210] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.211] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.211] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[19:28:26.212] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[19:28:26.212] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.212] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.212] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.212] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.212] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.212] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.212] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[19:28:26.212] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[19:28:26.212] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MET_BrickFurnace/Meshes/SM_MET_Brick_Furnace_01_c0_LOD2.fbx.ptero', materialPath='Geometry/MET_BrickFurnace/MET_BrickFurnace.json'
+[19:28:26.219] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=15995, indices=62352, subMeshes=1
+[19:28:26.219] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[19:28:26.304] [WARN ] [Watchdog    ] Render thread recovered after 7.7 s; resumed at frame 19565.
+[19:28:26.307] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[19:28:26.307] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[19:28:26.307] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[19:28:26.307] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[19:28:26.307] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[19:28:26.307] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[19:28:26.307] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[19:28:26.307] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[19:28:26.364] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[19:28:26.364] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[19:28:26.364] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[19:28:26.364] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[19:28:26.477] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[19:28:26.477] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[19:28:26.477] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[19:28:26.477] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice1', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[19:28:26.480] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice1', vertices=5620, indices=15540, subMeshes=1
+[19:28:26.480] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice2', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[19:28:26.480] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice2', vertices=5620, indices=15540, subMeshes=1
+[19:28:26.480] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice3', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[19:28:26.480] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice3', vertices=5620, indices=15540, subMeshes=1
+[19:28:26.480] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice5', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[19:28:26.480] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice5', vertices=5620, indices=15540, subMeshes=1
+[19:28:26.480] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice4', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[19:28:26.480] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice4', vertices=5620, indices=15540, subMeshes=1
+[19:28:26.499] [INFO ] [Meshes      ] Entity constant buffer grown to 49 slots x 3 frames (37632 bytes).
+[19:28:26.500] [INFO ] [Meshes      ] Material constant buffer grown to 113 draws x 3 frames.
+[19:28:26.501] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[19:28:26.501] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[19:28:26.592] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=0, vertexCount=54401, indexCount=312513, vbBytes=2611248, ibBytes=1250052
+[19:28:26.592] [DEBUG] [Meshes      ] First draw for entityIndex=1, entity='Table', lodIndex=0, vertexCount=54401, indexCount=312513, materialPath='Geometry/MET_Table/M_MET_Table.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=312513}, summedSubMeshIndices=312513, validSubMeshRanges=true
+[19:28:26.664] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[19:28:26.664] [DEBUG] [Meshes      ] First draw for entityIndex=2, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[19:28:26.666] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=3, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:28:26.666] [DEBUG] [Meshes      ] First draw for entityIndex=3, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[19:28:26.667] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=4, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:28:26.667] [DEBUG] [Meshes      ] First draw for entityIndex=4, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[19:28:26.668] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=5, lodIndex=0, vertexCount=2522, indexCount=10590, vbBytes=121056, ibBytes=42360
+[19:28:26.668] [DEBUG] [Meshes      ] First draw for entityIndex=5, entity='Geometry_4', lodIndex=0, vertexCount=2522, indexCount=10590, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=10590}, summedSubMeshIndices=10590, validSubMeshRanges=true
+[19:28:26.704] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=6, lodIndex=0, vertexCount=2522, indexCount=10590, vbBytes=121056, ibBytes=42360
+[19:28:26.704] [DEBUG] [Meshes      ] First draw for entityIndex=6, entity='Geometry_4', lodIndex=0, vertexCount=2522, indexCount=10590, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=10590}, summedSubMeshIndices=10590, validSubMeshRanges=true
+[19:28:26.705] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.705] [DEBUG] [Meshes      ] First draw for entityIndex=7, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.793] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=8, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.793] [DEBUG] [Meshes      ] First draw for entityIndex=8, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.794] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=9, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.794] [DEBUG] [Meshes      ] First draw for entityIndex=9, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.795] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=10, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.795] [DEBUG] [Meshes      ] First draw for entityIndex=10, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.796] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=11, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[19:28:26.796] [DEBUG] [Meshes      ] First draw for entityIndex=11, entity='Geometry_5', lodIndex=0, vertexCount=148, indexCount=456, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=228}, draw[1]={materialId=1,indexStart=228,indexCount=228}, summedSubMeshIndices=456, validSubMeshRanges=true
+[19:28:26.797] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=12, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.797] [DEBUG] [Meshes      ] First draw for entityIndex=12, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.798] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=13, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.798] [DEBUG] [Meshes      ] First draw for entityIndex=13, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.799] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=14, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:28:26.799] [DEBUG] [Meshes      ] First draw for entityIndex=14, entity='Geometry_5', lodIndex=1, vertexCount=87, indexCount=222, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=111}, draw[1]={materialId=1,indexStart=111,indexCount=111}, summedSubMeshIndices=222, validSubMeshRanges=true
+[19:28:26.800] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=15, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:28:26.800] [DEBUG] [Meshes      ] First draw for entityIndex=15, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[19:28:26.802] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=16, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[19:28:26.802] [DEBUG] [Meshes      ] First draw for entityIndex=16, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[19:28:26.803] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[19:28:26.803] [DEBUG] [Meshes      ] First draw for entityIndex=17, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[19:28:26.804] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[19:28:26.804] [DEBUG] [Meshes      ] First draw for entityIndex=18, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[19:28:26.805] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=19, lodIndex=0, vertexCount=15995, indexCount=62352, vbBytes=767760, ibBytes=249408
+[19:28:26.805] [DEBUG] [Meshes      ] First draw for entityIndex=19, entity='Geometry_22', lodIndex=0, vertexCount=15995, indexCount=62352, materialPath='Geometry/MET_BrickFurnace/MET_BrickFurnace.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=62352}, summedSubMeshIndices=62352, validSubMeshRanges=true
+[19:28:26.832] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=21, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[19:28:26.832] [DEBUG] [Meshes      ] First draw for entityIndex=21, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[19:28:26.857] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=22, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[19:28:26.857] [DEBUG] [Meshes      ] First draw for entityIndex=22, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[19:28:26.859] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=23, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[19:28:26.859] [DEBUG] [Meshes      ] First draw for entityIndex=23, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[19:28:26.862] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=24, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[19:28:26.862] [DEBUG] [Meshes      ] First draw for entityIndex=24, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[19:28:26.864] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[19:28:26.864] [DEBUG] [Meshes      ] First draw for entityIndex=25, entity='Geometry_26', lodIndex=1, vertexCount=80737, indexCount=461547, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=461547}, summedSubMeshIndices=461547, validSubMeshRanges=true
+[19:28:26.889] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[19:28:26.889] [DEBUG] [Meshes      ] First draw for entityIndex=26, entity='Geometry_26', lodIndex=1, vertexCount=80737, indexCount=461547, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=461547}, summedSubMeshIndices=461547, validSubMeshRanges=true
+[19:28:26.894] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=27, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[19:28:26.894] [DEBUG] [Meshes      ] First draw for entityIndex=27, entity='Geometry_27', lodIndex=0, vertexCount=317569, indexCount=1799199, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1799199}, summedSubMeshIndices=1799199, validSubMeshRanges=true
+[19:28:26.921] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=28, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[19:28:26.921] [DEBUG] [Meshes      ] First draw for entityIndex=28, entity='Geometry_27', lodIndex=0, vertexCount=317569, indexCount=1799199, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1799199}, summedSubMeshIndices=1799199, validSubMeshRanges=true
+[19:28:26.922] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=29, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[19:28:26.922] [DEBUG] [Meshes      ] First draw for entityIndex=29, entity='Dice1', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[19:28:26.990] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=30, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[19:28:26.990] [DEBUG] [Meshes      ] First draw for entityIndex=30, entity='Dice2', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[19:28:26.991] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=31, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[19:28:26.991] [DEBUG] [Meshes      ] First draw for entityIndex=31, entity='Dice3', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[19:28:26.992] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=32, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[19:28:26.992] [DEBUG] [Meshes      ] First draw for entityIndex=32, entity='Dice5', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[19:28:26.993] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=33, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[19:28:26.993] [DEBUG] [Meshes      ] First draw for entityIndex=33, entity='Dice4', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[19:28:31.389] [ERROR] [Watchdog    ] Render thread has not completed frame 19565 for 5.1 s. Everything above this line is what it did last.
+[19:28:46.609] [ERROR] [Watchdog    ] Render thread has not completed frame 19565 for 20.3 s. Everything above this line is what it did last.
+[19:29:01.827] [ERROR] [Watchdog    ] Render thread has not completed frame 19565 for 35.5 s. Everything above this line is what it did last.
+[19:29:02.843] [WARN ] [Watchdog    ] Render thread recovered after 36.5 s; resumed at frame 19586.
+[19:29:07.311] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=28, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[19:29:07.476] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=14, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[19:29:07.514] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=16, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:29:07.517] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=27, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[19:29:07.636] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=0, vertexCount=158980, indexCount=923100, vbBytes=7631040, ibBytes=3692400
+[19:29:08.209] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=9, lodIndex=2, vertexCount=53, indexCount=105, vbBytes=2544, ibBytes=420
+[19:29:08.400] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:29:08.470] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:29:08.636] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=21, lodIndex=2, vertexCount=64938, indexCount=376092, vbBytes=3117024, ibBytes=1504368
+[19:29:08.772] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=1, vertexCount=28133, indexCount=156255, vbBytes=1350384, ibBytes=625020
+[19:29:08.832] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=5, lodIndex=1, vertexCount=1551, indexCount=5295, vbBytes=74448, ibBytes=21180
+[19:31:50.267] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=13, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[19:31:51.195] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=24, lodIndex=0, vertexCount=255793, indexCount=1504374, vbBytes=12278064, ibBytes=6017496
+[19:31:53.411] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:31:53.417] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=23, lodIndex=0, vertexCount=255793, indexCount=1504374, vbBytes=12278064, ibBytes=6017496
+[19:31:53.472] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[19:31:53.503] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=11, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[19:31:53.534] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=10, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[19:32:21.153] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=24, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[19:32:21.153] [DEBUG] [Meshes      ] First draw for entityIndex=24, entity='Geometry_26', lodIndex=1, vertexCount=80737, indexCount=461547, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=461547}, summedSubMeshIndices=461547, validSubMeshRanges=true
+[19:32:21.160] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[19:32:21.160] [DEBUG] [Meshes      ] First draw for entityIndex=26, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[19:32:21.164] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=28, lodIndex=1, vertexCount=3720, indexCount=8667, vbBytes=178560, ibBytes=34668
+[19:32:21.164] [DEBUG] [Meshes      ] First draw for entityIndex=28, entity='Dice1', lodIndex=1, vertexCount=3720, indexCount=8667, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=8667}, summedSubMeshIndices=8667, validSubMeshRanges=true
+[19:32:21.213] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.252] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.287] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.326] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.364] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.399] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.438] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.474] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.511] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.547] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.585] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.623] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.660] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.697] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.735] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.776] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.815] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.856] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.898] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.940] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:21.978] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.016] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.057] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.097] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.137] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.180] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.224] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.266] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.304] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.345] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.383] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.425] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.469] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.511] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.552] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.592] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.635] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.679] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.721] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.765] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.807] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.848] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.892] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.937] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:22.983] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.026] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.072] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.115] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.159] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.204] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.252] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.295] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.338] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.380] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.425] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.470] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.514] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.559] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.603] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.649] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.694] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.741] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.788] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.833] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.878] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.923] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:23.969] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.015] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.063] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.108] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.155] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.236] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.284] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.332] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.378] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.425] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.472] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.519] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.568] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.620] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.668] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.714] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.761] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.809] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.860] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.912] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:24.961] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.018] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.069] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.119] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.171] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.222] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.274] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.323] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.374] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.426] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.476] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.526] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.577] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.630] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.683] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.735] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.787] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.839] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.892] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.946] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:25.998] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.053] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.104] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.158] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.216] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.273] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.328] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.382] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.439] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.496] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.551] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.607] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.661] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.716] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.772] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.828] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.883] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.940] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:26.997] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.054] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.110] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.166] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.222] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.282] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.339] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.396] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.454] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.513] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.572] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.632] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.690] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.747] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.804] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.862] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.922] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:27.980] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.038] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.097] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.158] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.223] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.283] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.343] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.408] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.472] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.537] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.597] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.660] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.722] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.784] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.846] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.924] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:28.995] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.066] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.137] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.202] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.276] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.348] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.423] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.491] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.563] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.636] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.712] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.783] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.856] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.921] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:29.994] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.066] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.141] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.213] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.291] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.362] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.437] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.513] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.591] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.659] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.729] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.803] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.880] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:30.948] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.018] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.094] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.171] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.246] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.322] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.391] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.467] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.541] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.617] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.686] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.756] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.833] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.911] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:31.987] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)
+[19:32:32.066] [ERROR] [Renderer    ] RendererDX12_Render failed while presenting a frame: DX12Context_EndFrame detected a device problem after command execution. HRESULT=-2005270522 (DXGI_ERROR_DEVICE_HUNG)

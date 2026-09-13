@@ -16,6 +16,7 @@
 #include "DX12Helper.h"
 #include "DX12ShaderCompiler.h"
 #include "RadianceProbeSettings.h"
+#include "MsaaSettings.h"
 
 #include <DirectXMath.h>
 #include <d3d12.h>
@@ -35,7 +36,6 @@ struct GBufferSrvs
     D3D12_GPU_DESCRIPTOR_HANDLE Albedo{};
     D3D12_GPU_DESCRIPTOR_HANDLE Normal{};
     D3D12_GPU_DESCRIPTOR_HANDLE Material{};
-    D3D12_GPU_DESCRIPTOR_HANDLE DepthReadback{}; // scene depth as SRV for reconstruction
 };
 
 class DeferredLightingPass
@@ -51,9 +51,32 @@ public:
         float             FalloffExponent;
         float             SourceRadius;
         float             CastShadows;
+        // Index into the point shadow atlas, or -1. Named _Pad0 from when it
+        // was unused; the scene renderer writes it after the shadow pass picks
+        // which lights get a cubemap.
         float             _Pad0;
+
+        // --- Spot and rect ---------------------------------------------------
+        // Emission axis in world space, from the entity's local -Z. Unused by
+        // LightType::Point.
+        DirectX::XMFLOAT3 Direction;
+        float             LightType;      // matches ::LightType in Components.h
+
+        // Cosines of the half-angles, so the shader compares against a dot
+        // product directly instead of taking an acos per pixel per light.
+        float             SpotCosInner;
+        float             SpotCosOuter;
+        float             RectHalfWidth;
+        float             RectHalfHeight;
+
+        // The rectangle's local X axis in world space. Its local Y is
+        // cross(Direction, Right), so the frame costs one vector rather than two.
+        DirectX::XMFLOAT3 RectRight;
+        float             RectTwoSided;
     };
-    static_assert(sizeof(PointLightGpu) == 48);
+    static_assert(sizeof(PointLightGpu) == 96,
+        "PointLightGpu must match PointLightData in DeferredLighting.hlsl and "
+        "RtgiPointLightData in RtGI_Common.hlsli.");
 
     // Maximum point lights the lighting shader supports.
     // Must match MAX_POINT_LIGHTS in DeferredLighting.hlsl.
@@ -65,13 +88,24 @@ public:
     // sceneDepthTarget – the same D32_FLOAT resource used by the geometry pass.
     // width/height     – initial scene resolution; re-created automatically when
     //                    EnsureSize() is called with different dimensions.
+    // msaaSettings     – MSAA configuration (sample count, quality)
     bool Initialize(
         UINT               width,
         UINT               height,
-        DXGI_FORMAT        depthFormat);
+        DXGI_FORMAT        depthFormat,
+        const MsaaSettings& msaaSettings = MsaaSettings{});
 
     // Resize G-Buffer RTs if the resolution has changed.
-    bool EnsureSize(UINT width, UINT height);
+    // If MSAA settings change, resources are recreated.
+    bool EnsureSize(UINT width, UINT height, const MsaaSettings& msaaSettings = MsaaSettings{});
+
+    // Resolve MSAA G-Buffer to single-sample textures for lighting.
+    // Only performs work if MSAA is enabled. Call after EndGeometryPass().
+    // Returns the GPU time in milliseconds (requires query support).
+    void ResolveGBuffer(ID3D12GraphicsCommandList* commandList);
+
+    // Get the last measured resolve time in milliseconds (0.0f if not measured).
+    float GetLastResolveTimeMs() const { return mLastResolveTimeMs; }
 
     // Transition G-Buffer RTs to render-target state and bind them as MRT.
     // The existing scene depth buffer is also bound as the shared DSV so the
@@ -163,6 +197,19 @@ public:
         return (index < 3u) ? mGBufferResources[index].Get() : nullptr;
     }
 
+    // Get MSAA G-Buffer resource (source for resolve). Returns nullptr if MSAA disabled.
+    ID3D12Resource* GetMsaaGBufferResource(UINT index) const
+    {
+        return (index < 3u) ? mMsaaGBufferResources[index].Get() : nullptr;
+    }
+
+    bool IsMsaaEnabled() const { return mMsaaSettings.Enabled; }
+    const MsaaSettings& GetMsaaSettings() const { return mMsaaSettings; }
+    // Get the current MSAA sample count for geometry renderers to use in their PSOs.
+    UINT GetMsaaSampleCount() const { return mMsaaSettings.GetEffectiveSampleCount(); }
+    UINT GetMsaaQuality() const { return mMsaaSettings.GetEffectiveQuality(); }
+
+
     bool IsInitialized() const { return mIsInitialized; }
     void Shutdown();
 
@@ -234,14 +281,29 @@ private:
     bool CreateLightingPipeline(DXGI_FORMAT sceneColorFormat);
     bool CreateConstantBuffers();
 
-    // G-Buffer resources (albedo, normal, material).
+    // MSAA G-Buffer resources (source for resolve, only created if MSAA enabled).
+    Microsoft::WRL::ComPtr<ID3D12Resource> mMsaaGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mMsaaRtvHeap;
+    D3D12_CPU_DESCRIPTOR_HANDLE            mMsaaRtvHandles[3]{};
+
+    // Single-sample G-Buffer resources (albedo, normal, material).
+    // These are always created and used for lighting (resolve targets if MSAA enabled).
     Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[3];
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap;
     D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[3]{};
     GBufferSrvs                            mSrvs{};
 
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> mRetiredGBufferResources;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>> mRetiredGBufferDescriptorHeaps;
+
     // CPU handles matching the SRV allocations (kept for re-creating SRVs on resize).
     D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[3]{};
+
+    // Current MSAA configuration.
+    MsaaSettings mMsaaSettings{};
+
+    // GPU timing for MSAA resolve (in milliseconds).
+    float mLastResolveTimeMs = 0.0f;
 
     // Lighting pipeline.
     DX12Shader                                   mVertexShader;

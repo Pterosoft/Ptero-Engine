@@ -89,7 +89,15 @@ float3 EvaluateSecondaryPointLights(float3 hitPos, float3 hitNormal, float3 hitG
     [loop]
     for (int i = 0; i < min(g_NumPointLights, MAX_RTGI_POINT_LIGHTS); ++i)
     {
-        const float3 toLight = g_PointLights[i].Position - hitPos;
+        // Resolve the emitter shape first: for a rect this moves the sample to
+        // the nearest point on the panel, and for a spot it bounds the bounce
+        // to the cone so indirect light cannot spill where direct light does
+        // not reach.
+        const PteroResolvedLight shape = PteroResolveLightShape(g_PointLights[i], hitPos);
+        if (shape.ShapeMask <= 0.0f)
+            continue;
+
+        const float3 toLight = shape.Position - hitPos;
         const float distSq = dot(toLight, toLight);
         const float normDistSq = saturate(distSq * g_PointLights[i].InvRadiusSq);
         if (normDistSq >= 1.0f)
@@ -117,7 +125,7 @@ float3 EvaluateSecondaryPointLights(float3 hitPos, float3 hitNormal, float3 hitG
             }
         }
 
-        const float falloff = (1.0f - normDistSq) * (1.0f - normDistSq);
+        const float falloff = (1.0f - normDistSq) * (1.0f - normDistSq) * shape.ShapeMask;
         pointLightSum += hitAlbedo * g_PointLights[i].Color * pointNdotL * falloff * visibility;
     }
 
@@ -274,8 +282,16 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
             dot(o2w[0], float4(localPos2, 1.0f)),
             dot(o2w[1], float4(localPos2, 1.0f)),
             dot(o2w[2], float4(localPos2, 1.0f)));
-        float3 geoNormal = normalize(cross(worldPos1 - worldPos0, worldPos2 - worldPos0));
-        float3 worldNormal = normalize(mul(o2wRot, localNormal));
+        // A sliver triangle collapses this cross product to zero and a plain
+        // normalize would return NaN, which then becomes the next bounce's ray
+        // origin and direction. Fall back to facing the incoming ray: wrong,
+        // but bounded, and it keeps the path alive instead of poisoning it.
+        float3 geoNormal = SafeNormalizeOr(
+            cross(worldPos1 - worldPos0, worldPos2 - worldPos0), -rayDir);
+
+        // Zero-length authored vertex normals get the same treatment, falling
+        // back to the geometric normal, which is the best available answer.
+        float3 worldNormal = SafeNormalizeOr(mul(o2wRot, localNormal), geoNormal);
 
         float3 shadingNormal = dot(worldNormal, -rayDir) >= 0.0f ? worldNormal : -worldNormal;
         float3 shadingGeoNormal = dot(geoNormal, -rayDir) >= 0.0f ? geoNormal : -geoNormal;
@@ -301,10 +317,22 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
 
         float2 xi = float2(RandFloat(rngState), RandFloat(rngState));
         float3 bounceDir = CosineSampleHemisphere(xi, shadingNormal);
-        rayOrigin = hitPos + shadingGeoNormal * 0.01f + bounceDir * 0.01f;
+
+        const float3 nextOrigin = hitPos + shadingGeoNormal * 0.01f + bounceDir * 0.01f;
+
+        // Last line of defence before spawning the next ray: a non-finite
+        // origin or direction makes TraceRayInline undefined, and whatever it
+        // returns would be accumulated as radiance. Stopping the path here
+        // costs one bounce; continuing can cost the whole surface.
+        if (!IsFinitePosition(nextOrigin) || !IsFinitePosition(bounceDir))
+            break;
+
+        rayOrigin = nextOrigin;
         rayDir = bounceDir;
     }
 
+    // The path is only worth what it can be trusted to be.
+    result.radiance = SanitizeRadiance(result.radiance);
     return result;
 }
 
@@ -340,6 +368,71 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     const float3 worldPos = ReconstructWorldPos(pixel, depth);
 
+    // ── Diagnostics ──────────────────────────────────────────────────────────
+    // Debug views >= 10 replace the GI signal with one input to it, so a
+    // flicker can be attributed to a stage instead of guessed at. Each writes a
+    // full reservoir so the downstream passes stay well-formed.
+    //
+    // Read them with the RTGI denoiser OFF and the composite debug view set to
+    // raw radiance, otherwise the denoiser will filter the very instability
+    // being looked for.
+    //
+    //   10 - reconstructed world position, fractional part. Flickering here
+    //        means the G-Buffer depth or g_ViewProjInv disagree between frames.
+    //   11 - G-Buffer surface normal. Flickering means the G-Buffer itself is
+    //        unstable and RTGI is only the messenger.
+    //   12 - raw G-Buffer depth, steeply remapped so small changes are visible.
+    //   13 - flat white. Nothing here depends on any per-frame input, so if
+    //        THIS flickers the fault is not in ray generation at all - it is in
+    //        dispatch, binding, or how the output is consumed.
+    //   14 - deterministic probe. Traces ONE ray straight along the surface
+    //        normal from a fixed rng seed, so the result depends only on where
+    //        the surface is, never on the camera or the frame. Ordinary GI
+    //        sampling cannot be judged by eye under motion - the rng is seeded
+    //        per pixel, so a surface point that moves to a new pixel legitimately
+    //        draws new directions, and that variance is the denoiser's job to
+    //        absorb. This view removes it. Anything that still flickers here is
+    //        real instability in traversal, hit attributes, or shading.
+    [branch]
+    if (g_DebugView >= 10)
+    {
+        float3 diagnostic = float3(1.0f, 1.0f, 1.0f);
+        if (g_DebugView == 10)
+            diagnostic = frac(worldPos);
+        else if (g_DebugView == 11)
+            diagnostic = surfaceNormal * 0.5f + 0.5f;
+        else if (g_DebugView == 12)
+        {
+            // Linear distance from the camera, black at 0 m and white at 30 m -
+            // a plain ramp, deliberately not frac(). A repeating fractional
+            // pattern exposes quantisation well but reads as arbitrary stripes,
+            // which is worse than useless when the question is "does this look
+            // right". Quantisation still shows here, as visible steps in what
+            // should be a smooth gradient.
+            diagnostic = saturate(length(worldPos - g_CameraPos) / 30.0f).xxx;
+        }
+        else if (g_DebugView == 14)
+        {
+            // Constant seed, not pixel-derived: the whole point is that nothing
+            // here varies with the camera or the frame index.
+            uint probeRng = 0x9e3779b9u;
+            const RayResult probe = TraceGIRay(
+                worldPos + surfaceNormal * 0.002f, surfaceNormal, probeRng);
+            diagnostic = probe.radiance;
+        }
+
+        u_GIOutput[pixel] = float4(diagnostic, 1.0f);
+
+        GIReservoir diagnosticReservoir = EmptyReservoir();
+        diagnosticReservoir.position  = worldPos;
+        diagnosticReservoir.normal    = surfaceNormal;
+        diagnosticReservoir.radiance  = diagnostic;
+        diagnosticReservoir.weightSum = 1.0f;
+        diagnosticReservoir.M         = 1;
+        u_Reservoir[PixelIndex(pixel)] = PackReservoir(diagnosticReservoir);
+        return;
+    }
+
     // ── Fire GI rays ─────────────────────────────────────────────────────────
     uint rng = InitRng(pixel, g_FrameIndex);
     GIReservoir reservoir = EmptyReservoir();
@@ -360,9 +453,13 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         // Keep the RTGI / NRD signal demodulated from the primary-surface albedo.
         // This lets the denoiser smooth indirect lighting without blurring texture detail.
         // The primary albedo is applied later in deferred lighting.
-        float3 radiance = hit.radiance;
+        // Sanitize before anything else looks at it. Past this point the value
+        // enters a reservoir that neighbouring pixels and later frames resample
+        // from, so a bad sample admitted here does not stay local - it spreads.
+        float3 radiance = SanitizeRadiance(hit.radiance);
 
-        // Clamp to suppress fireflies.
+        // Clamp to suppress fireflies. Note min() would not have filtered a NaN
+        // on its own, which is why the sanitize above has to come first.
         [flatten]
         if (g_RadianceClamp > 0.0f)
             radiance = min(radiance, g_RadianceClamp);

@@ -594,7 +594,7 @@ void RadianceProbeRenderer::UploadConstants(
     cb.ProbeOriginY   = oy;
     cb.ProbeOriginZ   = oz;
     cb.UpdateBlend    = settings.UpdateBlend;
-    cb.RaysPerProbe   = static_cast<uint32_t>(std::clamp(settings.RaysPerProbe, 32, 256));
+    cb.RaysPerProbe   = 1;
     cb.FrameIndex     = frameIndex;
     cb.TotalProbes    = mTotalProbes;
     cb.DebugSphereRadius = settings.DebugSphereRadius;

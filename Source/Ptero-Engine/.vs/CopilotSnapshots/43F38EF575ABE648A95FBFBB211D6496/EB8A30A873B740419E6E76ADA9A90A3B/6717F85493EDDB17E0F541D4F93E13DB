@@ -1,0 +1,109 @@
+﻿#pragma once
+
+#include "DX12Helper.h"
+#include "DX12ShaderCompiler.h"
+#include "RadianceCascadesSettings.h"
+
+#include <d3d12.h>
+#include <wrl/client.h>
+#include <string>
+#include <cstdint>
+
+using Microsoft::WRL::ComPtr;
+
+struct alignas(256) RadianceCascadesConstants
+{
+	uint32_t FrameWidth;
+	uint32_t FrameHeight;
+	uint32_t FrameIndex;
+	uint32_t CascadeCount;
+
+	uint32_t ProbeSpacingBase;
+	uint32_t RaysPerProbe;
+	int32_t  DebugView;
+	float    RayLengthBase;
+
+	float    RayLengthScale;
+	float    IntervalLengthScale;
+	float    Hysteresis;
+	float    GiIntensity;
+
+	float    ViewProjInv[16];
+	float    CurrViewProj[16];
+	float    PrevViewProj[16];
+	float    CameraPos[3];
+	float    _pad0;
+};
+
+class RadianceCascadesRenderer
+{
+public:
+	RadianceCascadesRenderer() = default;
+	~RadianceCascadesRenderer() { Shutdown(); }
+
+	bool Initialize(UINT width, UINT height);
+	bool EnsureSize(UINT width, UINT height);
+	void Shutdown();
+
+	void Dispatch(
+		ID3D12GraphicsCommandList4*  cmdList,
+		D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE  sceneDepthSrv,
+		D3D12_GPU_DESCRIPTOR_HANDLE  tlasSrv,
+		const RadianceCascadesSettings& settings,
+		const float                  viewProjInv[16],
+		const float                  currViewProj[16],
+		const float                  prevViewProj[16],
+		const float                  cameraPos[3]);
+
+	D3D12_GPU_DESCRIPTOR_HANDLE GetOutputSrv() const { return mOutputSrvGpu; }
+
+	bool IsInitialized() const { return mIsInitialized; }
+	bool HasInitFailed() const { return mInitFailed; }
+	const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
+
+private:
+	bool CreateRootSignature();
+	bool CreatePipelines();
+	bool CreateResolutionBuffers();
+	bool CreateDescriptors();
+	void UploadConstants(
+		const RadianceCascadesSettings& settings,
+		const float viewProjInv[16],
+		const float currViewProj[16],
+		const float prevViewProj[16],
+		const float cameraPos[3]);
+
+	bool        mIsInitialized = false;
+	bool        mInitFailed = false;
+	UINT        mWidth = 0;
+	UINT        mHeight = 0;
+	uint32_t    mFrameIndex = 0;
+	bool        mHistoryInSrvState = false;
+	bool        mOutputInSrvState = false;
+	std::string mLastError;
+
+	ComPtr<ID3D12RootSignature> mRootSignature;
+	ComPtr<ID3D12PipelineState> mPSO_Trace;
+	ComPtr<ID3D12PipelineState> mPSO_Composite;
+
+	ComPtr<ID3D12Resource> mConstantBuffer;
+	void*                  mMappedCb = nullptr;
+
+	ComPtr<ID3D12Resource> mHistoryBuffer;
+	ComPtr<ID3D12Resource> mOutputBuffer;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE mHistorySrvCpu = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE mHistorySrvGpu = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE mHistoryUavCpu = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE mHistoryUavGpu = {};
+
+	D3D12_CPU_DESCRIPTOR_HANDLE mOutputSrvCpu = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE mOutputSrvGpu = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE mOutputUavCpu = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE mOutputUavGpu = {};
+
+	bool mDescriptorsAllocated = false;
+};

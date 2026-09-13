@@ -150,19 +150,41 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     mLastError.clear();
 
     const std::filesystem::path texturePath(ddsPath);
-    std::error_code lastWriteError;
-    const auto lastWriteTime = std::filesystem::last_write_time(texturePath, lastWriteError);
 
     // Return cached entry if already loaded.
+    //
+    // The hot-reload check costs a filesystem call, so it is throttled rather
+    // than run on every lookup. This is called for every texture slot of every
+    // sub-mesh every frame, and stat-ing each one was costing more than the
+    // rest of the geometry pass put together - blocking time that never shows
+    // up as CPU load, because the thread is waiting rather than working.
     if (auto it = mCache.find(ddsPath); it != mCache.end())
     {
-        if (!lastWriteError && it->second.Texture && it->second.LastWriteTime == lastWriteTime)
+        const auto now = std::chrono::steady_clock::now();
+        if (now - it->second.LastCheckTime < kRevalidateInterval)
         {
-            return it->second.Texture;
+            if (it->second.Texture)
+            {
+                return it->second.Texture;
+            }
         }
+        else
+        {
+            it->second.LastCheckTime = now;
 
-        mCache.erase(it);
+            std::error_code lastWriteError;
+            const auto lastWriteTime = std::filesystem::last_write_time(texturePath, lastWriteError);
+            if (!lastWriteError && it->second.Texture && it->second.LastWriteTime == lastWriteTime)
+            {
+                return it->second.Texture;
+            }
+
+            mCache.erase(it);
+        }
     }
+
+    std::error_code lastWriteError;
+    const auto lastWriteTime = std::filesystem::last_write_time(texturePath, lastWriteError);
 
     if (!std::filesystem::exists(texturePath))
     {
@@ -298,7 +320,7 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
 
     device->CreateShaderResourceView(textureResource.Get(), &srvDesc, gpuTex->CpuHandle);
 
-    mCache[ddsPath] = { gpuTex, lastWriteTime };
+    mCache[ddsPath] = { gpuTex, lastWriteTime, std::chrono::steady_clock::now() };
     return gpuTex;
 }
 

@@ -1,0 +1,452 @@
+﻿#pragma once
+
+#include "Components.h"
+#include "DX12Helper.h"
+#include "TaaSettings.h"
+#include "DlssSettings.h"
+#include "TimeOfDaySettings.h"
+#include "RtGISettings.h"
+#include "RtAOSettings.h"
+#include "GtaoSettings.h"
+#include "AgxTonemapSettings.h"
+#include "VolumetricFogSettings.h"
+#include "BloomSettings.h"
+#include "AudioManager.h"
+#include "..\Ptero-Engine\EditorCamera.h"
+
+#include "imgui.h"
+
+#include <DirectXMath.h>
+
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+class SceneSerializer;
+
+struct EngineResourceUsageEntry
+{
+    std::string Name;
+    float CpuUsagePercent = 0.0f;
+    float GpuUsagePercent = 0.0f;
+    float RamUsagePercent = 0.0f;
+};
+
+struct EngineResourceUsageSnapshot
+{
+    float TotalCpuUsagePercent = 0.0f;
+    float TotalGpuUsagePercent = 0.0f;
+    float TotalRamUsagePercent = 0.0f;
+    std::vector<EngineResourceUsageEntry> Entries;
+};
+
+class Editor
+{
+public:
+    using ProgressCallback = void(__stdcall*)(const wchar_t* message);
+
+    enum class ManualGizmoHandle
+    {
+        None,
+        TranslateXAxis,
+        TranslateYAxis,
+        TranslateZAxis,
+        TranslateXYPlane,
+        TranslateXZPlane,
+        TranslateYZPlane,
+        Rotate,
+        ScaleXAxis,
+        ScaleYAxis,
+        ScaleZAxis,
+        Scale
+    };
+
+    enum class GizmoType
+    {
+        None,
+        Translate,
+        Rotate,
+        Scale
+    };
+
+    Editor();
+
+    bool Initialize(ID3D12GraphicsCommandList* commandList);
+    void Shutdown();
+    void SetProgressCallback(ProgressCallback callback)
+    {
+        mProgressCallback = callback;
+    }
+
+    void SetShowViewportPlacementIcons(bool shouldShow)
+    {
+        mShowViewportPlacementIcons = shouldShow;
+    }
+
+    bool GetShowViewportPlacementIcons() const
+    {
+        return mShowViewportPlacementIcons;
+    }
+
+    void SetShowViewportGrid(bool shouldShow)
+    {
+        mShowViewportGrid = shouldShow;
+    }
+
+    bool GetShowViewportGrid() const
+    {
+        return mShowViewportGrid;
+    }
+
+    void SetWireframeEnabled(bool shouldShow)
+    {
+        mWireframeEnabled = shouldShow;
+    }
+
+    bool GetWireframeEnabled() const
+    {
+        return mWireframeEnabled;
+    }
+
+    bool* GetShowComponentsPanelPointer()
+    {
+        return &mShowComponentsPanel;
+    }
+
+    bool* GetShowLevelExplorerPanelPointer()
+    {
+        return &mShowLevelExplorerPanel;
+    }
+
+    bool* GetShowPropertiesPanelPointer()
+    {
+        return &mShowPropertiesPanel;
+    }
+
+    bool* GetShowAudioManagerPanelPointer()
+    {
+        return &mShowAudioManagerPanel;
+    }
+
+    bool* GetShowResourceDebugPanelPointer()
+    {
+        return &mShowResourceDebugPanel;
+    }
+
+    bool SaveSceneToFile(const std::string& filepath);
+    bool LoadSceneFromFile(const std::string& filepath);
+    bool BeginLoadSceneFromFile(const std::string& filepath);
+    bool SaveScene(HWND ownerWindowHandle);
+    bool SaveSceneAs(HWND ownerWindowHandle);
+    bool OpenScene(HWND ownerWindowHandle);
+    bool NewScene(HWND ownerWindowHandle);
+    void UpdateSceneLoading();
+    bool IsSceneLoading() const;
+    float GetSceneLoadProgress() const;
+    std::string GetSceneLoadStatusMessage() const;
+    void SetSceneSettings(
+        TimeOfDaySettings* timeOfDaySettings,
+        TaaSettings* taaSettings,
+        DlssSettings* dlssSettings,
+        RtGISettings* rtgiSettings,
+        RtAOSettings* rtaoSettings,
+        GtaoSettings* gtaoSettings,
+        AgxTonemapSettings* agxSettings,
+        VolumetricFogSettings* volumetricFogSettings,
+        BloomSettings* bloomSettings)
+    {
+        mTimeOfDaySettings = timeOfDaySettings;
+        mTaaSettings = taaSettings;
+        mDlssSettings = dlssSettings;
+        mRtgiSettings = rtgiSettings;
+        mRtaoSettings = rtaoSettings;
+        mGtaoSettings = gtaoSettings;
+        mAgxSettings = agxSettings;
+        mVolumetricFogSettings = volumetricFogSettings;
+        mBloomSettings = bloomSettings;
+    }
+    bool CanCopySelectedEntity() const;
+    bool CanPasteEntity() const;
+    bool CanDeleteSelectedEntity() const;
+    bool CopySelectedEntity();
+    bool PasteCopiedEntity();
+    bool DeleteSelectedEntity();
+    bool HasUnsavedChanges() const
+    {
+        return mSceneDirty;
+    }
+
+    void MarkSceneDirty()
+    {
+        mSceneDirty = true;
+    }
+
+    const std::string& GetCurrentSceneFilePath() const
+    {
+        return mCurrentSceneFilePath;
+    }
+
+    std::string& GetCurrentSceneFilePath()
+    {
+        return mCurrentSceneFilePath;
+    }
+
+    const std::string& GetLastSceneStatusMessage() const
+    {
+        return mLastSceneStatusMessage;
+    }
+
+    void Draw(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        const char* sceneStatusMessage,
+        const char* statisticsText,
+        bool showStatistics,
+        AudioManager* audioManager);
+
+    void DrawToolbar(
+        D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
+        D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon);
+
+    void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
+    void DrawAudioManagerWindow(AudioManager* audioManager);
+    void DrawResourceDebugWindow();
+    void DrawViewportResolutionWindow();
+    void DrawScreenshotWindow();
+    void DrawViewport(
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneTextureHandle,
+        const EditorCamera& camera,
+        Entity* selectedEntity);
+
+    Entity* GetSelectedEntity();
+    std::vector<Entity>& GetEntities() { return mEntities; }
+
+    // Screenshot functionality
+    bool GetScreenshotRequested() const { return mRequestScreenshot; }
+    void ClearScreenshotRequest() { mRequestScreenshot = false; }
+    const std::string& GetScreenshotFolder() const { return mScreenshotOutputFolder; }
+
+    bool GetViewportResolutionChangeRequested() const { return mRequestViewportResolutionChange; }
+    void ClearViewportResolutionChangeRequest() { mRequestViewportResolutionChange = false; }
+    int GetRequestedViewportResolutionWidth() const { return mViewportResolutionWidth; }
+    int GetRequestedViewportResolutionHeight() const { return mViewportResolutionHeight; }
+    void SetViewportResolution(int width, int height)
+    {
+        mViewportResolutionWidth = width;
+        mViewportResolutionHeight = height;
+    }
+    bool HasPendingCameraRestore() const { return mRequestCameraRestore; }
+    const DirectX::XMFLOAT3& GetPendingCameraRestorePosition() const { return mSavedCameraPosition; }
+    const DirectX::XMFLOAT3& GetPendingCameraRestoreRotation() const { return mSavedCameraRotation; }
+    void ConsumePendingCameraRestore() { mRequestCameraRestore = false; }
+    void SetResourceUsageSnapshot(const EngineResourceUsageSnapshot& snapshot) { mResourceUsageSnapshot = snapshot; }
+
+private:
+    void ReportProgress(const wchar_t* message) const;
+    struct IconTexture
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle{};
+        D3D12_GPU_DESCRIPTOR_HANDLE GpuHandle{};
+        Microsoft::WRL::ComPtr<ID3D12Resource> Texture;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Upload;
+    };
+
+    struct ViewportSelectionState
+    {
+        bool IsDragging = false;
+        ImVec2 Start{};
+        ImVec2 Current{};
+    };
+
+    struct ManualGizmoState
+    {
+        bool IsActive = false;
+        ManualGizmoHandle ActiveHandle = ManualGizmoHandle::None;
+        ImVec2 StartMouse{};
+        DirectX::XMFLOAT3 StartPosition{};
+        DirectX::XMFLOAT3 StartRotation{};
+        DirectX::XMFLOAT3 StartScale{ 1.0f, 1.0f, 1.0f };
+        DirectX::XMFLOAT3 AxisWorldDirection{};
+        DirectX::XMFLOAT3 SecondaryAxisWorldDirection{};
+        DirectX::XMFLOAT3 PlaneNormal{};
+        DirectX::XMFLOAT3 StartPlaneHit{};
+        ImVec2 AxisScreenDirection{};
+        ImVec2 SecondaryAxisScreenDirection{};
+        float PixelsPerWorldUnit = 1.0f;
+        float SecondaryPixelsPerWorldUnit = 1.0f;
+        float StartAngle = 0.0f;
+    };
+
+    struct SceneLoadData
+    {
+        std::vector<Entity> Entities;
+        DirectX::XMFLOAT3 CameraPosition{};
+        DirectX::XMFLOAT3 CameraRotation{};
+        TimeOfDaySettings TimeOfDay{};
+        TaaSettings Taa{};
+        DlssSettings Dlss{};
+        RtGISettings Rtgi{};
+        RtAOSettings Rtao{};
+        GtaoSettings Gtao{};
+        AgxTonemapSettings Agx{};
+        VolumetricFogSettings VolumetricFog{};
+        BloomSettings Bloom{};
+        bool HasCameraPosition = false;
+        bool HasCameraRotation = false;
+        bool HasTimeOfDay = false;
+        bool HasTaa = false;
+        bool HasDlss = false;
+        bool HasRtgi = false;
+        bool HasRtao = false;
+        bool HasGtao = false;
+        bool HasAgx = false;
+        bool HasVolumetricFog = false;
+        bool HasBloom = false;
+    };
+
+    struct SceneLoadState
+    {
+        std::atomic<bool> InProgress{ false };
+        std::atomic<bool> Completed{ false };
+        std::atomic<bool> CancelRequested{ false };
+        std::atomic<float> Progress{ 0.0f };
+        mutable std::mutex Mutex;
+        std::string StatusMessage;
+        std::string TargetFilePath;
+        std::string ErrorMessage;
+        std::optional<SceneLoadData> Result;
+    };
+
+    DirectX::XMFLOAT3 mSavedCameraPosition = DirectX::XMFLOAT3(0.0f, -6.0f, 1.5f);
+    DirectX::XMFLOAT3 mSavedCameraRotation = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+
+    void DrawComponentsPanel();
+    void DrawLevelExplorerPanel();
+    void DrawSceneLoadingOverlay();
+    bool LoadGeometryIcon(ID3D12GraphicsCommandList* commandList);
+    bool LoadIconTexture(const wchar_t* fileName, IconTexture& iconTexture, std::string* statusMessage, ID3D12GraphicsCommandList* commandList);
+    void ReleaseIconTexture(IconTexture& iconTexture);
+    void DrawViewportPlacementIcons(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera);
+    void DrawManualGizmoPivot(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const;
+    bool TryProjectWorldToViewport(
+        const DirectX::XMFLOAT3& worldPosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        ImVec2& outScreenPosition,
+        bool clampToViewport = false) const;
+    bool TryGetViewportWorldPositionOnGrid(
+        const ImVec2& mousePosition,
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        DirectX::XMFLOAT3& outWorldPosition) const;
+    bool IsEntitySelected(int entityIndex) const;
+    void HandleViewportInteraction(
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        bool viewportHovered);
+    void HandleManualGizmoInteraction(
+        const ImVec2& viewportOrigin,
+        const ImVec2& viewportSize,
+        const EditorCamera& camera,
+        bool viewportHovered,
+        Entity* selectedEntity);
+    void FinishViewportSelection(const ImVec2& viewportOrigin, const ImVec2& viewportSize, const EditorCamera& camera);
+    void CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition);
+    void DrawViewportStatisticsOverlay() const;
+    void SetViewportStatisticsText(const char* text);
+    void HandleKeyboardShortcuts();
+    void ResetScene();
+    bool PromptToSaveUnsavedScene(HWND ownerWindowHandle);
+    void SetSceneLoadProgress(float progress, const char* statusMessage);
+    static bool SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData);
+
+    static ImTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+
+    std::vector<Entity> mEntities;
+    int mSelectedEntityIndex = -1;
+    std::vector<int> mSelectedEntityIndices;
+    GizmoType mActiveGizmo = GizmoType::None;
+    mutable bool mGeometryPrototypeSelected = false;
+    mutable bool mPointLightPrototypeSelected = false;
+    mutable bool mAudioEmitterPrototypeSelected = false;
+    mutable bool mDecalPrototypeSelected = false;
+    mutable bool mRainPrototypeSelected = false;
+    bool mShowViewportPlacementIcons = true;
+    bool mShowComponentsPanel = true;
+    bool mShowLevelExplorerPanel = false;
+    bool mShowPropertiesPanel = true;
+    bool mShowAudioManagerPanel = false;
+    bool mShowResourceDebugPanel = false;
+    bool mBlockViewportSelection = false;
+    int mNextGeometryInstanceId = 1;
+    ViewportSelectionState mViewportSelection;
+    ManualGizmoState mManualGizmo;
+
+    IconTexture mGeometryIcon;
+    IconTexture mPointLightIcon;
+    IconTexture mAudioEmitterIcon;
+    IconTexture mDecalIcon;
+    IconTexture mRainIcon;
+    IconTexture mSelectIcon;
+    IconTexture mMoveIcon;
+    IconTexture mRotateIcon;
+    IconTexture mScaleIcon;
+    IconTexture mWireframeIcon;
+    IconTexture mProxyIcon;
+    bool mIsInitialized = false;
+    bool mGeometryIconLoadAttempted = false;
+    std::string mGeometryIconStatus;
+    std::string mCurrentSceneFilePath;
+    std::string mLastSceneStatusMessage;
+    std::optional<Entity> mCopiedEntity;
+    bool mSceneDirty = false;
+
+    TimeOfDaySettings* mTimeOfDaySettings = nullptr;
+    TaaSettings* mTaaSettings = nullptr;
+    DlssSettings* mDlssSettings = nullptr;
+    RtGISettings* mRtgiSettings = nullptr;
+    RtAOSettings* mRtaoSettings = nullptr;
+    GtaoSettings* mGtaoSettings = nullptr;
+    AgxTonemapSettings* mAgxSettings = nullptr;
+    VolumetricFogSettings* mVolumetricFogSettings = nullptr;
+    BloomSettings* mBloomSettings = nullptr;
+    ProgressCallback mProgressCallback = nullptr;
+
+    const char* mSceneStatusMessage = nullptr;
+    const char* mViewportStatisticsText = nullptr;
+    bool mShowViewportStatistics = true;
+    bool mViewportStatisticsInitialized = false;
+    bool mShowViewportGrid = true;
+    bool mWireframeEnabled = false;
+    bool mProxyEnabled = false;
+
+    // Viewport resolution control
+    int mViewportResolutionWidth = 1920;
+    int mViewportResolutionHeight = 1080;
+    bool mShowViewportResolutionDialog = false;
+    bool mRequestViewportResolutionChange = false;
+    bool mRequestCameraRestore = false;
+
+    EngineResourceUsageSnapshot mResourceUsageSnapshot;
+
+    // Screenshot functionality
+    std::string mScreenshotOutputFolder;
+    bool mShowScreenshotDialog = false;
+    bool mRequestScreenshot = false;
+
+    ImVec2 mLastViewportContentOrigin{};
+    ImVec2 mLastViewportContentSize{};
+
+    SceneLoadState mSceneLoadState;
+    std::thread mSceneLoadWorker;
+};

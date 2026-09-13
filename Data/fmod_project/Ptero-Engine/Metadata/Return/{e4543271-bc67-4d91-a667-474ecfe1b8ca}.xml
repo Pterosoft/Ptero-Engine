@@ -19,46 +19,9 @@
 	</object>
 	<object class="MixerBusEffectChain" id="{45e8585c-b37c-4eb0-ae02-2ce926f816c9}">
 		<relationship name="effects">
-			<destination>{980c1bba-2396-4f4e-a248-17b3eacb9f9b}</destination>
 			<destination>{26e4b570-d542-4920-8be9-f7d35a554afa}</destination>
 		</relationship>
 	</object>
 	<object class="MixerBusPanner" id="{9ebc5772-4092-4cf1-9bae-cd4caea24fbe}" />
-	<object class="PluginEffect" id="{980c1bba-2396-4f4e-a248-17b3eacb9f9b}">
-		<relationship name="plugin">
-			<destination>{a28f6d1f-4766-48e6-9bbf-7fee85158c01}</destination>
-		</relationship>
-	</object>
 	<object class="MixerBusFader" id="{26e4b570-d542-4920-8be9-f7d35a554afa}" />
-	<object class="Plugin" id="{a28f6d1f-4766-48e6-9bbf-7fee85158c01}">
-		<property name="identifier">
-			<value>Steam Audio Reverb</value>
-		</property>
-		<relationship name="pluginParameters">
-			<destination>{16fc913d-342e-4dc6-9633-d7fedfaf4b18}</destination>
-			<destination>{338ef2c6-736d-45a1-a999-9345c9824c10}</destination>
-		</relationship>
-	</object>
-	<object class="BoolPluginParameter" id="{16fc913d-342e-4dc6-9633-d7fedfaf4b18}">
-		<property name="name">
-			<value>Binaural</value>
-		</property>
-		<property name="value">
-			<value>true</value>
-		</property>
-	</object>
-	<object class="IntPluginParameter" id="{338ef2c6-736d-45a1-a999-9345c9824c10}">
-		<property name="name">
-			<value>OutputFormat</value>
-		</property>
-		<property name="value">
-			<value>0</value>
-		</property>
-		<property name="minimumValue">
-			<value>0</value>
-		</property>
-		<property name="maximumValue">
-			<value>2</value>
-		</property>
-	</object>
 </objects>

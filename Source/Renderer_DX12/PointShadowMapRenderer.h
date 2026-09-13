@@ -100,7 +100,9 @@ public:
 
 	float GetLightFarPlane(int lightIndex) const
 	{
-		return mLights[lightIndex].Radius;
+		// Must match the far plane BuildPointLightViewProjection actually used, otherwise
+		// the depth pass would normalise against a different range than it rendered with.
+		return ShadowFarPlaneFor(mLights[lightIndex].Radius);
 	}
 
 	float GetShadowBias() const { return mShadowBias; }
@@ -149,6 +151,20 @@ private:
 	static constexpr int kFacesPerLight = 6;
 	static constexpr int kTotalShadowFaces = kMaxShadowCastingPointLights * kFacesPerLight;
 
+	// Near plane of every point-shadow face projection.
+	static constexpr float kShadowNearPlane = 0.05f;
+
+	// Dragging a light's Radius slider down to zero would hand XMMatrixPerspectiveFovLH a
+	// far plane at or below its near plane. That trips a DirectXMath assertion
+	// (!XMScalarNearEqual(FarZ, NearZ)) in debug and produces a degenerate projection in
+	// release, so keep a minimum depth range. A light this small lights nothing anyway;
+	// the point is only that the slider stays usable across its whole travel.
+	static float ShadowFarPlaneFor(float radius)
+	{
+		const float minimumFarPlane = kShadowNearPlane + 0.05f;
+		return radius > minimumFarPlane ? radius : minimumFarPlane;
+	}
+
 	static DirectX::XMMATRIX BuildPointLightViewProjection(const DirectX::XMFLOAT3& lightPosition, int faceIndex, float farPlane)
 	{
 		using namespace DirectX;
@@ -174,7 +190,7 @@ private:
 
 		const XMVECTOR eye = XMVectorSet(lightPosition.x, lightPosition.y, lightPosition.z, 1.0f);
 		const XMMATRIX view = XMMatrixLookToLH(eye, directions[faceIndex], upVectors[faceIndex]);
-		const XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV2, 1.0f, 0.05f, farPlane);
+		const XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV2, 1.0f, kShadowNearPlane, ShadowFarPlaneFor(farPlane));
 		return view * proj;
 	}
 

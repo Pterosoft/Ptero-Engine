@@ -1,0 +1,22 @@
+﻿#pragma once
+
+enum class GlobalIlluminationMode
+{
+	Disabled = 0,
+	Rtgi = 1,
+	RadianceCascades = 2
+};
+
+struct RadianceCascadesSettings
+{
+	bool Enabled = false;
+	int CascadeCount = 4;
+	int ProbeSpacingBase = 8;
+	int RaysPerProbe = 4;
+	float RayLengthBase = 2.0f;
+	float RayLengthScale = 2.0f;
+	float IntervalLengthScale = 1.0f;
+	float Hysteresis = 0.9f;
+	float GiIntensity = 1.0f;
+	int DebugView = 0;
+};

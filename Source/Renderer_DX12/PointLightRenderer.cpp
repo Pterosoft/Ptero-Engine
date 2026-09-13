@@ -104,6 +104,73 @@ namespace
     }
 } // namespace
 
+// Unit cone for the spot light gizmo: apex at the origin, opening along -Z with
+// a base of radius 1 at z = -1. Scaling the base by tan(halfAngle) and the
+// length by the light's radius then draws the exact volume the cone lights.
+void PointLightRenderer::AppendWireframeCone(
+    int                          slices,
+    std::vector<XMFLOAT3>&       outVerts,
+    std::vector<std::uint16_t>&  outIndices,
+    MeshRange&                   outRange)
+{
+    outRange.IndexOffset = static_cast<UINT>(outIndices.size());
+    outRange.BaseVertex = static_cast<INT>(outVerts.size());
+
+    const std::uint16_t apex = 0;
+    outVerts.push_back(XMFLOAT3(0.0f, 0.0f, 0.0f));
+
+    for (int slice = 0; slice < slices; ++slice)
+    {
+        const float theta = XM_2PI * static_cast<float>(slice) / static_cast<float>(slices);
+        outVerts.push_back(XMFLOAT3(std::cosf(theta), std::sinf(theta), -1.0f));
+    }
+
+    // Four ribs from the apex - enough to read the cone's direction without
+    // cluttering the viewport once several lights overlap.
+    for (int rib = 0; rib < 4; ++rib)
+    {
+        const int slice = rib * slices / 4;
+        outIndices.push_back(apex);
+        outIndices.push_back(static_cast<std::uint16_t>(1 + slice));
+    }
+
+    // Base ring.
+    for (int slice = 0; slice < slices; ++slice)
+    {
+        outIndices.push_back(static_cast<std::uint16_t>(1 + slice));
+        outIndices.push_back(static_cast<std::uint16_t>(1 + (slice + 1) % slices));
+    }
+
+    outRange.IndexCount = static_cast<UINT>(outIndices.size()) - outRange.IndexOffset;
+}
+
+// Unit rect light gizmo: a 1x1 quad in the XY plane plus a short stalk along -Z
+// showing which way the panel faces, since a rectangle lit from behind
+// contributes nothing and that is otherwise invisible in the viewport.
+void PointLightRenderer::AppendWireframeRect(
+    std::vector<XMFLOAT3>&       outVerts,
+    std::vector<std::uint16_t>&  outIndices,
+    MeshRange&                   outRange)
+{
+    outRange.IndexOffset = static_cast<UINT>(outIndices.size());
+    outRange.BaseVertex = static_cast<INT>(outVerts.size());
+
+    outVerts.push_back(XMFLOAT3(-0.5f, -0.5f, 0.0f)); // 0
+    outVerts.push_back(XMFLOAT3( 0.5f, -0.5f, 0.0f)); // 1
+    outVerts.push_back(XMFLOAT3( 0.5f,  0.5f, 0.0f)); // 2
+    outVerts.push_back(XMFLOAT3(-0.5f,  0.5f, 0.0f)); // 3
+    outVerts.push_back(XMFLOAT3( 0.0f,  0.0f, 0.0f)); // 4 - stalk root
+    outVerts.push_back(XMFLOAT3( 0.0f,  0.0f, -0.5f)); // 5 - stalk tip
+
+    const std::uint16_t edges[] = { 0, 1, 1, 2, 2, 3, 3, 0, 4, 5 };
+    for (const std::uint16_t index : edges)
+    {
+        outIndices.push_back(index);
+    }
+
+    outRange.IndexCount = static_cast<UINT>(outIndices.size()) - outRange.IndexOffset;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -156,12 +223,44 @@ void PointLightRenderer::Render(
 
         const PointLightComponent& pl = *e.PointLight;
 
-        // Scale the unit sphere to the light's influence radius and translate to its world position.
-        const XMMATRIX model = XMMatrixScaling(pl.Radius, pl.Radius, pl.Radius)
-                             * XMMatrixTranslation(
-                                   e.Transform.Position.x,
-                                   e.Transform.Position.y,
-                                   e.Transform.Position.z);
+        const XMMATRIX translation = XMMatrixTranslation(
+            e.Transform.Position.x,
+            e.Transform.Position.y,
+            e.Transform.Position.z);
+
+        // Spot and rect gizmos are authored facing local -Z, the same axis the
+        // lights emit along, so the entity's own rotation orients them.
+        const XMMATRIX rotation = PteroTransform::ComposeRotation(e.Transform.Rotation);
+
+        XMMATRIX model;
+        MeshRange range;
+
+        switch (pl.Type)
+        {
+        case LightType::Spot:
+        {
+            // Widen the unit cone's base to the outer half-angle and stretch it
+            // to the influence radius, so the wireframe is the volume the light
+            // actually reaches rather than a generic marker.
+            const float outerHalfAngle = XMConvertToRadians(pl.SpotOuterConeDegrees * 0.5f);
+            const float baseRadius = std::tanf((std::min)(outerHalfAngle, XMConvertToRadians(89.0f))) * pl.Radius;
+            model = XMMatrixScaling(baseRadius, baseRadius, pl.Radius) * rotation * translation;
+            range = mConeRange;
+            break;
+        }
+        case LightType::Rect:
+            model = XMMatrixScaling(pl.RectWidth, pl.RectHeight, (std::max)(pl.Radius * 0.25f, 0.05f))
+                  * rotation * translation;
+            range = mRectRange;
+            break;
+
+        case LightType::Point:
+        default:
+            model = XMMatrixScaling(pl.Radius, pl.Radius, pl.Radius) * translation;
+            range = mSphereRange;
+            break;
+        }
+
         const XMMATRIX mvp = XMMatrixTranspose(model * viewProjection);
 
         GizmoConstants& cb = mMappedCB[slot];
@@ -170,7 +269,7 @@ void PointLightRenderer::Render(
 
         const UINT64 cbOffset = static_cast<UINT64>(slot) * sizeof(GizmoConstants);
         commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
-        commandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
+        commandList->DrawIndexedInstanced(range.IndexCount, 1, range.IndexOffset, range.BaseVertex, 0);
 
         ++slot;
     }
@@ -214,6 +313,16 @@ bool PointLightRenderer::CreateSphereMesh(ID3D12GraphicsCommandList* commandList
     std::vector<XMFLOAT3>      verts;
     std::vector<std::uint16_t> indices;
     GenerateWireframeSphere(12, 16, verts, indices);
+
+    mSphereRange.IndexOffset = 0;
+    mSphereRange.IndexCount = static_cast<UINT>(indices.size());
+    mSphereRange.BaseVertex = 0;
+
+    // Append the cone and rect gizmos into the same buffers. Each shape is
+    // authored as a unit primitive and scaled per light at draw time, so one
+    // upload covers every light in the level.
+    AppendWireframeCone(16, verts, indices, mConeRange);
+    AppendWireframeRect(verts, indices, mRectRange);
 
     mIndexCount = static_cast<UINT>(indices.size());
 

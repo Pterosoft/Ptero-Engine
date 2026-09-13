@@ -24,6 +24,11 @@ public:
         return mLastErrorMessage.empty() ? nullptr : mLastErrorMessage.c_str();
     }
 
+    bool WasLoadedFromCache() const
+    {
+        return mLoadedFromCache;
+    }
+
     D3D12_SHADER_BYTECODE GetBytecode() const
     {
         D3D12_SHADER_BYTECODE bytecode{};
@@ -36,4 +41,5 @@ private:
     std::wstring mSourcePath;
     std::vector<std::uint8_t> mBytecode;
     std::string mLastErrorMessage;
+    bool mLoadedFromCache = false;
 };

@@ -409,7 +409,7 @@ void BloomRenderer::Apply(
         commandList->ResourceBarrier(1, &bar);
     }
 
-    // Restore shared heap for ImGui.
+    // Restore shared heap for Ui.
     ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
     commandList->SetDescriptorHeaps(1, sharedHeaps);
 }
@@ -677,28 +677,28 @@ bool BloomRenderer::CreateTextures(UINT width, UINT height)
         }
     }
 
-    // Allocate shared-context ImGui SRV slot once.
-    if (!mImGuiSlotAllocated)
+    // Allocate shared-context Ui SRV slot once.
+    if (!mUiSlotAllocated)
     {
-        if (!DX12Context_AllocateSrvDescriptor(&mOutputImGuiSrvCpu, &mOutputImGuiSrvGpu))
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputUiSrvCpu, &mOutputUiSrvGpu))
         {
-            mLastError = "BloomRenderer: Failed to allocate ImGui SRV descriptor.";
+            mLastError = "BloomRenderer: Failed to allocate Ui SRV descriptor.";
             return false;
         }
-        mImGuiSlotAllocated = true;
+        mUiSlotAllocated = true;
     }
 
-    // Write ImGui SRV.
+    // Write Ui SRV.
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                        = TexFormat;
         srvDesc.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping       = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels           = 1;
-        device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputImGuiSrvCpu);
+        device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputUiSrvCpu);
     }
 
-    mOutputTextureId = static_cast<ImTextureID>(mOutputImGuiSrvGpu.ptr);
+    mOutputTextureId = static_cast<UiTextureID>(mOutputUiSrvGpu.ptr);
 
     // Non-shader-visible heap for output UAV.
     {

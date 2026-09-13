@@ -253,9 +253,8 @@ void VolumetricFogRenderer::Shutdown()
 }
 
 void VolumetricFogRenderer::Dispatch(
-    ID3D12GraphicsCommandList4* cmdList,
+    ID3D12GraphicsCommandList* cmdList,
     D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
-    D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
     const VolumetricFogSettings& settings,
     const float viewProjInv[16],
     const float currViewProj[16],
@@ -315,8 +314,7 @@ void VolumetricFogRenderer::Dispatch(
     cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
     cmdList->SetPipelineState(mInjectPipelineState.Get());
     cmdList->SetComputeRootDescriptorTable(1, sceneDepthSrv);
-    cmdList->SetComputeRootDescriptorTable(2, tlasSrv);
-    cmdList->SetComputeRootDescriptorTable(3, mLightingUavGpu);
+    cmdList->SetComputeRootDescriptorTable(2, mLightingUavGpu);
     cmdList->Dispatch(
         (mFroxelWidth + kInjectGroupX - 1) / kInjectGroupX,
         (mFroxelHeight + kInjectGroupY - 1) / kInjectGroupY,
@@ -358,22 +356,19 @@ bool VolumetricFogRenderer::CreateRootSignatures()
         return false;
     }
 
-    D3D12_DESCRIPTOR_RANGE injectRanges[3]{};
+    D3D12_DESCRIPTOR_RANGE injectRanges[2]{};
     injectRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[0].NumDescriptors = 1;
     injectRanges[0].BaseShaderRegister = 0;
-    injectRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     injectRanges[1].NumDescriptors = 1;
-    injectRanges[1].BaseShaderRegister = 1;
-    injectRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    injectRanges[2].NumDescriptors = 1;
-    injectRanges[2].BaseShaderRegister = 0;
+    injectRanges[1].BaseShaderRegister = 0;
 
-    D3D12_ROOT_PARAMETER injectParams[4]{};
+    D3D12_ROOT_PARAMETER injectParams[3]{};
     injectParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     injectParams[0].Descriptor.ShaderRegister = 0;
     injectParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (UINT i = 0; i < 3; ++i)
+    for (UINT i = 0; i < 2; ++i)
     {
         injectParams[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         injectParams[i + 1].DescriptorTable.NumDescriptorRanges = 1;
@@ -382,7 +377,7 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     }
 
     D3D12_ROOT_SIGNATURE_DESC injectDesc{};
-    injectDesc.NumParameters = 4;
+    injectDesc.NumParameters = 3;
     injectDesc.pParameters = injectParams;
     injectDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 

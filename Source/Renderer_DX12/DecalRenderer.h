@@ -35,6 +35,16 @@ public:
         const std::vector<Entity>&  entities,
         const DirectX::XMMATRIX&   viewProjection);
 
+    // Draws the bounds of every VegetationAreaComponent that has ShowBounds
+    // set.  It lives here rather than in VegetationRenderer because the box
+    // wireframe mesh, the line pipeline and the gizmo constant buffer already
+    // exist in this class; a second copy of all three would earn nothing.
+    // Exclusion volumes are tinted red so they read as subtractive at a glance.
+    void RenderVegetationAreas(
+        ID3D12GraphicsCommandList* commandList,
+        const std::vector<Entity>& entities,
+        const DirectX::XMMATRIX&   viewProjection);
+
     void Shutdown();
 
     bool IsInitialized() const { return mPipelineReady; }

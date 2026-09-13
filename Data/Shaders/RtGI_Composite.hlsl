@@ -43,7 +43,14 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     // ── Debug views ───────────────────────────────────────────────────────
     float4 finalColor;
-    if (g_DebugView == 1)
+    if (g_DebugView >= 10)
+    {
+        // Diagnostic views from RayGen pass through unaccumulated: blending
+        // them with history would hide the frame-to-frame instability they
+        // exist to expose.
+        finalColor = float4(giSample.rgb, 1.0f);
+    }
+    else if (g_DebugView == 1)
     {
         // Raw GI radiance (no accumulation).
         finalColor = float4(giSample.rgb, 1.0f);

@@ -67,6 +67,29 @@ private:
     bool CreatePipeline(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat);
     bool EnsureConstantBuffer(std::size_t requiredCount);
 
+    // One vertex/index buffer holds all three gizmo shapes back to back; a
+    // light picks its shape by index range rather than by switching buffers.
+    struct MeshRange
+    {
+        UINT IndexOffset = 0;
+        UINT IndexCount = 0;
+        INT  BaseVertex = 0;
+    };
+    MeshRange mSphereRange;
+    MeshRange mConeRange;    // unit cone: apex at origin, opening along -Z
+    MeshRange mRectRange;    // unit quad in XY plus a short -Z normal stalk
+
+    static void AppendWireframeCone(
+        int                              slices,
+        std::vector<DirectX::XMFLOAT3>&  outVerts,
+        std::vector<std::uint16_t>&      outIndices,
+        MeshRange&                       outRange);
+
+    static void AppendWireframeRect(
+        std::vector<DirectX::XMFLOAT3>&  outVerts,
+        std::vector<std::uint16_t>&      outIndices,
+        MeshRange&                       outRange);
+
     Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> mVertexUpload;
     Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBuffer;

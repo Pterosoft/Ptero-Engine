@@ -1,0 +1,549 @@
+﻿#include "pch.h"
+#include "RadianceCascadesRenderer.h"
+
+#include <algorithm>
+#include <cstring>
+#include <stdexcept>
+
+using Microsoft::WRL::ComPtr;
+
+extern "C"
+{
+	ID3D12Device* __stdcall DX12Context_GetDevice();
+	ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+	bool __stdcall DX12Context_AllocateSrvDescriptor(
+		D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+		D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
+}
+
+namespace
+{
+	constexpr DXGI_FORMAT kRadianceCascadesFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	constexpr UINT kGroupSize = 8;
+
+	bool AllocDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, std::string& err)
+	{
+		if (!DX12Context_AllocateSrvDescriptor(&cpu, &gpu))
+		{
+			err = "RadianceCascadesRenderer: ran out of SRV descriptor heap slots.";
+			return false;
+		}
+
+		return true;
+	}
+
+	ComPtr<ID3D12Resource> MakeTexture2D(
+		ID3D12Device* device,
+		UINT width,
+		UINT height,
+		DXGI_FORMAT format,
+		D3D12_RESOURCE_STATES initialState,
+		LPCWSTR name)
+	{
+		D3D12_HEAP_PROPERTIES heap{};
+		heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+		heap.CreationNodeMask = 1;
+		heap.VisibleNodeMask = 1;
+
+		D3D12_RESOURCE_DESC desc{};
+		desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		desc.Width = width;
+		desc.Height = height;
+		desc.DepthOrArraySize = 1;
+		desc.MipLevels = 1;
+		desc.Format = format;
+		desc.SampleDesc.Count = 1;
+		desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+		desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+		ComPtr<ID3D12Resource> resource;
+		DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+			&heap,
+			D3D12_HEAP_FLAG_NONE,
+			&desc,
+			initialState,
+			nullptr,
+			IID_PPV_ARGS(&resource)));
+		resource->SetName(name);
+		return resource;
+	}
+
+	ComPtr<ID3D12Resource> MakeConstantBuffer(ID3D12Device* device, UINT64 size, void** mapped)
+	{
+		D3D12_HEAP_PROPERTIES heap{};
+		heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+		heap.CreationNodeMask = 1;
+		heap.VisibleNodeMask = 1;
+
+		D3D12_RESOURCE_DESC desc{};
+		desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		desc.Width = size;
+		desc.Height = 1;
+		desc.DepthOrArraySize = 1;
+		desc.MipLevels = 1;
+		desc.Format = DXGI_FORMAT_UNKNOWN;
+		desc.SampleDesc.Count = 1;
+		desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+		ComPtr<ID3D12Resource> resource;
+		DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+			&heap,
+			D3D12_HEAP_FLAG_NONE,
+			&desc,
+			D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr,
+			IID_PPV_ARGS(&resource)));
+		DX12_THROW_IF_FAILED(resource->Map(0, nullptr, mapped));
+		resource->SetName(L"RadianceCascadesConstants");
+		return resource;
+	}
+
+	bool CompileAndCreatePso(
+		ID3D12Device* device,
+		ID3D12RootSignature* rootSignature,
+		const wchar_t* filePath,
+		ComPtr<ID3D12PipelineState>& outPso,
+		std::string& err)
+	{
+		ShaderCompileRequest request{};
+		request.FilePath = filePath;
+		request.EntryPoint = L"CSMain";
+		request.TargetProfile = L"cs_6_5";
+		request.Stage = ShaderStage::Compute;
+
+		DX12Shader shader;
+		if (!shader.Compile(request))
+		{
+			err = std::string("RadianceCascadesRenderer: shader compile failed: ")
+				+ (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown error");
+			return false;
+		}
+
+		D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+		desc.pRootSignature = rootSignature;
+		desc.CS = shader.GetBytecode();
+		if (FAILED(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&outPso))))
+		{
+			err = "RadianceCascadesRenderer: CreateComputePipelineState failed.";
+			return false;
+		}
+
+		return true;
+	}
+
+	void Transition(
+		ID3D12GraphicsCommandList* commandList,
+		ID3D12Resource* resource,
+		D3D12_RESOURCE_STATES& currentState,
+		D3D12_RESOURCE_STATES newState)
+	{
+		if (!resource || currentState == newState)
+		{
+			return;
+		}
+
+		const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource, currentState, newState);
+		commandList->ResourceBarrier(1, &barrier);
+		currentState = newState;
+	}
+}
+
+bool RadianceCascadesRenderer::Initialize(UINT width, UINT height)
+{
+	if (width == 0 || height == 0)
+	{
+		mLastError = "RadianceCascadesRenderer: invalid resolution.";
+		mInitFailed = true;
+		return false;
+	}
+
+	mLastError.clear();
+
+	try
+	{
+		if (!mRootSignature && !CreateRootSignature())
+			return false;
+		if (!mTracePso || !mCompositePso)
+		{
+			if (!CreatePipelines())
+				return false;
+		}
+
+		if (!mConstantBuffer)
+		{
+			mConstantBuffer = MakeConstantBuffer(DX12Context_GetDevice(), sizeof(RadianceCascadesConstants), reinterpret_cast<void**>(&mMappedConstants));
+		}
+
+		mWidth = width;
+		mHeight = height;
+
+		if (!CreateResolutionBuffers())
+			return false;
+		if (!CreateDescriptors())
+			return false;
+
+		mFrameIndex = 0;
+		mIsInitialized = true;
+		mInitFailed = false;
+		return true;
+	}
+	catch (const std::exception& ex)
+	{
+		mLastError = std::string("RadianceCascadesRenderer::Initialize: ") + ex.what();
+		mInitFailed = true;
+		mIsInitialized = false;
+		return false;
+	}
+}
+
+bool RadianceCascadesRenderer::EnsureSize(UINT width, UINT height)
+{
+	if (!mIsInitialized)
+		return Initialize(width, height);
+
+	if (width == mWidth && height == mHeight)
+		return true;
+
+	if (width == 0 || height == 0)
+		return false;
+
+	mWidth = width;
+	mHeight = height;
+	return CreateResolutionBuffers() && CreateDescriptors();
+}
+
+void RadianceCascadesRenderer::Shutdown()
+{
+	if (mConstantBuffer && mMappedConstants)
+	{
+		mConstantBuffer->Unmap(0, nullptr);
+		mMappedConstants = nullptr;
+	}
+
+	mConstantBuffer.Reset();
+	mTraceTexture.Reset();
+	mOutputTexture.Reset();
+	mTracePso.Reset();
+	mCompositePso.Reset();
+	mRootSignature.Reset();
+	mIsInitialized = false;
+	mInitFailed = false;
+	mWidth = 0;
+	mHeight = 0;
+	mFrameIndex = 0;
+	mTraceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	mOutputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+}
+
+void RadianceCascadesRenderer::Dispatch(
+	ID3D12GraphicsCommandList4* cmdList,
+	D3D12_GPU_DESCRIPTOR_HANDLE gbufferAlbedoSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE gbufferNormalDepthSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE gbufferMaterialSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE vertexSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE indexSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE instanceInfoSrv,
+	D3D12_GPU_DESCRIPTOR_HANDLE materialRangeSrv,
+	const RadianceCascadesSettings& settings,
+	const float viewProjInv[16],
+	const float currViewProj[16],
+	const float cameraPos[3],
+	float sunDirX,
+	float sunDirY,
+	float sunDirZ,
+	float sunR,
+	float sunG,
+	float sunB,
+	float skyR,
+	float skyG,
+	float skyB,
+	const DeferredLightingPass::PointLightGpu* pointLights,
+	uint32_t numPointLights,
+	float sceneMaxDistance)
+{
+	if (!mIsInitialized || !cmdList || !mRootSignature || !mTracePso || !mCompositePso)
+		return;
+
+	ID3D12DescriptorHeap* const srvHeap = DX12Context_GetSrvDescriptorHeap();
+	if (!srvHeap)
+		return;
+
+	UploadConstants(
+		settings,
+		viewProjInv,
+		currViewProj,
+		cameraPos,
+		sunDirX,
+		sunDirY,
+		sunDirZ,
+		sunR,
+		sunG,
+		sunB,
+		skyR,
+		skyG,
+		skyB,
+		pointLights,
+		numPointLights,
+		sceneMaxDistance);
+
+	Transition(cmdList, mTraceTexture.Get(), mTraceState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	cmdList->SetDescriptorHeaps(1, &srvHeap);
+	cmdList->SetComputeRootSignature(mRootSignature.Get());
+	cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+
+	cmdList->SetPipelineState(mTracePso.Get());
+	cmdList->SetComputeRootDescriptorTable(1, gbufferAlbedoSrv);
+	cmdList->SetComputeRootDescriptorTable(2, gbufferNormalDepthSrv);
+	cmdList->SetComputeRootDescriptorTable(3, gbufferMaterialSrv);
+	cmdList->SetComputeRootDescriptorTable(4, sceneDepthSrv);
+	cmdList->SetComputeRootDescriptorTable(5, tlasSrv);
+	cmdList->SetComputeRootDescriptorTable(6, vertexSrv);
+	cmdList->SetComputeRootDescriptorTable(7, indexSrv);
+	cmdList->SetComputeRootDescriptorTable(8, instanceInfoSrv);
+	cmdList->SetComputeRootDescriptorTable(9, materialRangeSrv);
+	cmdList->SetComputeRootDescriptorTable(10, mTraceUavGpu);
+	cmdList->Dispatch((mWidth + kGroupSize - 1) / kGroupSize, (mHeight + kGroupSize - 1) / kGroupSize, 1);
+
+	Transition(cmdList, mTraceTexture.Get(), mTraceState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	Transition(cmdList, mOutputTexture.Get(), mOutputState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	cmdList->SetPipelineState(mCompositePso.Get());
+	cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+	cmdList->SetComputeRootDescriptorTable(1, mTraceSrvGpu);
+	cmdList->SetComputeRootDescriptorTable(2, gbufferNormalDepthSrv);
+	cmdList->SetComputeRootDescriptorTable(3, gbufferMaterialSrv);
+	cmdList->SetComputeRootDescriptorTable(4, sceneDepthSrv);
+	cmdList->SetComputeRootDescriptorTable(5, tlasSrv);
+	cmdList->SetComputeRootDescriptorTable(6, vertexSrv);
+	cmdList->SetComputeRootDescriptorTable(7, indexSrv);
+	cmdList->SetComputeRootDescriptorTable(8, instanceInfoSrv);
+	cmdList->SetComputeRootDescriptorTable(9, materialRangeSrv);
+	cmdList->SetComputeRootDescriptorTable(10, mOutputUavGpu);
+	cmdList->Dispatch((mWidth + kGroupSize - 1) / kGroupSize, (mHeight + kGroupSize - 1) / kGroupSize, 1);
+
+	Transition(cmdList, mOutputTexture.Get(), mOutputState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+	++mFrameIndex;
+}
+
+bool RadianceCascadesRenderer::CreateRootSignature()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device)
+	{
+		mLastError = "RadianceCascadesRenderer: no D3D12 device.";
+		return false;
+	}
+
+	D3D12_DESCRIPTOR_RANGE srvRanges[10]{};
+	for (UINT i = 0; i < 10; ++i)
+	{
+		srvRanges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		srvRanges[i].NumDescriptors = 1;
+		srvRanges[i].BaseShaderRegister = i;
+		srvRanges[i].RegisterSpace = 0;
+		srvRanges[i].OffsetInDescriptorsFromTableStart = 0;
+	}
+
+	D3D12_DESCRIPTOR_RANGE uavRange{};
+	uavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+	uavRange.NumDescriptors = 1;
+	uavRange.BaseShaderRegister = 0;
+	uavRange.RegisterSpace = 0;
+	uavRange.OffsetInDescriptorsFromTableStart = 0;
+
+	D3D12_ROOT_PARAMETER params[11]{};
+	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	params[0].Descriptor.ShaderRegister = 0;
+	params[0].Descriptor.RegisterSpace = 0;
+	params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+	for (UINT i = 0; i < 10; ++i)
+	{
+		params[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		params[i + 1].DescriptorTable.NumDescriptorRanges = 1;
+		params[i + 1].DescriptorTable.pDescriptorRanges = &srvRanges[i];
+		params[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	}
+
+	params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	params[10].DescriptorTable.NumDescriptorRanges = 1;
+	params[10].DescriptorTable.pDescriptorRanges = &uavRange;
+	params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+	D3D12_STATIC_SAMPLER_DESC linearClamp{};
+	linearClamp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	linearClamp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	linearClamp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	linearClamp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	linearClamp.ShaderRegister = 0;
+	linearClamp.RegisterSpace = 0;
+	linearClamp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	linearClamp.MaxLOD = D3D12_FLOAT32_MAX;
+
+	D3D12_ROOT_SIGNATURE_DESC desc{};
+	desc.NumParameters = static_cast<UINT>(std::size(params));
+	desc.pParameters = params;
+	desc.NumStaticSamplers = 1;
+	desc.pStaticSamplers = &linearClamp;
+	desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+	ComPtr<ID3DBlob> serialized;
+	ComPtr<ID3DBlob> errors;
+	if (FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors)))
+	{
+		mLastError = "RadianceCascadesRenderer: D3D12SerializeRootSignature failed.";
+		return false;
+	}
+
+	if (FAILED(device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&mRootSignature))))
+	{
+		mLastError = "RadianceCascadesRenderer: CreateRootSignature failed.";
+		return false;
+	}
+
+	return true;
+}
+
+bool RadianceCascadesRenderer::CreatePipelines()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device || !mRootSignature)
+	{
+		mLastError = "RadianceCascadesRenderer: missing device or root signature.";
+		return false;
+	}
+
+	return CompileAndCreatePso(device, mRootSignature.Get(), L"Data/Shaders/RadianceCascadesTrace.hlsl", mTracePso, mLastError)
+		&& CompileAndCreatePso(device, mRootSignature.Get(), L"Data/Shaders/RadianceCascadesComposite.hlsl", mCompositePso, mLastError);
+}
+
+bool RadianceCascadesRenderer::CreateResolutionBuffers()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device || mWidth == 0 || mHeight == 0)
+	{
+		mLastError = "RadianceCascadesRenderer: invalid device or resolution for buffers.";
+		return false;
+	}
+
+	try
+	{
+		mHistoryTexture = MakeTexture2D(device, mWidth, mHeight, kRadianceCascadesFormat, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RadianceCascadesHistory");
+		mTraceTexture = MakeTexture2D(device, mWidth, mHeight, kRadianceCascadesFormat, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RadianceCascadesTrace");
+		mOutputTexture = MakeTexture2D(device, mWidth, mHeight, kRadianceCascadesFormat, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"RadianceCascadesOutput");
+		mHistoryState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		mTraceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		mOutputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		return true;
+	}
+	catch (const std::exception& ex)
+	{
+		mLastError = std::string("RadianceCascadesRenderer::CreateResolutionBuffers: ") + ex.what();
+		return false;
+	}
+}
+
+bool RadianceCascadesRenderer::CreateDescriptors()
+{
+	ID3D12Device* device = DX12Context_GetDevice();
+	if (!device || !mTraceTexture || !mOutputTexture)
+	{
+		mLastError = "RadianceCascadesRenderer: missing resources for descriptor creation.";
+		return false;
+	}
+
+	if (!mDescriptorsAllocated)
+	{
+		if (!AllocDescriptor(mTraceSrvCpu, mTraceSrvGpu, mLastError)
+			|| !AllocDescriptor(mTraceUavCpu, mTraceUavGpu, mLastError)
+			|| !AllocDescriptor(mOutputSrvCpu, mOutputSrvGpu, mLastError)
+			|| !AllocDescriptor(mOutputUavCpu, mOutputUavGpu, mLastError))
+		{
+			return false;
+		}
+
+		mDescriptorsAllocated = true;
+	}
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = kRadianceCascadesFormat;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Texture2D.MipLevels = 1;
+
+	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = kRadianceCascadesFormat;
+	uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+	device->CreateShaderResourceView(mTraceTexture.Get(), &srvDesc, mTraceSrvCpu);
+	device->CreateUnorderedAccessView(mTraceTexture.Get(), nullptr, &uavDesc, mTraceUavCpu);
+	device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputSrvCpu);
+	device->CreateUnorderedAccessView(mOutputTexture.Get(), nullptr, &uavDesc, mOutputUavCpu);
+	return true;
+}
+
+void RadianceCascadesRenderer::UploadConstants(
+	const RadianceCascadesSettings& settings,
+	const float viewProjInv[16],
+	const float currViewProj[16],
+	const float cameraPos[3],
+	float sunDirX,
+	float sunDirY,
+	float sunDirZ,
+	float sunR,
+	float sunG,
+	float sunB,
+	float skyR,
+	float skyG,
+	float skyB,
+	const DeferredLightingPass::PointLightGpu* pointLights,
+	uint32_t numPointLights,
+	float sceneMaxDistance)
+{
+	if (!mMappedConstants)
+		return;
+
+	RadianceCascadesConstants constants{};
+	constants.FrameWidth = mWidth;
+	constants.FrameHeight = mHeight;
+	constants.FrameIndex = mFrameIndex;
+	constants.CascadeCount = (std::max)(settings.CascadeCount, 1u);
+	constants.ProbeSpacingBase = (std::max)(settings.ProbeSpacingBase, 1u);
+	constants.RaysPerProbe = (std::max)(settings.RaysPerProbe, 1u);
+	constants.DebugView = settings.DebugView;
+	constants.RayLengthBase = settings.RayLengthBase;
+	constants.RayLengthScale = settings.RayLengthScale;
+	constants.IntervalLengthScale = settings.IntervalLengthScale;
+	constants.Hysteresis = 0.0f;
+	constants.GiIntensity = settings.GiIntensity;
+	constants.SunDir[0] = sunDirX;
+	constants.SunDir[1] = sunDirY;
+	constants.SunDir[2] = sunDirZ;
+	constants.ProbeSpacingBaseFloat = static_cast<float>(constants.ProbeSpacingBase);
+	constants.SunColor[0] = sunR;
+	constants.SunColor[1] = sunG;
+	constants.SunColor[2] = sunB;
+	constants.NumPointLights = static_cast<int32_t>((std::min)(numPointLights, static_cast<uint32_t>(DeferredLightingPass::kMaxPointLights)));
+	constants.SkyColor[0] = skyR;
+	constants.SkyColor[1] = skyG;
+	constants.SkyColor[2] = skyB;
+	constants.SceneMaxDistance = sceneMaxDistance;
+	constants.ColorBleedingStrength = 1.0f;
+
+	if (viewProjInv)
+		std::memcpy(constants.ViewProjInv, viewProjInv, sizeof(constants.ViewProjInv));
+	if (currViewProj)
+		std::memcpy(constants.CurrViewProj, currViewProj, sizeof(constants.CurrViewProj));
+	if (cameraPos)
+		std::memcpy(constants.CameraPos, cameraPos, sizeof(constants.CameraPos));
+	if (pointLights != nullptr && constants.NumPointLights > 0)
+	{
+		std::memcpy(constants.PointLights, pointLights, static_cast<size_t>(constants.NumPointLights) * sizeof(DeferredLightingPass::PointLightGpu));
+	}
+
+	*mMappedConstants = constants;
+}

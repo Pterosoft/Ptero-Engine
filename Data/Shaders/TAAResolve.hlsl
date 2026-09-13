@@ -14,13 +14,9 @@
 cbuffer TaaConstantBuffer : register(b0)
 {
     float BlendFactor;       // weight of current frame colour (0.05 – 0.3 is typical)
-    float SharpeningStrength; // 0 = off
-    int   ApplySharpening;   // bool packed as int
-    float _Pad0;
     uint  FrameWidth;
     uint  FrameHeight;
-    float _Pad1;
-    float _Pad2;
+    float _Pad0;
 }
 
 // ----- resources -------------------------------------------------------
@@ -99,25 +95,6 @@ void CSMain(uint3 dispatchId : SV_DispatchThreadID)
     // Convert back to RGB.
     float3 resolvedRGB = YCoCgToRGB(resolved);
     resolvedRGB = SanitizeColor(resolvedRGB);
-
-    // Optional unsharp-mask sharpening.
-    if (ApplySharpening != 0)
-    {
-        // Box-filter the 3x3 neighbourhood for the blur estimate.
-        float3 blurAccum = float3(0.0f, 0.0f, 0.0f);
-        for (int dy = -1; dy <= 1; ++dy)
-        {
-            for (int dx = -1; dx <= 1; ++dx)
-            {
-                int2 sampleCoord = (int2)coord + int2(dx, dy);
-                sampleCoord = clamp(sampleCoord, int2(0, 0), int2((int)FrameWidth - 1, (int)FrameHeight - 1));
-                blurAccum += gCurrentFrame[sampleCoord].rgb;
-            }
-        }
-        float3 blur = blurAccum / 9.0f;
-        resolvedRGB = resolvedRGB + SharpeningStrength * (resolvedRGB - blur);
-        resolvedRGB = saturate(SanitizeColor(resolvedRGB));
-    }
 
     gOutput[coord] = float4(resolvedRGB, 1.0f);
 }

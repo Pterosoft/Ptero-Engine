@@ -1,0 +1,103 @@
+{
+  "alphaCutoff": 0.5,
+  "ambientOcclusionStrength": 1.0,
+  "baseColorTint": [
+    0.05999999865889549,
+    0.12999999523162842,
+    0.14000000059604645,
+    1.0
+  ],
+  "doubleSided": false,
+  "emissiveColor": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "glassCausticStrength": 0.0,
+  "glassDispersion": 0.3499999940395355,
+  "glassIor": 1.5,
+  "glassThickness": 0.07999999821186066,
+  "heightScale": 0.05000000074505806,
+  "isDecalMaterial": false,
+  "metallicFactor": 0.0,
+  "name": "Water",
+  "normalScale": 1.0,
+  "opacity": 1.0,
+  "roughnessFactor": 0.029999999329447746,
+  "textures": {
+    "ambientOcclusion": "",
+    "baseColor": "",
+    "emissive": "",
+    "height": "",
+    "metallic": "",
+    "metallicRoughness": "",
+    "normal": "",
+    "opacity": "",
+    "roughness": ""
+  },
+  "useAlphaCutout": false,
+  "useGlassRendering": false,
+  "useThinGlass": true,
+  "useTransparentBlend": false,
+  "water": {
+    "shallowTint": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "extinction": [
+      0.6,
+      0.2,
+      0.16
+    ],
+    "foamColor": [
+      0.93,
+      0.95,
+      0.96,
+      0.5
+    ],
+    "scatterColor": [
+      0.01,
+      0.03,
+      0.038,
+      1.0
+    ],
+    "roughness": 0.03,
+    "metallic": 0.0,
+    "waveAmplitude": 0.11,
+    "waveLength": 9.0,
+    "waveSpeed": 0.75,
+    "steepness": 0.3,
+    "choppiness": 0.7,
+    "waveCount": 10,
+    "directionalSpread": 1.45,
+    "detailStrength": 0.06,
+    "detailFadeDistance": 250.0,
+    "foamThreshold": 0.3,
+    "shorelineFoam": 0.45,
+    "fresnelPower": 5.0,
+    "fresnelF0": 0.0204,
+    "refractionStrength": 0.03,
+    "absorptionDistance": 1.0,
+    "scatterPower": 6.0,
+    "scatterDistortion": 0.45,
+    "sunSpecularIntensity": 1.0,
+    "reflectionStrength": 1.0,
+    "reflectionSteps": 18,
+    "reflectionStride": 0.4,
+    "reflectionThickness": 1.2,
+    "windDirection": [
+      0.7,
+      0.7
+    ],
+    "sssColor": [
+      0.05,
+      0.28,
+      0.24,
+      0.35
+    ],
+    "distantFlatten": 0.45,
+    "distantRoughness": 0.08,
+    "volumeDesaturate": 0.18
+  }
+}

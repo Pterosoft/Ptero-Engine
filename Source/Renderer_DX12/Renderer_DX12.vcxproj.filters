@@ -45,6 +45,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AreaTex.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="framework.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -72,10 +75,19 @@
     <ClInclude Include="Components.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ImGuizmoCompat.h">
+    <ClInclude Include="Editor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Editor.h">
+    <ClInclude Include="GameHost.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RmlUiRenderInterface.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RmlUiSystemInterface.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RmlUiRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SceneSerializer.h">
@@ -91,6 +103,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TAARenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SharpenSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ImageSharpenRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TimeOfDaySettings.h">
@@ -130,6 +148,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="AgxTonemapper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumetricCloudSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumetricCloudRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="VolumetricFogSettings.h">
@@ -174,10 +198,55 @@
     <ClInclude Include="DecalRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="LightStyles.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ParticleRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="RainRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RadianceCascadesRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RadianceCascadesSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SMAASettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SMAARenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SearchTex.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="HeightmapImporter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TerrainGeometry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TerrainRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OceanSimulation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="WaterRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="GlassRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MsaaSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RendererTimingSnapshot.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -191,27 +260,6 @@
     <ClCompile Include="EditorMainMenu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_demo.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_draw.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_dx12.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\SDKs\imgui\backends\imgui_impl_win32.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_tables.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="..\\SDKs\\imgui-docking\\imgui_widgets.cpp">
-      <Filter>Source Files\imgui</Filter>
-    </ClCompile>
     <ClCompile Include="..\System\MaterialEditor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -219,6 +267,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="EntityMeshRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ImageSharpenRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GlassRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\System\src\AssetManager.cpp">
@@ -332,6 +386,9 @@
     <ClCompile Include="AgxTonemapper.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="VolumetricCloudRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="VolumetricFogRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -347,7 +404,16 @@
     <ClCompile Include="Editor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\SDKs\ImGuizmo\ImGuizmo.cpp">
+    <ClCompile Include="GameHost.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RmlUiRenderInterface.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RmlUiSystemInterface.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="RmlUiRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="DlssRenderer.cpp">
@@ -357,6 +423,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="DecalRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ParticleRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RainRenderer.cpp">
@@ -410,6 +479,27 @@
     <ClCompile Include="..\System\src\CollisionGenerator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RadianceCascadesRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SMAARenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="HeightmapImporter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TerrainGeometry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TerrainRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OceanSimulation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="WaterRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
@@ -434,6 +524,9 @@
       <Filter>Source Files\Shaders</Filter>
     </FxCompile>
     <FxCompile Include="..\..\Data\Shaders\GBuffer.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="..\..\Data\Shaders\Terrain.hlsl">
       <Filter>Source Files\Shaders</Filter>
     </FxCompile>
   </ItemGroup>
@@ -465,6 +558,21 @@
     <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl">
       <Filter>Source Files\Shaders</Filter>
     </None>
+    <None Include="..\..\Data\Shaders\RadianceCascadesTrace.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\RadianceCascadesComposite.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\SMAA.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\SMAA_Ptero.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="SMAA.h">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Resource.rc">
@@ -472,3 +580,4 @@
     </ResourceCompile>
   </ItemGroup>
 </Project>
+

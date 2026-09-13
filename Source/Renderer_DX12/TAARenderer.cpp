@@ -211,16 +211,16 @@ bool TAARenderer::CreateTextures(UINT width, UINT height)
     if (!device)
         return false;
 
-    // Allocate the shared-context ImGui SRV slot once.
-    if (!mImGuiSlotAllocated)
+    // Allocate the shared-context Ui SRV slot once.
+    if (!mUiSlotAllocated)
     {
-        if (!DX12Context_AllocateSrvDescriptor(&mOutputImGuiSrvCpu, &mOutputImGuiSrvGpu))
+        if (!DX12Context_AllocateSrvDescriptor(&mOutputUiSrvCpu, &mOutputUiSrvGpu))
         {
-            mLastError = "TAARenderer: failed to allocate ImGui output SRV slot.";
+            mLastError = "TAARenderer: failed to allocate Ui output SRV slot.";
             return false;
         }
-        mImGuiSlotAllocated = true;
-        mOutputTextureId = static_cast<ImTextureID>(mOutputImGuiSrvGpu.ptr);
+        mUiSlotAllocated = true;
+        mOutputTextureId = static_cast<UiTextureID>(mOutputUiSrvGpu.ptr);
     }
 
     // Recreate the two textures.
@@ -236,7 +236,7 @@ bool TAARenderer::CreateTextures(UINT width, UINT height)
         D3D12_RESOURCE_FLAG_NONE,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // Output: written by compute (UAV) and then displayed by ImGui (SRV).
+    // Output: written by compute (UAV) and then displayed by Ui (SRV).
     mOutputTexture = MakeTex2D(device, width, height,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -270,8 +270,8 @@ bool TAARenderer::CreateTextures(UINT width, UINT height)
     device->CreateUnorderedAccessView(mOutputTexture.Get(), nullptr, &uavDesc,
         mNsUavHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // ---- fill ImGui shared-heap SRV ----
-    device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputImGuiSrvCpu);
+    // ---- fill Ui shared-heap SRV ----
+    device->CreateShaderResourceView(mOutputTexture.Get(), &srvDesc, mOutputUiSrvCpu);
 
     return true;
 }
@@ -294,11 +294,9 @@ void TAARenderer::Resolve(
         TaaCbData cb{};
         // When the camera has moved, force blend factor to 1.0 so we use only the current
         // frame instead of blending in stale history that no longer aligns with the scene.
-        cb.BlendFactor        = settings.ResetHistory ? 1.0f : settings.BlendFactor;
-        cb.SharpeningStrength = settings.SharpeningStrength;
-        cb.ApplySharpening    = settings.UseSharpening ? 1 : 0;
-        cb.FrameWidth         = mWidth;
-        cb.FrameHeight        = mHeight;
+        cb.BlendFactor = settings.ResetHistory ? 1.0f : settings.BlendFactor;
+        cb.FrameWidth  = mWidth;
+        cb.FrameHeight = mHeight;
         std::memcpy(mMappedCb, &cb, sizeof(cb));
     }
 
@@ -387,7 +385,7 @@ void TAARenderer::Resolve(
     slot1.ptr += mComputeHeapStride;
     device->CreateShaderResourceView(mHistoryTexture.Get(), &srvDesc, slot1);
 
-    // Re-bind the shared SRV heap so ImGui and other passes see it.
+    // Re-bind the shared SRV heap so Ui and other passes see it.
     ID3D12DescriptorHeap* sharedHeap[] = { DX12Context_GetSrvDescriptorHeap() };
     commandList->SetDescriptorHeaps(1, sharedHeap);
 }
@@ -407,8 +405,8 @@ void TAARenderer::Shutdown()
     mNsUavHeap.Reset();
     mPipelineState.Reset();
     mRootSignature.Reset();
-    mOutputTextureId = ImTextureID_Invalid;
+    mOutputTextureId = UiTextureID_Invalid;
     mIsInitialized = false;
-    // Note: mImGuiSlotAllocated stays false so a future re-init doesn't double-allocate.
+    // Note: mUiSlotAllocated stays false so a future re-init doesn't double-allocate.
     // The shared heap slot is leaked (acceptable – renderer lifetime == app lifetime).
 }

@@ -1,0 +1,461 @@
+{
+    "name": "norwegian_fishermen_house",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "outer",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "door_knob",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "door",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "frame",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "glass",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "wall",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "foundation_supports",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "horizontal_supports",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "support",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "nails",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "walkway",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "roof_edge",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "roof",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

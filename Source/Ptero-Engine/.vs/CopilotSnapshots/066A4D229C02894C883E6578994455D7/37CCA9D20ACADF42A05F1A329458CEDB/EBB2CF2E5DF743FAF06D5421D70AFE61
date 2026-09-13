@@ -1,0 +1,49 @@
+﻿cbuffer RadianceCascadesConstants : register(b0)
+{
+    uint  gFrameWidth;
+    uint  gFrameHeight;
+    uint  gFrameIndex;
+    uint  gCascadeCount;
+
+    uint  gProbeSpacingBase;
+    uint  gRaysPerProbe;
+    int   gDebugView;
+    float gRayLengthBase;
+
+    float gRayLengthScale;
+    float gIntervalLengthScale;
+    float gHysteresis;
+    float gGiIntensity;
+
+    float4x4 gViewProjInv;
+    float4x4 gCurrViewProj;
+    float3 gSunDir;
+    float gProbeSpacingBaseFloat;
+
+    float3 gSunColor;
+    int    gNumPointLights;
+
+    float3 gSkyColor;
+    float  gSceneMaxDistance;
+
+    float3 gCameraPos;
+    float  gColorBleedingStrength;
+};
+
+Texture2D gTrace : register(t0);
+Texture2D gNormalDepth : register(t1);
+RWTexture2D<float4> gOutput : register(u0);
+SamplerState gLinearClamp : register(s0);
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    if (dispatchThreadId.x >= gFrameWidth || dispatchThreadId.y >= gFrameHeight)
+        return;
+
+    const uint2 pixel = dispatchThreadId.xy;
+    const float3 gi = gTrace.Load(int3(pixel, 0)).rgb;
+    const float depth = gNormalDepth.Load(int3(pixel, 0)).z;
+    const float edgeFade = depth < 1.0f ? 1.0f : 0.0f;
+    gOutput[pixel] = float4(gi * edgeFade, 1.0f);
+}

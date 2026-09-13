@@ -102,6 +102,8 @@ void MotionVectorRenderer::Render(
         return;
     }
 
+    mClearedThisFrame = false;
+
     const auto toRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
         mOutputTexture.Get(),
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -111,6 +113,7 @@ void MotionVectorRenderer::Render(
     const float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
     commandList->ClearRenderTargetView(mRtvHandle, clearColor, 0, nullptr);
     commandList->OMSetRenderTargets(1, &mRtvHandle, FALSE, nullptr);
+    mClearedThisFrame = true;
 
     const D3D12_VIEWPORT viewport = { 0.0f, 0.0f, static_cast<float>(mWidth), static_cast<float>(mHeight), 0.0f, 1.0f };
     const D3D12_RECT scissor = { 0, 0, static_cast<LONG>(mWidth), static_cast<LONG>(mHeight) };
@@ -133,13 +136,13 @@ void MotionVectorRenderer::Render(
         }
 
         const Mesh* mesh = entity.Mesh->MeshAsset.get();
-        if (!EnsureMesh(commandList, i, mesh))
+        if (!EnsureMesh(commandList, mesh))
         {
             ++cbSlot;
             continue;
         }
 
-        auto gpuMeshIt = mGpuMeshes.find(i);
+        auto gpuMeshIt = mGpuMeshes.find(mesh);
         if (gpuMeshIt == mGpuMeshes.end() || gpuMeshIt->second.IndexCount == 0)
         {
             ++cbSlot;
@@ -174,6 +177,53 @@ void MotionVectorRenderer::Render(
         D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     commandList->ResourceBarrier(1, &toShaderResource);
+}
+
+bool MotionVectorRenderer::BeginExternalPass(ID3D12GraphicsCommandList* commandList)
+{
+    if (!mInitialized || commandList == nullptr || !mOutputTexture)
+        return false;
+
+    const auto toRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
+        mOutputTexture.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commandList->ResourceBarrier(1, &toRenderTarget);
+
+    // Render() clears when it has meshes to draw, but it bails out early on an
+    // empty scene.  Clearing here in that case keeps the target from carrying
+    // last frame's vectors into the temporal resolve.
+    if (!mClearedThisFrame)
+    {
+        const float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        commandList->ClearRenderTargetView(mRtvHandle, clearColor, 0, nullptr);
+        mClearedThisFrame = true;
+    }
+
+    commandList->OMSetRenderTargets(1, &mRtvHandle, FALSE, nullptr);
+
+    const D3D12_VIEWPORT viewport = { 0.0f, 0.0f, static_cast<float>(mWidth), static_cast<float>(mHeight), 0.0f, 1.0f };
+    const D3D12_RECT scissor = { 0, 0, static_cast<LONG>(mWidth), static_cast<LONG>(mHeight) };
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
+
+    return true;
+}
+
+void MotionVectorRenderer::EndExternalPass(ID3D12GraphicsCommandList* commandList)
+{
+    if (commandList == nullptr || !mOutputTexture)
+        return;
+
+    const auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+        mOutputTexture.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    commandList->ResourceBarrier(1, &toShaderResource);
+
+    // The next frame's Render() resets this; clearing it here as well keeps an
+    // external-only frame from being mistaken for an already-cleared one.
+    mClearedThisFrame = false;
 }
 
 void MotionVectorRenderer::ResetHistory()
@@ -305,7 +355,7 @@ bool MotionVectorRenderer::CreateOutput(UINT width, UINT height)
             mLastError = "MotionVectorRenderer: failed to allocate output SRV descriptor.";
             return false;
         }
-        mOutputTextureId = static_cast<ImTextureID>(mOutputSrvGpu.ptr);
+        mOutputTextureId = static_cast<UiTextureID>(mOutputSrvGpu.ptr);
         mOutputSrvAllocated = true;
     }
 
@@ -412,17 +462,14 @@ bool MotionVectorRenderer::EnsureConstantBuffer(std::size_t requiredCount)
     return true;
 }
 
-bool MotionVectorRenderer::EnsureMesh(ID3D12GraphicsCommandList* commandList, std::size_t entityIndex, const Mesh* mesh)
+bool MotionVectorRenderer::EnsureMesh(ID3D12GraphicsCommandList* commandList, const Mesh* mesh)
 {
-    auto existing = mGpuMeshes.find(entityIndex);
-    if (existing != mGpuMeshes.end() && existing->second.SourceMesh == mesh)
+    // One entry per asset, so an entry can never come to describe a different
+    // mesh than the one it was built from, and nothing ever has to be erased to
+    // correct it while the GPU may still be reading it.
+    if (mGpuMeshes.find(mesh) != mGpuMeshes.end())
     {
         return true;
-    }
-
-    if (existing != mGpuMeshes.end())
-    {
-        mGpuMeshes.erase(existing);
     }
 
     if (mesh == nullptr || mesh->GetVertices().empty() || mesh->GetIndices().empty())
@@ -478,7 +525,7 @@ bool MotionVectorRenderer::EnsureMesh(ID3D12GraphicsCommandList* commandList, st
     gpuMesh.IndexView.SizeInBytes = static_cast<UINT>(ibSize);
     gpuMesh.IndexCount = static_cast<UINT>(mesh->GetIndices().size());
 
-    mGpuMeshes[entityIndex] = std::move(gpuMesh);
+    mGpuMeshes[mesh] = std::move(gpuMesh);
     return true;
 }
 

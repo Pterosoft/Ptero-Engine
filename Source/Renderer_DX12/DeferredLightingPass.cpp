@@ -24,13 +24,31 @@ using namespace DirectX;
 // G-Buffer format table
 // ---------------------------------------------------------------------------
 // RT0 Albedo   – RGBA8 UNORM  (base colour + padding alpha)
-// RT1 Normal   – RGBA16 FLOAT (encoded world-space normal)
+// RT1 Normal   – RGBA32 FLOAT (encoded world-space normal + device depth)
 // RT2 Material – RGBA8 UNORM  (roughness / metallic / AO)
+//
+// RT1 is 32-bit per channel because of what shares it. The oct-encoded normal
+// in .xy would be perfectly happy at 16-bit, but GBuffer.hlsl also writes the
+// post-projection device depth into .z, and fp16 cannot carry that.
+//
+// A perspective depth buffer concentrates almost all of its range just below
+// 1.0 - with this engine's near and far planes an entire interior lands between
+// roughly 0.98 and 1.0 - while fp16's spacing near 1.0 is about 0.000488. That
+// left only a few dozen representable depths for a whole room. Every pass that
+// reconstructs world position from this target (RTGI ray generation, the NRD
+// prepare pass that derives viewZ and motion vectors, spatial reuse, specular)
+// therefore snapped its positions to a handful of depth planes, and surfaces
+// that rounded to exactly 1.0 were misread as sky. Under camera motion those
+// values dithered between buckets and the reconstructed positions jumped,
+// which is what produced flickering black and over-bright patches in the GI.
+//
+// The deferred lighting resolve was immune because it samples the real D32
+// depth buffer instead, which is why the fault looked like an RTGI-only bug.
 static constexpr DXGI_FORMAT kGBufferFormats[3] =
 {
-    DXGI_FORMAT_R8G8B8A8_UNORM,   // albedo
-    DXGI_FORMAT_R16G16B16A16_FLOAT, // normal
-    DXGI_FORMAT_R8G8B8A8_UNORM,   // material
+    DXGI_FORMAT_R8G8B8A8_UNORM,     // albedo
+    DXGI_FORMAT_R32G32B32A32_FLOAT, // normal + depth
+    DXGI_FORMAT_R8G8B8A8_UNORM,     // material
 };
 static constexpr UINT kGBufferCount = 3;
 
@@ -41,9 +59,14 @@ static constexpr UINT kGBufferCount = 3;
 bool DeferredLightingPass::Initialize(
     UINT        width,
     UINT        height,
-    DXGI_FORMAT depthFormat)
+    DXGI_FORMAT depthFormat,
+    const MsaaSettings& msaaSettings)
 {
     mLastError.clear();
+
+    // Validate and store MSAA settings
+    mMsaaSettings = msaaSettings;
+    mMsaaSettings.Validate();
 
     if (!CreateGBufferResources(width, height))
         return false;
@@ -57,10 +80,23 @@ bool DeferredLightingPass::Initialize(
     return true;
 }
 
-bool DeferredLightingPass::EnsureSize(UINT width, UINT height)
+bool DeferredLightingPass::EnsureSize(UINT width, UINT height, const MsaaSettings& msaaSettings)
 {
-    if (width == mWidth && height == mHeight)
+    MsaaSettings requestedSettings = msaaSettings;
+    requestedSettings.Validate();
+
+    // Check if MSAA settings changed
+    const bool msaaChanged =
+        requestedSettings.Enabled != mMsaaSettings.Enabled ||
+        requestedSettings.GetEffectiveSampleCount() != mMsaaSettings.GetEffectiveSampleCount() ||
+        requestedSettings.GetEffectiveQuality() != mMsaaSettings.GetEffectiveQuality();
+
+    if (width == mWidth && height == mHeight && !msaaChanged)
         return true;
+
+    // Update MSAA settings
+    mMsaaSettings = requestedSettings;
+
     return CreateGBufferResources(width, height);
 }
 
@@ -70,13 +106,18 @@ void DeferredLightingPass::BeginGeometryPass(
     UINT                        width,
     UINT                        height) const
 {
-    // Transition all three G-Buffer RTs from SRV -> RTV.
+    // Choose MSAA or single-sample resources based on settings
+    const auto* resources = mMsaaSettings.Enabled ? mMsaaGBufferResources : mGBufferResources;
+    const auto* rtvHandles = mMsaaSettings.Enabled ? mMsaaRtvHandles : mRtvHandles;
+
+    // Transition all three G-Buffer RTs from SRV/RESOLVE_SOURCE -> RTV.
     D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
         barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
-            mGBufferResources[i].Get(),
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            resources[i].Get(),
+            mMsaaSettings.Enabled ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
+                                  : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
     commandList->ResourceBarrier(kGBufferCount, barriers);
@@ -86,12 +127,12 @@ void DeferredLightingPass::BeginGeometryPass(
     // The normal RT stores oct-encoded normal XY plus copied scene depth in Z.
     // Clear depth to 1.0 for untouched sky pixels so RTGI can reject them safely.
     const float clearNormal[] = { 0.5f, 0.5f, 1.0f, 0.0f };
-    commandList->ClearRenderTargetView(mRtvHandles[0], clearBlack,  0, nullptr);
-    commandList->ClearRenderTargetView(mRtvHandles[1], clearNormal, 0, nullptr);
-    commandList->ClearRenderTargetView(mRtvHandles[2], clearBlack,  0, nullptr);
+    commandList->ClearRenderTargetView(rtvHandles[0], clearBlack,  0, nullptr);
+    commandList->ClearRenderTargetView(rtvHandles[1], clearNormal, 0, nullptr);
+    commandList->ClearRenderTargetView(rtvHandles[2], clearBlack,  0, nullptr);
 
     // Bind all three MRT outputs together with the shared depth buffer.
-    commandList->OMSetRenderTargets(kGBufferCount, mRtvHandles, FALSE, &sceneDsvHandle);
+    commandList->OMSetRenderTargets(kGBufferCount, rtvHandles, FALSE, &sceneDsvHandle);
 
     // Set viewport / scissor to the current scene dimensions.
     const D3D12_VIEWPORT vp = { 0,0, static_cast<float>(width), static_cast<float>(height), 0,1 };
@@ -103,16 +144,71 @@ void DeferredLightingPass::BeginGeometryPass(
 void DeferredLightingPass::EndGeometryPass(
     ID3D12GraphicsCommandList* commandList) const
 {
-    // Transition G-Buffer RTs from RTV -> PSR so the lighting pass can read them.
-    D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
+    // If MSAA is enabled, transition MSAA buffers to RESOLVE_SOURCE.
+    // Otherwise, transition single-sample buffers to PSR for lighting.
+    if (mMsaaSettings.Enabled)
+    {
+        D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
+        for (UINT i = 0; i < kGBufferCount; ++i)
+        {
+            barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mMsaaGBufferResources[i].Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+        }
+        commandList->ResourceBarrier(kGBufferCount, barriers);
+    }
+    else
+    {
+        D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
+        for (UINT i = 0; i < kGBufferCount; ++i)
+        {
+            barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mGBufferResources[i].Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(kGBufferCount, barriers);
+    }
+}
+
+void DeferredLightingPass::ResolveGBuffer(ID3D12GraphicsCommandList* commandList)
+{
+    if (!mMsaaSettings.Enabled)
+        return; // No resolve needed for single-sample rendering
+
+    // Transition single-sample buffers to RESOLVE_DEST
+    D3D12_RESOURCE_BARRIER preResolveBarriers[kGBufferCount];
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
-        barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+        preResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
             mGBufferResources[i].Get(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RESOLVE_DEST);
+    }
+    commandList->ResourceBarrier(kGBufferCount, preResolveBarriers);
+
+    // Resolve each MSAA G-Buffer RT to its single-sample counterpart
+    for (UINT i = 0; i < kGBufferCount; ++i)
+    {
+        commandList->ResolveSubresource(
+            mGBufferResources[i].Get(),      // Dest (single-sample)
+            0,                                // DestSubresource
+            mMsaaGBufferResources[i].Get(),  // Source (MSAA)
+            0,                                // SourceSubresource
+            kGBufferFormats[i]);             // Format
+    }
+
+    // Transition single-sample buffers to PSR for lighting pass
+    D3D12_RESOURCE_BARRIER postResolveBarriers[kGBufferCount];
+    for (UINT i = 0; i < kGBufferCount; ++i)
+    {
+        postResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+            mGBufferResources[i].Get(),
+            D3D12_RESOURCE_STATE_RESOLVE_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
-    commandList->ResourceBarrier(kGBufferCount, barriers);
+    commandList->ResourceBarrier(kGBufferCount, postResolveBarriers);
 }
 
 void DeferredLightingPass::SetSceneLighting(
@@ -469,10 +565,18 @@ void DeferredLightingPass::Shutdown()
     mShadowCB.Reset();
     mProbeCB.Reset();
 
+    // Release MSAA G-Buffer resources
+    for (UINT i = 0; i < kGBufferCount; ++i)
+        mMsaaGBufferResources[i].Reset();
+    mMsaaRtvHeap.Reset();
+
+    // Release single-sample G-Buffer resources
     for (UINT i = 0; i < kGBufferCount; ++i)
         mGBufferResources[i].Reset();
-
     mRtvHeap.Reset();
+    mRetiredGBufferResources.clear();
+    mRetiredGBufferDescriptorHeaps.clear();
+
     mRootSignature.Reset();
     mPipelineState.Reset();
     mVertexShader = DX12Shader{};
@@ -490,10 +594,87 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
     ID3D12Device* device = DX12Context_GetDevice();
     if (!device) { mLastError = "DeferredLightingPass: device is null."; return false; }
 
-    // Release existing resources if resizing.
+    // Keep old resources alive while the GPU may still reference the previous
+    // frame, especially when toggling MSAA without a full GPU idle wait.
     for (UINT i = 0; i < kGBufferCount; ++i)
+    {
+        if (mMsaaGBufferResources[i]) mRetiredGBufferResources.push_back(mMsaaGBufferResources[i]);
+        if (mGBufferResources[i]) mRetiredGBufferResources.push_back(mGBufferResources[i]);
+        mMsaaGBufferResources[i].Reset();
         mGBufferResources[i].Reset();
+    }
+    if (mMsaaRtvHeap) mRetiredGBufferDescriptorHeaps.push_back(mMsaaRtvHeap);
+    if (mRtvHeap) mRetiredGBufferDescriptorHeaps.push_back(mRtvHeap);
+    mMsaaRtvHeap.Reset();
     mRtvHeap.Reset();
+
+    // ========================================================================
+    // Create MSAA G-Buffer resources if MSAA is enabled
+    // ========================================================================
+    if (mMsaaSettings.Enabled)
+    {
+        // Create MSAA RTV heap
+        D3D12_DESCRIPTOR_HEAP_DESC msaaRtvHeapDesc{};
+        msaaRtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        msaaRtvHeapDesc.NumDescriptors = kGBufferCount;
+        msaaRtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(device->CreateDescriptorHeap(&msaaRtvHeapDesc, IID_PPV_ARGS(&mMsaaRtvHeap))))
+        {
+            mLastError = "DeferredLightingPass: failed to create MSAA RTV heap.";
+            return false;
+        }
+
+        const UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12_CPU_DESCRIPTOR_HANDLE msaaRtvBase = mMsaaRtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+        D3D12_HEAP_PROPERTIES defaultHeap{};
+        defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        // Create MSAA render targets
+        for (UINT i = 0; i < kGBufferCount; ++i)
+        {
+            D3D12_RESOURCE_DESC texDesc{};
+            texDesc.Dimension          = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            texDesc.Width              = width;
+            texDesc.Height             = height;
+            texDesc.DepthOrArraySize   = 1;
+            texDesc.MipLevels          = 1;
+            texDesc.Format             = kGBufferFormats[i];
+            texDesc.SampleDesc.Count   = mMsaaSettings.GetEffectiveSampleCount();
+            texDesc.SampleDesc.Quality = mMsaaSettings.GetEffectiveQuality();
+            texDesc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            texDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+            float clearColor[4] = {};
+            if (i == 1) { clearColor[0] = clearColor[1] = clearColor[2] = 0.5f; }
+            D3D12_CLEAR_VALUE clearVal{ kGBufferFormats[i], {} };
+            std::memcpy(clearVal.Color, clearColor, sizeof(clearColor));
+
+            if (FAILED(device->CreateCommittedResource(
+                &defaultHeap, D3D12_HEAP_FLAG_NONE,
+                &texDesc, D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                &clearVal, IID_PPV_ARGS(&mMsaaGBufferResources[i]))))
+            {
+                mLastError = "DeferredLightingPass: failed to create MSAA G-Buffer texture.";
+                return false;
+            }
+
+            const wchar_t* names[] = { L"GBuffer_MSAA_Albedo", L"GBuffer_MSAA_Normal", L"GBuffer_MSAA_Material" };
+            mMsaaGBufferResources[i]->SetName(names[i]);
+
+            // Create MSAA RTV
+            mMsaaRtvHandles[i].ptr = msaaRtvBase.ptr + static_cast<SIZE_T>(i) * rtvSize;
+            D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+            rtvDesc.Format        = kGBufferFormats[i];
+            rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMS;  // MSAA view
+            device->CreateRenderTargetView(mMsaaGBufferResources[i].Get(), &rtvDesc, mMsaaRtvHandles[i]);
+        }
+    }
+
+    // ========================================================================
+    // Create single-sample G-Buffer resources (always created)
+    // These are resolve targets if MSAA enabled, or direct render targets otherwise
+    // ========================================================================
 
     // Create a private RTV heap for the three G-Buffer targets.
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
@@ -569,7 +750,7 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         // Force alpha to 1 for debug display so float targets written with A=0
-        // do not appear black/transparent in the ImGui texture viewer.
+        // do not appear black/transparent in the Ui texture viewer.
         srvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
             D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
             D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,

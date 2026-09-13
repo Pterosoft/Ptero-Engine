@@ -1,0 +1,15 @@
+<rml>
+<head>
+	<title>Ptero HUD</title>
+	<link type="text/rcss" href="hud.rcss"/>
+</head>
+<body>
+	<div id="hud-panel">
+		<div id="hud-title">PTERO ENGINE</div>
+		<div class="readout"><span class="label">UI</span><span class="value">RmlUi 6.3</span></div>
+		<div class="readout"><span class="label">Renderer</span><span class="value">DirectX 12</span></div>
+		<div class="readout"><span class="label">Document</span><span class="value">Data/UI/hud.rml</span></div>
+		<div id="hud-hint">Hover this panel to confirm mouse input is reaching the UI.</div>
+	</div>
+</body>
+</rml>

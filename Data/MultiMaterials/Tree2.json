@@ -1,0 +1,132 @@
+{
+    "name": "Tree2",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "glassCausticStrength": 0.0,
+            "glassDispersion": 0.3499999940395355,
+            "glassIor": 1.5,
+            "glassThickness": 0.07999999821186066,
+            "heightScale": 0.05000000074505806,
+            "isDecalMaterial": false,
+            "metallicFactor": 1.0,
+            "name": "Tree2_0",
+            "normalScale": 1.0,
+            "opacity": 0.4830000102519989,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "useAlphaCutout": false,
+            "useGlassRendering": false,
+            "useThinGlass": true,
+            "useTransparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "glassCausticStrength": 0.0,
+            "glassDispersion": 0.3499999940395355,
+            "glassIor": 1.5,
+            "glassThickness": 0.07999999821186066,
+            "heightScale": 0.05000000074505806,
+            "isDecalMaterial": false,
+            "metallicFactor": 1.0,
+            "name": "Tree2_1",
+            "normalScale": 1.0,
+            "opacity": 0.43799999356269836,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "useAlphaCutout": false,
+            "useGlassRendering": false,
+            "useThinGlass": true,
+            "useTransparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5659999847412109,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "glassCausticStrength": 0.0,
+            "glassDispersion": 0.3499999940395355,
+            "glassIor": 1.5,
+            "glassThickness": 0.07999999821186066,
+            "heightScale": 0.05000000074505806,
+            "isDecalMaterial": false,
+            "metallicFactor": 0.0,
+            "name": "Tree2_2",
+            "normalScale": 1.0,
+            "opacity": 0.5189999938011169,
+            "roughnessFactor": 0.24500000476837158,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/T_BlackAlder_TwoSided_Summer_Albedo.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "Textures/T_BlackAlder_TwoSided_Summer_Alpha.dds",
+                "roughness": ""
+            },
+            "useAlphaCutout": false,
+            "useGlassRendering": false,
+            "useThinGlass": true,
+            "useTransparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

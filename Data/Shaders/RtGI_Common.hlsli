@@ -7,17 +7,11 @@
 
 #define MAX_RTGI_POINT_LIGHTS 16
 
-struct RtgiPointLightData
-{
-    float3 Position;
-    float  Radius;
-    float3 Color;
-    float  InvRadiusSq;
-    float  FalloffExponent;
-    float  SourceRadius;
-    float  CastShadows;
-    float  _Pad0;
-};
+// The light record and the emitter-shape resolution are shared with the
+// deferred, probe and cascade passes so all of them agree on the layout and on
+// where a spot cone ends.
+#include "LightShapes.hlsli"
+#include "ShaderSafeMath.hlsli"
 
 // ─── Root signature (matches RtGlobalIllumination::CreateRootSignature) ───────
 // [0] CBV  b0  – RtGIConstants
@@ -75,7 +69,7 @@ cbuffer RtGIConstants : register(b0)
     int    g_NumPointLights;
     float3 g_Pad5;
 
-    RtgiPointLightData g_PointLights[MAX_RTGI_POINT_LIGHTS];
+    PteroLightData g_PointLights[MAX_RTGI_POINT_LIGHTS];
 }
 
 // ─── GI Reservoir stored in the structured buffer ────────────────────────────

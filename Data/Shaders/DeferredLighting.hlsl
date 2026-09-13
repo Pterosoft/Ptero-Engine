@@ -21,17 +21,12 @@ cbuffer CameraConstants : register(b0)
 // Scene lighting – mirrors the layout in the former forward MeshEntity.hlsl.
 #define MAX_POINT_LIGHTS 16
 
-struct PointLightData
-{
-    float3 Position;    // world-space position
-    float  Radius;
-    float3 Color;       // pre-multiplied HDR colour (intensity baked in)
-    float  InvRadiusSq; // 1 / (Radius^2)
-    float  FalloffExponent;
-    float  SourceRadius;
-    float  CastShadows;
-    float  ShadowIndex;
-};
+// The light record and the emitter-shape resolution are shared with the GI,
+// probe and cascade passes so all of them agree on the layout and on where a
+// spot's cone ends.
+#include "LightShapes.hlsli"
+
+#define LIGHT_TYPE_RECT PTERO_LIGHT_TYPE_RECT
 
 cbuffer SceneLighting : register(b1)
 {
@@ -50,7 +45,7 @@ cbuffer SceneLighting : register(b1)
     float  gFogMaxDistance;
     int    gFogDebugView;
     float  gSpecularIntensity; // 0 = specular reflections disabled; >0 blends ray-traced specular
-    PointLightData gPointLights[MAX_POINT_LIGHTS];
+    PteroLightData gPointLights[MAX_POINT_LIGHTS];
     int    gRtgiDebugView;
     int    gPointShadowDebugView;
     int    gPointShadowFilterRadius;
@@ -90,7 +85,7 @@ struct ProbeSH
 Texture2D    gGBufferAlbedo   : register(t0); // RT0: albedo (RGB) + unused (A)
 Texture2D    gGBufferNormal   : register(t1); // RT1: oct normal (RG) + copied depth (B)
 Texture2D    gGBufferMaterial : register(t2); // RT2: roughness/metallic/AO
-Texture2D    gDepthBuffer     : register(t3); // scene depth (R32_FLOAT or D32_FLOAT read via SRV)
+Texture2D    gDepthBuffer     : register(t3); // scene depth, or resolved G-buffer depth when MSAA is active
 Texture2D    gShadowMap       : register(t4); // sun shadow map
 Texture2D    gGiAccumulation  : register(t5); // DXR GI accumulation buffer (RG11B10 HDR)
 Texture2D    gRtaoTexture     : register(t6); // DXR ambient occlusion (R16F)
@@ -170,6 +165,48 @@ float3 ComputeFogUv(float2 uv, float viewDistance)
     float farZ = max(gFogMaxDistance, nearZ + 0.001f);
     float fogZ = saturate(log(max(viewDistance, nearZ) / nearZ) / log(farZ / nearZ));
     return float3(uv, fogZ);
+}
+
+float4 SanitizeFogSample(float4 fogSample)
+{
+    if (any(isnan(fogSample)) || any(isinf(fogSample)))
+    {
+        fogSample = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    fogSample.rgb = max(fogSample.rgb, 0.0f.xxx);
+    fogSample.a = saturate(fogSample.a);
+    if (fogSample.a < 0.001f && dot(fogSample.rgb, fogSample.rgb) < 1e-8f)
+    {
+        fogSample.a = 1.0f;
+    }
+
+    return fogSample;
+}
+
+float4 CompositeFogOverPreservedTarget(float4 fogSample)
+{
+    fogSample = SanitizeFogSample(fogSample);
+
+    if (gFogDebugView == 1)
+    {
+        return float4(fogSample.rgb, 1.0f);
+    }
+    if (gFogDebugView == 2)
+    {
+        return float4(fogSample.aaa, 1.0f);
+    }
+
+    // The lighting pass alpha-blends over the sky that was already rendered
+    // into the scene target. Return colour premultiplied back to straight
+    // alpha so blending produces: fogScattering + sky * transmittance.
+    const float fogOpacity = saturate(1.0f - fogSample.a);
+    if (fogOpacity <= 0.0001f)
+    {
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    return float4(fogSample.rgb / fogOpacity, fogOpacity);
 }
 
 // 3x3 PCF shadow factor; 1 = fully lit, 0 = fully shadowed.
@@ -459,16 +496,72 @@ float4 PSMain(PSInput input) : SV_Target
     float4 materialSample = gGBufferMaterial.Load(int3(pixel, 0));
     float  rawDepth       = gDepthBuffer.Load(int3(pixel, 0)).r;
 
-    // Sky / skybox pixels have depth == 1.0 after clear; skip lighting for those.
+    // Sky / skybox pixels have depth == 1.0 after clear. The sky pass already
+    // wrote colour into the scene target, so only blend volumetric fog over it.
     [branch]
     if (rawDepth >= 1.0f)
     {
+        if (gVolumetricFogEnabled != 0)
+        {
+            float3 fogUv = ComputeFogUv(uv, gFogMaxDistance);
+            return CompositeFogOverPreservedTarget(gVolumetricFog.SampleLevel(gLinearSampler, fogUv, 0.0f));
+        }
+
         return float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     // Decode G-Buffer values.
     float3 albedo    = albedoSample.rgb;
     float3 N         = DecodeOctNormal(normalSample.xy);
+
+    // Glass materials repack the material G-buffer:
+    //   R = roughness, G = thin-glass flag, B = dispersion, A = encoded IOR.
+    // Shade them as transparent dielectric surfaces instead of opaque PBR.
+    const bool isGlassMaterial = materialSample.a > (1.0f / 255.0f) && materialSample.b < 0.75f;
+    [branch]
+    if (isGlassMaterial)
+    {
+        float glassRoughness = max(materialSample.r, 0.02f);
+        float thinGlass = materialSample.g > 0.5f ? 1.0f : 0.0f;
+        float glassOpacity = saturate(albedoSample.a);
+        float glassAlpha = glassOpacity;
+
+        float3 worldPos = ReconstructWorldPosition(uv, rawDepth);
+        float3 V = normalize(gCameraPos - worldPos);
+        float facing = saturate(dot(N, V));
+        float fresnel = 0.04f + 0.96f * pow(1.0f - facing, 5.0f);
+
+        float shadowFactor = SampleShadowPCF(worldPos);
+        float3 L_sun = normalize(-gSunDirection);
+        float sunFacing = saturate(dot(N, L_sun));
+        float3 glassTint = lerp(float3(0.96f, 0.99f, 1.0f), saturate(albedo), glassOpacity * 0.18f);
+        float3 glassLit = glassTint * gSunColor * sunFacing * shadowFactor * (0.12f + fresnel * 0.55f);
+        glassLit += glassTint * gSkyAmbient * (0.10f + fresnel * 0.22f);
+
+        [unroll]
+        for (int i = 0; i < MAX_POINT_LIGHTS; ++i)
+        {
+            float active = (i < gNumPointLights) ? 1.0f : 0.0f;
+            PteroResolvedLight glassShape = PteroResolveLightShape(gPointLights[i], worldPos);
+            float3 toLight = glassShape.Position - worldPos;
+            float distSq = dot(toLight, toLight);
+            float dist = sqrt(max(distSq, 1e-6f));
+            float3 L_pt = toLight / dist;
+            float normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
+            float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
+            rangeMask *= rangeMask;
+            float falloff = rangeMask * pow(max(dist, 1e-3f), -max(gPointLights[i].FalloffExponent, 0.001f))
+                          * glassShape.ShapeMask;
+            float pointFacing = saturate(dot(N, L_pt));
+            float3 H = normalize(V + L_pt);
+            float sparkle = pow(saturate(dot(N, H)), lerp(96.0f, 24.0f, glassRoughness));
+            glassLit += gPointLights[i].Color * falloff * active * (pointFacing * 0.05f + sparkle * (0.25f + fresnel));
+        }
+
+        glassLit *= lerp(0.35f, 1.0f, glassOpacity);
+        return float4(max(glassLit, 0.0f.xxx), saturate(glassAlpha));
+    }
+
     float  roughness = max(materialSample.r, 0.04f); // G-buffer R
     float  metallic  = materialSample.g;             // G-buffer G
     // Override the baked G-Buffer AO with the ray-traced AO when available.
@@ -518,37 +611,34 @@ float4 PSMain(PSInput input) : SV_Target
     {
         float active = (i < gNumPointLights) ? 1.0f : 0.0f;
 
-        float3 toLight    = gPointLights[i].Position - worldPos;
-        float  distSq     = dot(toLight, toLight);
-        float3 L_pt       = normalize(toLight);
+        PteroResolvedLight shape = PteroResolveLightShape(gPointLights[i], worldPos);
+        float3 lightPos = shape.Position;
 
-        float  dist = sqrt(max(distSq, 1e-6f));
+        // Spherical source: pull the sample point toward the surface by the
+        // source radius so a large bulb lights like a ball rather than a
+        // pinpoint. A rect light already has a real area, so it skips this.
+        if (gPointLights[i].SourceRadius > 0.0001f &&
+            (int)gPointLights[i].LightType != LIGHT_TYPE_RECT)
+        {
+            float3 toCenter = worldPos - lightPos;
+            float  toCenterLen = length(toCenter);
+            if (toCenterLen > 0.0001f)
+            {
+                lightPos += (toCenter / toCenterLen) * min(gPointLights[i].SourceRadius, gPointLights[i].Radius * 0.5f);
+            }
+        }
+
+        float3 toLight = lightPos - worldPos;
+        float  distSq  = dot(toLight, toLight);
+        float  dist    = sqrt(max(distSq, 1e-6f));
+        float3 L_pt    = toLight / dist;
+
         float  normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
         float  rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
         rangeMask *= rangeMask;
         float  falloffExponent = max(gPointLights[i].FalloffExponent, 0.001f);
         float  distanceFalloff = pow(max(dist, 1e-3f), -falloffExponent);
-        float  falloff = rangeMask * distanceFalloff;
-
-        float3 lightPos = gPointLights[i].Position;
-        if (gPointLights[i].SourceRadius > 0.0001f)
-        {
-            float3 toCenter = worldPos - gPointLights[i].Position;
-            float  toCenterLen = length(toCenter);
-            if (toCenterLen > 0.0001f)
-            {
-                lightPos += (toCenter / toCenterLen) * min(gPointLights[i].SourceRadius, gPointLights[i].Radius * 0.5f);
-                toLight = lightPos - worldPos;
-                distSq = dot(toLight, toLight);
-                dist = sqrt(max(distSq, 1e-6f));
-                normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
-                rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
-                rangeMask *= rangeMask;
-                distanceFalloff = pow(max(dist, 1e-3f), -falloffExponent);
-                falloff = rangeMask * distanceFalloff;
-                L_pt = normalize(toLight);
-            }
-        }
+        float  falloff = rangeMask * distanceFalloff * shape.ShapeMask;
 
         float pointShadow = SamplePointShadow(i, worldPos, N);
         pointShadowDebug = min(pointShadowDebug, pointShadow);
@@ -569,7 +659,14 @@ float4 PSMain(PSInput input) : SV_Target
     if (gGiIntensity > 0.0f)
     {
         float3 giDiffuseIrradiance = float3(0.0f, 0.0f, 0.0f);
-        if (gProbeGridX > 0 && gProbeGridY > 0 && gProbeGridZ > 0)
+
+        // Diagnostics live in the RTGI accumulation texture, so they must read
+        // from there even when radiance probes would otherwise supply the
+        // irradiance - sampling the probe grid instead would silently discard
+        // the diagnostic and show ordinary indirect light.
+        const bool diagnosticView = gRtgiDebugView >= 10;
+
+        if (!diagnosticView && gProbeGridX > 0 && gProbeGridY > 0 && gProbeGridZ > 0)
         {
             giDiffuseIrradiance = SampleRadianceProbeIrradiance(worldPos, N);
             float probeLuma = dot(giDiffuseIrradiance, float3(0.2126f, 0.7152f, 0.0722f));
@@ -580,7 +677,21 @@ float4 PSMain(PSInput input) : SV_Target
 
         // Guard against NaN/Inf from the GI texture corrupting the final colour.
         if (!any(isnan(giDiffuseIrradiance)) && !any(isinf(giDiffuseIrradiance)))
+        {
+            // Diagnostic views (>= 10) carry a raw quantity, not radiance, so
+            // they must replace the image rather than modulate it. Added to the
+            // lit result and multiplied by albedo below, a greyscale diagnostic
+            // is swamped by direct sun and firelight and reads as an ordinary
+            // scene - which is exactly how the depth view looked unreadable.
+            if (gRtgiDebugView >= 10 || gRtgiDebugView == 1)
+                return float4(max(giDiffuseIrradiance, 0.0f.xxx), 1.0f);
+            if (gRtgiDebugView == 2)
+            {
+                const float giLuma = dot(max(giDiffuseIrradiance, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
+                return float4(giLuma.xxx, 1.0f);
+            }
             lit += giDiffuseIrradiance * albedo * (1.0f - metallic) * gGiIntensity * ao;
+        }
     }
 
     // Add DXR specular reflections.
@@ -601,19 +712,7 @@ float4 PSMain(PSInput input) : SV_Target
         float viewDistance = distance(gCameraPos, worldPos);
         float fogViewDistance = max(viewDistance - 0.05f, gFogStartDistance);
         float3 fogUv = ComputeFogUv(uv, fogViewDistance);
-        float4 fogSample = gVolumetricFog.SampleLevel(gLinearSampler, fogUv, 0.0f);
-
-        if (any(isnan(fogSample)) || any(isinf(fogSample)))
-        {
-            fogSample = float4(0.0f, 0.0f, 0.0f, 1.0f);
-        }
-
-        fogSample.rgb = max(fogSample.rgb, 0.0f.xxx);
-        fogSample.a = saturate(fogSample.a);
-        if (fogSample.a < 0.001f && dot(fogSample.rgb, fogSample.rgb) < 1e-8f)
-        {
-            fogSample.a = 1.0f;
-        }
+        float4 fogSample = SanitizeFogSample(gVolumetricFog.SampleLevel(gLinearSampler, fogUv, 0.0f));
 
         if (gFogDebugView == 1)
         {
@@ -627,5 +726,8 @@ float4 PSMain(PSInput input) : SV_Target
         lit = (lit * fogSample.a) + fogSample.rgb;
     }
 
-    return float4(lit, 1.0f);
+    // The lighting PSO uses standard source-alpha blending over the sky/scene
+    // target. Opaque materials store 1 here; transparent materials carry their
+    // combined scalar/texture opacity in the albedo G-buffer alpha channel.
+    return float4(lit, saturate(albedoSample.a));
 }

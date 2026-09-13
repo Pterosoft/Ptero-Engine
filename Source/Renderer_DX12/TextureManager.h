@@ -5,6 +5,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -49,7 +50,15 @@ private:
     {
         std::shared_ptr<GpuTexture> Texture;
         std::filesystem::file_time_type LastWriteTime{};
+        // When this entry's write time was last checked against disk.
+        std::chrono::steady_clock::time_point LastCheckTime{};
     };
+
+    // How long a cached texture is trusted before its write time is checked
+    // again. Hot reloading a texture from an external editor still works; it
+    // just takes up to this long to appear, which is imperceptible next to the
+    // cost of stat-ing every texture of every sub-mesh every frame.
+    static constexpr std::chrono::milliseconds kRevalidateInterval{ 250 };
 
     // Execute a one-shot copy command to flush upload heaps to the GPU.
     bool FlushUploads(std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& uploadBuffers);

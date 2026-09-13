@@ -14,13 +14,26 @@ class VolumetricFogRenderer
 public:
     static constexpr uint32_t kMaxPointLights = 4;
 
+    // Deliberately smaller than DeferredLightingPass::PointLightGpu: the fog
+    // injection only needs enough to place the light and bound its cone, not
+    // the shadow index or the rect frame. A rect light scatters as a point at
+    // its centre, which is indistinguishable once the light is diffused through
+    // a participating medium.
     struct FogPointLight
     {
         float Position[3]{};
         float Radius = 0.0f;
         float Color[3]{};
         float InvRadiusSq = 0.0f;
+        float Direction[3]{};
+        float LightType = 0.0f;      // matches ::LightType in Components.h
+        float SpotCosInner = 1.0f;
+        float SpotCosOuter = -1.0f;
+        float Pad0 = 0.0f;
+        float Pad1 = 0.0f;
     };
+    static_assert(sizeof(FogPointLight) == 64,
+        "FogPointLight must match FogPointLightData in VolumetricFogInject.hlsl.");
 
     VolumetricFogRenderer() = default;
     ~VolumetricFogRenderer() { Shutdown(); }
@@ -31,9 +44,8 @@ public:
     void Shutdown();
 
     void Dispatch(
-        ID3D12GraphicsCommandList4* cmdList,
+        ID3D12GraphicsCommandList* cmdList,
         D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
-        D3D12_GPU_DESCRIPTOR_HANDLE tlasSrv,
         const VolumetricFogSettings& settings,
         const float viewProjInv[16],
         const float currViewProj[16],

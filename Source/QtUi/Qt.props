@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PteroQtRoot Condition="'$(PteroQtRoot)'==''">$(MSBuildThisFileDirectory)..\SDKs\qt\install</PteroQtRoot>
+    <!-- Every configuration links release Qt. Debug Qt is several times slower per
+         widget call and dominated the editor's frame time. The Debug configuration
+         therefore also compiles with the release CRT (/MD, no _DEBUG) so the engine and
+         Qt agree on the runtime; mixing them is unsupported and corrupts the heap where
+         allocations cross the boundary. Override with PteroQtSuffix=d to link debug Qt,
+         but revert the Debug RuntimeLibrary to MultiThreadedDebugDLL if you do. -->
+    <PteroQtConfiguration Condition="'$(PteroQtSuffix)'=='d'">Debug</PteroQtConfiguration>
+    <PteroQtConfiguration Condition="'$(PteroQtConfiguration)'==''">Release</PteroQtConfiguration>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(PteroQtRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>QT_NO_KEYWORDS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(PteroQtRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Qt6Core$(PteroQtSuffix).lib;Qt6Gui$(PteroQtSuffix).lib;Qt6Widgets$(PteroQtSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Target Name="CheckPteroQt" BeforeTargets="Link">
+    <Error Condition="'$(Platform)'!='x64'" Text="The bundled Qt SDK targets x64. Select x64 or supply a matching SDK using PteroQtRoot." />
+    <Error Condition="!Exists('$(PteroQtRoot)\lib\Qt6Widgets$(PteroQtSuffix).lib')" Text="Build the bundled Qt SDK first: powershell -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)BuildQt.ps1&quot; -Configuration $(PteroQtConfiguration)" />
+  </Target>
+  <Target Name="CheckPteroQtHeaders" BeforeTargets="ClCompile">
+    <Error Condition="!Exists('$(PteroQtRoot)\include\QtWidgets\QWidget')" Text="Qt headers are missing. Run Source/QtUi/BuildQt.ps1 for the selected configuration." />
+  </Target>
+  <Target Name="DeployPteroQt" AfterTargets="Build">
+    <ItemGroup>
+      <QtRuntime Include="$(PteroQtRoot)\bin\Qt6Core$(PteroQtSuffix).dll;$(PteroQtRoot)\bin\Qt6Gui$(PteroQtSuffix).dll;$(PteroQtRoot)\bin\Qt6Widgets$(PteroQtSuffix).dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(QtRuntime)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(PteroQtRoot)\plugins\platforms\qwindows$(PteroQtSuffix).dll" DestinationFolder="$(OutDir)platforms" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

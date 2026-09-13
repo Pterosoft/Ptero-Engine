@@ -40,12 +40,22 @@ cbuffer FogConstants : register(b0)
     uint     gNumPointLights;
     float3   _FogPad6;
 
+    // Must match VolumetricFogRenderer::FogPointLight. Deliberately smaller
+    // than the full scene light record: fog only needs to place the light and
+    // bound its cone. A rect light injects as a point at its centre, which is
+    // indistinguishable once the light is diffused through the medium.
     struct FogPointLight
     {
         float3 Position;
         float  Radius;
         float3 Color;
         float  InvRadiusSq;
+        float3 Direction;
+        float  LightType;
+        float  SpotCosInner;
+        float  SpotCosOuter;
+        float  _FogLightPad0;
+        float  _FogLightPad1;
     };
 
     FogPointLight gPointLights[4];

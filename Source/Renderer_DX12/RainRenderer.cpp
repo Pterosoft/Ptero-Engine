@@ -211,7 +211,7 @@ bool RainRenderer::CreateParticleBuffers()
 	makeSrv(mParticleBufferB.Get(), heapCpu(2));
 	makeUav(mParticleBufferB.Get(), heapCpu(3));
 
-	// Allocate draw SRVs from the shared engine heap so ImGui/root tables can use them.
+	// Allocate draw SRVs from the shared engine heap so Ui/root tables can use them.
 	if (!DX12Context_AllocateSrvDescriptor(&mDrawSrvACpu, &mDrawSrvAGpu) ||
 		!DX12Context_AllocateSrvDescriptor(&mDrawSrvBCpu, &mDrawSrvBGpu))
 	{

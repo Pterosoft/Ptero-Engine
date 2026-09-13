@@ -1,0 +1,42 @@
+﻿cbuffer RadianceCascadesConstants : register(b0)
+{
+    uint  gFrameWidth;
+    uint  gFrameHeight;
+    uint  gFrameIndex;
+    uint  gCascadeCount;
+
+    uint  gProbeSpacingBase;
+    uint  gRaysPerProbe;
+    int   gDebugView;
+    float gRayLengthBase;
+
+    float gRayLengthScale;
+    float gIntervalLengthScale;
+    float gHysteresis;
+    float gGiIntensity;
+
+    float4x4 gViewProjInv;
+    float4x4 gCurrViewProj;
+    float4x4 gPrevViewProj;
+    float3 gCameraPos;
+    float _Pad0;
+};
+
+Texture2D gHistory : register(t0);
+Texture2D gNormalDepth : register(t1);
+RWTexture2D<float4> gOutput : register(u0);
+SamplerState gLinearClamp : register(s0);
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    if (dispatchThreadId.x >= gFrameWidth || dispatchThreadId.y >= gFrameHeight)
+        return;
+
+    const uint2 pixel = dispatchThreadId.xy;
+    const float3 gi = gHistory.Load(int3(pixel, 0)).rgb;
+    const float3 normalDepth = gNormalDepth.Load(int3(pixel, 0)).xyz;
+    float edgeFade = saturate(normalDepth.z < 1.0f ? 1.0f : 0.0f);
+    edgeFade *= saturate(length(normalDepth.xy * 2.0f - 1.0f) + 0.25f);
+    gOutput[pixel] = float4(gi * gGiIntensity * edgeFade, 1.0f);
+}

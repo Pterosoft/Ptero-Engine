@@ -77,12 +77,14 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -101,7 +103,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -113,18 +115,22 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;_DEBUG;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;PTERO_FBX_SDK_AVAILABLE;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- Release FBX: the x64\debug libs are MDd builds, and this configuration now
+           compiles against the release CRT so it can share a runtime with release Qt. -->
+      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
@@ -142,7 +148,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -158,9 +164,15 @@
   <ItemGroup>
     <ClInclude Include="framework.h" />
     <ClInclude Include="include\System\AssetManager.h" />
+    <ClInclude Include="include\System\CVar.h" />
     <ClInclude Include="include\System\CollisionGenerator.h" />
     <ClInclude Include="include\System\FbxCompiler.h" />
     <ClInclude Include="include\System\Mesh.h" />
+    <ClInclude Include="include\System\NodeGraphCatalog.h" />
+    <ClInclude Include="include\System\NodeGraphDocument.h" />
+    <ClInclude Include="include\System\NodeGraphEditor.h" />
+    <ClInclude Include="include\System\NodeGraphRuntime.h" />
+    <ClInclude Include="include\System\PteroLog.h" />
     <ClInclude Include="include\System\PteroMeshFormat.h" />
     <ClInclude Include="include\System\SystemAssetApi.h" />
     <ClInclude Include="include\System\TextureImporter.h" />
@@ -178,11 +190,28 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\AssetManager.cpp" />
+    <ClCompile Include="src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\CollisionGenerator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="src\FbxCompiler.cpp" />
+    <!-- Visual scripting. The catalogue, the document and the interpreter are free of Qt
+         and of any renderer type, so they belong to System like every other engine
+         module. src\NodeGraphEditorWindow.cpp is the exception: it is the Qt editor built
+         on the bundled QtNodes SDK, and only the renderer - which owns the QApplication -
+         compiles it. -->
+    <ClCompile Include="src\NodeGraphCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\NodeGraphDocument.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\NodeGraphRuntime.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\SystemAssetApi.cpp" />
     <ClCompile Include="src\TextureImporter.cpp" />
     <!-- DirectXTex source units -->
@@ -291,39 +320,53 @@
     <ClCompile Include="..\SDKs\meshoptimizer\src\vfetchoptimizer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <!-- CoACD collision decomposition sources -->
+    <!-- CoACD collision decomposition sources.
+
+         The include directory is set per file, never on the project. CoACD/src
+         contains io.h, process.h and config.h - three CRT header names - so on
+         the global include path it shadows the real ones for every translation
+         unit here, and any file that reaches <io.h> or <process.h> pulls in
+         CoACD instead and fails to compile without DISABLE_SPDLOG and NOMINMAX.
+         Renderer_DX12 scopes it the same way. -->
     <ClCompile Include="..\SDKs\CoACD\public\coacd.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\bvh.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\clip.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\3rd\cdt\CDT\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;$(ProjectDir)..\SDKs\CoACD\3rd\cdt\CDT\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\cost.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\io.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\logger.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\mcts.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\model_obj.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\preprocess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -333,26 +376,32 @@
     <ClCompile Include="..\SDKs\CoACD\src\process.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\shape.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\sobol.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\quickhull\QuickHull.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btAlignedAllocator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\SDKs\CoACD\src\btConvexHull\btConvexHullComputer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\SDKs\CoACD\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

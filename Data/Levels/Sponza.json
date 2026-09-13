@@ -2,14 +2,14 @@
     "AgxTonemapSettings": {
         "Enabled": true,
         "Ev100Max": 16.0,
-        "Ev100Min": -2.499999761581421,
+        "Ev100Min": -2.4600000381469727,
         "Exposure": 0.0,
         "Global": {
             "Contrast": {
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": 0.23999999463558197,
                 "Yellow": 0.0
             },
             "Gain": {
@@ -30,7 +30,7 @@
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": -0.15000000596046448,
                 "Yellow": 0.0
             },
             "Vibrance": {
@@ -87,16 +87,16 @@
                 "Yellow": 0.0
             },
             "Gain": {
-                "Blue": -0.05000000074505806,
+                "Blue": 0.15000000596046448,
                 "Green": 0.0,
-                "Red": -0.05000000074505806,
+                "Red": 0.0,
                 "Total": 0.0,
                 "Yellow": 0.0
             },
             "Gamma": {
-                "Blue": -0.05000000074505806,
+                "Blue": 0.10000000149011612,
                 "Green": 0.0,
-                "Red": -0.05000000074505806,
+                "Red": 0.0,
                 "Total": 0.0,
                 "Yellow": 0.0
             },
@@ -163,11 +163,27 @@
         "Radius": 1.0,
         "Threshold": 0.8999999761581421
     },
+    "CameraPosition": {
+        "X": 0.997766375541687,
+        "Y": -0.8704469799995422,
+        "Z": 0.23119458556175232
+    },
+    "CameraRotation": {
+        "X": 0.10002298653125763,
+        "Y": 23.555065155029297,
+        "Z": 0.0
+    },
+    "DlssSettings": {
+        "Enabled": false,
+        "Mode": 2
+    },
     "Entities": [
         {
             "MeshComponent": {
-                "MaterialPath": "K:\\Ptero-Engine\\Data\\Geometry\\Sponza_Simple\\Sponza.json",
-                "MeshPath": "K:\\Ptero-Engine\\Data\\Geometry\\Sponza_Simple\\Sponza.fbx.ptero"
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Sponza_Simple/Sponza.json",
+                "MeshPath": "Geometry/Sponza_Simple/Sponza.fbx.ptero"
             },
             "NameComponent": {
                 "Name": "Sponza"
@@ -193,17 +209,40 @@
     ],
     "GTAOSettings": {
         "DebugView": 0,
-        "DenoisePasses": 0,
-        "DepthMIPSamplingOffset": 3.299999952316284,
+        "DenoisePasses": 2,
+        "DepthMIPSamplingOffset": 3.259999990463257,
         "Enabled": true,
-        "FalloffRange": 0.8500000238418579,
+        "FalloffRange": 0.8539999723434448,
         "FinalValuePower": 1.4600000381469727,
         "Intensity": 1.0,
         "QualityLevel": 3,
-        "Radius": 0.10000000149011612,
+        "Radius": 1.0,
         "RadiusMultiplier": 1.3270000219345093,
         "SampleDistributionPower": 3.0,
         "ThinOccluderCompensation": 0.0
+    },
+    "GlobalIlluminationMode": 1,
+    "RadianceCascadesSettings": {
+        "CascadeCount": 4,
+        "ColorBleedingStrength": 1.0,
+        "DebugView": 0,
+        "Enabled": false,
+        "GiIntensity": 1.0,
+        "HistoryClampScale": 0.4000000059604645,
+        "HistoryDepthSensitivity": 128.0,
+        "HistoryNormalThreshold": 0.9200000166893005,
+        "Hysteresis": 0.8999999761581421,
+        "IntervalLengthScale": 1.0,
+        "ProbeSpacingBase": 16,
+        "RayBias": 0.019999999552965164,
+        "RayLengthBase": 1.5,
+        "RayLengthScale": 2.0,
+        "RaysPerProbe": 4,
+        "SparseProbeCellSize": 16,
+        "SparseProbeReuseStrength": 0.3499999940395355,
+        "SparseProbeSearchSteps": 32,
+        "SparseProbeTableCapacity": 65536,
+        "SpatialFilterStrength": 1.0
     },
     "RtAOSettings": {
         "AOPower": 1.5,
@@ -226,16 +265,28 @@
         "NrdDisocclusionThreshold": 0.20000000298023224,
         "NrdMaxAccumulationTime": 0.3499999940395355,
         "NrdSharpenAmount": 0.3499999940395355,
-        "RadianceClamp": 9.999999046325684,
+        "RadianceClamp": 10.300000190734863,
         "RaysPerPixel": 1,
         "UseNrdDenoiser": true
     },
+    "SMAASettings": {
+        "CornerRounding": 25.0,
+        "DebugView": 0,
+        "EdgeThreshold": 0.05000000074505806,
+        "Enabled": false,
+        "MaxSearchSteps": 16.0,
+        "MaxSearchStepsDiag": 8.0
+    },
+    "SharpenSettings": {
+        "ImageSharpeningEnabled": true,
+        "ImageSharpeningStrength": 1.0,
+        "TextureMipLODBias": -3.0,
+        "TextureSharpeningEnabled": false
+    },
     "TaaSettings": {
         "BlendFactor": 0.5,
-        "Enabled": true,
-        "JitterScale": 1.0,
-        "SharpeningStrength": 0.20000000298023224,
-        "UseSharpening": false
+        "Enabled": false,
+        "JitterScale": 1.0
     },
     "TimeOfDaySettings": {
         "GroundAlbedo": 0.10000000149011612,
@@ -252,6 +303,57 @@
         "TimeOfDay": 12.0,
         "Turbidity": 2.5
     },
+    "VolumetricCloudSettings": {
+        "AmbientIntensityScale": 1.0,
+        "AnvilBias": 0.25,
+        "BaseNoiseScaleMeters": 24000.0,
+        "CloudTopOffsetMeters": 350.0,
+        "CloudType": 0.5,
+        "Coverage": 1.0,
+        "CurlStrength": 0.6000000238418579,
+        "DebugView": 0,
+        "Density": 0.6840000152587891,
+        "DetailFadeDistanceMeters": 25000.0,
+        "DetailNoiseScaleMeters": 1600.0,
+        "DetailStrength": 0.3499999940395355,
+        "DetailWindSpeedScale": 2.0,
+        "DistanceFadeStartMeters": 80000.0,
+        "Enabled": true,
+        "ExtinctionScale": 0.05000000074505806,
+        "GroundBounceScale": 0.30000001192092896,
+        "LayerBottomMeters": 1200.0,
+        "LayerThicknessMeters": 4000.0,
+        "LightMarchDistanceMeters": 1600.0,
+        "LightSteps": 6,
+        "MaxSteps": 96,
+        "MaxTraceDistanceMeters": 120000.0,
+        "MsExtinctionFalloff": 0.550000011920929,
+        "MsPhaseFalloff": 0.5,
+        "MsScatterFalloff": 0.550000011920929,
+        "MultiScatterOctaves": 3,
+        "PhaseBlend": 0.2800000011920929,
+        "PhaseG0": 0.800000011920929,
+        "PhaseG1": -0.25,
+        "PlanetRadiusKm": 6360.0,
+        "PowderStrength": 0.3499999940395355,
+        "ResolutionDivisor": 1,
+        "ScatteringColorB": 1.0,
+        "ScatteringColorG": 1.0,
+        "ScatteringColorR": 1.0,
+        "ShadowConeSpread": 0.11999999731779099,
+        "ShadowStepGrowth": 1.350000023841858,
+        "SunIntensityScale": 1.0,
+        "TemporalBlend": 0.9200000166893005,
+        "TemporalUpsampling": false,
+        "WeatherCellSize": 1.0,
+        "WeatherCoverageBias": 0.0,
+        "WeatherScaleMeters": 90000.0,
+        "WeatherSeed": 1337,
+        "WeatherTypeBias": 0.0,
+        "WindDirectionDegrees": 45.0,
+        "WindSkew": 0.3499999940395355,
+        "WindSpeed": 12.0
+    },
     "VolumetricFogSettings": {
         "Anisotropy": 0.5,
         "BaseHeight": 0.0,
@@ -259,7 +361,7 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.10000000149011612,
+        "Density": 0.21690000593662262,
         "DepthSlices": 64,
         "EmissiveColorB": 1.0,
         "EmissiveColorG": 1.0,

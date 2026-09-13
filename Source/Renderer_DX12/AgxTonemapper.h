@@ -4,7 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "AgxTonemapSettings.h"
 
-#include "imgui.h"
+#include "../QtUi/UiTypes.h"
 
 // AgxTonemapper performs an AgX-based tone-mapping pass as a compute shader.
 //
@@ -31,9 +31,12 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE inputCpuSrv,
         const AgxTonemapSettings&   settings);
 
-    // ImGui-displayable GPU handle of the tonemapped output (shared heap slot).
-    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()   const { return mOutputImGuiSrvGpu; }
-    ImTextureID                 GetOutputTextureId() const { return mOutputTextureId; }
+    // Ui-displayable GPU handle of the tonemapped output (shared heap slot).
+    D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()   const { return mOutputUiSrvGpu; }
+    // Needed by any later stage that copies this output's descriptor into its own heap,
+    // the way every other post stage already exposes one.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetOutputCpuSrv()   const { return mOutputUiSrvCpu; }
+    UiTextureID                 GetOutputTextureId() const { return mOutputTextureId; }
     ID3D12Resource*             GetOutputResource()  const { return mOutputTexture.Get(); }
 
     bool IsInitialized() const { return mIsInitialized; }
@@ -104,11 +107,11 @@ private:
     // Textures (recreated on resize)
     Microsoft::WRL::ComPtr<ID3D12Resource> mOutputTexture;
 
-    // Shared-context heap slot for ImGui display
-    D3D12_CPU_DESCRIPTOR_HANDLE mOutputImGuiSrvCpu{};
-    D3D12_GPU_DESCRIPTOR_HANDLE mOutputImGuiSrvGpu{};
-    ImTextureID                 mOutputTextureId = ImTextureID_Invalid;
-    bool                        mImGuiSlotAllocated = false;
+    // Shared-context heap slot for Ui display
+    D3D12_CPU_DESCRIPTOR_HANDLE mOutputUiSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mOutputUiSrvGpu{};
+    UiTextureID                 mOutputTextureId = UiTextureID_Invalid;
+    bool                        mUiSlotAllocated = false;
 
     UINT mWidth  = 0;
     UINT mHeight = 0;

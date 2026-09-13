@@ -1,0 +1,55 @@
+{
+    "alphaCutoff": 0.4399999976158142,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightScale": 0.08950000256299973,
+    "isDecalMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "Floor_Planks",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "roughnessFactor": 1.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "Textures/Modular/old_worn_planks_tijlbc1a_extracted/Old_Worn_Planks_tijlbc1aw_4K_BaseColor.dds",
+        "emissive": "",
+        "height": "Textures/Modular/old_worn_planks_tijlbc1a_extracted/Old_Worn_Planks_tijlbc1aw_4K_Displacement.dds",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Textures/Modular/old_worn_planks_tijlbc1a_extracted/Old_Worn_Planks_tijlbc1aw_4K_Normal.dds",
+        "opacity": "",
+        "roughness": "Textures/Modular/old_worn_planks_tijlbc1a_extracted/Old_Worn_Planks_tijlbc1aw_4K_Roughness.dds"
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        2.0,
+        2.0
+    ]
+}

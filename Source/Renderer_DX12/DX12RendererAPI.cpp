@@ -1,43 +1,58 @@
 #include "pch.h"
 #include "DX12Helper.h"
 #include "DX12SceneRenderer.h"
+#include "DX12ShaderCompiler.h"
 #include "Editor.h"
+#include "EngineCVars.h"
+#include "System/PteroLog.h"
 #include "RendererStatisticsText.h"
 
 #include "EditorMainMenu.h"
 
 #include "..\System\include\System\AssetManager.h"
 
-#include "imgui.h"
-#include "imgui_internal.h"
-#include "imgui_impl_dx12.h"
-#include "imgui_impl_win32.h"
+#include "../QtUi/QtUi.h"
+#include "QtViewportRenderer.h"
+
+
 
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <pdh.h>
 #include <pdhmsg.h>
+#include <set>
+#include <thread>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 #include <wincodec.h>
 #pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "windowscodecs.lib")
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 
 extern "C"
 {
     bool __stdcall DX12Context_Initialize(HWND windowHandle);
+    bool __stdcall DX12Context_WaitForGPU();
+    bool __stdcall DX12Context_IsDeviceRemoved();
+    void __stdcall DX12Context_LogDeviceRemovedDiagnostics();
+    bool __stdcall DX12Context_GetRenderSize(UINT*, UINT*);
     bool __stdcall DX12Context_BeginFrame(
         ID3D12GraphicsCommandList** commandList,
         ID3D12Resource** backBuffer,
         D3D12_CPU_DESCRIPTOR_HANDLE* rtvHandle,
         UINT* frameIndex);
     bool __stdcall DX12Context_EndFrame(UINT frameIndex);
+    void __stdcall DX12Context_AbortFrame();
     bool __stdcall DX12Context_Resize(UINT width, UINT height);
     HWND __stdcall DX12Context_GetWindowHandle();
     ID3D12Device* __stdcall DX12Context_GetDevice();
@@ -53,18 +68,24 @@ extern "C"
 
 namespace
 {
-    constexpr int ImGuiFrameCount = 2;
+    // Must match FrameCount in DX12Context.cpp: BeginFrame hands back a swap-chain frame
+    // index that is used to index gBackBufferHasBeenPresented.
+    constexpr int EditorFrameCount = 3;
     constexpr DXGI_FORMAT BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    bool gImGuiReady = false;
-    bool gDefaultDockLayoutApplied = false;
-    DX12SceneRenderer gSceneRenderer;
+    bool gQtUiReady = false;
+
+    std::unique_ptr<DX12SceneRenderer> gSceneRenderer;
     Editor gEditor;
     RendererStatisticsText gRendererStatisticsText;
     AssetManager gAssetManager;
     std::string gRendererLastError;
-    std::array<bool, ImGuiFrameCount> gBackBufferHasBeenPresented{};
+    std::array<bool, EditorFrameCount> gBackBufferHasBeenPresented{};
     bool gShowRendererStatistics = true;
+    int gPendingViewportWidth = 0;
+    int gPendingViewportHeight = 0;
+    bool gHasPendingViewportResize = false;
+    std::chrono::steady_clock::time_point gPendingViewportResizeSince{};
 
     // Optional progress callback registered by the host (editor) to display
     // fine-grained initialization status in the splash screen.
@@ -98,7 +119,7 @@ namespace
         snapshot.Entries.push_back({ "Bloom / TAA / DLSS / Tonemap", usageSnapshot.CpuUsagePercent * 0.06f, usageSnapshot.GpuUsagePercent * 0.10f, usageSnapshot.RamUsagePercent * 0.07f });
         snapshot.Entries.push_back({ "Volumetric Fog + Sky", usageSnapshot.CpuUsagePercent * 0.05f, usageSnapshot.GpuUsagePercent * 0.07f, usageSnapshot.RamUsagePercent * 0.04f });
         snapshot.Entries.push_back({ "Rain Rendering", usageSnapshot.CpuUsagePercent * 0.03f, usageSnapshot.GpuUsagePercent * 0.04f, usageSnapshot.RamUsagePercent * 0.03f });
-        snapshot.Entries.push_back({ "Editor UI / ImGui", usageSnapshot.CpuUsagePercent * 0.12f, usageSnapshot.GpuUsagePercent * 0.03f, usageSnapshot.RamUsagePercent * 0.10f });
+        snapshot.Entries.push_back({ "Editor UI / Qt Widgets", usageSnapshot.CpuUsagePercent * 0.12f, usageSnapshot.GpuUsagePercent * 0.03f, usageSnapshot.RamUsagePercent * 0.10f });
         snapshot.Entries.push_back({ "Asset Streaming / Meshes / Materials", usageSnapshot.CpuUsagePercent * 0.08f, usageSnapshot.GpuUsagePercent * 0.02f, usageSnapshot.RamUsagePercent * 0.17f });
         snapshot.Entries.push_back({ "Audio", usageSnapshot.CpuUsagePercent * 0.07f, usageSnapshot.GpuUsagePercent * 0.00f, usageSnapshot.RamUsagePercent * 0.08f });
         snapshot.Entries.push_back({ "Serialization / Background Tasks", usageSnapshot.CpuUsagePercent * 0.03f, usageSnapshot.GpuUsagePercent * 0.01f, usageSnapshot.RamUsagePercent * 0.05f });
@@ -106,114 +127,175 @@ namespace
         return snapshot;
     }
 
+    // Samples system counters on a worker thread. PdhCollectQueryData over the wildcard
+    // "\GPU Engine(*)" counter enumerates every engine instance of every process on the
+    // machine and routinely blocks for tens to hundreds of milliseconds; doing that on
+    // the render thread stalls the whole editor several times a second.
     class SystemUsageSampler final
     {
     public:
+        SystemUsageSampler() : mState(std::make_shared<State>()) {}
+
         ~SystemUsageSampler()
         {
-            if (mGpuQuery != nullptr)
-            {
-                PdhCloseQuery(mGpuQuery);
-            }
+            // Signal only. This object is a DLL-scope global, so joining here would run
+            // during DLL_PROCESS_DETACH and deadlock against the loader lock. The worker
+            // holds its own reference to the state, so detaching is safe.
+            Stop();
+        }
+
+        void Stop()
+        {
+            mState->Stop.store(true, std::memory_order_relaxed);
         }
 
         SystemUsageSnapshot Update()
         {
-            const auto now = std::chrono::steady_clock::now();
-            if (!mHasSampled || std::chrono::duration<float>(now - mLastSampleTime).count() >= 0.25f)
+            if (!mWorkerStarted)
             {
-                mCpuUsagePercent = SampleCpuUsage();
-                mGpuUsagePercent = SampleGpuUsage();
-                mRamUsagePercent = SampleRamUsage();
-                mLastSampleTime = now;
-                mHasSampled = true;
+                mWorkerStarted = true;
+                std::thread(SampleLoop, mState).detach();
             }
 
-            return SystemUsageSnapshot{ mCpuUsagePercent, mGpuUsagePercent, mRamUsagePercent };
+            const std::lock_guard<std::mutex> lock(mState->Mutex);
+            return mState->Snapshot;
         }
 
     private:
+        struct State
+        {
+            std::mutex Mutex;
+            SystemUsageSnapshot Snapshot{};
+            std::atomic<bool> Stop{ false };
+        };
+
+        // Counter state lives here so it stays owned by the worker thread alone.
+        struct SamplerState
+        {
+            PDH_HQUERY GpuQuery = nullptr;
+            PDH_HCOUNTER GpuCounter = nullptr;
+            ULONGLONG PreviousIdleTime = 0;
+            ULONGLONG PreviousKernelTime = 0;
+            ULONGLONG PreviousUserTime = 0;
+            float CpuUsagePercent = 0.0f;
+            float GpuUsagePercent = 0.0f;
+            float RamUsagePercent = 0.0f;
+            bool HasCpuSample = false;
+            bool GpuCounterInitialized = false;
+        };
+
+        static void SampleLoop(std::shared_ptr<State> state)
+        {
+            SamplerState sampler;
+            while (!state->Stop.load(std::memory_order_relaxed))
+            {
+                sampler.CpuUsagePercent = SampleCpuUsage(sampler);
+                sampler.GpuUsagePercent = SampleGpuUsage(sampler);
+                sampler.RamUsagePercent = SampleRamUsage();
+
+                {
+                    const std::lock_guard<std::mutex> lock(state->Mutex);
+                    state->Snapshot = SystemUsageSnapshot{
+                        sampler.CpuUsagePercent, sampler.GpuUsagePercent, sampler.RamUsagePercent };
+                }
+
+                // Wake often enough to notice a stop request promptly without resampling
+                // the expensive counters more than four times a second.
+                for (int slice = 0; slice < 25 && !state->Stop.load(std::memory_order_relaxed); ++slice)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+
+            if (sampler.GpuQuery != nullptr)
+            {
+                PdhCloseQuery(sampler.GpuQuery);
+            }
+        }
+
+        std::shared_ptr<State> mState;
+        bool mWorkerStarted = false;
         static ULONGLONG FileTimeToUInt64(const FILETIME& fileTime)
         {
             return (static_cast<ULONGLONG>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime;
         }
 
-        float SampleCpuUsage()
+        static float SampleCpuUsage(SamplerState& sampler)
         {
             FILETIME idleTime{};
             FILETIME kernelTime{};
             FILETIME userTime{};
             if (!GetSystemTimes(&idleTime, &kernelTime, &userTime))
             {
-                return mCpuUsagePercent;
+                return sampler.CpuUsagePercent;
             }
 
             const ULONGLONG currentIdle = FileTimeToUInt64(idleTime);
             const ULONGLONG currentKernel = FileTimeToUInt64(kernelTime);
             const ULONGLONG currentUser = FileTimeToUInt64(userTime);
 
-            if (!mHasCpuSample)
+            if (!sampler.HasCpuSample)
             {
-                mPreviousIdleTime = currentIdle;
-                mPreviousKernelTime = currentKernel;
-                mPreviousUserTime = currentUser;
-                mHasCpuSample = true;
-                return mCpuUsagePercent;
+                sampler.PreviousIdleTime = currentIdle;
+                sampler.PreviousKernelTime = currentKernel;
+                sampler.PreviousUserTime = currentUser;
+                sampler.HasCpuSample = true;
+                return sampler.CpuUsagePercent;
             }
 
-            const ULONGLONG idleDelta = currentIdle - mPreviousIdleTime;
-            const ULONGLONG kernelDelta = currentKernel - mPreviousKernelTime;
-            const ULONGLONG userDelta = currentUser - mPreviousUserTime;
+            const ULONGLONG idleDelta = currentIdle - sampler.PreviousIdleTime;
+            const ULONGLONG kernelDelta = currentKernel - sampler.PreviousKernelTime;
+            const ULONGLONG userDelta = currentUser - sampler.PreviousUserTime;
             const ULONGLONG totalDelta = kernelDelta + userDelta;
 
-            mPreviousIdleTime = currentIdle;
-            mPreviousKernelTime = currentKernel;
-            mPreviousUserTime = currentUser;
+            sampler.PreviousIdleTime = currentIdle;
+            sampler.PreviousKernelTime = currentKernel;
+            sampler.PreviousUserTime = currentUser;
 
             if (totalDelta == 0)
             {
-                return mCpuUsagePercent;
+                return sampler.CpuUsagePercent;
             }
 
             const double busyFraction = 1.0 - (static_cast<double>(idleDelta) / static_cast<double>(totalDelta));
             return static_cast<float>((std::clamp)(busyFraction * 100.0, 0.0, 100.0));
         }
 
-        void EnsureGpuCounter()
+        static void EnsureGpuCounter(SamplerState& sampler)
         {
-            if (mGpuCounterInitialized)
+            if (sampler.GpuCounterInitialized)
             {
                 return;
             }
 
-            if (PdhOpenQueryW(nullptr, 0, &mGpuQuery) != ERROR_SUCCESS)
+            if (PdhOpenQueryW(nullptr, 0, &sampler.GpuQuery) != ERROR_SUCCESS)
             {
                 return;
             }
 
-            if (PdhAddEnglishCounterW(mGpuQuery, L"\\GPU Engine(*)\\Utilization Percentage", 0, &mGpuCounter) != ERROR_SUCCESS)
+            if (PdhAddEnglishCounterW(sampler.GpuQuery, L"\\GPU Engine(*)\\Utilization Percentage", 0, &sampler.GpuCounter) != ERROR_SUCCESS)
             {
-                PdhCloseQuery(mGpuQuery);
-                mGpuQuery = nullptr;
+                PdhCloseQuery(sampler.GpuQuery);
+                sampler.GpuQuery = nullptr;
                 return;
             }
 
-            PdhCollectQueryData(mGpuQuery);
-            mGpuCounterInitialized = true;
+            PdhCollectQueryData(sampler.GpuQuery);
+            sampler.GpuCounterInitialized = true;
         }
 
-        float SampleGpuUsage()
+        static float SampleGpuUsage(SamplerState& sampler)
         {
-            EnsureGpuCounter();
-            if (!mGpuCounterInitialized || PdhCollectQueryData(mGpuQuery) != ERROR_SUCCESS)
+            EnsureGpuCounter(sampler);
+            if (!sampler.GpuCounterInitialized || PdhCollectQueryData(sampler.GpuQuery) != ERROR_SUCCESS)
             {
-                return mGpuUsagePercent;
+                return sampler.GpuUsagePercent;
             }
 
             DWORD bufferSize = 0;
             DWORD itemCount = 0;
             PDH_STATUS status = PdhGetFormattedCounterArrayW(
-                mGpuCounter,
+                sampler.GpuCounter,
                 PDH_FMT_DOUBLE,
                 &bufferSize,
                 &itemCount,
@@ -221,20 +303,20 @@ namespace
 
             if ((status != ERROR_SUCCESS && bufferSize == 0) || itemCount == 0)
             {
-                return mGpuUsagePercent;
+                return sampler.GpuUsagePercent;
             }
 
             std::vector<BYTE> buffer(bufferSize);
             auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
             status = PdhGetFormattedCounterArrayW(
-                mGpuCounter,
+                sampler.GpuCounter,
                 PDH_FMT_DOUBLE,
                 &bufferSize,
                 &itemCount,
                 items);
             if (status != ERROR_SUCCESS)
             {
-                return mGpuUsagePercent;
+                return sampler.GpuUsagePercent;
             }
 
             double totalUtilization = 0.0;
@@ -257,7 +339,7 @@ namespace
             return static_cast<float>((std::clamp)(totalUtilization, 0.0, 100.0));
         }
 
-        float SampleRamUsage() const
+        static float SampleRamUsage()
         {
             MEMORYSTATUSEX memoryStatus{};
             memoryStatus.dwLength = sizeof(memoryStatus);
@@ -268,22 +350,46 @@ namespace
 
             return static_cast<float>(memoryStatus.dwMemoryLoad);
         }
-
-        std::chrono::steady_clock::time_point mLastSampleTime{};
-        PDH_HQUERY mGpuQuery = nullptr;
-        PDH_HCOUNTER mGpuCounter = nullptr;
-        ULONGLONG mPreviousIdleTime = 0;
-        ULONGLONG mPreviousKernelTime = 0;
-        ULONGLONG mPreviousUserTime = 0;
-        float mCpuUsagePercent = 0.0f;
-        float mGpuUsagePercent = 0.0f;
-        float mRamUsagePercent = 0.0f;
-        bool mHasSampled = false;
-        bool mHasCpuSample = false;
-        bool mGpuCounterInitialized = false;
     };
 
     SystemUsageSampler gSystemUsageSampler;
+    UINT gSwapChainResizeCount = 0;
+
+    // Frame breakdown. "Outside" is the gap between one render call returning and the
+    // next starting, i.e. everything the host loop does: the Win32 message pump (which is
+    // where Qt's child windows service their paint messages) and the audio update. "Tail"
+    // is the work after the UI is handed off: the viewport blit, present and signal.
+    std::chrono::steady_clock::time_point gPreviousFrameExit{};
+    std::chrono::steady_clock::time_point gTailStart{};
+    float gRenderMilliseconds = 0.0f;
+    float gOutsideMilliseconds = 0.0f;
+    float gTailMilliseconds = 0.0f;
+    // Splits the UI span: recording the scene's command list versus walking the editor's
+    // immediate-mode declaration (menus, docks, panels) into retained Qt widgets.
+    std::chrono::steady_clock::time_point gUiBuildStart{};
+    float gSceneMilliseconds = 0.0f;
+    float gUiBuildMilliseconds = 0.0f;
+
+    struct FrameProfiler
+    {
+        std::chrono::steady_clock::time_point Entry = std::chrono::steady_clock::now();
+
+        ~FrameProfiler()
+        {
+            const auto exit = std::chrono::steady_clock::now();
+            gRenderMilliseconds = std::chrono::duration<float, std::milli>(exit - Entry).count();
+            if (gPreviousFrameExit.time_since_epoch().count() != 0)
+            {
+                gOutsideMilliseconds = std::chrono::duration<float, std::milli>(Entry - gPreviousFrameExit).count();
+            }
+            if (gTailStart.time_since_epoch().count() != 0)
+            {
+                gTailMilliseconds = std::chrono::duration<float, std::milli>(exit - gTailStart).count();
+            }
+            gPreviousFrameExit = exit;
+            gTailStart = {};
+        }
+    };
 
     void ReportProgress(const wchar_t* message)
     {
@@ -291,18 +397,87 @@ namespace
             gProgressCallback(message);
     }
 
+    // A frame that never returns writes nothing to the log, because the thread
+    // that would write the line is the thread that is stuck. So a second thread
+    // watches: the render loop stamps a heartbeat at the top of every frame, and
+    // if the stamp stops moving the watchdog says so and flushes the file. A
+    // hang then leaves a record of which frame it died on, instead of silence.
+    std::atomic<std::uint64_t> gFrameHeartbeat{ 0 };
+    bool gDeviceRemovedReported = false;
+    std::atomic<bool>          gWatchdogShouldRun{ false };
+    std::thread                gWatchdogThread;
+
+    constexpr std::chrono::seconds kWatchdogStallThreshold{ 5 };
+    constexpr std::chrono::seconds kWatchdogRepeatInterval{ 15 };
+
+    void WatchdogLoop()
+    {
+        std::uint64_t lastSeen = gFrameHeartbeat.load(std::memory_order_relaxed);
+        auto lastChange = std::chrono::steady_clock::now();
+        auto lastReport = std::chrono::steady_clock::time_point{};
+
+        while (gWatchdogShouldRun.load(std::memory_order_relaxed))
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            const std::uint64_t current = gFrameHeartbeat.load(std::memory_order_relaxed);
+            const auto now = std::chrono::steady_clock::now();
+
+            if (current != lastSeen)
+            {
+                if (lastReport != std::chrono::steady_clock::time_point{})
+                {
+                    PTERO_LOG_WARNING("Watchdog",
+                                      "Render thread recovered after %.1f s; resumed at frame %llu.",
+                                      std::chrono::duration<double>(now - lastChange).count(),
+                                      static_cast<unsigned long long>(current));
+                    PteroLog::Flush();
+                    lastReport = std::chrono::steady_clock::time_point{};
+                }
+                lastSeen = current;
+                lastChange = now;
+                continue;
+            }
+
+            // The heartbeat only starts once the first frame has run, so a zero
+            // stamp means startup is still in progress rather than stalled.
+            if (current == 0) continue;
+
+            if (now - lastChange < kWatchdogStallThreshold) continue;
+            if (lastReport != std::chrono::steady_clock::time_point{}
+                && now - lastReport < kWatchdogRepeatInterval) continue;
+
+            lastReport = now;
+            PTERO_LOG_ERROR("Watchdog",
+                            "Render thread has not completed frame %llu for %.1f s. "
+                            "Everything above this line is what it did last.",
+                            static_cast<unsigned long long>(current),
+                            std::chrono::duration<double>(now - lastChange).count());
+            PteroLog::Flush();
+        }
+    }
+
+    void StartWatchdog()
+    {
+        if (gWatchdogShouldRun.exchange(true)) return;
+        gWatchdogThread = std::thread(WatchdogLoop);
+    }
+
+    void StopWatchdog()
+    {
+        if (!gWatchdogShouldRun.exchange(false)) return;
+        if (gWatchdogThread.joinable()) gWatchdogThread.join();
+    }
+
     void SetRendererError(const std::string& errorMessage)
     {
         gRendererLastError = errorMessage;
-        OutputDebugStringA(gRendererLastError.c_str());
-        OutputDebugStringA("\n");
+        PteroLog::Write(PteroLog::Level::Error, "Renderer", gRendererLastError.c_str());
     }
 
     void LogRendererMeshDiagnostic(const std::string& message)
     {
-        OutputDebugStringA("[DX12RendererAPI] ");
-        OutputDebugStringA(message.c_str());
-        OutputDebugStringA("\n");
+        PteroLog::Write(PteroLog::Level::Debug, "Renderer", message.c_str());
     }
 
     void ClearRendererError()
@@ -362,215 +537,418 @@ namespace
         return {};
     }
 
-    void ApplyEditorStyle()
+    std::filesystem::path FindShadersDirectoryUpward()
     {
-        ImGuiStyle& style = ImGui::GetStyle();
-        ImVec4* colors = style.Colors;
+        namespace fs = std::filesystem;
 
-        const ImVec4 accent(0.78f, 0.24f, 0.05f, 1.0f);
-        const ImVec4 accentHovered(0.86f, 0.32f, 0.10f, 1.0f);
-        const ImVec4 accentActive(0.68f, 0.18f, 0.03f, 1.0f);
-        const ImVec4 panel(0.08f, 0.07f, 0.07f, 0.96f);
-        const ImVec4 panelAlt(0.12f, 0.09f, 0.08f, 0.96f);
-        const ImVec4 frame(0.16f, 0.11f, 0.09f, 1.0f);
-        const ImVec4 text(0.95f, 0.92f, 0.89f, 1.0f);
+        std::vector<fs::path> startDirectories;
+        const fs::path executableDirectory = GetEditorExecutableDirectory();
+        if (!executableDirectory.empty())
+        {
+            startDirectories.push_back(executableDirectory);
+        }
 
-        style.WindowRounding = 5.0f;
-        style.FrameRounding = 4.0f;
-        style.GrabRounding = 4.0f;
-        style.ScrollbarRounding = 4.0f;
-        style.TabRounding = 4.0f;
-        style.PopupRounding = 4.0f;
-        style.WindowBorderSize = 1.0f;
-        style.FrameBorderSize = 1.0f;
+        std::error_code currentPathError;
+        const fs::path currentDirectory = fs::current_path(currentPathError);
+        if (!currentPathError && !currentDirectory.empty())
+        {
+            startDirectories.push_back(currentDirectory);
+        }
 
-        colors[ImGuiCol_Text] = text;
-        colors[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.56f, 0.52f, 1.0f);
-        colors[ImGuiCol_WindowBg] = panel;
-        colors[ImGuiCol_ChildBg] = ImVec4(0.06f, 0.05f, 0.05f, 0.94f);
-        colors[ImGuiCol_PopupBg] = panelAlt;
-        colors[ImGuiCol_Border] = ImVec4(0.42f, 0.18f, 0.10f, 0.80f);
-        colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-        colors[ImGuiCol_FrameBg] = frame;
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.27f, 0.15f, 0.10f, 1.0f);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(0.34f, 0.18f, 0.11f, 1.0f);
-        colors[ImGuiCol_TitleBg] = ImVec4(0.28f, 0.11f, 0.05f, 1.0f);
-        colors[ImGuiCol_TitleBgActive] = accent;
-        colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.22f, 0.09f, 0.05f, 0.90f);
-        colors[ImGuiCol_MenuBarBg] = ImVec4(0.16f, 0.08f, 0.05f, 1.0f);
-        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.08f, 0.06f, 0.05f, 1.0f);
-        colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.42f, 0.19f, 0.10f, 1.0f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = accentHovered;
-        colors[ImGuiCol_ScrollbarGrabActive] = accentActive;
-        colors[ImGuiCol_CheckMark] = accentHovered;
-        colors[ImGuiCol_SliderGrab] = accent;
-        colors[ImGuiCol_SliderGrabActive] = accentHovered;
-        colors[ImGuiCol_Button] = accent;
-        colors[ImGuiCol_ButtonHovered] = accentHovered;
-        colors[ImGuiCol_ButtonActive] = accentActive;
-        colors[ImGuiCol_Header] = ImVec4(0.42f, 0.16f, 0.08f, 0.90f);
-        colors[ImGuiCol_HeaderHovered] = accentHovered;
-        colors[ImGuiCol_HeaderActive] = accentActive;
-        colors[ImGuiCol_Separator] = ImVec4(0.52f, 0.20f, 0.10f, 0.70f);
-        colors[ImGuiCol_SeparatorHovered] = accentHovered;
-        colors[ImGuiCol_SeparatorActive] = accentActive;
-        colors[ImGuiCol_ResizeGrip] = ImVec4(0.62f, 0.23f, 0.10f, 0.25f);
-        colors[ImGuiCol_ResizeGripHovered] = accentHovered;
-        colors[ImGuiCol_ResizeGripActive] = accentActive;
-        colors[ImGuiCol_Tab] = ImVec4(0.30f, 0.12f, 0.06f, 1.0f);
-        colors[ImGuiCol_TabHovered] = accentHovered;
-        colors[ImGuiCol_TabActive] = accent;
-        colors[ImGuiCol_TabUnfocused] = ImVec4(0.18f, 0.09f, 0.06f, 1.0f);
-        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.24f, 0.11f, 0.07f, 1.0f);
-        colors[ImGuiCol_PlotLines] = accentHovered;
-        colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.95f, 0.56f, 0.26f, 1.0f);
-        colors[ImGuiCol_PlotHistogram] = accent;
-        colors[ImGuiCol_PlotHistogramHovered] = accentHovered;
-        colors[ImGuiCol_TextSelectedBg] = ImVec4(0.78f, 0.24f, 0.05f, 0.35f);
-        colors[ImGuiCol_DragDropTarget] = accentHovered;
-        colors[ImGuiCol_NavHighlight] = accentHovered;
+        for (fs::path currentPath : startDirectories)
+        {
+            while (!currentPath.empty())
+            {
+                const fs::path shadersDirectory = currentPath / L"Data" / L"Shaders";
+                std::error_code statusError;
+                if (fs::exists(shadersDirectory, statusError) && fs::is_directory(shadersDirectory, statusError))
+                {
+                    return fs::weakly_canonical(shadersDirectory, statusError);
+                }
+
+                const fs::path parentPath = currentPath.parent_path();
+                if (parentPath == currentPath)
+                {
+                    break;
+                }
+
+                currentPath = parentPath;
+            }
+        }
+
+        return {};
     }
 
-    void TryLoadEditorFont(ImGuiIO& io)
+    std::string ReadTextFile(const std::filesystem::path& path)
     {
-        const std::filesystem::path playfairDisplayPath = FindFontFileUpward(L"PlayfairDisplay-Regular");
-        if (playfairDisplayPath.empty())
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
         {
-            OutputDebugStringA("PlayfairDisplay-Regular font was not found under Data\\Fonts. Falling back to the default ImGui font.\n");
+            return {};
+        }
+
+        std::ostringstream buffer;
+        buffer << stream.rdbuf();
+        return buffer.str();
+    }
+
+    std::wstring ToWideString(const std::string& value)
+    {
+        if (value.empty())
+        {
+            return {};
+        }
+
+        const int requiredSize = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+        if (requiredSize <= 0)
+        {
+            return {};
+        }
+
+        std::wstring result(static_cast<size_t>(requiredSize), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), requiredSize);
+        return result;
+    }
+
+    std::string ToNarrowString(const std::wstring& value)
+    {
+        if (value.empty())
+        {
+            return {};
+        }
+
+        const int requiredSize = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+        if (requiredSize <= 0)
+        {
+            return {};
+        }
+
+        std::string result(static_cast<size_t>(requiredSize), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), requiredSize, nullptr, nullptr);
+        return result;
+    }
+
+    bool ContainsText(const std::string& haystack, const char* needle)
+    {
+        return haystack.find(needle) != std::string::npos;
+    }
+
+    std::wstring GuessComputeTargetProfile(const std::filesystem::path& path, const std::string& sourceText)
+    {
+        const std::wstring filename = path.filename().wstring();
+        if (_wcsicmp(filename.c_str(), L"SMAA_Ptero.hlsl") == 0)
+        {
+            return L"cs_6_0";
+        }
+
+        if (ContainsText(sourceText, "RayQuery") || ContainsText(sourceText, "RaytracingAccelerationStructure"))
+        {
+            return L"cs_6_5";
+        }
+
+        if (ContainsText(sourceText, "XE_GTAO_"))
+        {
+            return L"cs_6_0";
+        }
+
+        if (ContainsText(sourceText, "Wave") || ContainsText(sourceText, "SV_Barycentrics"))
+        {
+            return L"cs_6_5";
+        }
+
+        return L"cs_5_0";
+    }
+
+    void AddStartupShaderRequest(
+        std::vector<ShaderCompileRequest>& requests,
+        std::set<std::wstring>& uniqueKeys,
+        const std::filesystem::path& path,
+        const std::wstring& entryPoint,
+        const std::wstring& targetProfile,
+        ShaderStage stage,
+        const std::vector<std::wstring>& includeDirectories = {})
+    {
+        const std::wstring key = path.wstring() + L"|" + entryPoint + L"|" + targetProfile;
+        if (!uniqueKeys.insert(key).second)
+        {
             return;
         }
 
-        ImFontConfig fontConfig{};
-        fontConfig.OversampleH = 2;
-        fontConfig.OversampleV = 2;
-        fontConfig.PixelSnapH = false;
+        ShaderCompileRequest request{};
+        request.FilePath = path.wstring();
+        request.EntryPoint = entryPoint;
+        request.TargetProfile = targetProfile;
+        request.Stage = stage;
+        request.IncludeDirectories = includeDirectories;
+        requests.push_back(std::move(request));
+    }
 
-        if (io.Fonts->AddFontFromFileTTF(playfairDisplayPath.string().c_str(), 18.0f, &fontConfig) == nullptr)
+    void AddNumthreadsEntryPoints(
+        std::vector<ShaderCompileRequest>& requests,
+        std::set<std::wstring>& uniqueKeys,
+        const std::filesystem::path& path,
+        const std::string& sourceText,
+        const std::vector<std::wstring>& includeDirectories)
+    {
+        size_t searchOffset = 0;
+        while (true)
         {
-            OutputDebugStringA("Failed to load PlayfairDisplay-Regular. Falling back to the default ImGui font.\n");
-            return;
+            const size_t attributePosition = sourceText.find("[numthreads", searchOffset);
+            if (attributePosition == std::string::npos)
+            {
+                break;
+            }
+
+            const size_t attributeEnd = sourceText.find(']', attributePosition);
+            const size_t argumentStart = sourceText.find('(', attributeEnd == std::string::npos ? attributePosition : attributeEnd);
+            if (attributeEnd == std::string::npos || argumentStart == std::string::npos)
+            {
+                break;
+            }
+
+            std::string declaration = sourceText.substr(attributeEnd + 1, argumentStart - attributeEnd - 1);
+            for (char& character : declaration)
+            {
+                if (character == '\r' || character == '\n' || character == '\t')
+                {
+                    character = ' ';
+                }
+            }
+
+            std::istringstream declarationStream(declaration);
+            std::string token;
+            std::string entryName;
+            while (declarationStream >> token)
+            {
+                entryName = token;
+            }
+
+            if (!entryName.empty())
+            {
+                if (entryName == "NRD_CS_MAIN")
+                {
+                    entryName = "main";
+                }
+
+                AddStartupShaderRequest(
+                    requests,
+                    uniqueKeys,
+                    path,
+                    ToWideString(entryName),
+                    GuessComputeTargetProfile(path, sourceText),
+                    ShaderStage::Compute,
+                    includeDirectories);
+            }
+
+            searchOffset = argumentStart + 1;
         }
     }
 
-    void EnsureDefaultDockLayout()
+    bool IsExternalShaderPackageDirectory(
+        const std::filesystem::path& path,
+        const std::filesystem::path& shadersDirectory)
     {
-        if (gDefaultDockLayoutApplied)
+        namespace fs = std::filesystem;
+
+        std::error_code relativeError;
+        const fs::path relativePath = fs::relative(path, shadersDirectory, relativeError);
+        if (relativeError || relativePath.empty())
         {
-            return;
-        }
-
-        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        if (mainViewport == nullptr)
-        {
-            return;
-        }
-
-        const ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
-
-        ImGui::DockBuilderRemoveNode(dockspaceId);
-        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_PassthruCentralNode);
-        ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport->WorkSize);
-
-        ImGuiID centerDockId = dockspaceId;
-        ImGuiID topDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Up, 0.11f, nullptr, &centerDockId);
-        ImGuiID leftDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Left, 0.19f, nullptr, &centerDockId);
-        ImGuiID rightDockId = ImGui::DockBuilderSplitNode(centerDockId, ImGuiDir_Right, 0.19f, nullptr, &centerDockId);
-
-        ImGui::DockBuilderDockWindow("Toolbar", topDockId);
-        ImGui::DockBuilderDockWindow("Viewport", centerDockId);
-        ImGui::DockBuilderDockWindow("Components", leftDockId);
-        ImGui::DockBuilderDockWindow("Properties", rightDockId);
-        ImGui::DockBuilderDockWindow("Level Explorer", leftDockId);
-        ImGui::DockBuilderDockWindow("Resource Debug", rightDockId);
-        ImGui::DockBuilderDockWindow("Audio Manager", rightDockId);
-
-        ImGui::DockBuilderFinish(dockspaceId);
-        gDefaultDockLayoutApplied = true;
-    }
-
-    void ShutdownImGui()
-    {
-        if (!gImGuiReady)
-        {
-            return;
-        }
-
-        ImGuiIO& io = ImGui::GetIO();
-        ImGuiPlatformIO& platformIO = ImGui::GetPlatformIO();
-        if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0 || platformIO.Viewports.Size > 1)
-        {
-            ImGui::DestroyPlatformWindows();
-        }
-        else if (ImGuiViewport* mainViewport = ImGui::GetMainViewport())
-        {
-            mainViewport->RendererUserData = nullptr;
-            mainViewport->PlatformUserData = nullptr;
-            mainViewport->PlatformHandle = nullptr;
-            mainViewport->PlatformHandleRaw = nullptr;
-        }
-
-        ImGui_ImplDX12_Shutdown();
-        ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
-        gImGuiReady = false;
-        gDefaultDockLayoutApplied = false;
-    }
-
-    bool InitializeImGui()
-    {
-        ID3D12Device* device = DX12Context_GetDevice();
-        ID3D12CommandQueue* commandQueue = DX12Context_GetCommandQueue();
-        ID3D12DescriptorHeap* srvHeap = DX12Context_GetSrvDescriptorHeap();
-        HWND windowHandle = DX12Context_GetWindowHandle();
-
-        if (!(device && commandQueue && srvHeap && windowHandle))
-        {
-            SetRendererError("InitializeImGui failed because the device, command queue, descriptor heap, or window handle was not ready.");
             return false;
         }
 
-        ReportProgress(L"Initializing ImGui...");
-
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-        ImGui::StyleColorsDark();
-        ApplyEditorStyle();
-
-        ReportProgress(L"Loading editor font...");
-        TryLoadEditorFont(io);
-
-        if (!ImGui_ImplWin32_Init(windowHandle))
+        const auto firstPart = relativePath.begin();
+        if (firstPart == relativePath.end())
         {
-            SetRendererError("ImGui_ImplWin32_Init failed for the editor window.");
-            ImGui::DestroyContext();
             return false;
         }
 
-        ImGui_ImplDX12_InitInfo initInfo{};
-        initInfo.Device = device;
-        initInfo.CommandQueue = commandQueue;
-        initInfo.NumFramesInFlight = ImGuiFrameCount;
-        initInfo.RTVFormat = BackBufferFormat;
-        initInfo.DSVFormat = DXGI_FORMAT_UNKNOWN;
-        initInfo.SrvDescriptorHeap = srvHeap;
-        initInfo.LegacySingleSrvCpuDescriptor = DX12Context_GetSrvDescriptorCpuHandle();
-        initInfo.LegacySingleSrvGpuDescriptor = DX12Context_GetSrvDescriptorGpuHandle();
+        const std::wstring topLevelDirectory = firstPart->wstring();
+        return _wcsicmp(topLevelDirectory.c_str(), L"NRD") == 0
+            || _wcsicmp(topLevelDirectory.c_str(), L"Rtxdi") == 0;
+    }
 
-        if (!ImGui_ImplDX12_Init(&initInfo))
+    struct StartupShaderPrecompileResult
+    {
+        uint32_t SourceFiles = 0;
+        uint32_t IncludeFiles = 0;
+        uint32_t Requests = 0;
+        uint32_t LoadedFromCache = 0;
+        uint32_t Compiled = 0;
+        uint32_t Failed = 0;
+        std::string FirstFailure;
+    };
+
+    StartupShaderPrecompileResult PrecompileStartupShaders()
+    {
+        namespace fs = std::filesystem;
+
+        StartupShaderPrecompileResult result{};
+        const fs::path shadersDirectory = FindShadersDirectoryUpward();
+        if (shadersDirectory.empty())
         {
-            SetRendererError("ImGui_ImplDX12_Init failed while binding Dear ImGui to DirectX 12.");
-            ImGui_ImplWin32_Shutdown();
-            ImGui::DestroyContext();
-            return false;
+            ReportProgress(L"Shader startup compile skipped: Data\\Shaders was not found.");
+            result.FirstFailure = "Data\\Shaders was not found during startup shader precompile.";
+            return result;
         }
 
-        gImGuiReady = true;
-        return true;
+        const std::wstring startMessage = L"Loading startup shader cache from " + shadersDirectory.wstring() + L"...";
+        ReportProgress(startMessage.c_str());
+
+        std::vector<ShaderCompileRequest> requests;
+        std::set<std::wstring> uniqueKeys;
+        const std::vector<std::wstring> includeDirectories
+        {
+            shadersDirectory.wstring(),
+            (shadersDirectory / L"NRD").wstring(),
+            (shadersDirectory / L"Rtxdi").wstring()
+        };
+
+        std::error_code iteratorError;
+        for (fs::recursive_directory_iterator it(shadersDirectory, fs::directory_options::skip_permission_denied, iteratorError), end;
+             it != end && !iteratorError;
+             it.increment(iteratorError))
+        {
+            std::error_code statusError;
+            if (it->is_directory(statusError) && !statusError)
+            {
+                if (IsExternalShaderPackageDirectory(it->path(), shadersDirectory))
+                {
+                    it.disable_recursion_pending();
+                }
+
+                continue;
+            }
+
+            statusError.clear();
+            if (!it->is_regular_file(statusError) || statusError)
+            {
+                continue;
+            }
+
+            const fs::path path = it->path();
+            const std::wstring filename = path.filename().wstring();
+            const std::wstring extension = path.extension().wstring();
+            if (_wcsicmp(extension.c_str(), L".hlsl") != 0)
+            {
+                ++result.IncludeFiles;
+                continue;
+            }
+
+            if (_wcsicmp(filename.c_str(), L"SMAA.hlsl") == 0)
+            {
+                ++result.IncludeFiles;
+                continue;
+            }
+
+            ++result.SourceFiles;
+            const std::string sourceText = ReadTextFile(path);
+            if (sourceText.empty())
+            {
+                continue;
+            }
+
+            if (ContainsText(sourceText, "VSMain"))
+            {
+                AddStartupShaderRequest(requests, uniqueKeys, path, L"VSMain", L"vs_5_0", ShaderStage::Vertex, includeDirectories);
+            }
+
+            if (ContainsText(sourceText, "PSMain"))
+            {
+                AddStartupShaderRequest(requests, uniqueKeys, path, L"PSMain", L"ps_5_0", ShaderStage::Pixel, includeDirectories);
+            }
+
+            AddNumthreadsEntryPoints(requests, uniqueKeys, path, sourceText, includeDirectories);
+        }
+
+        result.Requests = static_cast<uint32_t>(requests.size());
+
+        for (const ShaderCompileRequest& request : requests)
+        {
+            const fs::path requestPath(request.FilePath);
+            std::error_code relativeError;
+            fs::path relativePath = fs::relative(requestPath, shadersDirectory, relativeError);
+            if (relativeError || relativePath.empty())
+            {
+                relativePath = requestPath.filename();
+            }
+
+            const std::wstring compileMessage =
+                L"Loading shader " + relativePath.wstring()
+                + L" :: " + request.EntryPoint
+                + L" [" + request.TargetProfile + L"]...";
+            ReportProgress(compileMessage.c_str());
+
+            DX12Shader shader;
+            if (shader.Compile(request))
+            {
+                if (shader.WasLoadedFromCache())
+                {
+                    ++result.LoadedFromCache;
+                }
+                else
+                {
+                    ++result.Compiled;
+                }
+                continue;
+            }
+
+            ++result.Failed;
+            if (result.FirstFailure.empty())
+            {
+                result.FirstFailure =
+                    ToNarrowString(relativePath.wstring())
+                    + " :: " + ToNarrowString(request.EntryPoint)
+                    + " [" + ToNarrowString(request.TargetProfile) + "]: "
+                    + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown shader compiler error");
+            }
+        }
+
+        std::wostringstream summary;
+        summary << L"Startup shader cache ready: "
+            << result.LoadedFromCache << L" loaded from cache, "
+            << result.Compiled << L" compiled, "
+            << result.Requests << L" total entries";
+        if (result.Failed > 0)
+        {
+            summary << L", " << result.Failed << L" failed";
+        }
+        summary << L", " << result.SourceFiles << L" source files scanned"
+            << L", " << result.IncludeFiles << L" include/header files indexed.";
+        ReportProgress(summary.str().c_str());
+
+        if (!result.FirstFailure.empty())
+        {
+            OutputDebugStringA("[DX12RendererAPI] Startup shader precompile first failure: ");
+            OutputDebugStringA(result.FirstFailure.c_str());
+            OutputDebugStringA("\n");
+        }
+
+        return result;
+    }
+
+    std::string CompileShadersFromMainMenu()
+    {
+        const StartupShaderPrecompileResult result = PrecompileStartupShaders();
+
+        std::ostringstream summary;
+        summary << "Shader cache ready: "
+            << result.LoadedFromCache << " loaded from cache, "
+            << result.Compiled << " compiled into Cache\\Shaders, "
+            << result.Requests << " total entries";
+        if (result.Failed > 0)
+        {
+            summary << ", " << result.Failed << " failed";
+        }
+        summary << ", " << result.SourceFiles << " source files scanned"
+            << ", " << result.IncludeFiles << " include/header files indexed.";
+
+        if (!result.FirstFailure.empty())
+        {
+            summary << " First failure: " << result.FirstFailure;
+        }
+
+        return summary.str();
     }
 
     float HalfToFloat(uint16_t value)
@@ -965,8 +1343,15 @@ extern "C"
 
     __declspec(dllexport) bool __stdcall RendererDX12_Initialize(HWND windowHandle)
     {
+        // First thing in the process that does anything: the crash handlers it
+        // installs are the only record of a failure during startup, and a level
+        // that will not load has to leave evidence behind.
+        PteroLog::Initialize();
+        PTERO_LOG_INFO("Renderer", "RendererDX12_Initialize starting.");
+
         ClearRendererError();
         gEditor.Shutdown();
+        gSceneRenderer = std::make_unique<DX12SceneRenderer>();
         gBackBufferHasBeenPresented.fill(false);
         gRendererStatisticsText = RendererStatisticsText();
         gShowRendererStatistics = true;
@@ -976,39 +1361,123 @@ extern "C"
         // Forward the same callback into the context layer so DX12 setup steps
         // are also surfaced on the splash screen.
         DX12Context_SetProgressCallback(gProgressCallback);
-        gSceneRenderer.SetProgressCallback(gProgressCallback);
+        gSceneRenderer->SetProgressCallback(gProgressCallback);
         gEditor.SetProgressCallback(gProgressCallback);
 
-        if (!DX12Context_Initialize(windowHandle))
+        ReportProgress(L"Initializing Qt editor..." );
+        if (!QtUi::Initialize(windowHandle)) return false;
+        if (!DX12Context_Initialize(QtUi::ViewportHandle()))
         {
             const char* contextError = DX12Context_GetLastError();
             SetRendererError(contextError != nullptr
                 ? std::string("RendererDX12_Initialize failed during DX12 context startup: ") + contextError
                 : "RendererDX12_Initialize failed during DX12 context startup.");
+            DX12Context_Shutdown();
+            QtUi::Shutdown();
             return false;
         }
 
         DX12Context_StreamlineInitialize();
 
-        ReportProgress(L"Initializing ImGui and editor UI...");
+        const StartupShaderPrecompileResult shaderPrecompileResult = PrecompileStartupShaders();
+        if (shaderPrecompileResult.Failed > 0)
+        {
+            std::ostringstream errorMessage;
+            errorMessage << "Startup shader cache warmup found " << shaderPrecompileResult.Failed
+                << " failed shader entries. First failure: " << shaderPrecompileResult.FirstFailure;
+            SetRendererError(errorMessage.str());
+        }
 
-        if (!InitializeImGui())
+        ReportProgress(L"Initializing Qt viewport renderer...");
+
+        if (!QtViewportRenderer::Initialize(DX12Context_GetDevice()))
         {
             if (gRendererLastError.empty())
             {
-                SetRendererError("RendererDX12_Initialize failed during ImGui startup.");
+                SetRendererError("RendererDX12_Initialize failed during Qt viewport startup.");
             }
             DX12Context_Shutdown();
+            QtViewportRenderer::Shutdown();
+            QtUi::Shutdown();
             return false;
         }
 
+        RegisterEngineCVars(*gSceneRenderer);
+        StartWatchdog();
+
+        gQtUiReady = true;
         ReportProgress(L"Renderer initialized.");
+        PTERO_LOG_INFO("Renderer", "Renderer initialized.");
 
         return true;
     }
 
+    // Reported by the host loop: the two things that happen between render calls.
+    __declspec(dllexport) void __stdcall RendererDX12_SetLoopTimings(
+        float pumpMilliseconds, float audioMilliseconds, unsigned messageCount, unsigned paintMessageCount)
+    {
+        gRendererStatisticsText.SetLoopTimings(
+            pumpMilliseconds, audioMilliseconds, messageCount, paintMessageCount);
+    }
+
     __declspec(dllexport) bool __stdcall RendererDX12_Render()
     {
+        // A removed device never comes back without being recreated from
+        // scratch, so every later frame would fail identically. Say why once -
+        // with whatever DRED recorded about the GPU operation that killed it -
+        // then stop, instead of writing the same line sixty times a second and
+        // burying the evidence above it.
+        if (DX12Context_IsDeviceRemoved())
+        {
+            if (!gDeviceRemovedReported)
+            {
+                gDeviceRemovedReported = true;
+                DX12Context_LogDeviceRemovedDiagnostics();
+                PTERO_LOG_FATAL("Renderer",
+                    "Rendering has stopped. Restart the editor; the log above names the last GPU work that ran.");
+                PteroLog::Flush();
+
+                // The viewport is drawn by this function, so nothing on screen
+                // will update again - including the Console. Without this the
+                // editor just appears to freeze.
+                const std::string message =
+                    "The graphics device was lost and rendering has stopped.\n\n"
+                    "The reason and the last GPU work that ran were written to:\n"
+                    + PteroLog::SessionFilePathUtf8()
+                    + "\n\nPlease restart the editor.";
+                MessageBoxA(nullptr, message.c_str(), "Ptero Engine - device lost",
+                            MB_OK | MB_ICONERROR);
+            }
+            return false;
+        }
+
+        gFrameHeartbeat.fetch_add(1, std::memory_order_relaxed);
+        const FrameProfiler frameProfiler;
+        QtUi::NewFrame();
+        RECT viewportRect{};
+        GetClientRect(QtUi::ViewportHandle(), &viewportRect);
+        UINT renderWidth=0, renderHeight=0;
+        DX12Context_GetRenderSize(&renderWidth, &renderHeight);
+        if (viewportRect.right > 0 && viewportRect.bottom > 0 && (renderWidth != viewportRect.right || renderHeight != viewportRect.bottom))
+        {
+            if (!DX12Context_Resize(viewportRect.right, viewportRect.bottom)) return false;
+            gBackBufferHasBeenPresented.fill(false);
+            // A swap-chain resize flushes the GPU. If this keeps climbing while the window
+            // sits still, the requested size never matches what the context reports back
+            // and the editor is paying a full pipeline stall every single frame.
+            ++gSwapChainResizeCount;
+        }
+        gRendererStatisticsText.SetViewportInfo(
+            static_cast<UINT>(viewportRect.right), static_cast<UINT>(viewportRect.bottom), gSwapChainResizeCount);
+        if (!gSceneRenderer->ApplyPendingMsaaSettings())
+        {
+            const char* sceneError = gSceneRenderer->GetLastErrorMessage();
+            SetRendererError(sceneError != nullptr
+                ? std::string("RendererDX12_Render could not apply MSAA settings: ") + sceneError
+                : "RendererDX12_Render could not apply MSAA settings.");
+            return false;
+        }
+
         // Acquire command list + current swap chain back buffer for this frame.
         ID3D12GraphicsCommandList* commandList = nullptr;
         ID3D12Resource* backBuffer = nullptr;
@@ -1017,19 +1486,17 @@ extern "C"
 
         if (!DX12Context_BeginFrame(&commandList, &backBuffer, &rtvHandle, &frameIndex))
         {
+            // BeginFrame now waits for the back buffer instead of reporting it busy, so
+            // reaching here is a real failure rather than routine back-pressure.
             const char* contextError = DX12Context_GetLastError();
-            if (contextError != nullptr
-                && std::string_view(contextError).find("Current frame resources are still in flight.") == 0)
-            {
-                return true;
-            }
-
             SetRendererError(contextError != nullptr
                 ? std::string("RendererDX12_Render could not begin a frame: ") + contextError
                 : "RendererDX12_Render could not begin a frame.");
             return false;
         }
 
+        try
+        {
         gRendererStatisticsText.MarkFrame();
         gEditor.UpdateSceneLoading();
 
@@ -1037,9 +1504,9 @@ extern "C"
         {
             const UINT requestedWidth = static_cast<UINT>((std::max)(1, gEditor.GetRequestedViewportResolutionWidth()));
             const UINT requestedHeight = static_cast<UINT>((std::max)(1, gEditor.GetRequestedViewportResolutionHeight()));
-            if (!gSceneRenderer.ResizeSceneTarget(requestedWidth, requestedHeight))
+            if (!gSceneRenderer->ResizeSceneTarget(requestedWidth, requestedHeight))
             {
-                const char* sceneError = gSceneRenderer.GetLastErrorMessage();
+                const char* sceneError = gSceneRenderer->GetLastErrorMessage();
                 SetRendererError(sceneError != nullptr
                     ? std::string("Viewport resolution change failed: ") + sceneError
                     : "Viewport resolution change failed.");
@@ -1052,12 +1519,21 @@ extern "C"
         }
 
         ReportProgress(L"Initializing scene renderer...");
-        const bool sceneReady = gSceneRenderer.Initialize(commandList);
+        const bool sceneReady = gSceneRenderer->Initialize(commandList);
         if (sceneReady)
         {
+            // Vegetation layers reference meshes by path but have no entity to
+            // hang a MeshComponent on, so they load through this callback
+            // rather than the per-entity resolution loop below.
+            gSceneRenderer->GetVegetationRenderer().SetMeshResolver(
+                [](const std::string& relativePath) -> std::shared_ptr<Mesh>
+                {
+                    return gAssetManager.GetMesh(relativePath);
+                });
+
             if (gEditor.HasPendingCameraRestore())
             {
-                gSceneRenderer.SetCameraTransform(
+                gSceneRenderer->SetCameraTransform(
                     gEditor.GetPendingCameraRestorePosition(),
                     gEditor.GetPendingCameraRestoreRotation());
                 gEditor.ConsumePendingCameraRestore();
@@ -1106,7 +1582,7 @@ extern "C"
 
             if (gAudioManagerPtr != nullptr && gAudioManagerPtr->IsInitialized())
             {
-                const EditorCamera& camera = gSceneRenderer.GetCamera();
+                const EditorCamera& camera = gSceneRenderer->GetCamera();
                 const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
                 const DirectX::XMFLOAT3 cameraForward = camera.GetForwardVector();
                 const DirectX::XMFLOAT3 cameraUp = camera.GetUpVector();
@@ -1161,22 +1637,33 @@ extern "C"
             }
 
             // Give the scene renderer an up-to-date view of the entity list every frame.
-            gSceneRenderer.SetEntities(&gEditor.GetEntities());
+            gSceneRenderer->SetEntities(&gEditor.GetEntities());
+
+            // The node graph editor keeps one document for the whole session and hands
+            // out a stable reference to it, so this only has to be wired up once.
+            gSceneRenderer->SetNodeGraph(&NodeGraphEditor::Document());
 
             ReportProgress(L"Rendering initial scene frame...");
-            gSceneRenderer.Render(commandList);
+            const auto sceneStart = std::chrono::steady_clock::now();
+            gSceneRenderer->Render(commandList);
+            gSceneMilliseconds = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - sceneStart).count();
+            gEditor.SetRendererTimingSnapshot(gSceneRenderer->GetRendererTimingSnapshot());
             const SystemUsageSnapshot usageSnapshot = gSystemUsageSampler.Update();
             gRendererStatisticsText.SetRuntimeStatistics(
                 usageSnapshot.CpuUsagePercent,
                 usageSnapshot.GpuUsagePercent,
                 usageSnapshot.RamUsagePercent,
-                gSceneRenderer.GetCamera().GetPosition(),
-                gSceneRenderer.GetCamera().GetRotation());
+                gSceneRenderer->GetCamera().GetPosition(),
+                gSceneRenderer->GetCamera().GetRotation());
             gEditor.SetResourceUsageSnapshot(BuildResourceUsageSnapshot(usageSnapshot));
             // Transition depth to PIXEL_SHADER_RESOURCE so the G-Buffer debug window
-            // in ImGui can sample it.  Restored to DEPTH_WRITE after ImGui renders.
-            gSceneRenderer.TransitionDepthForRead(commandList);
+            // in Qt UI can sample it.  Restored to DEPTH_WRITE after Qt UI renders.
+            gSceneRenderer->TransitionDepthForRead(commandList);
             ReportProgress(L"Initializing editor UI assets...");
+            // Hand the editor a pointer to the terrain renderer so the brush
+            // tool can paint heightmaps and pick terrain height.
+            gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
+            gEditor.SetSceneRenderer(gSceneRenderer.get());
             gEditor.Initialize(commandList);
         }
 
@@ -1201,39 +1688,29 @@ extern "C"
         const float clearColor[] = { 0.08f, 0.10f, 0.14f, 1.0f };
         commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
-        if (gImGuiReady)
+        if (gQtUiReady)
         {
-            ImGui_ImplDX12_NewFrame();
-            ImGui_ImplWin32_NewFrame();
-            ImGui::NewFrame();
-
-            if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0)
-            {
-                ImGui::DockSpaceOverViewport(
-                    ImGui::GetID("MainDockSpace"),
-                    ImGui::GetMainViewport(),
-                    ImGuiDockNodeFlags_PassthruCentralNode);
-                EnsureDefaultDockLayout();
-            }
-
             // Keep the editor menu rendering in its own file so this function only orchestrates the frame.
-            float cameraSpeed = gSceneRenderer.GetCameraMovementSpeed();
-            bool gridEnabled = gSceneRenderer.IsGridEnabled();
+            float cameraSpeed = gSceneRenderer->GetCameraMovementSpeed();
+            float viewDistanceMeters = gSceneRenderer->GetViewDistanceMeters();
+            bool gridEnabled = gSceneRenderer->IsGridEnabled();
             bool showViewportPlacementIcons = gEditor.GetShowViewportPlacementIcons();
             GBufferDebugTextureIds gbufferIds;
-            gbufferIds.Albedo   = gSceneRenderer.GetGBufferAlbedoTextureId();
-            gbufferIds.Normal   = gSceneRenderer.GetGBufferNormalTextureId();
-            gbufferIds.Material = gSceneRenderer.GetGBufferMaterialTextureId();
-            gbufferIds.Depth    = gSceneRenderer.GetGBufferDepthTextureId();
-            gbufferIds.GiAccum  = gSceneRenderer.GetGiAccumTextureId();
-            gbufferIds.PointShadowArray = gSceneRenderer.GetPointShadowDebugTextureId();
+            gbufferIds.Albedo   = gSceneRenderer->GetGBufferAlbedoTextureId();
+            gbufferIds.Normal   = gSceneRenderer->GetGBufferNormalTextureId();
+            gbufferIds.Material = gSceneRenderer->GetGBufferMaterialTextureId();
+            gbufferIds.Depth    = gSceneRenderer->GetGBufferDepthTextureId();
+            gbufferIds.GiAccum  = gSceneRenderer->GetGiAccumTextureId();
+            gbufferIds.PointShadowArray = gSceneRenderer->GetPointShadowDebugTextureId();
+            gUiBuildStart = std::chrono::steady_clock::now();
             RenderEditorMainMenu(
-                DX12Context_GetWindowHandle(),
+                QtUi::HostHandle(),
                 &gEditor,
-                gSceneRenderer.GetSceneTextureId(),
-                gSceneRenderer.GetLastErrorMessage(),
+                gSceneRenderer->GetSceneTextureId(),
+                gSceneRenderer->GetLastErrorMessage(),
                 gRendererStatisticsText.GetText(),
                 &cameraSpeed,
+                &viewDistanceMeters,
                 &gridEnabled,
                 &gShowRendererStatistics,
                 &showViewportPlacementIcons,
@@ -1241,42 +1718,104 @@ extern "C"
                 gEditor.GetShowLevelExplorerPanelPointer(),
                 gEditor.GetShowPropertiesPanelPointer(),
                 gEditor.GetShowResourceDebugPanelPointer(),
-                &gSceneRenderer.GetTaaSettings(),
-                &gSceneRenderer.GetDlssSettings(),
-                &gSceneRenderer.GetTimeOfDaySettings(),
-                &gSceneRenderer.GetRtgiSettings(),
-                &gSceneRenderer.GetProbeSettings(),
-                &gSceneRenderer.GetRtaoSettings(),
-                &gSceneRenderer.GetGtaoSettings(),
-                &gSceneRenderer.GetAgxSettings(),
-                &gSceneRenderer.GetVolumetricFogSettings(),
-                &gSceneRenderer.GetBloomSettings(),
-                &gSceneRenderer.GetPointShadowSettings(),
+                &gSceneRenderer->GetTaaSettings(),
+                &gSceneRenderer->GetSmaaSettings(),
+                &gSceneRenderer->GetMsaaSettings(),
+                &gSceneRenderer->GetSharpenSettings(),
+                &gSceneRenderer->GetDlssSettings(),
+                &gSceneRenderer->GetTimeOfDaySettings(),
+                &gSceneRenderer->GetWindSettings(),
+                &gSceneRenderer->GetGlobalIlluminationMode(),
+                &gSceneRenderer->GetRtgiSettings(),
+                &gSceneRenderer->GetRadianceCascadesSettings(),
+                &gSceneRenderer->GetProbeSettings(),
+                &gSceneRenderer->GetRtaoSettings(),
+                &gSceneRenderer->GetGtaoSettings(),
+                &gSceneRenderer->GetSsrSettings(),
+                &gSceneRenderer->GetChromaticAberrationSettings(),
+                &gSceneRenderer->GetAgxSettings(),
+                &gSceneRenderer->GetVolumetricFogSettings(),
+                &gSceneRenderer->GetVolumetricCloudSettings(),
+                &gSceneRenderer->GetBloomSettings(),
+                &gSceneRenderer->GetPointShadowSettings(),
                 &gbufferIds,
-                gAudioManagerPtr);
+                gAudioManagerPtr,
+                CompileShadersFromMainMenu,
+                gSceneRenderer->GetMsaaResolveTimeMs());
+            gSceneRenderer->SetViewDistanceMeters(viewDistanceMeters);
             gEditor.SetShowViewportGrid(gridEnabled);
             gEditor.SetSceneSettings(
-                &gSceneRenderer.GetTimeOfDaySettings(),
-                &gSceneRenderer.GetTaaSettings(),
-                &gSceneRenderer.GetDlssSettings(),
-                &gSceneRenderer.GetRtgiSettings(),
-                &gSceneRenderer.GetRtaoSettings(),
-                &gSceneRenderer.GetGtaoSettings(),
-                &gSceneRenderer.GetAgxSettings(),
-                &gSceneRenderer.GetVolumetricFogSettings(),
-                &gSceneRenderer.GetBloomSettings());
+                &gSceneRenderer->GetTimeOfDaySettings(),
+                &gSceneRenderer->GetTaaSettings(),
+                &gSceneRenderer->GetSmaaSettings(),
+                &gSceneRenderer->GetSharpenSettings(),
+                &gSceneRenderer->GetDlssSettings(),
+                &gSceneRenderer->GetGlobalIlluminationMode(),
+                &gSceneRenderer->GetRtgiSettings(),
+                &gSceneRenderer->GetRadianceCascadesSettings(),
+                &gSceneRenderer->GetRtaoSettings(),
+                &gSceneRenderer->GetGtaoSettings(),
+                &gSceneRenderer->GetSsrSettings(),
+                &gSceneRenderer->GetChromaticAberrationSettings(),
+                &gSceneRenderer->GetAgxSettings(),
+                &gSceneRenderer->GetVolumetricFogSettings(),
+                &gSceneRenderer->GetVolumetricCloudSettings(),
+                &gSceneRenderer->GetBloomSettings());
             gEditor.SetShowViewportPlacementIcons(showViewportPlacementIcons);
-            gEditor.SetWireframeEnabled(gSceneRenderer.IsWireframeEnabled());
+            gEditor.SetWireframeEnabled(gSceneRenderer->IsWireframeEnabled());
             gEditor.Draw(
-                gSceneRenderer.GetSceneTextureHandle(),
-                gSceneRenderer.GetCamera(),
-                gSceneRenderer.GetLastErrorMessage(),
+                gSceneRenderer->GetSceneTextureHandle(),
+                gSceneRenderer->GetCamera(),
+                gSceneRenderer->GetLastErrorMessage(),
                 gRendererStatisticsText.GetText(),
                 gShowRendererStatistics,
                 gAudioManagerPtr);
-            gSceneRenderer.SetCameraMovementSpeed(cameraSpeed);
-            gSceneRenderer.SetGridEnabled(gEditor.GetShowViewportGrid());
-            gSceneRenderer.SetWireframeEnabled(gEditor.GetWireframeEnabled());
+
+            int viewportContentWidth = 0;
+            int viewportContentHeight = 0;
+            if (!gSceneRenderer->GetDlssSettings().Enabled
+                && gEditor.GetLastViewportContentResolution(viewportContentWidth, viewportContentHeight))
+            {
+                const UINT requestedWidth = static_cast<UINT>(viewportContentWidth);
+                const UINT requestedHeight = static_cast<UINT>(viewportContentHeight);
+                if (requestedWidth != gSceneRenderer->GetSceneWidth() || requestedHeight != gSceneRenderer->GetSceneHeight())
+                {
+                    const bool pendingSizeChanged =
+                        !gHasPendingViewportResize
+                        || gPendingViewportWidth != viewportContentWidth
+                        || gPendingViewportHeight != viewportContentHeight;
+                    const auto now = std::chrono::steady_clock::now();
+                    if (pendingSizeChanged)
+                    {
+                        gPendingViewportWidth = viewportContentWidth;
+                        gPendingViewportHeight = viewportContentHeight;
+                        gPendingViewportResizeSince = now;
+                        gHasPendingViewportResize = true;
+                    }
+
+                    constexpr int kImmediateResizeDeltaPixels = 96;
+                    constexpr auto kViewportResizeDebounce = std::chrono::milliseconds(120);
+                    const bool largeDelta =
+                        std::abs(static_cast<int>(requestedWidth) - static_cast<int>(gSceneRenderer->GetSceneWidth())) >= kImmediateResizeDeltaPixels
+                        || std::abs(static_cast<int>(requestedHeight) - static_cast<int>(gSceneRenderer->GetSceneHeight())) >= kImmediateResizeDeltaPixels;
+                    const bool debounceElapsed = gHasPendingViewportResize
+                        && (now - gPendingViewportResizeSince) >= kViewportResizeDebounce;
+                    const bool userStillDraggingDock = QtUi::IsMouseDown(QtUiMouseButton_Left);
+                    if (gHasPendingViewportResize && !userStillDraggingDock && (largeDelta || debounceElapsed))
+                    {
+                        gEditor.RequestViewportResolution(gPendingViewportWidth, gPendingViewportHeight);
+                        gHasPendingViewportResize = false;
+                    }
+                }
+                else
+                {
+                    gHasPendingViewportResize = false;
+                }
+            }
+
+            gSceneRenderer->SetCameraMovementSpeed(cameraSpeed);
+            gSceneRenderer->SetGridEnabled(gEditor.GetShowViewportGrid());
+            gSceneRenderer->SetWireframeEnabled(gEditor.GetWireframeEnabled());
 
             // Handle screenshot capture if requested
             if (gEditor.GetScreenshotRequested())
@@ -1301,7 +1840,7 @@ extern "C"
                     std::filesystem::path outputPath = std::filesystem::path(folder) / fileNameBuilder.str();
                     outputPath.make_preferred();
 
-                    ID3D12Resource* sceneTexture = gSceneRenderer.GetSceneColorTargetResource();
+                    ID3D12Resource* sceneTexture = gSceneRenderer->GetSceneColorTargetResource();
                     if (sceneTexture && SaveScreenshotToPNG(sceneTexture, outputPath.string()))
                     {
                         OutputDebugStringA(("Screenshot saved to: " + outputPath.string() + "\n").c_str());
@@ -1314,13 +1853,45 @@ extern "C"
                 gEditor.ClearScreenshotRequest();
             }
 
-            ImGui::Render();
+            if (gUiBuildStart.time_since_epoch().count() != 0)
+            {
+                gUiBuildMilliseconds =
+                    std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - gUiBuildStart).count();
+            }
+            QtUi::EndFrame();
+            gRendererStatisticsText.SetUiFrameMilliseconds(QtUi::FrameMilliseconds());
+            gTailStart = std::chrono::steady_clock::now();
+            gRendererStatisticsText.SetFrameBreakdown(
+                gRenderMilliseconds, gOutsideMilliseconds, gTailMilliseconds);
+            gRendererStatisticsText.SetUiPhases(
+                gSceneMilliseconds, gUiBuildMilliseconds, QtUi::EventMilliseconds());
+            unsigned qtUpdates = 0, qtLayouts = 0, qtPaints = 0, topPainterCount = 0;
+            const char* topPainter = nullptr;
+            QtUi::EventCounts(qtUpdates, qtLayouts, qtPaints, topPainter, topPainterCount);
+            gRendererStatisticsText.SetQtEventCounts(
+                qtUpdates, qtLayouts, qtPaints, topPainter, topPainterCount, QtUi::EventTypes());
 
             ID3D12DescriptorHeap* descriptorHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
             commandList->SetDescriptorHeaps(1, descriptorHeaps);
-            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+            RECT viewportRect{};
+            GetClientRect(QtUi::ViewportHandle(), &viewportRect);
+            QtViewportRenderer::Draw(commandList, gSceneRenderer->GetSceneTextureId(), viewportRect.right, viewportRect.bottom);
+
+            // The game UI composites over the scene here rather than through the Qt UI
+            // layer: the viewport is a native surface presented by this blit, and the Qt
+            // draw list can only paint file-backed pixmaps, not live GPU textures.
+            if (gSceneRenderer->IsGameUiActive())
+            {
+                QtViewportRenderer::DrawOverlay(
+                    commandList,
+                    gSceneRenderer->GetRmlUiRenderer().GetOutputTextureId(),
+                    viewportRect.right,
+                    viewportRect.bottom);
+            }
+
+            QtViewportRenderer::DrawDebugViews(commandList);
             // Restore depth to DEPTH_WRITE for the next frame's geometry pass.
-            gSceneRenderer.TransitionDepthAfterRead(commandList);
+            gSceneRenderer->TransitionDepthAfterRead(commandList);
         }
 
         // Transition back to present state so swap chain can display the frame.
@@ -1334,31 +1905,55 @@ extern "C"
         if (!DX12Context_EndFrame(frameIndex))
         {
             const char* contextError = DX12Context_GetLastError();
+            DX12Context_AbortFrame();
             SetRendererError(contextError != nullptr
                 ? std::string("RendererDX12_Render failed while presenting a frame: ") + contextError
                 : "RendererDX12_Render failed while presenting a frame.");
             return false;
         }
 
+        QtViewportRenderer::PresentDebugViews();
         ReportProgress(L"Initial frame presented.");
         gBackBufferHasBeenPresented[frameIndex] = true;
 
+        // One syscall a frame buys the guarantee that a process killed outright
+        // still leaves every line up to the previous frame on disk.
+        PteroLog::Flush();
+
         return true;
+        }
+        catch (const std::exception& exception)
+        {
+            DX12Context_AbortFrame();
+            PTERO_LOG_ERROR("Renderer", "Frame aborted after an exception: %s", exception.what());
+            SetRendererError(std::string("RendererDX12_Render aborted the frame after an exception: ") + exception.what());
+            return false;
+        }
+        catch (...)
+        {
+            DX12Context_AbortFrame();
+            PTERO_LOG_ERROR("Renderer", "Frame aborted after an unknown exception.");
+            SetRendererError("RendererDX12_Render aborted the frame after an unknown exception.");
+            return false;
+        }
     }
 
     __declspec(dllexport) bool __stdcall RendererDX12_HandleWindowMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
-        if (!gImGuiReady)
+        if (!gQtUiReady)
         {
             return false;
         }
 
-        return ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam) != 0;
+        return false; // Qt dispatches its native child-window events through QApplication.
     }
 
     __declspec(dllexport) bool __stdcall RendererDX12_Resize(UINT width, UINT height)
     {
-        if (!DX12Context_Resize(width, height))
+        QtUi::ResizeHost(width, height);
+        RECT viewportRect{};
+        GetClientRect(QtUi::ViewportHandle(), &viewportRect);
+        if (!DX12Context_Resize(viewportRect.right, viewportRect.bottom))
         {
             const char* contextError = DX12Context_GetLastError();
             SetRendererError(contextError != nullptr
@@ -1374,11 +1969,31 @@ extern "C"
 
     __declspec(dllexport) void __stdcall RendererDX12_Shutdown()
     {
+        ReportProgress(L"Waiting for renderer shutdown...");
+        gSystemUsageSampler.Stop();
+        DX12Context_WaitForGPU();
+        ReportProgress(L"Releasing editor resources...");
         gEditor.Shutdown();
-        gSceneRenderer.Shutdown();
-        ShutdownImGui();
+        ReportProgress(L"Releasing scene resources...");
+        if (gSceneRenderer)
+        {
+            gSceneRenderer->Shutdown();
+            gSceneRenderer.reset();
+        }
+        gEditor.SetSceneRenderer(nullptr);
+        gEditor.SetTerrainRenderer(nullptr);
+        gEditor.GetEntities().clear();
+        ReportProgress(L"Releasing Qt viewport resources...");
+        QtViewportRenderer::Shutdown();
+        gQtUiReady = false;
+        ReportProgress(L"Releasing DX12 context...");
         DX12Context_Shutdown();
+        ReportProgress(L"Closing Qt interface...");
+        QtUi::Shutdown();
+        ReportProgress(L"Renderer shutdown complete.");
+        StopWatchdog();
         gBackBufferHasBeenPresented.fill(false);
+        PteroLog::Shutdown("editor closed");
     }
 
     __declspec(dllexport) const char* __stdcall RendererDX12_GetLastError()
@@ -1388,7 +2003,7 @@ extern "C"
             return gRendererLastError.c_str();
         }
 
-        const char* sceneError = gSceneRenderer.GetLastErrorMessage();
+        const char* sceneError = gSceneRenderer ? gSceneRenderer->GetLastErrorMessage() : nullptr;
         return (sceneError != nullptr && sceneError[0] != '\0') ? sceneError : nullptr;
     }
 }
