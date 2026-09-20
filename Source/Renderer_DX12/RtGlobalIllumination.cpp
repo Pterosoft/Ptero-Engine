@@ -427,7 +427,7 @@ void RtGlobalIllumination::Shutdown()
     mOutputBufferInSrvState = false;
     mSpecularBufferInSrvState = false;
     mUploadRingIdx = 0;
-    for (std::vector<ComPtr<ID3D12Resource>>& slot : mPendingUploads)
+    for (std::vector<ComPtr<ID3D12Resource>>& slot : mPendingReleases)
         slot.clear();
     mConstantFrameSlot = 0;
     mSceneSignature = 0;
@@ -1454,7 +1454,7 @@ void RtGlobalIllumination::UploadConstants(
 
 bool RtGlobalIllumination::CreateGpuBuffer(ID3D12Device* dev, UINT64 size,
     D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
-    ComPtr<ID3D12Resource>& out)
+    ComPtr<ID3D12Resource>& out, const wchar_t* debugName)
 {
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
@@ -1463,12 +1463,18 @@ bool RtGlobalIllumination::CreateGpuBuffer(ID3D12Device* dev, UINT64 size,
     d.Width = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
     d.Format = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
     d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = flags;
-    return SUCCEEDED(dev->CreateCommittedResource(
-        &hp, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
+    if (FAILED(dev->CreateCommittedResource(
+        &hp, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out))))
+    {
+        return false;
+    }
+    if (debugName != nullptr)
+        out->SetName(debugName);
+    return true;
 }
 
 bool RtGlobalIllumination::CreateUploadBuf(ID3D12Device* dev, UINT64 size,
-    ComPtr<ID3D12Resource>& out)
+    ComPtr<ID3D12Resource>& out, const wchar_t* debugName)
 {
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
     hp.CreationNodeMask = 1; hp.VisibleNodeMask = 1;
@@ -1477,9 +1483,15 @@ bool RtGlobalIllumination::CreateUploadBuf(ID3D12Device* dev, UINT64 size,
     d.Width = size; d.Height = 1; d.DepthOrArraySize = 1; d.MipLevels = 1;
     d.Format = DXGI_FORMAT_UNKNOWN; d.SampleDesc.Count = 1;
     d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; d.Flags = D3D12_RESOURCE_FLAG_NONE;
-    return SUCCEEDED(dev->CreateCommittedResource(
+    if (FAILED(dev->CreateCommittedResource(
         &hp, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&out)));
+        nullptr, IID_PPV_ARGS(&out))))
+    {
+        return false;
+    }
+    if (debugName != nullptr)
+        out->SetName(debugName);
+    return true;
 }
 
 // -----------------------------------------------------------------------
@@ -1589,8 +1601,8 @@ void RtGlobalIllumination::BuildTlas(
         mSceneSignature = signature;
     }
 
-    // Upload ring, one slot per frame in flight: advance, then release the
-    // oldest uploads.
+    // Deferred-release ring, one slot per frame in flight: advance, then drop the
+    // resources replaced three scene rebuilds ago.
     //
     // This used to be two slots, on the assumption that the GPU finishes frame
     // N-1 before frame N+1 is submitted. That does not hold - the engine queues
@@ -1598,7 +1610,7 @@ void RtGlobalIllumination::BuildTlas(
     // freed a BLAS's vertex or index upload while an earlier frame's
     // acceleration-structure build was still reading it.
     mUploadRingIdx = (mUploadRingIdx + 1u) % kFramesInFlight;
-    mPendingUploads[mUploadRingIdx].clear();
+    mPendingReleases[mUploadRingIdx].clear();
 
     // Rebuild per-instance info each frame (instance order can change).
     mCpuInstanceInfo.clear();
@@ -1734,7 +1746,12 @@ void RtGlobalIllumination::BuildTlas(
     // in the shared geometry pools.  Hoisted out of the entity loop so the
     // vegetation pass below builds its acceleration structures through exactly
     // the same path.  Returns false when the mesh has no usable geometry.
-    const auto ensureBlas = [&](const Mesh* mesh, const BlasKey& meshKey) -> bool
+    // `owner`, when the caller has one, is stored on the entry so the address the
+    // key is built from cannot be recycled while the entry lives. Vegetation
+    // passes null: its meshes belong to the vegetation layers, which outlive a
+    // play session, so they are not part of the level swap that churns addresses.
+    const auto ensureBlas = [&](const Mesh* mesh, const BlasKey& meshKey,
+                                const std::shared_ptr<const Mesh>& owner) -> bool
     {
         if (mBlasCache.find(meshKey) != mBlasCache.end())
             return true;
@@ -1748,8 +1765,8 @@ void RtGlobalIllumination::BuildTlas(
             const UINT64 ibSize = indices.size()  * sizeof(uint32_t);
 
             ComPtr<ID3D12Resource> vbUp, ibUp;
-            if (!CreateUploadBuf(device.Get(), vbSize, vbUp)) return false;
-            if (!CreateUploadBuf(device.Get(), ibSize, ibUp)) return false;
+            if (!CreateUploadBuf(device.Get(), vbSize, vbUp, L"RtGI_BlasVertexUpload")) return false;
+            if (!CreateUploadBuf(device.Get(), ibSize, ibUp, L"RtGI_BlasIndexUpload")) return false;
 
             void* m = nullptr;
             vbUp->Map(0, nullptr, &m); std::memcpy(m, verts.data(),   vbSize); vbUp->Unmap(0, nullptr);
@@ -1777,11 +1794,12 @@ void RtGlobalIllumination::BuildTlas(
             device->GetRaytracingAccelerationStructurePrebuildInfo(&inp, &pre);
 
             BlasEntry& e = mBlasCache[meshKey];
+            e.MeshOwner = owner;
             if (!CreateGpuBuffer(device.Get(), pre.ScratchDataSizeInBytes,
-                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch)) return false;
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch, L"RtGI_BlasScratch")) return false;
             if (!CreateGpuBuffer(device.Get(), pre.ResultDataMaxSizeInBytes,
                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result)) return false;
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result, L"RtGI_Blas")) return false;
 
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bd{};
             bd.Inputs                           = inp;
@@ -1812,8 +1830,8 @@ void RtGlobalIllumination::BuildTlas(
 
             mGeometryDirty = true;
 
-            mPendingUploads[mUploadRingIdx].push_back(std::move(vbUp));
-            mPendingUploads[mUploadRingIdx].push_back(std::move(ibUp));
+            mPendingReleases[mUploadRingIdx].push_back(std::move(vbUp));
+            mPendingReleases[mUploadRingIdx].push_back(std::move(ibUp));
         }
 
         return true;
@@ -1827,7 +1845,7 @@ void RtGlobalIllumination::BuildTlas(
         const Mesh* mesh = entity.Mesh->MeshAsset.get();
         const BlasKey meshKey{ mesh, false };
 
-        if (!ensureBlas(mesh, meshKey)) continue;
+        if (!ensureBlas(mesh, meshKey, entity.Mesh->MeshAsset)) continue;
 
         const auto it = mBlasCache.find(meshKey);
         if (it == mBlasCache.end() || !it->second.Result) continue;
@@ -1926,7 +1944,7 @@ void RtGlobalIllumination::BuildTlas(
                 continue;
 
             const BlasKey meshKey{ batch.MeshAsset, false };
-            if (!ensureBlas(batch.MeshAsset, meshKey)) continue;
+            if (!ensureBlas(batch.MeshAsset, meshKey, nullptr)) continue;
 
             const auto blasIt = mBlasCache.find(meshKey);
             if (blasIt == mBlasCache.end() || !blasIt->second.Result) continue;
@@ -2001,8 +2019,12 @@ void RtGlobalIllumination::BuildTlas(
     const UINT64 instRingSize = instSize * kFramesInFlight;
     if (!mInstanceDescBuffer || mInstanceDescBuffer->GetDesc().Width < instRingSize)
     {
-        mInstanceDescBuffer.Reset();
-        CreateUploadBuf(device.Get(), instRingSize, mInstanceDescBuffer);
+        // Same reasoning as the pools below: earlier frames' TLAS builds name this
+        // buffer's address, so growing it has to retire the old one through the
+        // ring rather than free it under a GPU that is still three frames behind.
+        if (mInstanceDescBuffer)
+            mPendingReleases[mUploadRingIdx].push_back(std::move(mInstanceDescBuffer));
+        CreateUploadBuf(device.Get(), instRingSize, mInstanceDescBuffer, L"RtGI_TlasInstanceDescs");
     }
     const UINT64 instOffset = instSize * mUploadRingIdx;
     void* mapped = nullptr;
@@ -2020,18 +2042,25 @@ void RtGlobalIllumination::BuildTlas(
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasPre{};
     device->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInp, &tlasPre);
 
+    // Both grow when the instance count does - which is exactly what pressing Play
+    // does, since the play level is a different set of entities from the one being
+    // edited. Earlier frames' ray dispatches are already recorded against the old
+    // TLAS's address and their builds against the old scratch, so neither can be
+    // released here; they go to the deferred list like everything else.
     if (!mTlas || mTlas->GetDesc().Width < tlasPre.ResultDataMaxSizeInBytes)
     {
-        mTlas.Reset();
+        if (mTlas)
+            mPendingReleases[mUploadRingIdx].push_back(std::move(mTlas));
         CreateGpuBuffer(device.Get(), tlasPre.ResultDataMaxSizeInBytes,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, mTlas);
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, mTlas, L"RtGI_Tlas");
     }
     if (!mTlasScratch || mTlasScratch->GetDesc().Width < tlasPre.ScratchDataSizeInBytes)
     {
-        mTlasScratch.Reset();
+        if (mTlasScratch)
+            mPendingReleases[mUploadRingIdx].push_back(std::move(mTlasScratch));
         CreateGpuBuffer(device.Get(), tlasPre.ScratchDataSizeInBytes,
-            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, mTlasScratch);
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, mTlasScratch, L"RtGI_TlasScratch");
     }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tlasDesc{};
@@ -2084,21 +2113,36 @@ void RtGlobalIllumination::BuildTlas(
         UINT                    stride,
         ComPtr<ID3D12Resource>& gpuBuf,
         void**                  mappedPtr,
-        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu)
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu,
+        const wchar_t*          debugName)
     {
         if (byteSize == 0) return;
 
         const UINT64 ringBytes = byteSize * kFramesInFlight;
 
         // Recreate if missing or undersized.
+        //
+        // Ringing the slices stopped the CPU overwriting what the GPU was reading,
+        // but growing the buffer is the other half of the same problem: the pool
+        // grows the moment a mesh the scene has not raytraced before appears, and
+        // the outgoing resource is still the one named by the SRVs that up to three
+        // already-submitted frames were recorded against. Releasing it here freed
+        // GPU memory the GPU was about to read, which is a page fault and a hung
+        // device several frames later - with nothing in the log between the mesh
+        // that grew the pool and the hang. So it goes to the same ring the BLAS
+        // uploads use and dies when the ring next comes round to this slot, by
+        // which time every frame that could still name it has retired.
         if (!gpuBuf || gpuBuf->GetDesc().Width < ringBytes)
         {
-            if (gpuBuf && *mappedPtr)
-                gpuBuf->Unmap(0, nullptr);
-            gpuBuf.Reset();
+            if (gpuBuf)
+            {
+                if (*mappedPtr)
+                    gpuBuf->Unmap(0, nullptr);
+                mPendingReleases[mUploadRingIdx].push_back(std::move(gpuBuf));
+            }
             *mappedPtr = nullptr;
 
-            CreateUploadBuf(rawDevice, ringBytes, gpuBuf);
+            CreateUploadBuf(rawDevice, ringBytes, gpuBuf, debugName);
             gpuBuf->Map(0, nullptr, mappedPtr);
         }
 
@@ -2128,7 +2172,8 @@ void RtGlobalIllumination::BuildTlas(
             sizeof(GpuPackedVertex),
             mVertexBuffer,
             &mMappedVertices,
-            mVertexSrvCpu);
+            mVertexSrvCpu,
+            L"RtGI_VertexPool");
 
         SyncUploadBuffer(
             mCpuIndices.data(),
@@ -2136,7 +2181,8 @@ void RtGlobalIllumination::BuildTlas(
             sizeof(uint32_t),
             mIndexBuffer,
             &mMappedIndices,
-            mIndexSrvCpu);
+            mIndexSrvCpu,
+            L"RtGI_IndexPool");
 
         mGeometryDirty = false;
     }
@@ -2149,7 +2195,8 @@ void RtGlobalIllumination::BuildTlas(
             sizeof(GpuInstanceInfo),
             mInstanceInfoBuffer,
             &mMappedInstanceInfo,
-            mInstanceInfoSrvCpu);
+            mInstanceInfoSrvCpu,
+            L"RtGI_InstanceInfo");
     }
 
     if (!mCpuMaterialRanges.empty())
@@ -2160,7 +2207,8 @@ void RtGlobalIllumination::BuildTlas(
             sizeof(GpuMaterialRange),
             mMaterialRangeBuffer,
             &mMappedMaterialRanges,
-            mMaterialRangeSrvCpu);
+            mMaterialRangeSrvCpu,
+            L"RtGI_MaterialRanges");
     }
 
     RefreshMaterialTextureDescriptors();

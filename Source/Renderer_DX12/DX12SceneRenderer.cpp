@@ -3,6 +3,8 @@
 #include "../QtUi/QtUi.h"
 
 #include "..\System\include\System\AssetManager.h"
+#include "System/PteroLog.h"
+#include "AudioManager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -356,6 +358,16 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             mAgxSettings.Enabled = false;
         }
 
+        // Initialize histogram auto-exposure. Non-fatal: the tonemapper falls
+        // back to the manual exposure if the meter is unavailable.
+        ReportProgress(L"Initializing auto exposure...");
+        if (!mAutoExposure.Initialize())
+        {
+            OutputDebugStringA("DX12SceneRenderer: auto exposure initialization failed – manual exposure only.\n");
+            if (mAutoExposure.GetLastErrorMessage())
+                OutputDebugStringA(mAutoExposure.GetLastErrorMessage());
+        }
+
         // Initialize the sky renderer.  Non-fatal if it fails.
         ReportProgress(L"Initializing sky renderer...");
         if (!mSkyRenderer.Initialize(SceneColorFormat, SceneDepthFormat))
@@ -651,8 +663,6 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // Gather point lights from the entity list and upload to the deferred lighting pass.
-    VolumetricFogRenderer::FogPointLight fogPointLights[VolumetricFogRenderer::kMaxPointLights]{};
-    uint32_t numFogPointLights = 0;
     if (mEntities != nullptr)
     {
         PTERO_SCOPED_PASS_TIMER("Scene", "Light gather");
@@ -731,24 +741,9 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             gpu.RectHalfHeight = pl.RectHeight * 0.5f;
             gpu.RectTwoSided = pl.RectTwoSided ? 1.0f : 0.0f;
 
-            if (pl.AffectVolumetricFog && numFogPointLights < VolumetricFogRenderer::kMaxPointLights)
-            {
-                VolumetricFogRenderer::FogPointLight& fogLight = fogPointLights[numFogPointLights++];
-                fogLight.Position[0] = entity.Transform.Position.x;
-                fogLight.Position[1] = entity.Transform.Position.y;
-                fogLight.Position[2] = entity.Transform.Position.z;
-                fogLight.Radius = gpu.Radius;
-                fogLight.Color[0] = gpu.Color.x;
-                fogLight.Color[1] = gpu.Color.y;
-                fogLight.Color[2] = gpu.Color.z;
-                fogLight.InvRadiusSq = gpu.InvRadiusSq;
-                fogLight.Direction[0] = gpu.Direction.x;
-                fogLight.Direction[1] = gpu.Direction.y;
-                fogLight.Direction[2] = gpu.Direction.z;
-                fogLight.LightType = gpu.LightType;
-                fogLight.SpotCosInner = gpu.SpotCosInner;
-                fogLight.SpotCosOuter = gpu.SpotCosOuter;
-            }
+            // The fog reads this very record later, so all it needs here is
+            // whether the artist let this light into the medium.
+            mCachedPointLightAffectsFog[entityLightIndex] = pl.AffectVolumetricFog;
         }
 
         // Append the particle systems' emissive proxy lights. They are ordinary
@@ -789,18 +784,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
             lightGiScale[lightIndex] = proxy.GiContribution;
 
-            if (proxy.AffectVolumetricFog && numFogPointLights < VolumetricFogRenderer::kMaxPointLights)
-            {
-                VolumetricFogRenderer::FogPointLight& fogLight = fogPointLights[numFogPointLights++];
-                fogLight.Position[0] = proxy.Position.x;
-                fogLight.Position[1] = proxy.Position.y;
-                fogLight.Position[2] = proxy.Position.z;
-                fogLight.Radius = proxy.Radius;
-                fogLight.Color[0] = proxy.Color.x;
-                fogLight.Color[1] = proxy.Color.y;
-                fogLight.Color[2] = proxy.Color.z;
-                fogLight.InvRadiusSq = proxy.InvRadiusSq;
-            }
+            mCachedPointLightAffectsFog[lightIndex] = proxy.AffectVolumetricFog;
         }
 
         mDeferredLightingPass.SetPointLights(gpuLights, numLights);
@@ -1122,12 +1106,22 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     const bool rtaoWillRun = mRtaoSettings.Enabled && mEntities != nullptr;
     const bool gtaoWillRun = mGtaoSettings.Enabled;
     const bool volumetricFogWillRun = mVolumetricFogSettings.Enabled && mVolumetricFogRenderer.IsInitialized();
+
+    // The fog takes its indirect light from the radiance probe grid, which is
+    // the engine's only world-space irradiance field - the RTGI accumulation
+    // buffer is screen-space and has nothing to say about a froxel behind a
+    // wall. So the grid may need to run for the fog alone, without probes
+    // taking over surface GI from RTGI the way mProbeSettings.Enabled does.
+    const bool fogWantsProbeGi = volumetricFogWillRun
+        && mVolumetricFogSettings.GiIntensity > 0.0f
+        && mEntities != nullptr;
+    const bool probeGridWillRun = probesEnabled || fogWantsProbeGi;
     // Clouds are part of the sky, so they go away with it rather than being left to
     // composite an unlit black layer over the scene.
     const bool volumetricCloudsWillRun = mVolumetricCloudSettings.Enabled
         && mVolumetricCloudRenderer.IsInitialized()
         && mTimeOfDaySettings.Enabled;
-    if (rtgiWillRun || rtaoWillRun || gtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || probesEnabled || probesDebugEnabled)
+    if (rtgiWillRun || rtaoWillRun || gtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || probeGridWillRun || probesDebugEnabled)
     {
         D3D12_RESOURCE_BARRIER toNonPixel[3];
         for (UINT i = 0; i < 3; ++i)
@@ -1150,6 +1144,12 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         }
     }
 
+    // Filled in by the radiance probe block further down, which runs before the
+    // fog is dispatched. Left null when no grid is available, in which case the
+    // fog simply injects without indirect light.
+    D3D12_GPU_DESCRIPTOR_HANDLE fogProbeSrv{};
+    XMFLOAT3 fogProbeOrigin{};
+
     const auto dispatchVolumetricFog = [&]()
     {
         if (!volumetricFogWillRun)
@@ -1160,50 +1160,83 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
         mVolumetricFogRenderer.EnsureSize(mSceneWidth, mSceneHeight, mVolumetricFogSettings);
 
-        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> cmdList4;
-        if (SUCCEEDED(commandList->QueryInterface(IID_PPV_ARGS(&cmdList4))))
+        const XMMATRIX fogViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
+        XMFLOAT4X4 invVP;
+        XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, fogViewProjection)));
+
+        XMFLOAT4X4 currJitteredVP;
+        XMStoreFloat4x4(&currJitteredVP, XMMatrixTranspose(fogViewProjection));
+
+        const XMFLOAT3 camPos = mCamera.GetPosition();
+
+        // Compact the scene's lights down to the ones the artist let into the
+        // medium. mCachedPointLights is read rather than a parallel array built
+        // at gather time so the fog gets the shadow indices the point shadow
+        // pass wrote into it, and so its falloff is driven by the same record
+        // the walls are lit from. There is a fog slot per scene light, so this
+        // can no longer run out and quietly drop one.
+        VolumetricFogRenderer::FogPointLight fogLights[VolumetricFogRenderer::kMaxPointLights]{};
+        uint32_t numFogLights = 0;
+        for (int i = 0; i < mNumCachedPointLights; ++i)
         {
-            if (mRtgiRenderer.IsInitialized() && mRtgiRenderer.IsTlasReady())
-            {
-                const XMMATRIX fogViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
-                XMFLOAT4X4 invVP;
-                XMStoreFloat4x4(&invVP, XMMatrixTranspose(XMMatrixInverse(nullptr, fogViewProjection)));
-
-                XMFLOAT4X4 currJitteredVP;
-                XMStoreFloat4x4(&currJitteredVP, XMMatrixTranspose(fogViewProjection));
-
-                const XMFLOAT3 camPos = mCamera.GetPosition();
-
-                mVolumetricFogRenderer.Dispatch(
-                    cmdList4.Get(),
-                    mDepthSrvGpuHandle,
-                    mVolumetricFogSettings,
-                    invVP.m[0],
-                    currJitteredVP.m[0],
-                    &camPos.x,
-                    0.1f,
-                    mVolumetricFogSettings.MaxDistance,
-                    mHosekResult.SunDirX,
-                    mHosekResult.SunDirY,
-                    mHosekResult.SunDirZ,
-                    sunR,
-                    sunG,
-                    sunB,
-                    skyR,
-                    skyG,
-                    skyB,
-                    fogPointLights,
-                    numFogPointLights);
-
-                mDeferredLightingPass.SetVolumetricFogSrv(
-                    mVolumetricFogRenderer.GetIntegratedFogSrv(),
-                    &mVolumetricFogSettings);
-            }
-            else
-            {
-                mDeferredLightingPass.SetVolumetricFogSrv({}, nullptr);
-            }
+            if (mCachedPointLightAffectsFog[i])
+                fogLights[numFogLights++] = mCachedPointLights[i];
         }
+
+        VolumetricFogRenderer::FrameInputs fogInputs{};
+        fogInputs.ViewProjInv = invVP.m[0];
+        fogInputs.CurrViewProj = currJitteredVP.m[0];
+        fogInputs.CameraPos = &camPos.x;
+        fogInputs.NearPlane = 0.1f;
+        fogInputs.FarPlane = mVolumetricFogSettings.MaxDistance;
+        fogInputs.SunDir[0] = mHosekResult.SunDirX;
+        fogInputs.SunDir[1] = mHosekResult.SunDirY;
+        fogInputs.SunDir[2] = mHosekResult.SunDirZ;
+        fogInputs.SunColor[0] = sunR;
+        fogInputs.SunColor[1] = sunG;
+        fogInputs.SunColor[2] = sunB;
+        fogInputs.SkyColor[0] = skyR;
+        fogInputs.SkyColor[1] = skyG;
+        fogInputs.SkyColor[2] = skyB;
+        fogInputs.PointLights = fogLights;
+        fogInputs.NumPointLights = numFogLights;
+
+        if (fogProbeSrv.ptr != 0)
+        {
+            fogInputs.ProbeSrv = fogProbeSrv;
+            fogInputs.ProbeGridX = static_cast<uint32_t>((std::max)(mProbeSettings.GridX, 0));
+            fogInputs.ProbeGridY = static_cast<uint32_t>((std::max)(mProbeSettings.GridY, 0));
+            fogInputs.ProbeGridZ = static_cast<uint32_t>((std::max)(mProbeSettings.GridZ, 0));
+            fogInputs.ProbeSpacing = mProbeSettings.Spacing;
+            fogInputs.ProbeOrigin[0] = fogProbeOrigin.x;
+            fogInputs.ProbeOrigin[1] = fogProbeOrigin.y;
+            fogInputs.ProbeOrigin[2] = fogProbeOrigin.z;
+        }
+
+        // Shadowed shafts. The cubemaps were rendered long before this point in
+        // the frame and are left in ALL_SHADER_RESOURCE precisely so a compute
+        // pass can read them.
+        if (mPointShadowMapRenderer.IsInitialized() && mPointShadowMapRenderer.GetActiveLightCount() > 0)
+        {
+            fogInputs.PointShadowSrv = mPointShadowMapRenderer.GetShadowTextureArraySrvGpuHandle();
+            fogInputs.PointShadowFaceViewProj = mPointShadowMapRenderer.GetAllFaceViewProjections();
+            fogInputs.PointShadowLightCount = mPointShadowMapRenderer.GetActiveLightCount();
+            fogInputs.PointShadowMapSize = static_cast<float>(mPointShadowMapRenderer.GetMapSize());
+            fogInputs.PointShadowBias = mPointShadowMapRenderer.GetShadowBias();
+        }
+
+        // No ray tracing anywhere in this pass, so no TLAS gate and no
+        // ID3D12GraphicsCommandList4. Requiring one used to make the fog vanish
+        // with no diagnostic whenever RTGI was off or its TLAS was not ready.
+        mVolumetricFogRenderer.Dispatch(
+            commandList,
+            mDepthSrvGpuHandle,
+            mVolumetricFogSettings,
+            fogInputs);
+
+        mDeferredLightingPass.SetVolumetricFogSrv(
+            mVolumetricFogRenderer.GetIntegratedFogSrv(),
+            &mVolumetricFogSettings);
     };
 
     if (mRtgiSettings.Enabled && mEntities != nullptr)
@@ -1234,8 +1267,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // RTAO, volumetric fog, and probe updates. Rebuilding multiple times in the
     // same frame can retire BLAS upload buffers too early when new geometry is
     // added, which can hang the GPU.
+    // The fog pass itself traces nothing; it is in this list only through the
+    // probe grid it may ask for.
     const bool sharedTlasNeeded = mEntities != nullptr
-        && (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || probesEnabled);
+        && (rtgiWillRun || rtaoWillRun || probeGridWillRun);
     if (sharedTlasNeeded)
     {
         PTERO_SCOPED_PASS_TIMER("GI", "TLAS build");
@@ -1355,9 +1390,17 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // PASS 2b – Radiance Probe Update
     // Updates the world-space SH irradiance probe grid from TLAS ray samples.
     // -----------------------------------------------------------------------
-    if (probesEnabled)
+    if (probeGridWillRun)
     {
         PTERO_SCOPED_PASS_TIMER("GI", "Radiance probes");
+
+        // Probes only take over surface GI when they are the chosen GI mode.
+        // Running the grid purely to give the fog something to scatter must not
+        // change how the walls are lit, and leaving last frame's SRV bound
+        // would do exactly that.
+        if (!probesEnabled)
+            mDeferredLightingPass.SetProbeSrv({}, nullptr, mCamera.GetPosition());
+
         if (!mProbeRenderer.IsInitialized() && !mProbeRenderer.HasInitFailed())
         {
             if (!mProbeRenderer.Initialize(mProbeSettings))
@@ -1417,11 +1460,24 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                         skyR, skyG, skyB,
                         mProbeFrameIndex++);
 
-                    mDeferredLightingPass.SetGiSrv({}, mRtgiSettings.GiIntensity);
-                    mDeferredLightingPass.SetProbeSrv(mProbeRenderer.GetProbeSHSrv(), &mProbeSettings, camPos);
-                    mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
+                    // The fog samples the grid whether or not probes are also
+                    // driving surface GI, so it takes the SRV here rather than
+                    // from the deferred pass, which only gets it when probes
+                    // are the chosen GI mode.
+                    fogProbeSrv = mProbeRenderer.GetProbeSHSrv();
+                    ResolveProbeGridOrigin(
+                        mProbeSettings,
+                        camPos.x, camPos.y, camPos.z,
+                        fogProbeOrigin.x, fogProbeOrigin.y, fogProbeOrigin.z);
+
+                    if (probesEnabled)
+                    {
+                        mDeferredLightingPass.SetGiSrv({}, mRtgiSettings.GiIntensity);
+                        mDeferredLightingPass.SetProbeSrv(mProbeRenderer.GetProbeSHSrv(), &mProbeSettings, camPos);
+                        mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
+                    }
                 }
-                else
+                else if (probesEnabled)
                 {
                     mDeferredLightingPass.SetGiSrv({}, 0.0f);
                     mDeferredLightingPass.SetProbeSrv({}, nullptr, camPos);
@@ -1697,7 +1753,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // Restore G-Buffer and depth back to PIXEL_SHADER_RESOURCE for the deferred lighting pass.
-    if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || gtaoWillRun || probesEnabled || probesDebugEnabled)
+    if (rtgiWillRun || rtaoWillRun || volumetricFogWillRun || volumetricCloudsWillRun || gtaoWillRun || probeGridWillRun || probesDebugEnabled)
     {
         D3D12_RESOURCE_BARRIER toPixel[3];
         for (UINT i = 0; i < 3; ++i)
@@ -2457,7 +2513,25 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             agxInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
-        mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings);
+        // Meter the same HDR image the tonemapper is about to consume, before
+        // it is tonemapped. The exposure the meter produces stays on the GPU;
+        // the tonemapper reads it through this SRV.
+        D3D12_CPU_DESCRIPTOR_HANDLE autoExposureSrv{};
+        if (mAgxSettings.ExposureMode == AgxExposureMode::AutoHistogram &&
+            mAutoExposure.IsInitialized())
+        {
+            const bool metered = mAutoExposure.Apply(
+                commandList,
+                agxInputResource,
+                agxInputSrv,
+                mAgxSettings,
+                mFrameDeltaTimeMs * 0.001f);
+
+            if (metered)
+                autoExposureSrv = mAutoExposure.GetExposureCpuSrv();
+        }
+
+        mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings, autoExposureSrv);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -2587,6 +2661,7 @@ void DX12SceneRenderer::Shutdown()
     mBloomRenderer.Shutdown();
     mRmlUiRenderer.Shutdown();
     mAgxTonemapper.Shutdown();
+    mAutoExposure.Shutdown();
     mSkyRenderer.Shutdown();
     mShadowMapRenderer.Shutdown();
 
@@ -2691,6 +2766,10 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
         {
             mAgxTonemapper.Initialize(outputWidth, outputHeight);
         }
+
+        // The next histogram is built over a different sample grid, so take its
+        // result directly instead of easing the old value towards it.
+        mAutoExposure.ResetHistory();
 
         if (mChromaticAberrationRenderer.IsInitialized())
         {
@@ -2844,6 +2923,9 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
         mAgxTonemapper.Initialize(postProcessWidth, postProcessHeight);
     }
 
+    // As above: re-meter from scratch rather than easing across the change.
+    mAutoExposure.ResetHistory();
+
     // Runs on the tonemapper's output, so it follows the post-process size too.
     if (mChromaticAberrationRenderer.IsInitialized())
     {
@@ -2913,17 +2995,81 @@ bool DX12SceneRenderer::RecreateSceneTargetsForMsaaChange()
     }
 }
 
+void DX12SceneRenderer::LogLiveGpuBufferRanges() const
+{
+    mEntityMeshRenderer.LogLiveGpuBufferRanges();
+
+    const auto logResource = [](const char* name, const Microsoft::WRL::ComPtr<ID3D12Resource>& resource)
+    {
+        if (!resource) return;
+        const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+        // Textures have no GPU virtual address of their own, so the size is what
+        // identifies them here; buffers get the range.
+        if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+        {
+            const D3D12_GPU_VIRTUAL_ADDRESS start = resource->GetGPUVirtualAddress();
+            PTERO_LOG_ERROR("Renderer", "  %-22s buffer 0x%llx..0x%llx (%llu B)", name,
+                static_cast<unsigned long long>(start),
+                static_cast<unsigned long long>(start + desc.Width),
+                static_cast<unsigned long long>(desc.Width));
+        }
+        else
+        {
+            PTERO_LOG_ERROR("Renderer", "  %-22s texture %llux%u fmt=%d ptr=%p", name,
+                static_cast<unsigned long long>(desc.Width), desc.Height,
+                static_cast<int>(desc.Format),
+                static_cast<const void*>(resource.Get()));
+        }
+    };
+
+    PTERO_LOG_ERROR("Renderer", "Live scene targets at the time of the fault (%ux%u), "
+        "%llu resources and %llu descriptor heaps parked awaiting release:",
+        mSceneWidth, mSceneHeight,
+        static_cast<unsigned long long>(mRetiredSceneResources.size()),
+        static_cast<unsigned long long>(mRetiredSceneDescriptorHeaps.size()));
+    logResource("scene colour", mSceneColorTarget);
+    logResource("scene depth", mSceneDepthTarget);
+    logResource("MSAA scene depth", mMsaaSceneDepthTarget);
+    logResource("depth debug", mDepthDebugTarget);
+
+    // Anything still parked was freed late on purpose; a fault inside one of these
+    // would mean the parking is not lasting long enough.
+    for (const auto& retired : mRetiredSceneResources)
+        logResource("parked scene target", retired);
+}
+
 void DX12SceneRenderer::ReleaseSceneTargetResources(bool waitForGpu)
 {
+    // These must not be released while the GPU is still writing through them. A flush
+    // is the strong guarantee - but it has a two second deadline, and the render thread
+    // has been seen stalled far longer than that while a level loads. Freeing anyway on
+    // a flush that gave up releases render targets and descriptor heaps that in-flight
+    // command lists still name, which the GPU reports as a page fault inside whichever
+    // pass happens to be running - nowhere near the resize that caused it.
+    //
+    // So: free immediately only when the GPU has actually confirmed it is idle. In every
+    // other case park the resources on the retired lists, where they outlive the frames
+    // that could still reference them and are dropped by the next confirmed flush.
+    bool gpuIsIdle = false;
     if (waitForGpu)
     {
-        // Flush the GPU before releasing resources to prevent the device from
-        // referencing freed memory, which causes the level to disappear for a frame.
-        DX12Context_WaitForGPU();
-        mRetiredSceneResources.clear();
-        mRetiredSceneDescriptorHeaps.clear();
+        gpuIsIdle = DX12Context_WaitForGPU();
+        if (gpuIsIdle)
+        {
+            mRetiredSceneResources.clear();
+            mRetiredSceneDescriptorHeaps.clear();
+        }
+        else
+        {
+            PTERO_LOG_WARNING("Renderer",
+                "GPU flush timed out before releasing the scene targets; parking them "
+                "instead of freeing them (%llu resources and %llu descriptor heaps already held).",
+                static_cast<unsigned long long>(mRetiredSceneResources.size()),
+                static_cast<unsigned long long>(mRetiredSceneDescriptorHeaps.size()));
+        }
     }
-    else
+
+    if (!gpuIsIdle)
     {
         if (mSceneColorTarget) mRetiredSceneResources.push_back(mSceneColorTarget);
         if (mSceneDepthTarget) mRetiredSceneResources.push_back(mSceneDepthTarget);
@@ -3882,10 +4028,12 @@ bool DX12SceneRenderer::CreateBufferWithUpload(
     return true;
 }
 
-bool DX12SceneRenderer::StartGame()
+bool DX12SceneRenderer::StartGame(bool separateWindow)
 {
     if (mGameHost.IsRunning())
         return true;
+
+    mGameInSeparateWindow = separateWindow;
 
     // Remember the editor pose so stopping the session restores the viewport exactly.
     mEditorCameraPositionBeforePlay = mCamera.GetPosition();
@@ -3898,8 +4046,89 @@ bool DX12SceneRenderer::StartGame()
     initialCamera.Pitch = mEditorCameraRotationBeforePlay.x;
     initialCamera.Yaw = mEditorCameraRotationBeforePlay.y;
 
-    if (!mGameHost.Start(initialCamera))
+    mGameStopRequested = false;
+    mFarkleKeys.fill(false);
+    GameServices services{};
+    services.User = this;
+    services.FindEntity = [](void* user, const char* name) -> int {
+        auto* self = static_cast<DX12SceneRenderer*>(user);
+        if (self->mEntities) for (size_t i=0;i<self->mEntities->size();++i)
+            if ((*self->mEntities)[i].Name == name) return static_cast<int>(i);
+        return -1;
+    };
+    services.GetTransform = [](void* user, int index, GameTransform* out) -> bool {
+        auto* self = static_cast<DX12SceneRenderer*>(user);
+        if (!out || !self->mEntities || index<0 || size_t(index)>=self->mEntities->size()) return false;
+        const auto& t=(*self->mEntities)[index].Transform;
+        *out={{t.Position.x,t.Position.y,t.Position.z},{t.Rotation.x,t.Rotation.y,t.Rotation.z},{t.Scale.x,t.Scale.y,t.Scale.z}};
+        return true;
+    };
+    services.SetTransform = [](void* user, int index, const GameTransform* pose) {
+        auto* self = static_cast<DX12SceneRenderer*>(user);
+        if (!pose || !self->mEntities || index<0 || size_t(index)>=self->mEntities->size()) return;
+        auto& t=(*self->mEntities)[index].Transform;
+        t.Position={pose->Position[0],pose->Position[1],pose->Position[2]};
+        t.Rotation={pose->Rotation[0],pose->Rotation[1],pose->Rotation[2]};
+        t.Scale={pose->Scale[0],pose->Scale[1],pose->Scale[2]};
+    };
+    services.LoadUi = [](void* user, const char* path) -> bool {
+        auto& ui=static_cast<DX12SceneRenderer*>(user)->mRmlUiRenderer;
+        ui.SetVisible(true); return ui.LoadDocument(path);
+    };
+    services.Ui = [](void* user,int op,const char* id,const char* value) {
+        static_cast<DX12SceneRenderer*>(user)->mRmlUiRenderer.ApplyGameUiCommand(op,id,value);
+    };
+    services.RequestStop = [](void* user) {static_cast<DX12SceneRenderer*>(user)->mGameStopRequested=true;};
+    services.ToggleFullscreen = [](void*) {QtUi::ToggleGameFullscreen();};
+    services.PlaySound = [](void* user, const char* name) {
+        auto* audio=static_cast<DX12SceneRenderer*>(user)->mAudioManager;
+        if (audio && name) audio->PlayOneShotByName(name);
+    };
+    services.PlayMusic = [](void* user, const char* name) -> bool {
+        auto* audio=static_cast<DX12SceneRenderer*>(user)->mAudioManager;
+        return audio && name && audio->PlayMusicByName(name);
+    };
+    services.IsMusicPlaying = [](void* user) -> bool {
+        auto* audio=static_cast<DX12SceneRenderer*>(user)->mAudioManager;
+        return audio && audio->IsMusicPlaying();
+    };
+    services.PollAction = [](void* user) -> int {
+        auto* self=static_cast<DX12SceneRenderer*>(user);
+        const auto id=self->mRmlUiRenderer.PollGameAction();
+        if (!id.empty()) {
+            const std::pair<const char*,int> actions[]={{"roll-button",Roll},{"bank-button",Bank},{"clear-button",Clear},{"help-button",Help},{"pause-button",Pause},{"close-button",Close},{"rematch-button",Rematch},{"main-menu-button",MainMenu},{"continue-button",Continue},{"fullscreen-button",Fullscreen},{"start-button",StartMatch},{"exit-button",ExitGame}};
+            for (const auto& action:actions) if(id==action.first)return action.second;
+            for(int i=0;i<6;++i) {if(id=="die-"+std::to_string(i+1))return SelectDie+i;if(id=="slot-"+std::to_string(i+1))return RemoveDie+i;}
+        }
+        const std::pair<int,int> keys[]={{'R',Roll},{'B',Bank},{'C',Clear},{VK_F1,Help},{VK_ESCAPE,Pause},{VK_F11,Fullscreen},{'1',SelectDie},{'2',SelectDie+1},{'3',SelectDie+2},{'4',SelectDie+3},{'5',SelectDie+4},{'6',SelectDie+5}};
+        int result=NoAction;
+        for(const auto& key:keys) {
+            bool down=QtUi::GameWindowHasFocus() && (GetAsyncKeyState(key.first)&0x8000)!=0;
+            if(down&&!self->mFarkleKeys[key.first]&&!result)result=key.second;
+            self->mFarkleKeys[key.first]=down;
+        }
+        return result;
+    };
+    if (!mGameHost.Start(initialCamera, services))
         return false;
+
+    // Hover and click are the host's to make: the game module never sees them.
+    mRmlUiRenderer.SetUiSoundCallback([this](bool click) {
+        if (!mAudioManager) return;
+        // Clicks everywhere, but hover only on the menu and result screens. The play HUD
+        // puts six dice and three actions under a pointer that is moving constantly, and
+        // a tick for each one is chatter rather than feedback.
+        if (!click && mRmlUiRenderer.GetLoadedDocumentName().find("farkle.rml") != std::string::npos)
+            return;
+        mAudioManager->PlayOneShotByName(click ? "Click" : "Hover");
+    });
+
+    // The window is titled after whatever the module reports, so a different game does
+    // not put up a window that still says Farkle.
+    const std::string windowTitle =
+        (mGameHost.GetGameName().empty() ? std::string("Play") : mGameHost.GetGameName())
+        + " - F11 Fullscreen";
+    QtUi::OpenGameWindow(separateWindow, windowTitle.c_str());
 
     // The graph runs on a copy taken here, so On Game Start sees the level exactly as it
     // was when play was pressed even if the artist keeps editing the graph afterwards.
@@ -3923,16 +4152,23 @@ void DX12SceneRenderer::StopGame()
     // outlives the game module.
     mNodeGraphRuntime.Stop();
     mGameHost.Stop();
+    mRmlUiRenderer.SetUiSoundCallback({});
+    mRmlUiRenderer.CloseDocument();
+    // The soundtrack belongs to the session, not the level: it has to end here even if
+    // the game module died without getting the chance to stop it itself.
+    if (mAudioManager) mAudioManager->StopMusic();
+    QtUi::CloseGameWindow();
+    mGameStopRequested = false;
     mGameHasLastMousePosition = false;
     SetCameraTransform(mEditorCameraPositionBeforePlay, mEditorCameraRotationBeforePlay);
 }
 
-void DX12SceneRenderer::ToggleGame()
+void DX12SceneRenderer::ToggleGame(bool separateWindow)
 {
     if (mGameHost.IsRunning())
         StopGame();
     else
-        StartGame();
+        StartGame(separateWindow);
 }
 
 void DX12SceneRenderer::RecordPassTiming(const char* category, const char* name, float milliseconds)
@@ -4086,9 +4322,8 @@ void DX12SceneRenderer::UpdateCamera()
 
 void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosition, bool lookActive)
 {
-    // Escape leaves play mode, but only when the editor is the foreground window so a
-    // background editor cannot swallow the key from whatever the user is actually using.
-    if (GetForegroundWindow() == DX12Context_GetWindowHandle() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0)
+    // Escape belongs to Farkle's pause menu. Closing its window ends the session.
+    if (mGameStopRequested || QtUi::ConsumeGameCloseRequest())
     {
         StopGame();
         return;
@@ -4149,7 +4384,7 @@ void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosi
 
     // A Stop Game node only raises a flag; tearing the runtime down from inside its own
     // execution would destroy the state the current step is still walking.
-    if (mNodeGraphRuntime.ConsumeStopRequest())
+    if (mGameStopRequested || mNodeGraphRuntime.ConsumeStopRequest())
     {
         StopGame();
     }

@@ -2,8 +2,13 @@ K:\Ptero-Engine\Source\System\dllmain.cpp;K:\Ptero-Engine\Source\System\System\x
 K:\Ptero-Engine\Source\System\MaterialEditor.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\MaterialEditor.obj
 K:\Ptero-Engine\Source\System\pch.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\pch.obj
 K:\Ptero-Engine\Source\System\src\AssetManager.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\AssetManager.obj
+K:\Ptero-Engine\Source\System\src\CVar.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\CVar.obj
+K:\Ptero-Engine\Source\System\src\PteroLog.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\PteroLog.obj
 K:\Ptero-Engine\Source\System\src\CollisionGenerator.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\CollisionGenerator.obj
 K:\Ptero-Engine\Source\System\src\FbxCompiler.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\FbxCompiler.obj
+K:\Ptero-Engine\Source\System\src\NodeGraphCatalog.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphCatalog.obj
+K:\Ptero-Engine\Source\System\src\NodeGraphDocument.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphDocument.obj
+K:\Ptero-Engine\Source\System\src\NodeGraphRuntime.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphRuntime.obj
 K:\Ptero-Engine\Source\System\src\SystemAssetApi.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\SystemAssetApi.obj
 K:\Ptero-Engine\Source\System\src\TextureImporter.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\TextureImporter.obj
 K:\Ptero-Engine\Source\SDKs\DirectXTex\DirectXTex\BC.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\BC.obj

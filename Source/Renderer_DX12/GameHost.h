@@ -20,7 +20,7 @@ public:
     GameHost(const GameHost&) = delete;
     GameHost& operator=(const GameHost&) = delete;
 
-    bool Start(const GameCameraState& initialCamera);
+    bool Start(const GameCameraState& initialCamera, const GameServices& services);
     void Stop();
     void Update(const GameFrameContext& frame, GameCameraState& camera);
 

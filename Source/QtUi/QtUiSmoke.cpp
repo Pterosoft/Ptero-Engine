@@ -63,7 +63,10 @@ int main()
     assert(box && spin && main);
     assert(QApplication::palette().color(QPalette::Window).lightness() < 40);
     assert(QApplication::palette().color(QPalette::Highlight) == QColor("#c73d0d"));
-    assert(QApplication::font().family().contains("Playfair"));
+    // The editor takes the system UI font rather than shipping a face of its own, so this
+    // checks that it agrees with what Qt reports for the platform.
+    assert(QApplication::font().family() ==
+           QFontDatabase::systemFont(QFontDatabase::GeneralFont).family());
     box->click();
     spin->setValue(3.5);
     render();

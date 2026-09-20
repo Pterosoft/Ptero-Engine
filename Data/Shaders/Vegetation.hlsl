@@ -16,6 +16,10 @@
 // and denoiser passes need no special case for vegetation.
 
 #include "Vegetation_Common.hlsli"
+// Foliage does not expose a reflectivity knob of its own; it writes the neutral default
+// so the specular channel is valid across the whole G-Buffer, including at MSAA edges
+// where the resolve averages this channel with a neighbouring surface.
+#include "SurfaceSpecular.hlsli"
 
 cbuffer VegetationPassConstants : register(b0)
 {
@@ -250,7 +254,7 @@ PSOutput PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace)
         N = normalize(T * tsNormal.x + B * tsNormal.y + N * tsNormal.z);
     }
 
-    output.Normal = float4(EncodeOctNormal(N), input.Position.z, 0.0f);
+    output.Normal = float4(EncodeOctNormal(N), input.Position.z, PteroEncodeSurfaceSpecular(kPteroDefaultSpecular));
 
     // --- Material ---
     const float4 metallicSample  = gMetallicTexture.Sample(gLinearSampler, input.TexCoord);

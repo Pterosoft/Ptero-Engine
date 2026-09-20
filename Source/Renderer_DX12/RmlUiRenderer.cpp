@@ -147,6 +147,100 @@ private:
     std::chrono::steady_clock::time_point mStarted = std::chrono::steady_clock::now();
 };
 
+class RmlUiRenderer::ActionListener final : public Rml::EventListener
+{
+public:
+    explicit ActionListener(RmlUiRenderer& owner) : mOwner(owner) {}
+    void ProcessEvent(Rml::Event& event) override
+    {
+        if (event.GetType() == "keydown")
+        {
+            const auto key = event.GetParameter<int>("key_identifier", 0);
+            if (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE) return;
+        }
+        auto* element = event.GetTargetElement();
+        while (element && element->GetTagName() != "button") element = element->GetParentNode();
+        if (!element || element->HasAttribute("disabled") || element->GetId().empty()) return;
+        if (mOwner.mGameActions.size() < 32) mOwner.mGameActions.push_back(element->GetId());
+        if (event.GetType() == "keydown") event.StopPropagation();
+    }
+private:
+    RmlUiRenderer& mOwner;
+};
+
+// UI audio. Sits alongside ActionListener rather than inside it because it answers a
+// different question: ActionListener reports what the player asked the game to do, this
+// reports that the player touched a control at all - including hovers, which never reach
+// the game module, and including clicks on controls the game has disabled.
+class RmlUiRenderer::SoundListener final : public Rml::EventListener
+{
+public:
+    explicit SoundListener(RmlUiRenderer& owner) : mOwner(owner) {}
+
+    void ProcessEvent(Rml::Event& event) override
+    {
+        if (!mOwner.mUiSoundCallback) return;
+
+        auto* element = event.GetTargetElement();
+        while (element && element->GetTagName() != "button") element = element->GetParentNode();
+
+        const bool click = event.GetType() == "click";
+        if (!element || element->HasAttribute("disabled"))
+        {
+            // The pointer left every button, so the next one it enters is a fresh hover.
+            if (!click) mHovered = nullptr;
+            return;
+        }
+
+        if (!click)
+        {
+            // mouseover also fires for the spans inside a button, and again on the way
+            // back out to it. Only the first entry into a given button makes a sound.
+            if (mHovered == element) return;
+            mHovered = element;
+        }
+        mOwner.mUiSoundCallback(click);
+    }
+
+    void Reset() { mHovered = nullptr; }
+
+private:
+    RmlUiRenderer& mOwner;
+    const Rml::Element* mHovered = nullptr; // Compared, never dereferenced.
+};
+
+std::string RmlUiRenderer::PollGameAction()
+{
+    if (mGameActions.empty()) return {};
+    std::string result = std::move(mGameActions.front());
+    mGameActions.erase(mGameActions.begin());
+    return result;
+}
+
+void RmlUiRenderer::ApplyGameUiCommand(int operation, const char* id, const char* value)
+{
+    if (!mDocument) return;
+    auto* element = mDocument->GetElementById(id);
+    if (!element) return;
+    switch (operation)
+    {
+    case 0: SetElementText(id, value); break;
+    case 1: element->SetInnerRML(value); break;
+    case 2: element->SetClass(value, true); break;
+    case 3: element->SetClass(value, false); break;
+    case 4: element->RemoveAttribute("disabled"); break;
+    case 5: element->SetAttribute("disabled", true); break;
+    }
+    // Keep tab navigation inside an open pause/help dialog.
+    if (std::string(id) == "dialog" && std::string(value) == "hidden")
+    {
+        auto* root = mDocument->GetElementById("game-content");
+        if (root) root->SetProperty("display", operation == 3 ? "none" : "block");
+        auto* focus = mDocument->GetElementById(operation == 3 ? "close-button" : "roll-button");
+        if (focus) focus->Focus();
+    }
+}
+
 RmlUiRenderer::RmlUiRenderer() = default;
 
 RmlUiRenderer::~RmlUiRenderer()
@@ -436,7 +530,8 @@ bool RmlUiRenderer::LoadDocument(const std::string& fileName)
 
     CloseDocument();
 
-    const std::filesystem::path documentPath = FindDataDirectory() / L"UI" / std::filesystem::path(fileName);
+    const std::filesystem::path relativePath = std::filesystem::u8path(fileName).lexically_normal();
+    const std::filesystem::path documentPath = FindDataDirectory() / L"UI" / relativePath;
     std::error_code errorCode;
     if (!std::filesystem::exists(documentPath, errorCode))
     {
@@ -452,7 +547,15 @@ bool RmlUiRenderer::LoadDocument(const std::string& fileName)
     }
 
     mDocument->Show();
-    mLoadedDocumentName = fileName;
+    if (!mActionListener) mActionListener = std::make_unique<ActionListener>(*this);
+    mDocument->AddEventListener("click", mActionListener.get());
+    mDocument->AddEventListener("keydown", mActionListener.get());
+    // Capture phase: a button that swallows its own click still makes a sound.
+    if (!mSoundListener) mSoundListener = std::make_unique<SoundListener>(*this);
+    mSoundListener->Reset();
+    mDocument->AddEventListener("click", mSoundListener.get(), true);
+    mDocument->AddEventListener("mouseover", mSoundListener.get(), true);
+    mLoadedDocumentName = WideToUtf8(relativePath.generic_wstring());
     // A fresh document starts with no listeners, so tracing has to be re-armed
     // after every load and reload.
     ApplyEventTracing();
@@ -514,9 +617,17 @@ std::vector<std::string> RmlUiRenderer::ListAvailableDocuments()
     if (!std::filesystem::is_directory(uiDirectory, errorCode))
         return documents;
 
-    for (const auto& entry : std::filesystem::directory_iterator(uiDirectory, errorCode))
+    // Preserve paths relative to Data/UI: separate folders may contain documents
+    // with the same filename. Use non-throwing traversal so an inaccessible folder
+    // cannot take down the editor while it refreshes the picker.
+    const auto options = std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator entryIterator(uiDirectory, options, errorCode);
+    const std::filesystem::recursive_directory_iterator end;
+    for (; !errorCode && entryIterator != end; entryIterator.increment(errorCode))
     {
-        if (!entry.is_regular_file(errorCode))
+        const auto& entry = *entryIterator;
+        std::error_code entryError;
+        if (!entry.is_regular_file(entryError))
             continue;
         std::filesystem::path extension = entry.path().extension();
         std::wstring lowered = extension.wstring();
@@ -524,7 +635,7 @@ std::vector<std::string> RmlUiRenderer::ListAvailableDocuments()
                        [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
         if (lowered != L".rml")
             continue;
-        documents.push_back(WideToUtf8(entry.path().filename().wstring()));
+        documents.push_back(WideToUtf8(entry.path().lexically_relative(uiDirectory).generic_wstring()));
     }
 
     std::sort(documents.begin(), documents.end());
@@ -533,6 +644,7 @@ std::vector<std::string> RmlUiRenderer::ListAvailableDocuments()
 
 void RmlUiRenderer::CloseDocument()
 {
+    mGameActions.clear();
     if (mDocument != nullptr)
     {
         mDocument->Close();
@@ -687,9 +799,8 @@ void RmlUiRenderer::UpdateKeyboardInput()
     if (!mIsInitialized || mContext == nullptr || !mInputEnabled)
         return;
 
-    // Only take keys while the editor is the foreground window, so a background editor
-    // cannot steal input from whatever the user is actually typing into.
-    if (GetForegroundWindow() != DX12Context_GetWindowHandle())
+    // The presentation HWND is a native child of either the editor or Play window.
+    if (GetAncestor(GetForegroundWindow(), GA_ROOT) != GetAncestor(DX12Context_GetWindowHandle(), GA_ROOT))
         return;
 
     const int modifiers = GetKeyModifierState();

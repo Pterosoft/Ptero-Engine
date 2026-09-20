@@ -1,4 +1,5 @@
 K:\Ptero-Engine\Source\Renderer_DX12\AgxTonemapper.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\AgxTonemapper.obj
+K:\Ptero-Engine\Source\Renderer_DX12\AutoExposure.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\AutoExposure.obj
 K:\Ptero-Engine\Source\Renderer_DX12\BloomRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\BloomRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\DecalRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\DecalRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\DeferredLightingPass.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\DeferredLightingPass.obj
@@ -15,6 +16,13 @@ K:\Ptero-Engine\Source\Renderer_DX12\RmlUiRenderInterface.cpp;K:\Ptero-Engine\So
 K:\Ptero-Engine\Source\Renderer_DX12\RmlUiSystemInterface.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RmlUiSystemInterface.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RmlUiRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RmlUiRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\EditorMainMenu.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EditorMainMenu.obj
+K:\Ptero-Engine\Source\Renderer_DX12\EditorConsole.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EditorConsole.obj
+K:\Ptero-Engine\Source\Renderer_DX12\EditorUiViewer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EditorUiViewer.obj
+K:\Ptero-Engine\Source\Renderer_DX12\EditorUndo.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EditorUndo.obj
+K:\Ptero-Engine\Source\Renderer_DX12\EditorLightGizmos.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EditorLightGizmos.obj
+K:\Ptero-Engine\Source\System\src\PteroLog.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\PteroLog.obj
+K:\Ptero-Engine\Source\System\src\CVar.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\CVar.obj
+K:\Ptero-Engine\Source\Renderer_DX12\EngineCVars.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\EngineCVars.obj
 K:\Ptero-Engine\Source\Renderer_DX12\GlassRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\GlassRenderer.obj
 K:\Ptero-Engine\Source\System\MaterialEditor.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\MaterialEditor.obj
 K:\Ptero-Engine\Source\System\src\AssetManager.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\AssetManager.obj
@@ -62,6 +70,7 @@ K:\Ptero-Engine\Source\Renderer_DX12\pch.cpp;K:\Ptero-Engine\Source\Renderer_DX1
 K:\Ptero-Engine\Source\Renderer_DX12\PointLightRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\PointLightRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RadianceCascadesRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RadianceCascadesRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RadianceProbeRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RadianceProbeRenderer.obj
+K:\Ptero-Engine\Source\Renderer_DX12\ParticleRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\ParticleRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RainRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RainRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RtAmbientOcclusion.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RtAmbientOcclusion.obj
 K:\Ptero-Engine\Source\Renderer_DX12\RtGlobalIllumination.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\RtGlobalIllumination.obj
@@ -69,6 +78,8 @@ K:\Ptero-Engine\Source\Renderer_DX12\SceneSerializer.cpp;K:\Ptero-Engine\Source\
 K:\Ptero-Engine\Source\Renderer_DX12\ShadowMapRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\ShadowMapRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\SkyRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\SkyRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\SMAARenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\SMAARenderer.obj
+K:\Ptero-Engine\Source\Renderer_DX12\SsrRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\SsrRenderer.obj
+K:\Ptero-Engine\Source\Renderer_DX12\ChromaticAberrationRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\ChromaticAberrationRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\TerrainGeometry.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\TerrainGeometry.obj
 K:\Ptero-Engine\Source\Renderer_DX12\TerrainRenderer.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\TerrainRenderer.obj
 K:\Ptero-Engine\Source\Renderer_DX12\GeometryRaycaster.cpp;K:\Ptero-Engine\Source\Renderer_DX12\Renderer_DX12\x64\Debug\GeometryRaycaster.obj

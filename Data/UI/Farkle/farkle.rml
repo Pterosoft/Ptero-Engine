@@ -1,0 +1,103 @@
+<rml>
+<head>
+    <title>Farkle — Good Dice, Better Company</title>
+    <link type="text/rcss" href="farkle.rcss" />
+</head>
+<body id="farkle-ui">
+    <div id="game-content">
+    <!-- All text and controls are live RmlUi elements. No scene/background image. -->
+    <div id="score-panel" class="parchment">
+        <div class="score-content">
+            <div class="ornament-rule"><span class="rule"></span><img sprite="fleur" /><span class="rule"></span></div>
+            <div id="player-name" class="player-name">Player</div>
+            <div id="player-score" class="score">2,350</div>
+            <div class="divider">◆</div>
+            <div id="opponent-name" class="player-name opponent">Opponent</div>
+            <div id="opponent-score" class="score opponent-score">1,800</div>
+            <div class="divider">◆</div>
+            <div class="turn-ledger">
+                <div class="ledger-row"><span>This Turn</span><span id="turn-score" class="ledger-value">0</span></div>
+                <div class="ledger-row last"><span>Banked</span><span id="banked-score" class="ledger-value">0</span></div>
+            </div>
+            <img class="motto-fleur" sprite="fleur" />
+            <div class="motto">Good Dice<br/>Better Company</div>
+        </div>
+    </div>
+
+    <div id="masthead">
+        <div class="sign"><div id="game-title">Farkle</div></div>
+        <div class="turn-sign"><img sprite="fleur" class="turn-fleur left"/><span id="turn-label">Your Turn</span><img sprite="fleur" class="turn-fleur right"/></div>
+    </div>
+
+    <div id="play-area">
+        <img class="corner top-left" sprite="fleur"/><img class="corner top-right" sprite="fleur"/>
+        <img class="corner bottom-left" sprite="fleur"/><img class="corner bottom-right" sprite="fleur"/>
+        <div id="roll-prompt"><div id="status-text">Roll the dice<br/>to begin</div><img sprite="fleur"/></div>
+        <!-- Add class 'has-dice' to play-area to show these native hit targets.
+             Set each die's face-1 ... face-6 class from the game. -->
+        <div id="rolled-dice">
+            <button id="die-1" class="die face-1" data-index="0"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+            <button id="die-2" class="die face-2" data-index="1"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+            <button id="die-3" class="die face-3" data-index="2"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+            <button id="die-4" class="die face-4" data-index="3"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+            <button id="die-5" class="die face-5" data-index="4"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+            <button id="die-6" class="die face-6" data-index="5"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></button>
+        </div>
+    </div>
+    <div id="turn-message">Roll the dice to begin</div>
+
+    <div id="scoring-panel" class="parchment">
+        <div class="scoring-content">
+            <h1>Scoring Combinations</h1><div class="divider compact">◆</div>
+            <div class="scoring-row"><span class="mini-die face-1"><span class="pip p4"></span></span><span class="combination">Single 1</span><span class="points">100</span></div>
+            <div class="scoring-row"><span class="mini-die face-5"><span class="pip p1"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p7"></span></span><span class="combination">Single 5</span><span class="points">50</span></div>
+            <div class="scoring-row"><span class="mini-die face-3"><span class="pip p1"></span><span class="pip p4"></span><span class="pip p7"></span></span><span class="combination">Three of a kind</span><span class="points">100 × value</span></div>
+            <div class="scoring-row"><span class="mini-die face-4"><span class="pip p1"></span><span class="pip p3"></span><span class="pip p5"></span><span class="pip p7"></span></span><span class="combination">Four of a kind</span><span class="points">200 × value</span></div>
+            <div class="scoring-row"><span class="mini-die face-5"><span class="pip p1"></span><span class="pip p3"></span><span class="pip p4"></span><span class="pip p5"></span><span class="pip p7"></span></span><span class="combination">Five of a kind</span><span class="points">400 × value</span></div>
+            <div class="scoring-row"><span class="mini-die face-6"><span class="pip p1"></span><span class="pip p2"></span><span class="pip p3"></span><span class="pip p5"></span><span class="pip p6"></span><span class="pip p7"></span></span><span class="combination">Six of a kind</span><span class="points">800 × value</span></div>
+            <div class="divider compact scoring-break">◆</div>
+            <div class="scoring-row"><span class="rule-symbol">Ⅲ</span><span class="combination">Three pairs</span><span class="points">750</span></div>
+            <div class="scoring-row no-line"><span class="rule-symbol">↗</span><span class="combination">Straight (1–6)</span><span class="points">1,500</span></div>
+            <div class="ones-note">Three 1s = 1,000; each extra 1 doubles it.</div>
+        </div>
+    </div>
+
+    <div id="log-panel" class="parchment">
+        <div class="log-content"><h1>Game Log</h1><div class="divider compact">◆</div>
+            <div id="game-log">
+                <div class="log-row"><span>You rolled 3 × 5s</span><span class="gain">+150</span></div>
+                <div class="log-row"><span>You banked 150</span><span class="gain">+150</span></div>
+                <div class="log-row"><span>Opponent rolled 3 × 1s</span><span class="gain">+300</span></div>
+                <div class="log-row"><span>Opponent banked 300</span><span class="gain">+300</span></div>
+                <div class="log-row"><span>You rolled 1 × 1, 1 × 5</span><span class="gain">+150</span></div>
+                <div class="log-row"><span>You banked 150</span><span class="gain">+150</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="dice-tray">
+        <div class="selected-area"><div class="tray-heading"><span>Selected Dice</span></div>
+            <div id="selected-dice">
+                <button id="slot-1" class="dice-slot" data-index="0">+</button>
+                <button id="slot-2" class="dice-slot" data-index="1">+</button>
+                <button id="slot-3" class="dice-slot" data-index="2">+</button>
+                <button id="slot-4" class="dice-slot" data-index="3">+</button>
+                <button id="slot-5" class="dice-slot" data-index="4">+</button>
+                <button id="slot-6" class="dice-slot" data-index="5">+</button>
+            </div>
+        </div>
+        <div class="round-area"><div class="round-heading">Current Round</div><div class="gold-divider">◆</div><div id="round-score">0</div></div>
+    </div>
+    <div id="actions">
+        <button id="roll-button" class="action primary" data-action="roll">Roll <span class="shortcut">[ R ]</span></button>
+        <button id="bank-button" class="action" data-action="bank">Bank <span class="shortcut">[ B ]</span></button>
+        <button id="clear-button" class="action" data-action="clear">Clear <span class="shortcut">[ C ]</span></button>
+    </div>
+    <button id="help-button" class="footer-link" data-action="help"><span class="keycap">F1</span><span>How to Play</span></button>
+    <button id="pause-button" class="footer-link" data-action="pause"><span class="keycap">ESC</span><span>Pause Menu</span></button>
+    </div>
+
+    <!-- Optional overlay shell: remove 'hidden', populate text and wire close-button. -->
+    <div id="dialog" class="hidden"><div class="dialog-card parchment"><h1 id="dialog-title">How to Play</h1><div class="divider">◆</div><div id="dialog-text">Roll six dice. Select a scoring combination, then roll the remaining dice or bank your points. A roll with no scoring dice is a Farkle: this turn's points are lost.</div><div id="dialog-flavor">Fortune favours the bold.</div><button id="close-button" class="action">Return to the table</button><div class="pause-actions"><button id="fullscreen-button">Fullscreen [F11]</button><button id="main-menu-button">Main Menu</button><button id="exit-button">Exit to Editor</button></div></div></div>
+</body>
+</rml>

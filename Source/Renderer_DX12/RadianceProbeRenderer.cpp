@@ -567,22 +567,14 @@ void RadianceProbeRenderer::UploadConstants(
 {
     if (!mMappedCb) return;
 
-    // Compute probe grid origin: either fixed or camera-centred.
+    // Compute probe grid origin: either fixed or camera-centred. Shared with
+    // deferred shading and the volumetric fog, which both read this same grid.
     float ox = settings.OriginX;
     float oy = settings.OriginY;
     float oz = settings.OriginZ;
-    if (settings.FollowCamera && cameraPos)
+    if (cameraPos)
     {
-        float halfX = (std::max)(settings.GridX - 1, 0) * settings.Spacing * 0.5f;
-        float halfY = (std::max)(settings.GridY - 1, 0) * settings.Spacing * 0.5f;
-        float halfZ = (std::max)(settings.GridZ - 1, 0) * settings.Spacing * 0.5f;
-        // Snap to nearest spacing grid cell to avoid per-frame SH invalidation.
-        auto snap = [](float v, float s) {
-            return std::floor(v / s) * s;
-        };
-        ox = snap(cameraPos[0] - halfX, settings.Spacing);
-        oy = snap(cameraPos[1] - halfY, settings.Spacing);
-        oz = snap(cameraPos[2] - halfZ, settings.Spacing);
+        ResolveProbeGridOrigin(settings, cameraPos[0], cameraPos[1], cameraPos[2], ox, oy, oz);
     }
 
     RadianceProbeConstants cb{};
@@ -594,7 +586,16 @@ void RadianceProbeRenderer::UploadConstants(
     cb.ProbeOriginY   = oy;
     cb.ProbeOriginZ   = oz;
     cb.UpdateBlend    = settings.UpdateBlend;
-    cb.RaysPerProbe   = 1;
+    // Honour the setting. This was pinned to 1, which silently discarded the
+    // "Rays Per Probe" slider, the probes.raysperprobe CVar and the value saved
+    // into the level - and one uniform-sphere ray per probe per frame cannot
+    // estimate a room lit by a single small bright source. Each sample carries
+    // the whole sphere's 4*pi solid angle, so a ray that happens to miss the fire
+    // and one that happens to hit it differ by orders of magnitude, and blending
+    // 15% of that into the SH every frame leaves a permanent flicker. Surfaces
+    // hide it behind albedo and direct light; the fog, which takes this grid as
+    // its main light indoors and reads it per froxel, does not.
+    cb.RaysPerProbe   = static_cast<uint32_t>(std::clamp(settings.RaysPerProbe, 1, 1024));
     cb.FrameIndex     = frameIndex;
     cb.TotalProbes    = mTotalProbes;
     cb.DebugSphereRadius = settings.DebugSphereRadius;
@@ -698,7 +699,9 @@ void RadianceProbeRenderer::Update(
     cmdList->SetComputeRootDescriptorTable(8, mProbeSHUavGpu[writeIdx]);    // u0: current SH
 
     cmdList->SetPipelineState(mPSO_Update.Get());
-    cmdList->Dispatch(mTotalProbes, 1, 1);
+    // Must match kProbeUpdateGroupSize in RadianceProbes_Update.hlsl.
+    constexpr UINT kProbeUpdateGroupSize = 64;
+    cmdList->Dispatch((mTotalProbes + kProbeUpdateGroupSize - 1) / kProbeUpdateGroupSize, 1, 1);
 
     auto barrier = CD3DX12_RESOURCE_BARRIER::UAV(mProbeSHBuffer[writeIdx].Get());
     cmdList->ResourceBarrier(1, &barrier);

@@ -83,7 +83,11 @@ PteroResolvedLight PteroResolveLightShape(PteroLightData light, float3 worldPos)
     }
     else if (lightType == PTERO_LIGHT_TYPE_RECT)
     {
-        const float3 rectUp = cross(light.Direction, light.RectRight);
+        // cross(right, forward) is the local +Y the rectangle is defined in;
+        // the operands the other way round give -Y, which symmetric extents
+        // hide but which disagrees with the component, the C++ upload and the
+        // editor gizmo.
+        const float3 rectUp = cross(light.RectRight, light.Direction);
         const float3 offset = worldPos - light.Position;
 
         // Project the surface into the rectangle's own axes and clamp it to the
@@ -104,13 +108,50 @@ PteroResolvedLight PteroResolveLightShape(PteroLightData light, float3 worldPos)
         const float3 towardSurface = worldPos - resolved.Position;
         const float  towardLengthSq = dot(towardSurface, towardSurface);
         if (towardLengthSq < 1e-8f)
+        {
+            // The surface is sitting on the emitter. There is no direction to
+            // take a cosine along, and leaving the mask at its initial 1.0 gave
+            // geometry that intersects the panel the full unattenuated light -
+            // the brightest part of the leak.
+            resolved.ShapeMask = 0.0f;
             return resolved;
+        }
 
         const float emitCos = dot(light.Direction, towardSurface * rsqrt(towardLengthSq));
         resolved.ShapeMask = (light.RectTwoSided > 0.5f) ? abs(emitCos) : saturate(emitCos);
     }
 
     return resolved;
+}
+
+// The distance the inverse-square law should be evaluated at.
+//
+// A true point light has a singularity at zero, and nothing ever gets that
+// close to one because the light has no size to get inside of. An emitter with
+// real extent is different: you cannot be nearer to it than its own size, and
+// the irradiance from a panel saturates as you approach it rather than
+// diverging. Evaluating 1/d^n at the closest point on a rectangle therefore
+// explodes wherever geometry passes near the panel - which is what the bright
+// streaks along beams and floor edges were, the closest point landing almost
+// exactly on the surface being shaded.
+//
+// Softened rather than clamped, because max(d, r) puts a visible crease at
+// d == r. sqrt(d^2 + r^2) is the same curve far away, flattens smoothly inside
+// the emitter, and costs one multiply-add.
+float PteroLightFalloffDistance(PteroLightData light, float dist)
+{
+    // A point light with no source radius keeps 1e-3, so this changes nothing
+    // for the shapes that never had the problem.
+    float emitterExtent = max(light.SourceRadius, 1e-3f);
+
+    if ((int)light.LightType == PTERO_LIGHT_TYPE_RECT)
+    {
+        // The smaller half-extent: closer than that, a single stand-in point
+        // has stopped describing an area at all.
+        emitterExtent = max(min(light.RectHalfWidth, light.RectHalfHeight), 1e-3f);
+    }
+
+    return sqrt(dist * dist + emitterExtent * emitterExtent);
 }
 
 #endif // PTERO_LIGHT_SHAPES_HLSLI

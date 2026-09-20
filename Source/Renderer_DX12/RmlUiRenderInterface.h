@@ -133,6 +133,39 @@ private:
     std::uintptr_t mNextGeometryHandle = 1;
     std::uintptr_t mNextTextureHandle = 1;
 
+    // Deferred release for UI geometry and textures.
+    //
+    // RmlUi frees these the moment a document closes or an element's markup is
+    // rewritten, and game code does both from inside its Update - which the engine
+    // calls at the top of the frame, with this frame's command list already open and
+    // the previous two frames still executing. Dropping the buffers there hands back
+    // memory that submitted draws are still reading, which the GPU reports as a page
+    // fault in the middle of a run of DrawIndexedInstanced, with nothing in the log
+    // to connect it to the document swap that caused it.
+    //
+    // It only shows up with game code that actually changes its UI: a game that just
+    // moves the camera never releases anything, which is why this looked like a
+    // renderer bug rather than a lifetime one.
+    //
+    // Holding each release for one more frame than the engine keeps in flight is
+    // enough, and the count is ticked in BeginFrame. The SRV descriptor slot is
+    // recycled at the same moment, not earlier - handing the slot to a new texture
+    // while an in-flight frame still samples through it is the same bug one level up.
+    static constexpr int kFramesInFlight = 3;
+    struct PendingGeometryRelease
+    {
+        CompiledGeometry Geometry;
+        int FramesRemaining = 0;
+    };
+    struct PendingTextureRelease
+    {
+        Texture TextureData;
+        int FramesRemaining = 0;
+    };
+    std::vector<PendingGeometryRelease> mPendingGeometryReleases;
+    std::vector<PendingTextureRelease> mPendingTextureReleases;
+    void TickPendingReleases();
+
     std::vector<std::pair<D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE>> mFreeSrvDescriptors;
 
     ID3D12GraphicsCommandList* mCommandList = nullptr;

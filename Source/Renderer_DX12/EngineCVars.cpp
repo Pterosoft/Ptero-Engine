@@ -217,9 +217,28 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
 
     AgxTonemapSettings& agx = renderer.GetAgxSettings();
     CVar::RegisterBool ("agx.enabled", &agx.Enabled, "AgX tonemapping.");
-    CVar::RegisterFloat("agx.exposure", &agx.Exposure, "Exposure compensation in stops.", -10.0f, 10.0f);
-    CVar::RegisterFloat("agx.ev100min", &agx.Ev100Min, "Bottom of the auto-exposure range, in EV100.", -16.0f, 16.0f);
-    CVar::RegisterFloat("agx.ev100max", &agx.Ev100Max, "Top of the auto-exposure range, in EV100.", -16.0f, 24.0f);
+    CVar::RegisterFloat("agx.ev100", &agx.Ev100, "Photographic exposure in EV100; higher is darker, one unit per stop.", -16.0f, 16.0f);
+    CVar::RegisterFloat("agx.exposure", &agx.Exposure, "Exposure trim on top of agx.ev100, in stops.", -10.0f, 10.0f);
+    CVar::RegisterFloat("agx.ev100min", &agx.Ev100Min, "Lower clamp on agx.ev100.", -16.0f, 16.0f);
+    CVar::RegisterFloat("agx.ev100max", &agx.Ev100Max, "Upper clamp on agx.ev100.", -16.0f, 16.0f);
+    CVar::RegisterEnum ("agx.exposuremode", reinterpret_cast<int*>(&agx.ExposureMode),
+        "Manual uses agx.ev100; auto meters the scene with a luminance histogram.", { "manual", "auto" }, 0);
+    CVar::RegisterFloat("agx.autoexposure.speedup", &agx.AutoExposureSpeedUp,
+        "Stops per second when adapting to a brighter scene.", 0.0f, 20.0f);
+    CVar::RegisterFloat("agx.autoexposure.speeddown", &agx.AutoExposureSpeedDown,
+        "Stops per second when adapting to a darker scene.", 0.0f, 20.0f);
+    CVar::RegisterFloat("agx.autoexposure.lowpercent", &agx.AutoExposureLowPercent,
+        "Fraction of the darkest metered weight to discard.", 0.0f, 1.0f);
+    CVar::RegisterFloat("agx.autoexposure.highpercent", &agx.AutoExposureHighPercent,
+        "Cumulative point the metering stops averaging at.", 0.0f, 1.0f);
+    CVar::RegisterFloat("agx.autoexposure.greypoint", &agx.AutoExposureGreyPoint,
+        "Scene luminance the metered average is exposed onto.", 0.01f, 1.0f);
+    CVar::RegisterFloat("agx.autoexposure.meteringmask", &agx.AutoExposureMeteringMask,
+        "0 meters the whole frame evenly, 1 weights the centre heavily.", 0.0f, 1.0f);
+    CVar::RegisterFloat("agx.autoexposure.histogramlogmin", &agx.AutoExposureHistogramLogMin,
+        "Darkest luminance the histogram resolves, in log2.", -20.0f, 0.0f);
+    CVar::RegisterFloat("agx.autoexposure.histogramlogmax", &agx.AutoExposureHistogramLogMax,
+        "Brightest luminance the histogram resolves, in log2.", 0.0f, 20.0f);
     CVar::RegisterFloat("agx.toestrength", &agx.ToeStrength, "Shadow roll-off of the AgX curve.", 0.0f, 4.0f);
     CVar::RegisterFloat("agx.shoulderstrength", &agx.ShoulderStrength, "Highlight roll-off of the AgX curve.", 0.0f, 4.0f);
     RegisterColorGradeRegion("agx.global", agx.Global, "whole image");

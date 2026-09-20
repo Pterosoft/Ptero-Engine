@@ -229,7 +229,10 @@ private:
             { 1.f, 1.f, 1.f, 1.f }, { 1.f, 1.f, 1.f, 1.f } };
         int               HasBaseMap         = 0;
         int               UseVertexColour    = 0;
-        DirectX::XMINT2   _Pad0              = {};
+        // Reflectivity; 0.5 is neutral. Takes the first of the two padding words so the
+        // 16-byte register row the shader expects is unchanged.
+        float             Specular           = 0.5f;
+        int               _Pad0              = 0;
         std::byte         Padding[112]{};
     };
     static_assert(sizeof(TerrainMaterial) == 256);
@@ -240,6 +243,7 @@ private:
         DirectX::XMFLOAT4 BaseTint = { 0.78f, 0.48f, 0.16f, 1.0f };
         float Metallic = 0.0f;
         float Roughness = 0.9f;
+        float Specular = 0.5f;
         float AoStrength = 1.0f;
     };
 

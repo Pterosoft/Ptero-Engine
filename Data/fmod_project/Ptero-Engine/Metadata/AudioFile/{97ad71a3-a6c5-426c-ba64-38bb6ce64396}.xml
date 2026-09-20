@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<objects serializationModel="Studio.02.03.00">
+	<object class="AudioFile" id="{97ad71a3-a6c5-426c-ba64-38bb6ce64396}">
+		<property name="assetPath">
+			<value>Emilio_Villalba.-_Viola_de_teclas_medieval_(Nickelharpa)._Saltarello.webm.1080p.vp9.wav</value>
+		</property>
+		<property name="isStreaming">
+			<value>true</value>
+		</property>
+		<property name="frequencyInKHz">
+			<value>48</value>
+		</property>
+		<property name="channelCount">
+			<value>2</value>
+		</property>
+		<property name="length">
+			<value>97.500604166666662</value>
+		</property>
+		<relationship name="masterAssetFolder">
+			<destination>{c2a4bb11-9683-48ec-8078-9afda058d972}</destination>
+		</relationship>
+	</object>
+</objects>

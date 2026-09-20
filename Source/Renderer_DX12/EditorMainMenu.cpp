@@ -230,6 +230,11 @@ namespace
         QtUi::SliderFloat("Height Scale", &materialDefinition.HeightScale, 0.0f, 0.5f, "%.3f");
         QtUi::SetItemTooltip("Depth of the height volume in tiled UV units. Large values "
                              "exaggerate the effect and expose stretching at grazing angles.");
+        QtUi::SliderFloat("Reference Plane", &materialDefinition.HeightReference, 0.05f, 1.0f, "%.3f");
+        QtUi::SetItemTooltip("Height value that sits at the polygon surface. Leave at 1 for a "
+                             "0-1 height map. For a Substance-style map that is signed around "
+                             "0.5, set this to the map's brightest value, or the whole surface "
+                             "sits half a volume deep and slides about instead of showing relief.");
         QtUi::SliderInt("Min Steps", &materialDefinition.ParallaxMinSteps, 1, 64);
         QtUi::SetItemTooltip("Ray-march steps used when looking straight at the surface.");
         QtUi::SliderInt("Max Steps", &materialDefinition.ParallaxMaxSteps, 1, 256);
@@ -1427,42 +1432,31 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("File"))
         {
-            if (editorInstance != nullptr && QtUi::MenuItem("New", nullptr, false, !sceneLoading))
+            if (editorInstance != nullptr && QtUi::MenuItem("New", "Ctrl+N", false, !sceneLoading))
             {
                 editorInstance->NewScene(windowHandle);
             }
 
-            if (editorInstance != nullptr && QtUi::MenuItem("Open...", nullptr, false, !sceneLoading))
+            if (editorInstance != nullptr && QtUi::MenuItem("Open...", "Ctrl+O", false, !sceneLoading))
             {
-                if (PromptForSceneOpenPath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
-                {
-                    editorInstance->BeginLoadSceneFromFile(gSceneFileBuffer);
-                }
+                // Through OpenScene, not straight to the loader: that is what
+                // asks about unsaved changes first. This item used to call the
+                // loader directly and could discard an edited level silently,
+                // while Ctrl+O - the same command - asked.
+                editorInstance->OpenScene(windowHandle);
             }
 
-            if (editorInstance != nullptr && QtUi::MenuItem("Save", nullptr, false, !sceneLoading))
+            if (editorInstance != nullptr && QtUi::MenuItem("Save", "Ctrl+S", false, !sceneLoading))
             {
-                if (!editorInstance->GetCurrentSceneFilePath().empty())
-                {
-                    editorInstance->SaveSceneToFile(editorInstance->GetCurrentSceneFilePath());
-                }
-                else if (PromptForSceneSavePath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
-                {
-                    editorInstance->SaveSceneToFile(gSceneFileBuffer);
-                }
+                editorInstance->SaveScene(windowHandle);
             }
 
+            // All four File commands now go through the Editor rather than
+            // duplicating its logic here, so the menu and the shortcuts cannot
+            // drift apart the way Open had.
             if (editorInstance != nullptr && QtUi::MenuItem("Save As...", nullptr, false, !sceneLoading))
             {
-                if (!editorInstance->GetCurrentSceneFilePath().empty())
-                {
-                    strcpy_s(gSceneFileBuffer, editorInstance->GetCurrentSceneFilePath().c_str());
-                }
-
-                if (PromptForSceneSavePath(windowHandle, gSceneFileBuffer, static_cast<DWORD>(std::size(gSceneFileBuffer))))
-                {
-                    editorInstance->SaveSceneToFile(gSceneFileBuffer);
-                }
+                editorInstance->SaveSceneAs(windowHandle);
             }
 
             QtUi::Separator();
@@ -1483,6 +1477,18 @@ void RenderEditorMainMenu(
 
         if (editorInstance != nullptr && QtUi::BeginMenu("Edit"))
         {
+            if (QtUi::MenuItem("Undo", "Ctrl+Z", false, editorInstance->CanUndo()))
+            {
+                editorInstance->Undo();
+            }
+
+            if (QtUi::MenuItem("Redo", "Ctrl+Y", false, editorInstance->CanRedo()))
+            {
+                editorInstance->Redo();
+            }
+
+            QtUi::Separator();
+
             const bool canCopy = editorInstance->CanCopySelectedEntity();
             const bool canPaste = editorInstance->CanPasteEntity();
             const bool canDelete = editorInstance->CanDeleteSelectedEntity();
@@ -1510,6 +1516,22 @@ void RenderEditorMainMenu(
             if (QtUi::MenuItem("G-Buffer / RT Debug..."))
                 gShowGBufferDebugWindow = true;
 
+            QtUi::EndMenu();
+        }
+
+        if (editorInstance != nullptr && QtUi::BeginMenu("Play"))
+        {
+            // Both entries always, one of them greyed, rather than a single item whose
+            // label follows the state: menu nodes are keyed by their label, so a name
+            // that changed would add its action at the end of the menu - below the mode
+            // entries - the first time the state flipped.
+            const bool playing = editorInstance->IsPlaySessionActive();
+            if (QtUi::MenuItem("Play", nullptr, false, !playing && !sceneLoading))
+                editorInstance->RequestPlaySession();
+            if (QtUi::MenuItem("Stop", nullptr, false, playing))
+                editorInstance->StopPlaySession();
+            QtUi::Separator();
+            editorInstance->DrawPlayModeMenuItems();
             QtUi::EndMenu();
         }
 
@@ -1636,7 +1658,7 @@ void RenderEditorMainMenu(
         if (showViewportPlacementIcons != nullptr)
         {
             // Let the user hide the placement markers when they want an unobstructed view of the scene.
-            QtUi::Checkbox("Show Geometry Placement Icons", showViewportPlacementIcons);
+            QtUi::Checkbox("Show Placement Icons & Light Shapes", showViewportPlacementIcons);
         }
 
         QtUi::End();
@@ -2541,18 +2563,78 @@ void RenderEditorMainMenu(
                     QtUi::Separator();
                     QtUi::TextDisabled("Exposure");
 
-                    SliderFloatWithInput("Exposure (EV)##agx", &agxSettings->Exposure, -5.0f, 5.0f, "%.2f");
-                    QtUi::SetItemTooltip("Exposure adjustment in EV stops. 0 = no change, positive = brighter.");
-
-                    SliderFloatWithInput("EV100 Min##agx", &agxSettings->Ev100Min, -6.0f, 16.0f, "%.2f");
-                    QtUi::SetItemTooltip("Lower AgX exposure bound. Typical targets: -6 starlight night, -3 full moon, 3 blue hour, 8 golden hour, 11 overcast, 16 clear midday.");
-
-                    SliderFloatWithInput("EV100 Max##agx", &agxSettings->Ev100Max, -6.0f, 16.0f, "%.2f");
-                    QtUi::SetItemTooltip("Upper AgX exposure bound. Typical targets: -6 starlight night, -3 full moon, 3 blue hour, 8 golden hour, 11 overcast, 16 clear midday.");
-
-                    if (agxSettings->Ev100Max <= agxSettings->Ev100Min)
                     {
-                        agxSettings->Ev100Max = agxSettings->Ev100Min + 0.001f;
+                        const char* exposureModes[] = { "Manual", "Auto (Histogram)" };
+                        int exposureMode = static_cast<int>(agxSettings->ExposureMode);
+                        if (QtUi::Combo("Exposure Mode##agx", &exposureMode, exposureModes, 2))
+                        {
+                            agxSettings->ExposureMode = static_cast<AgxExposureMode>(exposureMode);
+                        }
+                        QtUi::SetItemTooltip("Manual uses the EV100 value below. Auto meters the scene with a 64-bin luminance histogram each frame and adapts towards it, clamped to the EV100 Min/Max range.");
+                    }
+
+                    const bool autoExposure = agxSettings->ExposureMode == AgxExposureMode::AutoHistogram;
+
+                    QtUi::BeginDisabled(autoExposure);
+                    SliderFloatWithInput("Exposure (EV100)##agx", &agxSettings->Ev100, -16.0f, 16.0f, "%.2f");
+                    QtUi::SetItemTooltip("Photographic exposure. One unit is one stop and higher is darker, like stopping a camera down. AgX itself always encodes over the same fixed window; this is what decides how bright the frame is. Driven by the meter in Auto mode.");
+                    QtUi::EndDisabled();
+
+                    SliderFloatWithInput("Exposure Trim (EV)##agx", &agxSettings->Exposure, -5.0f, 5.0f, "%.2f");
+                    QtUi::SetItemTooltip("Offset on top of the EV100 exposure, in stops. 0 = no change, positive = brighter.");
+
+                    const bool minEvChanged = SliderFloatWithInput("EV100 Min##agx", &agxSettings->Ev100Min, -16.0f, 16.0f, "%.2f");
+                    QtUi::SetItemTooltip("Lower clamp on the exposure. In Auto mode this is the darkest the meter is allowed to settle. Set Min and Max to the same value to pin the exposure there.");
+
+                    const bool maxEvChanged = SliderFloatWithInput("EV100 Max##agx", &agxSettings->Ev100Max, -16.0f, 16.0f, "%.2f");
+                    QtUi::SetItemTooltip("Upper clamp on the exposure. In Auto mode this is the brightest the meter is allowed to settle. Set Min and Max to the same value to pin the exposure there.");
+
+                    // Min == Max is a legal, useful setting now that these only clamp
+                    // the exposure, so the bounds are merely kept in order: push the
+                    // one the user is not dragging.
+                    if (agxSettings->Ev100Max < agxSettings->Ev100Min)
+                    {
+                        if (minEvChanged && !maxEvChanged)
+                        {
+                            agxSettings->Ev100Max = agxSettings->Ev100Min;
+                        }
+                        else
+                        {
+                            agxSettings->Ev100Min = agxSettings->Ev100Max;
+                        }
+                    }
+
+                    if (autoExposure)
+                    {
+                        QtUi::Separator();
+                        QtUi::TextDisabled("Auto Exposure");
+
+                        SliderFloatWithInput("Speed Up##agx", &agxSettings->AutoExposureSpeedUp, 0.0f, 10.0f, "%.2f");
+                        QtUi::SetItemTooltip("Stops per second when adapting to a brighter scene, such as walking out of a cave. 0 freezes the adaptation.");
+
+                        SliderFloatWithInput("Speed Down##agx", &agxSettings->AutoExposureSpeedDown, 0.0f, 10.0f, "%.2f");
+                        QtUi::SetItemTooltip("Stops per second when adapting to a darker scene. Usually slower than Speed Up, the way an eye takes longer to dark-adapt.");
+
+                        SliderFloatWithInput("Low Percent##agx", &agxSettings->AutoExposureLowPercent, 0.0f, 1.0f, "%.2f");
+                        QtUi::SetItemTooltip("Fraction of the darkest pixels ignored when metering. Raising it stops large shadowed areas from washing the image out.");
+
+                        SliderFloatWithInput("High Percent##agx", &agxSettings->AutoExposureHighPercent, 0.0f, 1.0f, "%.2f");
+                        QtUi::SetItemTooltip("Cumulative point the metering stops at. Lowering it stops a lamp or a bright specular hit from crushing the image.");
+
+                        if (agxSettings->AutoExposureHighPercent < agxSettings->AutoExposureLowPercent)
+                            agxSettings->AutoExposureHighPercent = agxSettings->AutoExposureLowPercent;
+
+                        SliderFloatWithInput("Grey Point##agx", &agxSettings->AutoExposureGreyPoint, 0.02f, 0.5f, "%.3f");
+                        QtUi::SetItemTooltip("Scene luminance the metered average is exposed onto. 0.18 is photographic middle grey; lower is a darker overall image.");
+
+                        SliderFloatWithInput("Metering Mask##agx", &agxSettings->AutoExposureMeteringMask, 0.0f, 1.0f, "%.2f");
+                        QtUi::SetItemTooltip("0 meters the whole frame evenly, 1 weights the centre heavily. Centre bias stops something bright at the edge of the screen from stopping the exposure down.");
+
+                        SliderFloatWithInput("Histogram Log Min##agx", &agxSettings->AutoExposureHistogramLogMin, -20.0f, 0.0f, "%.1f");
+                        QtUi::SetItemTooltip("Darkest luminance the histogram resolves, in log2. Only needs to span the scene's real range; widening it costs resolution per bin.");
+
+                        SliderFloatWithInput("Histogram Log Max##agx", &agxSettings->AutoExposureHistogramLogMax, 0.0f, 20.0f, "%.1f");
+                        QtUi::SetItemTooltip("Brightest luminance the histogram resolves, in log2.");
                     }
 
                     QtUi::Separator();
@@ -2603,8 +2685,13 @@ void RenderEditorMainMenu(
                     if (volumetricFogSettings->MaxDistance <= volumetricFogSettings->StartDistance)
                         volumetricFogSettings->MaxDistance = volumetricFogSettings->StartDistance + 0.001f;
                     SliderFloatWithInput("Density##volfog", &volumetricFogSettings->Density, 0.0f, 1.0f, "%.4f", 0.001f, 0.01f);
+                    QtUi::SetItemTooltip("Extinction per metre: a ray of length d keeps exp(-Density * d). Interiors need far more than outdoor haze - a 10 m room at 0.01 is only 10% attenuated.");
+                    SliderFloatWithInput("Scattering Albedo##volfog", &volumetricFogSettings->ScatteringAlbedo, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+                    QtUi::SetItemTooltip("How much of what the fog blocks it scatters back out rather than absorbing. 1 is smoke-free haze; lower values darken unlit fog toward soot.");
                     SliderFloatWithInput("Anisotropy##volfog", &volumetricFogSettings->Anisotropy, -0.95f, 0.95f, "%.2f", 0.01f, 0.1f);
                     QtUi::SetItemTooltip("Positive values bias forward scattering for stronger god rays.");
+                    SliderFloatWithInput("GI Intensity##volfog", &volumetricFogSettings->GiIntensity, 0.0f, 4.0f, "%.2f", 0.05f, 0.25f);
+                    QtUi::SetItemTooltip("Indirect light the fog picks up from the radiance probe grid. Often the only thing lighting fog in an interior with no sky. Above 0 this makes the probe grid run even when RTGI is the chosen GI mode; set it to 0 to drop that cost.");
                     SliderFloatWithInput("Base Height##volfog", &volumetricFogSettings->BaseHeight, -100.0f, 1000.0f, "%.2f m", 0.1f, 1.0f);
                     SliderFloatWithInput("Height Falloff##volfog", &volumetricFogSettings->HeightFalloff, 0.0f, 2.0f, "%.3f", 0.001f, 0.01f);
 
@@ -2913,6 +3000,10 @@ void RenderEditorMainMenu(
                     QtUi::ColorEdit3("Emissive Color", materialDefinition.EmissiveColor.data());
                     QtUi::SliderFloat("Metallic Factor", &materialDefinition.MetallicFactor, 0.0f, 1.0f);
                     QtUi::SliderFloat("Roughness Factor", &materialDefinition.RoughnessFactor, 0.0f, 1.0f);
+                    // 0.5 is neutral: it reproduces the 0.04 dielectric reflectance every
+                    // material used before this slider existed. Raising it is how a metal
+                    // gets a visible reflection in a scene with nothing to mirror.
+                    QtUi::SliderFloat("Specular", &materialDefinition.SpecularFactor, 0.0f, 1.0f);
                     QtUi::SliderFloat("Normal Scale", &materialDefinition.NormalScale, 0.0f, 4.0f);
                     QtUi::SliderFloat("Ambient Occlusion Strength", &materialDefinition.AmbientOcclusionStrength, 0.0f, 4.0f);
                     QtUi::SliderFloat("Opacity", &materialDefinition.Opacity, 0.0f, 1.0f);
@@ -3143,6 +3234,7 @@ void RenderEditorMainMenu(
                         QtUi::ColorEdit3("Emissive Color", subMat.EmissiveColor.data());
                         QtUi::SliderFloat("Metallic Factor", &subMat.MetallicFactor, 0.0f, 1.0f);
                         QtUi::SliderFloat("Roughness Factor", &subMat.RoughnessFactor, 0.0f, 1.0f);
+                        QtUi::SliderFloat("Specular", &subMat.SpecularFactor, 0.0f, 1.0f);
                         QtUi::SliderFloat("Normal Scale", &subMat.NormalScale, 0.0f, 4.0f);
                         QtUi::SliderFloat("AO Strength", &subMat.AmbientOcclusionStrength, 0.0f, 4.0f);
                         QtUi::SliderFloat("Opacity", &subMat.Opacity, 0.0f, 1.0f);

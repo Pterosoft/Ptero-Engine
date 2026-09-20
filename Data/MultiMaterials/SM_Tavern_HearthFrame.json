@@ -1,0 +1,146 @@
+{
+    "name": "SM_Tavern_HearthFrame",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_AgedOak_Timber",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_ForgedIron",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Plaster_UNUSED",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Stone",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

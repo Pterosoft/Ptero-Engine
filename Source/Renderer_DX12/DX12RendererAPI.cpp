@@ -4,6 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "Editor.h"
 #include "EngineCVars.h"
+#include "System/CVar.h"
 #include "System/PteroLog.h"
 #include "RendererStatisticsText.h"
 
@@ -32,6 +33,7 @@
 #include <thread>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 #include <wincodec.h>
@@ -54,6 +56,7 @@ extern "C"
     bool __stdcall DX12Context_EndFrame(UINT frameIndex);
     void __stdcall DX12Context_AbortFrame();
     bool __stdcall DX12Context_Resize(UINT width, UINT height);
+    bool __stdcall DX12Context_SetPresentationWindow(HWND windowHandle);
     HWND __stdcall DX12Context_GetWindowHandle();
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
@@ -77,10 +80,14 @@ namespace
 
     std::unique_ptr<DX12SceneRenderer> gSceneRenderer;
     Editor gEditor;
+    std::string gStandaloneLevel;
+    bool gStandaloneLevelLoaded = false;
+    bool gStandaloneStarted = false;
     RendererStatisticsText gRendererStatisticsText;
     AssetManager gAssetManager;
     std::string gRendererLastError;
     std::array<bool, EditorFrameCount> gBackBufferHasBeenPresented{};
+    std::array<bool, EditorFrameCount> gParkedBackBufferHasBeenPresented{};
     bool gShowRendererStatistics = true;
     int gPendingViewportWidth = 0;
     int gPendingViewportHeight = 0;
@@ -1339,6 +1346,18 @@ extern "C"
     __declspec(dllexport) void __stdcall RendererDX12_SetAudioManager(AudioManager* audioManager)
     {
         gAudioManagerPtr = audioManager;
+        // The host may register audio either side of RendererDX12_Initialize, so the
+        // scene renderer is told from both places rather than only from one of them.
+        if (gSceneRenderer)
+            gSceneRenderer->SetAudioManager(audioManager);
+    }
+
+    // Called before initialization: the child process owns a separate scene and DXGI viewport.
+    __declspec(dllexport) void __stdcall RendererDX12_ConfigureStandaloneGame(const wchar_t* level)
+    {
+        gStandaloneLevel = level ? std::filesystem::path(level).string() : std::string();
+        gStandaloneLevelLoaded = gStandaloneStarted = false;
+        QtUi::SetStandaloneGame(!gStandaloneLevel.empty());
     }
 
     __declspec(dllexport) bool __stdcall RendererDX12_Initialize(HWND windowHandle)
@@ -1352,7 +1371,9 @@ extern "C"
         ClearRendererError();
         gEditor.Shutdown();
         gSceneRenderer = std::make_unique<DX12SceneRenderer>();
+        gSceneRenderer->SetAudioManager(gAudioManagerPtr);
         gBackBufferHasBeenPresented.fill(false);
+        gParkedBackBufferHasBeenPresented.fill(false);
         gRendererStatisticsText = RendererStatisticsText();
         gShowRendererStatistics = true;
 
@@ -1403,6 +1424,10 @@ extern "C"
         }
 
         RegisterEngineCVars(*gSceneRenderer);
+        // Registered here rather than in RegisterEngineCVars because it belongs to the
+        // editor, not the renderer, and gEditor is what this file owns.
+        CVar::RegisterBool("ed.playinnewwindow", gEditor.GetPlayInNewWindowPointer(),
+            "Play opens a window of its own instead of running inside the editor viewport.");
         StartWatchdog();
 
         gQtUiReady = true;
@@ -1433,6 +1458,10 @@ extern "C"
             {
                 gDeviceRemovedReported = true;
                 DX12Context_LogDeviceRemovedDiagnostics();
+                // Straight after the page-fault address, so the two can be read
+                // together: whose memory that address was is not something DRED
+                // will say, but it is obvious against a list of what is resident.
+                if (gSceneRenderer) gSceneRenderer->LogLiveGpuBufferRanges();
                 PTERO_LOG_FATAL("Renderer",
                     "Rendering has stopped. Restart the editor; the log above names the last GPU work that ran.");
                 PteroLog::Flush();
@@ -1453,7 +1482,21 @@ extern "C"
 
         gFrameHeartbeat.fetch_add(1, std::memory_order_relaxed);
         const FrameProfiler frameProfiler;
+        // Play requests and scene restoration happen before command recording begins.
+        gEditor.UpdatePlaySession();
         QtUi::NewFrame();
+        if (QtUi::ViewportHandle() != DX12Context_GetWindowHandle())
+        {
+            if (!DX12Context_SetPresentationWindow(QtUi::ViewportHandle()))
+            {
+                const char* error=DX12Context_GetLastError();
+                SetRendererError(error ? error : "Could not transfer the renderer to the Play window.");
+                if (gSceneRenderer->IsGameRunning()) gSceneRenderer->StopGame();
+                gEditor.UpdatePlaySession();
+                return false;
+            }
+            gBackBufferHasBeenPresented.swap(gParkedBackBufferHasBeenPresented);
+        }
         RECT viewportRect{};
         GetClientRect(QtUi::ViewportHandle(), &viewportRect);
         UINT renderWidth=0, renderHeight=0;
@@ -1522,6 +1565,33 @@ extern "C"
         const bool sceneReady = gSceneRenderer->Initialize(commandList);
         if (sceneReady)
         {
+            if (QtUi::IsStandaloneGame() && !gStandaloneLevelLoaded)
+            {
+                gEditor.SetSceneRenderer(gSceneRenderer.get());
+                gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
+                gEditor.SetSceneSettings(
+                    &gSceneRenderer->GetTimeOfDaySettings(),
+                    &gSceneRenderer->GetTaaSettings(),
+                    &gSceneRenderer->GetSmaaSettings(),
+                    &gSceneRenderer->GetSharpenSettings(),
+                    &gSceneRenderer->GetDlssSettings(),
+                    &gSceneRenderer->GetGlobalIlluminationMode(),
+                    &gSceneRenderer->GetRtgiSettings(),
+                    &gSceneRenderer->GetRadianceCascadesSettings(),
+                    &gSceneRenderer->GetRtaoSettings(),
+                    &gSceneRenderer->GetGtaoSettings(),
+                    &gSceneRenderer->GetSsrSettings(),
+                    &gSceneRenderer->GetChromaticAberrationSettings(),
+                    &gSceneRenderer->GetAgxSettings(),
+                    &gSceneRenderer->GetVolumetricFogSettings(),
+                    &gSceneRenderer->GetVolumetricCloudSettings(),
+                    &gSceneRenderer->GetBloomSettings());
+                if (!gEditor.LoadSceneFromFile(gStandaloneLevel))
+                    throw std::runtime_error("Could not load the Farkle play level: " + gStandaloneLevel);
+                gEditor.SetShowViewportGrid(false);
+                gSceneRenderer->SetGridEnabled(false);
+                gStandaloneLevelLoaded = true;
+            }
             // Vegetation layers reference meshes by path but have no entity to
             // hang a MeshComponent on, so they load through this callback
             // rather than the per-entity resolution loop below.
@@ -1641,7 +1711,16 @@ extern "C"
 
             // The node graph editor keeps one document for the whole session and hands
             // out a stable reference to it, so this only has to be wired up once.
-            gSceneRenderer->SetNodeGraph(&NodeGraphEditor::Document());
+            gSceneRenderer->SetNodeGraph(&gEditor.GetRuntimeNodeGraph());
+
+            if (QtUi::IsStandaloneGame() && !gStandaloneStarted)
+            {
+                // A standalone build already owns the only window there is, so the mode
+                // is moot - OpenGameWindow takes the standalone path either way.
+                if (!gSceneRenderer->StartGame(true))
+                    throw std::runtime_error(gSceneRenderer->GetGameStartErrorMessage());
+                gStandaloneStarted = true;
+            }
 
             ReportProgress(L"Rendering initial scene frame...");
             const auto sceneStart = std::chrono::steady_clock::now();
@@ -1664,7 +1743,7 @@ extern "C"
             // tool can paint heightmaps and pick terrain height.
             gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
             gEditor.SetSceneRenderer(gSceneRenderer.get());
-            gEditor.Initialize(commandList);
+            if (!QtUi::IsStandaloneGame()) gEditor.Initialize(commandList);
         }
 
         // Swap-chain buffers begin life in COMMON state. After the first successful
@@ -1703,7 +1782,7 @@ extern "C"
             gbufferIds.GiAccum  = gSceneRenderer->GetGiAccumTextureId();
             gbufferIds.PointShadowArray = gSceneRenderer->GetPointShadowDebugTextureId();
             gUiBuildStart = std::chrono::steady_clock::now();
-            RenderEditorMainMenu(
+            if (!QtUi::IsGameWindowOpen()) RenderEditorMainMenu(
                 QtUi::HostHandle(),
                 &gEditor,
                 gSceneRenderer->GetSceneTextureId(),
@@ -1874,7 +1953,9 @@ extern "C"
             ID3D12DescriptorHeap* descriptorHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
             commandList->SetDescriptorHeaps(1, descriptorHeaps);
             RECT viewportRect{};
-            GetClientRect(QtUi::ViewportHandle(), &viewportRect);
+            // Stop may have hidden the game window during this frame. Finish the
+            // command list against the chain acquired by BeginFrame; transfer next frame.
+            GetClientRect(DX12Context_GetWindowHandle(), &viewportRect);
             QtViewportRenderer::Draw(commandList, gSceneRenderer->GetSceneTextureId(), viewportRect.right, viewportRect.bottom);
 
             // The game UI composites over the scene here rather than through the Qt UI
@@ -1951,6 +2032,9 @@ extern "C"
     __declspec(dllexport) bool __stdcall RendererDX12_Resize(UINT width, UINT height)
     {
         QtUi::ResizeHost(width, height);
+        // While Play owns presentation, resizing the editor only changes its parked
+        // surface. The frame loop resizes the active chain at the safe boundary.
+        if (QtUi::IsGameWindowOpen()) return true;
         RECT viewportRect{};
         GetClientRect(QtUi::ViewportHandle(), &viewportRect);
         if (!DX12Context_Resize(viewportRect.right, viewportRect.bottom))
@@ -1965,6 +2049,23 @@ extern "C"
         // Resized swap-chain buffers start life in COMMON state again.
         gBackBufferHasBeenPresented.fill(false);
         return true;
+    }
+
+    // Asked by the host before it begins shutting down. Returns false when the
+    // user chose Cancel at the unsaved-changes prompt, which means "do not
+    // close". Closing the editor is the one path that used to discard an edited
+    // level without a word: New and Open both asked, and the window's X did not.
+    //
+    // Modal, and deliberately on the caller's thread - it runs from WM_CLOSE,
+    // before any shutdown work has started, so a Cancel simply carries on
+    // rendering.
+    __declspec(dllexport) bool __stdcall RendererDX12_ConfirmClose(HWND ownerWindowHandle)
+    {
+        if (!gQtUiReady || QtUi::IsStandaloneGame())
+            return true;
+        if (gSceneRenderer && gSceneRenderer->IsGameRunning()) gSceneRenderer->StopGame();
+        gEditor.StopPlaySession();
+        return gEditor.ConfirmDiscardUnsavedScene(ownerWindowHandle);
     }
 
     __declspec(dllexport) void __stdcall RendererDX12_Shutdown()

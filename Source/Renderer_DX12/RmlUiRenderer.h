@@ -7,6 +7,7 @@
 #include "../QtUi/UiTypes.h"
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,11 +42,22 @@ public:
     // with nothing loaded; it becomes a clear.
     void Render(ID3D12GraphicsCommandList* commandList);
 
-    // Loads a document from Data/UI and shows it. Any previously loaded document is
+    // Loads a UTF-8 path relative to Data/UI (e.g. Farkle/farkle.rml) and shows it.
+    // Subdirectories are supported. Any previously loaded document is
     // closed first, so this doubles as the reload path while authoring.
     bool LoadDocument(const std::string& fileName);
     void CloseDocument();
     bool ReloadDocument();
+    // Buffered IDs: game actions are consumed on Update, never during DOM dispatch.
+    std::string PollGameAction();
+    void ApplyGameUiCommand(int operation, const char* id, const char* value);
+
+    // Called when a button is clicked or first hovered, so the host can play UI audio.
+    // Hover and click are the one part of the game's sound that the game module cannot
+    // drive: it only ever sees the actions a click produced, and never sees hover at
+    // all. An empty callback (the default) disables UI sound. Set while a play session
+    // is running; the UI Editor's preview is silent.
+    void SetUiSoundCallback(std::function<void(bool isClick)> callback) { mUiSoundCallback = std::move(callback); }
 
     // Element edits addressed by RML id, for game code and for the node graph's UI nodes.
     // Each returns false when there is no document loaded or no element with that id, so a
@@ -103,7 +115,8 @@ public:
     const std::vector<TracedEvent>& GetTracedEvents() const { return mTracedEvents; }
     void ClearTracedEvents() { mTracedEvents.clear(); }
 
-    // Documents found under Data/UI, by file name, sorted. Rescanned on every
+    // Documents found recursively under Data/UI, as sorted UTF-8 relative paths
+    // with forward slashes (e.g. Farkle/farkle.rml). Rescanned on every
     // call: the point of the viewer is to pick up a file you just wrote.
     static std::vector<std::string> ListAvailableDocuments();
 
@@ -168,6 +181,12 @@ private:
     // survive it - reloading and clicking again is the whole workflow.
     static constexpr std::size_t kMaxTracedEvents = 400;
     class TraceListener;
+    class ActionListener;
+    class SoundListener;
+    std::unique_ptr<ActionListener> mActionListener;
+    std::unique_ptr<SoundListener> mSoundListener;
+    std::function<void(bool)> mUiSoundCallback;
+    std::vector<std::string> mGameActions;
     std::unique_ptr<TraceListener> mTraceListener;
     std::vector<TracedEvent> mTracedEvents;
     bool mEventTracingEnabled = false;

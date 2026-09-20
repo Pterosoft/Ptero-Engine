@@ -1,0 +1,762 @@
+Ptero Engine session log
+Started 2026-09-21 00:09:42
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-21_00-09-42.txt
+----------------------------------------------------------------------
+[00:09:42.110] [INFO ] [Log         ] Logging to disk started.
+[00:09:42.110] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-21_00-09-42.txt
+[00:09:42.110] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[00:09:46.874] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[00:09:46.882] [INFO ] [CVar        ] 333 cvars registered. Type 'list' in the console to see them.
+[00:09:46.882] [INFO ] [Renderer    ] Renderer initialized.
+[00:10:00.500] [ERROR] [Watchdog    ] Render thread has not completed frame 1449 for 5.1 s. Everything above this line is what it did last.
+[00:10:06.746] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.747] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.747] [DEBUG] [Renderer    ] Attempting mesh load for entity='Table', meshPath='Geometry/MET_Table/Meshes/SM_MET_Table_c0_LOD0.fbx.ptero', materialPath='Geometry/MET_Table/M_MET_Table.json'
+[00:10:06.760] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Table', vertices=54401, indices=312513, subMeshes=1
+[00:10:06.760] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.760] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.760] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.760] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.760] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.760] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.760] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[00:10:06.761] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[00:10:06.761] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[00:10:06.761] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[00:10:06.761] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Geometry/Modular/sm_Floor_1_1.fbx.ptero', materialPath='Materials/Floor_Planks.json'
+[00:10:06.763] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=306, indices=1152, subMeshes=2
+[00:10:06.763] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[00:10:06.821] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[00:10:06.821] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[00:10:06.859] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[00:10:06.859] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[00:10:06.859] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[00:10:06.859] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[00:10:06.935] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[00:10:06.935] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[00:10:06.935] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[00:10:06.935] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice1', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.938] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice1', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.938] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice2', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.938] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice2', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.938] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice3', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.938] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice3', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.938] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice5', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.938] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice5', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.938] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice4', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.938] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice4', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.938] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_38', meshPath='Geometry/MVV_WoodenShelves_Shelves_01/Meshes/SM_MVV_WoodenShelve01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_WoodenShelves_Shelves_01/M_MVV_WoodenShelves_Shelves_01.json'
+[00:10:06.954] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_38', vertices=64221, indices=366270, subMeshes=1
+[00:10:06.954] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[00:10:06.955] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[00:10:06.955] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[00:10:06.955] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[00:10:06.955] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[00:10:06.955] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[00:10:06.955] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[00:10:06.956] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[00:10:06.956] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice6', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[00:10:06.956] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice6', vertices=5620, indices=15540, subMeshes=1
+[00:10:06.956] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[00:10:06.956] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[00:10:06.956] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.958] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.958] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.958] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.958] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.958] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.958] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.958] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.958] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_40', meshPath='Geometry/Modular/SM_Tavern_HearthFrame.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_HearthFrame.json'
+[00:10:06.960] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_40', vertices=2418, indices=6576, subMeshes=3
+[00:10:06.960] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.960] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.960] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[00:10:06.960] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:06.960] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay2.json'
+[00:10:06.960] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[00:10:07.048] [INFO ] [Meshes      ] Entity constant buffer grown to 54 slots x 3 frames (41472 bytes).
+[00:10:07.048] [INFO ] [Meshes      ] Material constant buffer grown to 128 draws x 3 frames.
+[00:10:07.049] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xb0bb000..0xb0be960 (14688 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.049] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e441a000..0x2e441b200 (4608 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.049] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=306, indexCount=1152, vbBytes=14688, ibBytes=4608
+[00:10:07.051] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[00:10:07.107] [WARN ] [Watchdog    ] Render thread recovered after 11.7 s; resumed at frame 1450.
+[00:10:07.116] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x88f0000..0x8b6d830 (2611248 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.117] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2fb690000..0x2fb7c1304 (1250052 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.117] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=0, vertexCount=54401, indexCount=312513, vbBytes=2611248, ibBytes=1250052
+[00:10:07.117] [DEBUG] [Meshes      ] First draw for entityIndex=1, entity='Table', lodIndex=0, vertexCount=54401, indexCount=312513, materialPath='Geometry/MET_Table/M_MET_Table.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=312513}, summedSubMeshIndices=312513, validSubMeshRanges=true
+[00:10:07.165] [DEBUG] [Meshes      ] First draw for entityIndex=2, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[00:10:07.166] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e45e0000..0x2e45e2040 (8256 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.167] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e441f000..0x2e441f900 (2304 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.167] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=3, lodIndex=1, vertexCount=172, indexCount=576, vbBytes=8256, ibBytes=2304
+[00:10:07.167] [DEBUG] [Meshes      ] First draw for entityIndex=3, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[00:10:07.167] [DEBUG] [Meshes      ] First draw for entityIndex=4, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[00:10:07.167] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2fb7d0000..0x2fb7ed8e0 (121056 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.168] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2fb7f0000..0x2fb7fa578 (42360 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.168] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=5, lodIndex=0, vertexCount=2522, indexCount=10590, vbBytes=121056, ibBytes=42360
+[00:10:07.168] [DEBUG] [Meshes      ] First draw for entityIndex=5, entity='Geometry_4', lodIndex=0, vertexCount=2522, indexCount=10590, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=10590}, summedSubMeshIndices=10590, validSubMeshRanges=true
+[00:10:07.189] [DEBUG] [Meshes      ] First draw for entityIndex=6, entity='Geometry_4', lodIndex=0, vertexCount=2522, indexCount=10590, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=10590}, summedSubMeshIndices=10590, validSubMeshRanges=true
+[00:10:07.190] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e3ffd000..0x2e3ffebc0 (7104 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.191] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e3fff000..0x2e3fff720 (1824 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.191] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:10:07.191] [DEBUG] [Meshes      ] First draw for entityIndex=7, entity='Geometry_5', lodIndex=0, vertexCount=148, indexCount=456, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=228}, draw[1]={materialId=1,indexStart=228,indexCount=228}, summedSubMeshIndices=456, validSubMeshRanges=true
+[00:10:07.254] [DEBUG] [Meshes      ] First draw for entityIndex=8, entity='Geometry_5', lodIndex=0, vertexCount=148, indexCount=456, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=228}, draw[1]={materialId=1,indexStart=228,indexCount=228}, summedSubMeshIndices=456, validSubMeshRanges=true
+[00:10:07.254] [DEBUG] [Meshes      ] First draw for entityIndex=9, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[00:10:07.254] [DEBUG] [Meshes      ] First draw for entityIndex=10, entity='Geometry_1', lodIndex=1, vertexCount=172, indexCount=576, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=288}, draw[1]={materialId=1,indexStart=288,indexCount=288}, summedSubMeshIndices=576, validSubMeshRanges=true
+[00:10:07.254] [DEBUG] [Meshes      ] First draw for entityIndex=11, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[00:10:07.254] [DEBUG] [Meshes      ] First draw for entityIndex=12, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[00:10:07.256] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0c7f0000..0xf0cdd37a0 (6174624 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.258] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e4010000..0x2e42ee8e0 (3008736 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.258] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=14, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[00:10:07.258] [DEBUG] [Meshes      ] First draw for entityIndex=14, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[00:10:07.278] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x19600000..0x199b2230 (3875376 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.279] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf0de00000..0xf0dfc2bac (1846188 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.279] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=15, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[00:10:07.279] [DEBUG] [Meshes      ] First draw for entityIndex=15, entity='Geometry_26', lodIndex=1, vertexCount=80737, indexCount=461547, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=461547}, summedSubMeshIndices=461547, validSubMeshRanges=true
+[00:10:07.300] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0f740000..0xf0fe870c0 (7631040 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.303] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf10220000..0xf105a5770 (3692400 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.303] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=16, lodIndex=0, vertexCount=158980, indexCount=923100, vbBytes=7631040, ibBytes=3692400
+[00:10:07.303] [DEBUG] [Meshes      ] First draw for entityIndex=16, entity='Geometry_26', lodIndex=0, vertexCount=158980, indexCount=923100, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=923100}, summedSubMeshIndices=923100, validSubMeshRanges=true
+[00:10:07.307] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf10d40000..0xf114c7050 (7893072 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.310] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf11840000..0xf11bae838 (3598392 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.310] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:10:07.310] [DEBUG] [Meshes      ] First draw for entityIndex=17, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[00:10:07.327] [DEBUG] [Meshes      ] First draw for entityIndex=18, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[00:10:07.328] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xb5d0000..0xb611dc0 (269760 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.329] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xb620000..0xb62f2d0 (62160 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.329] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=19, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[00:10:07.329] [DEBUG] [Meshes      ] First draw for entityIndex=19, entity='Dice1', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.379] [DEBUG] [Meshes      ] First draw for entityIndex=20, entity='Dice2', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.379] [DEBUG] [Meshes      ] First draw for entityIndex=21, entity='Dice3', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.380] [DEBUG] [Meshes      ] First draw for entityIndex=22, entity='Dice5', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.380] [DEBUG] [Meshes      ] First draw for entityIndex=23, entity='Dice4', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.381] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf16f80000..0xf170ffca0 (1572000 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.382] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f7340000..0x2f73f2d7c (732540 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.382] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=1, vertexCount=32750, indexCount=183135, vbBytes=1572000, ibBytes=732540
+[00:10:07.382] [DEBUG] [Meshes      ] First draw for entityIndex=25, entity='Geometry_38', lodIndex=1, vertexCount=32750, indexCount=183135, materialPath='Geometry/MVV_WoodenShelves_Shelves_01/M_MVV_WoodenShelves_Shelves_01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=183135}, summedSubMeshIndices=183135, validSubMeshRanges=true
+[00:10:07.400] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e45ec000..0x2e45f43a0 (33696 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.401] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e45f5000..0x2e45f89f0 (14832 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.401] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=1, vertexCount=702, indexCount=3708, vbBytes=33696, ibBytes=14832
+[00:10:07.401] [DEBUG] [Meshes      ] First draw for entityIndex=26, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] First draw for entityIndex=27, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] First draw for entityIndex=28, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] First draw for entityIndex=29, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] First draw for entityIndex=30, entity='Dice6', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] First draw for entityIndex=33, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[00:10:07.410] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x17cf0000..0x17d3c5f0 (312816 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.411] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf12bd0000..0xf12be40a0 (82080 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.411] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=34, lodIndex=0, vertexCount=6517, indexCount=20520, vbBytes=312816, ibBytes=82080
+[00:10:07.411] [DEBUG] [Meshes      ] First draw for entityIndex=34, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.566] [DEBUG] [Meshes      ] First draw for entityIndex=35, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.566] [DEBUG] [Meshes      ] First draw for entityIndex=36, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.566] [DEBUG] [Meshes      ] First draw for entityIndex=37, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.567] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1dfe0000..0x1dffc560 (116064 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.568] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x18050000..0x180566c0 (26304 bytes), releasing in 4 frames (frame 1450).
+[00:10:07.568] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=38, lodIndex=0, vertexCount=2418, indexCount=6576, vbBytes=116064, ibBytes=26304
+[00:10:07.568] [DEBUG] [Meshes      ] First draw for entityIndex=38, entity='Geometry_40', lodIndex=0, vertexCount=2418, indexCount=6576, materialPath='Geometry/Modular/M_Tavern_HearthFrame.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=1644}, draw[1]={materialId=1,indexStart=1644,indexCount=4800}, draw[2]={materialId=3,indexStart=6444,indexCount=132}, summedSubMeshIndices=6576, validSubMeshRanges=true
+[00:10:07.717] [DEBUG] [Meshes      ] First draw for entityIndex=39, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.718] [DEBUG] [Meshes      ] First draw for entityIndex=40, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:07.718] [DEBUG] [Meshes      ] First draw for entityIndex=41, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay2.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[00:10:12.181] [ERROR] [Watchdog    ] Render thread has not completed frame 1450 for 5.1 s. Everything above this line is what it did last.
+[00:10:27.392] [ERROR] [Watchdog    ] Render thread has not completed frame 1450 for 20.3 s. Everything above this line is what it did last.
+[00:10:42.618] [ERROR] [Watchdog    ] Render thread has not completed frame 1450 for 35.5 s. Everything above this line is what it did last.
+[00:10:57.824] [ERROR] [Watchdog    ] Render thread has not completed frame 1450 for 50.7 s. Everything above this line is what it did last.
+[00:11:13.036] [ERROR] [Watchdog    ] Render thread has not completed frame 1450 for 65.9 s. Everything above this line is what it did last.
+[00:11:23.480] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xb0bb000..0xb0be960 (frame 1454).
+[00:11:23.480] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e441a000..0x2e441b200 (frame 1454).
+[00:11:23.480] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x88f0000..0x8b6d830 (frame 1454).
+[00:11:23.480] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2fb690000..0x2fb7c1304 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e45e0000..0x2e45e2040 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e441f000..0x2e441f900 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2fb7d0000..0x2fb7ed8e0 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2fb7f0000..0x2fb7fa578 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e3ffd000..0x2e3ffebc0 (frame 1454).
+[00:11:23.481] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e3fff000..0x2e3fff720 (frame 1454).
+[00:11:23.482] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0c7f0000..0xf0cdd37a0 (frame 1454).
+[00:11:23.482] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e4010000..0x2e42ee8e0 (frame 1454).
+[00:11:23.482] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x19600000..0x199b2230 (frame 1454).
+[00:11:23.482] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf0de00000..0xf0dfc2bac (frame 1454).
+[00:11:23.483] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0f740000..0xf0fe870c0 (frame 1454).
+[00:11:23.484] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf10220000..0xf105a5770 (frame 1454).
+[00:11:23.484] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf10d40000..0xf114c7050 (frame 1454).
+[00:11:23.484] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf11840000..0xf11bae838 (frame 1454).
+[00:11:23.484] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xb5d0000..0xb611dc0 (frame 1454).
+[00:11:23.485] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xb620000..0xb62f2d0 (frame 1454).
+[00:11:23.485] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf16f80000..0xf170ffca0 (frame 1454).
+[00:11:23.485] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f7340000..0x2f73f2d7c (frame 1454).
+[00:11:23.485] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e45ec000..0x2e45f43a0 (frame 1454).
+[00:11:23.485] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e45f5000..0x2e45f89f0 (frame 1454).
+[00:11:23.486] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x17cf0000..0x17d3c5f0 (frame 1454).
+[00:11:23.486] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf12bd0000..0xf12be40a0 (frame 1454).
+[00:11:23.486] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1dfe0000..0x1dffc560 (frame 1454).
+[00:11:23.486] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x18050000..0x180566c0 (frame 1454).
+[00:11:23.683] [WARN ] [Watchdog    ] Render thread recovered after 76.6 s; resumed at frame 1468.
+[00:11:29.492] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf361e0000..0xf361f22d0 (74448 bytes), releasing in 4 frames (frame 1905).
+[00:11:29.493] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e45ec000..0x2e45f12bc (21180 bytes), releasing in 4 frames (frame 1905).
+[00:11:29.493] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=6, lodIndex=1, vertexCount=1551, indexCount=5295, vbBytes=74448, ibBytes=21180
+[00:11:29.540] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf16f80000..0xf170c9af0 (1350384 bytes), releasing in 4 frames (frame 1906).
+[00:11:29.540] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xcb10000..0xcba897c (625020 bytes), releasing in 4 frames (frame 1906).
+[00:11:29.540] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=1, vertexCount=28133, indexCount=156255, vbBytes=1350384, ibBytes=625020
+[00:11:29.603] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf361e0000..0xf361f22d0 (frame 1909).
+[00:11:29.604] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e45ec000..0x2e45f12bc (frame 1909).
+[00:11:29.645] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf16f80000..0xf170c9af0 (frame 1910).
+[00:11:29.646] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xcb10000..0xcba897c (frame 1910).
+[00:11:34.577] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf407fe000..0xf407ff050 (4176 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.577] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1805f000..0x1805f378 (888 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.577] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[00:11:34.582] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf5aa00000..0xf5b889830 (15243312 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.584] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf10d40000..0xf1141d07c (7196796 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.584] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:11:34.585] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1af70000..0x1af9aa20 (174624 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.586] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e45ec000..0x2e45f4358 (33624 bytes), releasing in 4 frames (frame 2306).
+[00:11:34.586] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=19, lodIndex=2, vertexCount=3638, indexCount=8406, vbBytes=174624, ibBytes=33624
+[00:11:34.985] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf407fe000..0xf407ff050 (frame 2310).
+[00:11:34.985] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1805f000..0x1805f378 (frame 2310).
+[00:11:34.985] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf5aa00000..0xf5b889830 (frame 2310).
+[00:11:34.986] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf10d40000..0xf1141d07c (frame 2310).
+[00:11:34.986] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1af70000..0x1af9aa20 (frame 2310).
+[00:11:34.986] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e45ec000..0x2e45f4358 (frame 2310).
+[00:11:40.120] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2fb690000..0x2fb7d9af0 (1350384 bytes), releasing in 4 frames (frame 2640).
+[00:11:40.120] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2f7340000..0x2f73d897c (625020 bytes), releasing in 4 frames (frame 2640).
+[00:11:40.120] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1dfe0000..0x1dff22d0 (74448 bytes), releasing in 4 frames (frame 2640).
+[00:11:40.120] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x18050000..0x180552bc (21180 bytes), releasing in 4 frames (frame 2640).
+[00:11:40.181] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2fb690000..0x2fb7d9af0 (frame 2644).
+[00:11:40.181] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2f7340000..0x2f73d897c (frame 2644).
+[00:11:40.181] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1dfe0000..0x1dff22d0 (frame 2644).
+[00:11:40.181] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x18050000..0x180552bc (frame 2644).
+[00:11:45.645] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e3ffb000..0x2e3ffcbc0 (7104 bytes), releasing in 4 frames (frame 3000).
+[00:11:45.645] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x1a6cf000..0x1a6cf720 (1824 bytes), releasing in 4 frames (frame 3000).
+[00:11:45.645] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf105b0000..0xf10d37050 (7893072 bytes), releasing in 4 frames (frame 3000).
+[00:11:45.645] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf114d0000..0xf1183e838 (3598392 bytes), releasing in 4 frames (frame 3000).
+[00:11:45.706] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e3ffb000..0x2e3ffcbc0 (frame 3004).
+[00:11:45.707] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x1a6cf000..0x1a6cf720 (frame 3004).
+[00:11:45.707] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf105b0000..0xf10d37050 (frame 3004).
+[00:11:45.707] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf114d0000..0xf1183e838 (frame 3004).
+[00:11:49.328] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xe500000..0xe541dc0 (269760 bytes), releasing in 4 frames (frame 3240).
+[00:11:49.328] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf069f0000..0xf069ff2d0 (62160 bytes), releasing in 4 frames (frame 3240).
+[00:11:49.389] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xe500000..0xe541dc0 (frame 3244).
+[00:11:49.390] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf069f0000..0xf069ff2d0 (frame 3244).
+[00:11:52.140] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xe500000..0xe541dc0 (269760 bytes), releasing in 4 frames (frame 3423).
+[00:11:52.141] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xb610000..0xb61f2d0 (62160 bytes), releasing in 4 frames (frame 3423).
+[00:11:52.141] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=20, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[00:11:52.218] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xe500000..0xe541dc0 (frame 3427).
+[00:11:52.218] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xb610000..0xb61f2d0 (frame 3427).
+[00:13:49.994] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (7893072 bytes), releasing in 4 frames (frame 11061).
+[00:13:49.995] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (3598392 bytes), releasing in 4 frames (frame 11061).
+[00:13:49.995] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:13:50.056] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (frame 11065).
+[00:13:50.056] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (frame 11065).
+[00:13:50.157] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf17094000..0xf17095bc0 (7104 bytes), releasing in 4 frames (frame 11071).
+[00:13:50.157] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1a6cf000..0x1a6cf720 (1824 bytes), releasing in 4 frames (frame 11071).
+[00:13:50.157] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:13:50.222] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf17094000..0xf17095bc0 (frame 11075).
+[00:13:50.223] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1a6cf000..0x1a6cf720 (frame 11075).
+[00:13:57.214] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf0df00000..0xf0df41dc0 (269760 bytes), releasing in 4 frames (frame 11520).
+[00:13:57.214] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf069f0000..0xf069ff2d0 (62160 bytes), releasing in 4 frames (frame 11520).
+[00:13:57.275] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf0df00000..0xf0df41dc0 (frame 11524).
+[00:13:57.276] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf069f0000..0xf069ff2d0 (frame 11524).
+[00:14:00.918] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (4176 bytes), releasing in 4 frames (frame 11760).
+[00:14:00.918] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x18056000..0x18056378 (888 bytes), releasing in 4 frames (frame 11760).
+[00:14:00.918] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf59a00000..0xf5a889830 (15243312 bytes), releasing in 4 frames (frame 11760).
+[00:14:00.918] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (7196796 bytes), releasing in 4 frames (frame 11760).
+[00:14:00.980] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (frame 11764).
+[00:14:00.980] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x18056000..0x18056378 (frame 11764).
+[00:14:00.980] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf59a00000..0xf5a889830 (frame 11764).
+[00:14:00.980] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (frame 11764).
+[00:14:02.045] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2eb5a4000..0x2eb5a5050 (4176 bytes), releasing in 4 frames (frame 11829).
+[00:14:02.046] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1a6cf000..0x1a6cf378 (888 bytes), releasing in 4 frames (frame 11829).
+[00:14:02.046] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=8, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[00:14:02.108] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2eb5a4000..0x2eb5a5050 (frame 11833).
+[00:14:02.108] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1a6cf000..0x1a6cf378 (frame 11833).
+[00:14:02.539] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf39400000..0xf3a289830 (15243312 bytes), releasing in 4 frames (frame 11861).
+[00:14:02.541] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xa980000..0xb05d07c (7196796 bytes), releasing in 4 frames (frame 11861).
+[00:14:02.541] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:14:02.596] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf39400000..0xf3a289830 (frame 11865).
+[00:14:02.597] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xa980000..0xb05d07c (frame 11865).
+[00:14:11.026] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e4570000..0x2e45b1dc0 (269760 bytes), releasing in 4 frames (frame 12414).
+[00:14:11.026] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2fb120000..0x2fb12f2d0 (62160 bytes), releasing in 4 frames (frame 12414).
+[00:14:11.027] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=19, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[00:14:11.096] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e4570000..0x2e45b1dc0 (frame 12418).
+[00:14:11.097] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2fb120000..0x2fb12f2d0 (frame 12418).
+[00:14:12.049] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8bc0 (7104 bytes), releasing in 4 frames (frame 12480).
+[00:14:12.049] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2eb5af000..0x2eb5af720 (1824 bytes), releasing in 4 frames (frame 12480).
+[00:14:12.049] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (7893072 bytes), releasing in 4 frames (frame 12480).
+[00:14:12.049] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (3598392 bytes), releasing in 4 frames (frame 12480).
+[00:14:12.112] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8bc0 (frame 12484).
+[00:14:12.112] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2eb5af000..0x2eb5af720 (frame 12484).
+[00:14:12.112] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (frame 12484).
+[00:14:12.113] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (frame 12484).
+[00:16:59.565] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (7893072 bytes), releasing in 4 frames (frame 23347).
+[00:16:59.568] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (3598392 bytes), releasing in 4 frames (frame 23347).
+[00:16:59.568] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:16:59.626] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (frame 23351).
+[00:16:59.627] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (frame 23351).
+[00:16:59.709] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e45e0000..0x2e45e1bc0 (7104 bytes), releasing in 4 frames (frame 23356).
+[00:16:59.710] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e441f000..0x2e441f720 (1824 bytes), releasing in 4 frames (frame 23356).
+[00:16:59.710] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:16:59.775] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e45e0000..0x2e45e1bc0 (frame 23360).
+[00:16:59.775] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e441f000..0x2e441f720 (frame 23360).
+[00:17:02.287] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1f1b0000..0x1f1f1dc0 (269760 bytes), releasing in 4 frames (frame 23520).
+[00:17:02.287] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2fb110000..0x2fb11f2d0 (62160 bytes), releasing in 4 frames (frame 23520).
+[00:17:02.349] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1f1b0000..0x1f1f1dc0 (frame 23524).
+[00:17:02.349] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2fb110000..0x2fb11f2d0 (frame 23524).
+[00:17:09.700] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (4176 bytes), releasing in 4 frames (frame 24000).
+[00:17:09.700] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x1805f000..0x1805f378 (888 bytes), releasing in 4 frames (frame 24000).
+[00:17:09.700] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (15243312 bytes), releasing in 4 frames (frame 24000).
+[00:17:09.700] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (7196796 bytes), releasing in 4 frames (frame 24000).
+[00:17:09.762] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (frame 24004).
+[00:17:09.762] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x1805f000..0x1805f378 (frame 24004).
+[00:17:09.762] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (frame 24004).
+[00:17:09.762] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (frame 24004).
+[00:17:14.692] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf17094000..0xf17095050 (4176 bytes), releasing in 4 frames (frame 24319).
+[00:17:14.693] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x8c1f000..0x8c1f378 (888 bytes), releasing in 4 frames (frame 24319).
+[00:17:14.693] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=8, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[00:17:14.753] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf17094000..0xf17095050 (frame 24323).
+[00:17:14.753] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x8c1f000..0x8c1f378 (frame 24323).
+[00:17:15.172] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf39400000..0xf3a289830 (15243312 bytes), releasing in 4 frames (frame 24350).
+[00:17:15.176] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xa980000..0xb05d07c (7196796 bytes), releasing in 4 frames (frame 24350).
+[00:17:15.177] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:17:15.228] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf39400000..0xf3a289830 (frame 24354).
+[00:17:15.228] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xa980000..0xb05d07c (frame 24354).
+[00:17:24.521] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (7893072 bytes), releasing in 4 frames (frame 24960).
+[00:17:24.521] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (3598392 bytes), releasing in 4 frames (frame 24960).
+[00:17:24.582] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (frame 24964).
+[00:17:24.582] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (frame 24964).
+[00:17:24.972] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (7893072 bytes), releasing in 4 frames (frame 24989).
+[00:17:24.973] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (3598392 bytes), releasing in 4 frames (frame 24989).
+[00:17:24.974] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:17:24.974] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1f1b0000..0x1f1f1dc0 (269760 bytes), releasing in 4 frames (frame 24989).
+[00:17:24.975] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1af83000..0x1af922d0 (62160 bytes), releasing in 4 frames (frame 24989).
+[00:17:24.975] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=19, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[00:17:25.229] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf3d960000..0xf3e0e7050 (frame 24993).
+[00:17:25.229] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (frame 24993).
+[00:17:25.230] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1f1b0000..0x1f1f1dc0 (frame 24993).
+[00:17:25.230] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1af83000..0x1af922d0 (frame 24993).
+[00:17:33.625] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1be40000..0x1be6aa20 (174624 bytes), releasing in 4 frames (frame 25680).
+[00:17:33.625] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fb358 (33624 bytes), releasing in 4 frames (frame 25680).
+[00:17:33.625] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (15243312 bytes), releasing in 4 frames (frame 25680).
+[00:17:33.625] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (7196796 bytes), releasing in 4 frames (frame 25680).
+[00:17:33.714] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1be40000..0x1be6aa20 (frame 25684).
+[00:17:33.714] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fb358 (frame 25684).
+[00:17:33.715] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (frame 25684).
+[00:17:33.715] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (frame 25684).
+[00:17:36.479] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf61800000..0xf62689830 (15243312 bytes), releasing in 4 frames (frame 25904).
+[00:17:36.482] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf3d960000..0xf3e03d07c (7196796 bytes), releasing in 4 frames (frame 25904).
+[00:17:36.482] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:17:36.546] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (68976 bytes), releasing in 4 frames (frame 25905).
+[00:17:36.546] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1a6d0000..0x1a6d73e0 (29664 bytes), releasing in 4 frames (frame 25905).
+[00:17:36.546] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=0, vertexCount=1437, indexCount=7416, vbBytes=68976, ibBytes=29664
+[00:17:36.620] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf11840000..0xf11b30970 (3082608 bytes), releasing in 4 frames (frame 25906).
+[00:17:36.622] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf5cb40000..0xf5cca5af8 (1465080 bytes), releasing in 4 frames (frame 25906).
+[00:17:36.622] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=0, vertexCount=64221, indexCount=366270, vbBytes=3082608, ibBytes=1465080
+[00:17:36.690] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf63400000..0xf63fb5930 (12278064 bytes), releasing in 4 frames (frame 25907).
+[00:17:36.693] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2efe00000..0x2f03bd1d8 (6017496 bytes), releasing in 4 frames (frame 25907).
+[00:17:36.693] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=33, lodIndex=0, vertexCount=255793, indexCount=1504374, vbBytes=12278064, ibBytes=6017496
+[00:17:36.754] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf61800000..0xf62689830 (frame 25908).
+[00:17:36.754] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf3d960000..0xf3e03d07c (frame 25908).
+[00:17:36.820] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (frame 25909).
+[00:17:36.820] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1a6d0000..0x1a6d73e0 (frame 25909).
+[00:17:36.898] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf11840000..0xf11b30970 (frame 25910).
+[00:17:36.898] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf5cb40000..0xf5cca5af8 (frame 25910).
+[00:17:36.960] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf63400000..0xf63fb5930 (frame 25911).
+[00:17:36.961] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2efe00000..0x2f03bd1d8 (frame 25911).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (15243312 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (7196796 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (3082608 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf10220000..0xf10385af8 (1465080 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (68976 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.583] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (29664 bytes), releasing in 4 frames (frame 26880).
+[00:17:49.672] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf10400000..0xf11289830 (frame 26884).
+[00:17:49.672] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (frame 26884).
+[00:17:49.672] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (frame 26884).
+[00:17:49.673] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf10220000..0xf10385af8 (frame 26884).
+[00:17:49.673] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (frame 26884).
+[00:17:49.673] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (frame 26884).
+[00:17:50.337] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf63400000..0xf64289830 (15243312 bytes), releasing in 4 frames (frame 26938).
+[00:17:50.338] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf3d960000..0xf3e03d07c (7196796 bytes), releasing in 4 frames (frame 26938).
+[00:17:50.338] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:17:50.437] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf63400000..0xf64289830 (frame 26942).
+[00:17:50.438] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf3d960000..0xf3e03d07c (frame 26942).
+[00:17:50.567] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (68976 bytes), releasing in 4 frames (frame 26949).
+[00:17:50.567] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f9130000..0x2f91373e0 (29664 bytes), releasing in 4 frames (frame 26949).
+[00:17:50.567] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=0, vertexCount=1437, indexCount=7416, vbBytes=68976, ibBytes=29664
+[00:17:50.663] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (frame 26953).
+[00:17:50.663] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f9130000..0x2f91373e0 (frame 26953).
+[00:17:50.735] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf35400000..0xf356f0970 (3082608 bytes), releasing in 4 frames (frame 26954).
+[00:17:50.736] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf5cb40000..0xf5cca5af8 (1465080 bytes), releasing in 4 frames (frame 26954).
+[00:17:50.736] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=0, vertexCount=64221, indexCount=366270, vbBytes=3082608, ibBytes=1465080
+[00:17:50.822] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf35400000..0xf356f0970 (frame 26958).
+[00:17:50.823] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf5cb40000..0xf5cca5af8 (frame 26958).
+[00:17:54.666] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf62800000..0xf633b5930 (12278064 bytes), releasing in 4 frames (frame 27240).
+[00:17:54.666] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2f8730000..0x2f8ced1d8 (6017496 bytes), releasing in 4 frames (frame 27240).
+[00:17:54.779] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf62800000..0xf633b5930 (frame 27244).
+[00:17:54.779] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2f8730000..0x2f8ced1d8 (frame 27244).
+[00:17:58.825] [INFO ] [Editor      ] Copied entity 'Geometry_27' (index 17).
+[00:17:59.090] [INFO ] [Editor      ] Pasted entity 'Geometry_27' at index 42. Scene now holds 43 entities.
+[00:17:59.176] [DEBUG] [Meshes      ] First draw for entityIndex=42, entity='Geometry_27', lodIndex=0, vertexCount=317569, indexCount=1799199, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1799199}, summedSubMeshIndices=1799199, validSubMeshRanges=true
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8bc0 (7104 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x1a6cf000..0x1a6cf720 (1824 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (7893072 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (3598392 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (1572000 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e7b40000..0x2e7bf2d7c (732540 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e45e3000..0x2e45eb3a0 (33696 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.601] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2fb7fb000..0x2fb7fe9f0 (14832 bytes), releasing in 4 frames (frame 27600).
+[00:17:59.710] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8bc0 (frame 27604).
+[00:17:59.711] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x1a6cf000..0x1a6cf720 (frame 27604).
+[00:17:59.711] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2fa980000..0x2fb107050 (frame 27604).
+[00:17:59.711] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf114c0000..0xf1182e838 (frame 27604).
+[00:17:59.711] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (frame 27604).
+[00:17:59.712] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e7b40000..0x2e7bf2d7c (frame 27604).
+[00:17:59.712] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e45e3000..0x2e45eb3a0 (frame 27604).
+[00:17:59.712] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2fb7fb000..0x2fb7fe9f0 (frame 27604).
+[00:18:01.762] [INFO ] [Editor      ] Copied entity 'Geometry_1' (index 9).
+[00:18:02.033] [INFO ] [Editor      ] Pasted entity 'Geometry_1' at index 43. Scene now holds 44 entities.
+[00:18:02.121] [DEBUG] [Meshes      ] First draw for entityIndex=43, entity='Geometry_1', lodIndex=0, vertexCount=306, indexCount=1152, materialPath='Materials/Floor_Planks.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=576}, draw[1]={materialId=1,indexStart=576,indexCount=576}, summedSubMeshIndices=1152, validSubMeshRanges=true
+[00:18:03.198] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1dc00000..0x1dfb2230 (3875376 bytes), releasing in 4 frames (frame 27840).
+[00:18:03.198] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf06820000..0xf069e2bac (1846188 bytes), releasing in 4 frames (frame 27840).
+[00:18:03.305] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1dc00000..0x1dfb2230 (frame 27844).
+[00:18:03.305] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf06820000..0xf069e2bac (frame 27844).
+[00:18:05.593] [INFO ] [Editor      ] Copied entity 'Geometry_27' (index 18).
+[00:18:05.831] [INFO ] [Editor      ] Pasted entity 'Geometry_27' at index 43. Scene now holds 44 entities.
+[00:18:07.946] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2f9130000..0x2f91383a0 (33696 bytes), releasing in 4 frames (frame 28163).
+[00:18:07.946] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2fb7e0000..0x2fb7e39f0 (14832 bytes), releasing in 4 frames (frame 28163).
+[00:18:07.946] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=29, lodIndex=1, vertexCount=702, indexCount=3708, vbBytes=33696, ibBytes=14832
+[00:18:08.022] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf06820000..0xf0699fca0 (1572000 bytes), releasing in 4 frames (frame 28164).
+[00:18:08.026] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (732540 bytes), releasing in 4 frames (frame 28164).
+[00:18:08.026] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=1, vertexCount=32750, indexCount=183135, vbBytes=1572000, ibBytes=732540
+[00:18:08.112] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf3ebfe000..0xf3ebffbc0 (7104 bytes), releasing in 4 frames (frame 28165).
+[00:18:08.113] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf0df47000..0xf0df47720 (1824 bytes), releasing in 4 frames (frame 28165).
+[00:18:08.113] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:18:08.209] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2f8730000..0x2f8eb7050 (7893072 bytes), releasing in 4 frames (frame 28166).
+[00:18:08.218] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (3598392 bytes), releasing in 4 frames (frame 28166).
+[00:18:08.218] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:18:08.295] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2f9130000..0x2f91383a0 (frame 28167).
+[00:18:08.295] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2fb7e0000..0x2fb7e39f0 (frame 28167).
+[00:18:08.310] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x19600000..0x199b2230 (3875376 bytes), releasing in 4 frames (frame 28167).
+[00:18:08.314] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1fc80000..0x1fe42bac (1846188 bytes), releasing in 4 frames (frame 28167).
+[00:18:08.314] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=15, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[00:18:08.399] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf06820000..0xf0699fca0 (frame 28168).
+[00:18:08.399] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (frame 28168).
+[00:18:08.475] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf3ebfe000..0xf3ebffbc0 (frame 28169).
+[00:18:08.476] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf0df47000..0xf0df47720 (frame 28169).
+[00:18:08.557] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2f8730000..0x2f8eb7050 (frame 28170).
+[00:18:08.558] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf35400000..0xf3576e838 (frame 28170).
+[00:18:08.648] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x19600000..0x199b2230 (frame 28171).
+[00:18:08.648] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1fc80000..0x1fe42bac (frame 28171).
+[00:18:17.423] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (3082608 bytes), releasing in 4 frames (frame 28800).
+[00:18:17.423] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x1d540000..0x1d6a5af8 (1465080 bytes), releasing in 4 frames (frame 28800).
+[00:18:17.542] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (frame 28804).
+[00:18:17.542] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x1d540000..0x1d6a5af8 (frame 28804).
+[00:18:18.100] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf114c0000..0xf117b0970 (3082608 bytes), releasing in 4 frames (frame 28839).
+[00:18:18.101] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1d540000..0x1d6a5af8 (1465080 bytes), releasing in 4 frames (frame 28839).
+[00:18:18.101] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=0, vertexCount=64221, indexCount=366270, vbBytes=3082608, ibBytes=1465080
+[00:18:18.214] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf114c0000..0xf117b0970 (frame 28843).
+[00:18:18.215] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1d540000..0x1d6a5af8 (frame 28843).
+[00:18:18.296] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf10400000..0xf10fb5930 (12278064 bytes), releasing in 4 frames (frame 28844).
+[00:18:18.302] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf62800000..0xf62dbd1d8 (6017496 bytes), releasing in 4 frames (frame 28844).
+[00:18:18.302] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=33, lodIndex=0, vertexCount=255793, indexCount=1504374, vbBytes=12278064, ibBytes=6017496
+[00:18:18.421] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf10400000..0xf10fb5930 (frame 28848).
+[00:18:18.421] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf62800000..0xf62dbd1d8 (frame 28848).
+[00:18:21.386] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf3d960000..0xf3e0e7050 (7893072 bytes), releasing in 4 frames (frame 29040).
+[00:18:21.386] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf11840000..0xf11bae838 (3598392 bytes), releasing in 4 frames (frame 29040).
+[00:18:21.514] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf3d960000..0xf3e0e7050 (frame 29044).
+[00:18:21.515] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf11840000..0xf11bae838 (frame 29044).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x165fc000..0x165fdbc0 (7104 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479fb000..0xf479fb720 (1824 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (1572000 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xd140000..0xd1f2d7c (732540 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e45e3000..0x2e45eb3a0 (33696 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.489] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf12bfc000..0xf12bff9f0 (14832 bytes), releasing in 4 frames (frame 29520).
+[00:18:28.627] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x165fc000..0x165fdbc0 (frame 29524).
+[00:18:28.627] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479fb000..0xf479fb720 (frame 29524).
+[00:18:28.628] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (frame 29524).
+[00:18:28.628] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xd140000..0xd1f2d7c (frame 29524).
+[00:18:28.628] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e45e3000..0x2e45eb3a0 (frame 29524).
+[00:18:28.628] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf12bfc000..0xf12bff9f0 (frame 29524).
+[00:18:31.018] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2f9130000..0x2f91383a0 (33696 bytes), releasing in 4 frames (frame 29685).
+[00:18:31.018] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf12bfc000..0xf12bff9f0 (14832 bytes), releasing in 4 frames (frame 29685).
+[00:18:31.018] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=29, lodIndex=1, vertexCount=702, indexCount=3708, vbBytes=33696, ibBytes=14832
+[00:18:31.104] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1d540000..0x1d6bfca0 (1572000 bytes), releasing in 4 frames (frame 29687).
+[00:18:31.105] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (732540 bytes), releasing in 4 frames (frame 29687).
+[00:18:31.106] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=1, vertexCount=32750, indexCount=183135, vbBytes=1572000, ibBytes=732540
+[00:18:31.202] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2f9130000..0x2f91383a0 (frame 29689).
+[00:18:31.202] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf12bfc000..0xf12bff9f0 (frame 29689).
+[00:18:31.287] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf10220000..0xf109a7050 (7893072 bytes), releasing in 4 frames (frame 29690).
+[00:18:31.288] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf114c0000..0xf1182e838 (3598392 bytes), releasing in 4 frames (frame 29690).
+[00:18:31.288] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[00:18:31.367] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1d540000..0x1d6bfca0 (frame 29691).
+[00:18:31.367] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (frame 29691).
+[00:18:31.453] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0df47000..0xf0df48bc0 (7104 bytes), releasing in 4 frames (frame 29692).
+[00:18:31.454] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf12bf7000..0xf12bf7720 (1824 bytes), releasing in 4 frames (frame 29692).
+[00:18:31.454] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:18:31.551] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf10220000..0xf109a7050 (frame 29694).
+[00:18:31.552] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf114c0000..0xf1182e838 (frame 29694).
+[00:18:31.637] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0df47000..0xf0df48bc0 (frame 29696).
+[00:18:31.637] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf12bf7000..0xf12bf7720 (frame 29696).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (4176 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e441f000..0x2e441f378 (888 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf61800000..0xf62689830 (15243312 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (7196796 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (3082608 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf06820000..0xf06985af8 (1465080 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2fa400000..0x2fafb5930 (12278064 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2f8730000..0x2f8ced1d8 (6017496 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (68976 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.331] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (29664 bytes), releasing in 4 frames (frame 30360).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e441a000..0x2e441b050 (frame 30364).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e441f000..0x2e441f378 (frame 30364).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf61800000..0xf62689830 (frame 30364).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf0f740000..0xf0fe1d07c (frame 30364).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1cc00000..0x1cef0970 (frame 30364).
+[00:18:40.449] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf06820000..0xf06985af8 (frame 30364).
+[00:18:40.450] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2fa400000..0x2fafb5930 (frame 30364).
+[00:18:40.450] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2f8730000..0x2f8ced1d8 (frame 30364).
+[00:18:40.451] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (frame 30364).
+[00:18:40.451] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (frame 30364).
+[00:19:17.218] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e441a000..0x2e441b050 (4176 bytes), releasing in 4 frames (frame 32901).
+[00:19:17.219] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x165fd000..0x165fd378 (888 bytes), releasing in 4 frames (frame 32901).
+[00:19:17.219] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=8, lodIndex=1, vertexCount=87, indexCount=222, vbBytes=4176, ibBytes=888
+[00:19:17.328] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf9ca00000..0xf9d889830 (15243312 bytes), releasing in 4 frames (frame 32902).
+[00:19:17.331] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf9da00000..0xf9e0dd07c (7196796 bytes), releasing in 4 frames (frame 32902).
+[00:19:17.331] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=42, lodIndex=0, vertexCount=317569, indexCount=1799199, vbBytes=15243312, ibBytes=7196796
+[00:19:17.427] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e441a000..0x2e441b050 (frame 32905).
+[00:19:17.427] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x165fd000..0x165fd378 (frame 32905).
+[00:19:17.511] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf9ca00000..0xf9d889830 (frame 32906).
+[00:19:17.511] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf9da00000..0xf9e0dd07c (frame 32906).
+[00:19:17.516] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (68976 bytes), releasing in 4 frames (frame 32906).
+[00:19:17.517] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f9130000..0x2f91373e0 (29664 bytes), releasing in 4 frames (frame 32906).
+[00:19:17.517] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=0, vertexCount=1437, indexCount=7416, vbBytes=68976, ibBytes=29664
+[00:19:17.625] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1be40000..0x1be50d70 (frame 32910).
+[00:19:17.625] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f9130000..0x2f91373e0 (frame 32910).
+[00:19:17.629] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf114c0000..0xf117b0970 (3082608 bytes), releasing in 4 frames (frame 32910).
+[00:19:17.630] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf0fc80000..0xf0fde5af8 (1465080 bytes), releasing in 4 frames (frame 32910).
+[00:19:17.630] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=0, vertexCount=64221, indexCount=366270, vbBytes=3082608, ibBytes=1465080
+[00:19:17.738] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf114c0000..0xf117b0970 (frame 32914).
+[00:19:17.738] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf0fc80000..0xf0fde5af8 (frame 32914).
+[00:19:23.218] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf9d600000..0xf9e1b5930 (12278064 bytes), releasing in 4 frames (frame 33230).
+[00:19:23.221] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf9e7c0000..0xf9ed7d1d8 (6017496 bytes), releasing in 4 frames (frame 33230).
+[00:19:23.221] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=33, lodIndex=0, vertexCount=255793, indexCount=1504374, vbBytes=12278064, ibBytes=6017496
+[00:19:23.344] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf9d600000..0xf9e1b5930 (frame 33234).
+[00:19:23.344] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf9e7c0000..0xf9ed7d1d8 (frame 33234).
+[00:19:32.783] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x8b20000..0x8b4b980 (178560 bytes), releasing in 4 frames (frame 33883).
+[00:19:32.784] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf64570000..0xf6457876c (34668 bytes), releasing in 4 frames (frame 33883).
+[00:19:32.784] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=30, lodIndex=1, vertexCount=3720, indexCount=8667, vbBytes=178560, ibBytes=34668
+[00:19:32.895] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x8b20000..0x8b4b980 (frame 33887).
+[00:19:32.895] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf64570000..0xf6457876c (frame 33887).
+[00:19:33.992] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1f1d0000..0x1f1e22d0 (74448 bytes), releasing in 4 frames (frame 33958).
+[00:19:33.993] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf64570000..0xf645752bc (21180 bytes), releasing in 4 frames (frame 33958).
+[00:19:33.993] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=5, lodIndex=1, vertexCount=1551, indexCount=5295, vbBytes=74448, ibBytes=21180
+[00:19:34.107] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1f1d0000..0x1f1e22d0 (frame 33962).
+[00:19:34.107] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf64570000..0xf645752bc (frame 33962).
+[00:19:35.015] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0fc80000..0xf0fdc9af0 (1350384 bytes), releasing in 4 frames (frame 34014).
+[00:19:35.016] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf10760000..0xf107f897c (625020 bytes), releasing in 4 frames (frame 34014).
+[00:19:35.016] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=1, vertexCount=28133, indexCount=156255, vbBytes=1350384, ibBytes=625020
+[00:19:35.131] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0fc80000..0xf0fdc9af0 (frame 34018).
+[00:19:35.131] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf10760000..0xf107f897c (frame 34018).
+[00:19:37.636] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf3ebfe000..0xf3ebffbc0 (7104 bytes), releasing in 4 frames (frame 34200).
+[00:19:37.636] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479fb000..0xf479fb720 (1824 bytes), releasing in 4 frames (frame 34200).
+[00:19:37.754] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf3ebfe000..0xf3ebffbc0 (frame 34204).
+[00:19:37.754] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479fb000..0xf479fb720 (frame 34204).
+[00:19:40.984] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (1572000 bytes), releasing in 4 frames (frame 34440).
+[00:19:40.984] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e7b40000..0x2e7bf2d7c (732540 bytes), releasing in 4 frames (frame 34440).
+[00:19:40.984] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf0c200000..0xf0c7e37a0 (6174624 bytes), releasing in 4 frames (frame 34440).
+[00:19:40.984] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x17a10000..0x17cee8e0 (3008736 bytes), releasing in 4 frames (frame 34440).
+[00:19:41.099] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf16e00000..0xf16f7fca0 (frame 34444).
+[00:19:41.100] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e7b40000..0x2e7bf2d7c (frame 34444).
+[00:19:41.100] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf0c200000..0xf0c7e37a0 (frame 34444).
+[00:19:41.100] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x17a10000..0x17cee8e0 (frame 34444).
+[00:19:42.523] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf9d600000..0xf9dbe37a0 (6174624 bytes), releasing in 4 frames (frame 34541).
+[00:19:42.525] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f8c70000..0x2f8f4e8e0 (3008736 bytes), releasing in 4 frames (frame 34541).
+[00:19:42.525] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=33, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[00:19:42.614] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0fc80000..0xf0fdffca0 (1572000 bytes), releasing in 4 frames (frame 34542).
+[00:19:42.615] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (732540 bytes), releasing in 4 frames (frame 34542).
+[00:19:42.615] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=25, lodIndex=1, vertexCount=32750, indexCount=183135, vbBytes=1572000, ibBytes=732540
+[00:19:42.712] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e441a000..0x2e441bbc0 (7104 bytes), releasing in 4 frames (frame 34543).
+[00:19:42.713] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f913f000..0x2f913f720 (1824 bytes), releasing in 4 frames (frame 34543).
+[00:19:42.713] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[00:19:42.811] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf9d600000..0xf9dbe37a0 (frame 34545).
+[00:19:42.812] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f8c70000..0x2f8f4e8e0 (frame 34545).
+[00:19:42.901] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0fc80000..0xf0fdffca0 (frame 34546).
+[00:19:42.902] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f9740000..0x2f97f2d7c (frame 34546).
+[00:19:42.999] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e441a000..0x2e441bbc0 (frame 34547).
+[00:19:43.000] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f913f000..0x2f913f720 (frame 34547).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2f7280000..0x2f73c9af0 (1350384 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf37d60000..0xf37df897c (625020 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1f1b0000..0x1f1c22d0 (74448 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2f9139000..0x2f913e2bc (21180 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1be40000..0x1be6b980 (178560 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.378] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2f9130000..0x2f913876c (34668 bytes), releasing in 4 frames (frame 34800).
+[00:19:46.515] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2f7280000..0x2f73c9af0 (frame 34804).
+[00:19:46.516] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf37d60000..0xf37df897c (frame 34804).
+[00:19:46.516] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1f1b0000..0x1f1c22d0 (frame 34804).
+[00:19:46.516] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2f9139000..0x2f913e2bc (frame 34804).
+[00:19:46.516] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1be40000..0x1be6b980 (frame 34804).
+[00:19:46.517] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2f9130000..0x2f913876c (frame 34804).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8050 (4176 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x165fc000..0x165fc378 (888 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf9ba00000..0xf9c889830 (15243312 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf90280000..0xf9095d07c (7196796 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf11840000..0xf11b30970 (3082608 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf64400000..0xf64565af8 (1465080 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf9ca00000..0xf9d5b5930 (12278064 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf9e200000..0xf9e7bd1d8 (6017496 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (68976 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.189] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (29664 bytes), releasing in 4 frames (frame 35160).
+[00:19:51.308] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf12bf7000..0xf12bf8050 (frame 35164).
+[00:19:51.308] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x165fc000..0x165fc378 (frame 35164).
+[00:19:51.308] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf9ba00000..0xf9c889830 (frame 35164).
+[00:19:51.308] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf90280000..0xf9095d07c (frame 35164).
+[00:19:51.309] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf11840000..0xf11b30970 (frame 35164).
+[00:19:51.309] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf64400000..0xf64565af8 (frame 35164).
+[00:19:51.309] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf9ca00000..0xf9d5b5930 (frame 35164).
+[00:19:51.310] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf9e200000..0xf9e7bd1d8 (frame 35164).
+[00:19:51.310] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf3ebd0000..0xf3ebe0d70 (frame 35164).
+[00:19:51.310] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf479f3000..0xf479fa3e0 (frame 35164).
+[00:20:23.908] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:23.909] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:23.909] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:23.910] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.029] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.031] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.031] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.031] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.126] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.127] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.127] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.127] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.221] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.222] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.222] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.222] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.329] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.329] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.329] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.330] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.424] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.425] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.425] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.425] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.526] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.527] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.527] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.527] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.632] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.632] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.632] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.633] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.734] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.735] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.735] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.735] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.836] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.837] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.837] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.837] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.947] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.948] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:24.948] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:24.949] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.051] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.051] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.051] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.052] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.169] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.169] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.169] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.170] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.285] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.286] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.286] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.286] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.392] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.393] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.393] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.393] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.499] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.500] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.500] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.500] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.608] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.609] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.609] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.610] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.717] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.718] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.718] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.828] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.829] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.829] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.829] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.951] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.952] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:25.952] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:25.952] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.066] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.066] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.066] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.067] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.181] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.182] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.182] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.182] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.305] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.305] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.305] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.306] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.420] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.420] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.420] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.420] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.541] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.541] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.541] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.542] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.669] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.669] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.669] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.670] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.789] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.790] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.790] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.791] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.920] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.921] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:26.921] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:26.921] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.043] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.044] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.044] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.044] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.174] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.175] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.175] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.175] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.302] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.302] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.302] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.303] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.437] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.437] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.437] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.438] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.564] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.564] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.564] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.565] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.701] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.701] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[00:20:27.703] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[00:20:27.703] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'

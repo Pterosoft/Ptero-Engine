@@ -24,6 +24,9 @@
     <ClInclude Include="Game.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FarkleConfig.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="GameAPI.h">
       <Filter>Header Files</Filter>
     </ClInclude>

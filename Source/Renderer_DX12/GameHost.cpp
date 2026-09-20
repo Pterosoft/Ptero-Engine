@@ -77,7 +77,7 @@ void GameHost::UnloadModule()
     mGameName.clear();
 }
 
-bool GameHost::Start(const GameCameraState& initialCamera)
+bool GameHost::Start(const GameCameraState& initialCamera, const GameServices& services)
 {
     if (mIsRunning)
         return true;
@@ -86,9 +86,10 @@ bool GameHost::Start(const GameCameraState& initialCamera)
     if (!LoadModule())
         return false;
 
-    if (!mStart(&initialCamera))
+    if (!mStart(&initialCamera, &services))
     {
-        mLastErrorMessage = "Game.dll refused to start the play session.";
+        mStop();
+        mLastErrorMessage = "Farkle could not start. Open Farkle.json and ensure Table and Dice1 through Dice6 (or Dice 1 through Dice 6) exist.";
         UnloadModule();
         return false;
     }

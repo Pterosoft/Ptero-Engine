@@ -3,6 +3,10 @@
 // Writes albedo, world-space normal, and roughness/metallic/AO into three
 // separate render targets.  No lighting is computed here.
 
+// Supplies the reflectivity knob's encoding; the deferred resolve, SSR and the ray-traced
+// specular pass all decode it from the same header.
+#include "SurfaceSpecular.hlsli"
+
 cbuffer EntityConstants : register(b0)
 {
     float4x4 gMVP;      // pre-transposed model-view-projection
@@ -25,7 +29,11 @@ cbuffer MaterialConstants : register(b1)
     int    gHasAoMap;
     int    gHasEmissiveMap;
     int    gHasPackedMaterialMap;
-    float2 _MatPad1;
+    // Reflectivity, 0.5 = neutral. Scales the surface's normal-incidence reflectance, so
+    // it is what gives a metal a specular response when the scene offers it nothing to
+    // mirror. Travels to the lighting pass in the normal target's W channel.
+    float  gSpecularFactor;
+    float  _MatPad1;
     float  gOpacityFactor;
     float  gAlphaCutoff;
     int    gHasOpacityMap;
@@ -46,7 +54,11 @@ cbuffer MaterialConstants : register(b1)
     int    gParallaxMaxSteps;      // steps at grazing angles, where the ray travels furthest
     float  gParallaxFadeDistance;  // metres; 0 disables the distance fade
     float3 gCameraPositionWS;
-    float  _MatPad3;
+    // Height value that sits at the polygon surface. 1 suits a 0-1 height map, where
+    // white is the top of the volume. Substance-style maps are signed around 0.5 and
+    // never reach 1, so without this the whole surface sits half a volume deep and most
+    // of the offset is a uniform slab shift instead of relief.
+    float  gParallaxReferenceHeight;
 };
 
 cbuffer RainSurfaceConstants : register(b2)
@@ -112,6 +124,10 @@ float2 EncodeOctNormal(float3 n)
     return oct * 0.5f + 0.5f;
 }
 
+// Largest distance, in height-map texels, that one parallax step is allowed to cover.
+// The step budget is fixed, so this is what bounds how far a grazing ray may sweep.
+static const float kParallaxMaxTexelsPerStep = 4.0f;
+
 // Applies the material's UV transform to the mesh's authored texture coordinates.
 float2 TransformUv(float2 uv)
 {
@@ -125,9 +141,18 @@ float2 TransformUv(float2 uv)
 // Builds a tangent frame aligned with the UV layout, derived from screen-space
 // derivatives so no tangent vertex attribute is needed. Parallax only makes sense in
 // a UV-aligned frame: the height volume is addressed in texture space, so the marching
-// direction has to be expressed there too. Meshes whose UVs are degenerate (a flat or
-// missing UV set gives zero derivatives) fall back to an arbitrary frame around N.
-void BuildTangentFrame(float3 worldPosition, float2 uv, float3 N, out float3 T, out float3 B)
+// direction has to be expressed there too. Also reports how many world units one UV
+// unit spans along each axis; parallax only uses this to tell a usable UV
+// parameterisation from an unusable one. Meshes whose UVs are degenerate (a flat or
+// missing UV set gives zero derivatives) fall back to an arbitrary frame around N and
+// report a zero scale, which disables parallax.
+void BuildTangentFrame(
+    float3 worldPosition,
+    float2 uv,
+    float3 N,
+    out float3 T,
+    out float3 B,
+    out float2 worldUnitsPerUv)
 {
     const float3 dpdx = ddx(worldPosition);
     const float3 dpdy = ddy(worldPosition);
@@ -140,39 +165,60 @@ void BuildTangentFrame(float3 worldPosition, float2 uv, float3 N, out float3 T, 
     float3 tangent   = dpdyPerp * duvdx.x + dpdxPerp * duvdy.x;
     float3 bitangent = dpdyPerp * duvdx.y + dpdxPerp * duvdy.y;
 
-    if (max(dot(tangent, tangent), dot(bitangent, bitangent)) < 1e-16f)
+    // That solve leaves both vectors scaled by the UV determinant. Dividing it back out
+    // is what makes them real tangents: their lengths become world units per UV unit,
+    // which the parallax march needs to know, and the sign restores the right handedness
+    // on mirrored UV shells, where a plain normalize() leaves T and B flipped.
+    const float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+
+    // The degeneracy test has to be relative. Both the determinant and the derivatives
+    // shrink with the pixel's footprint, so the absolute epsilon this used to compare
+    // against started rejecting perfectly good UVs once the camera came close enough to
+    // a high-resolution texture - which swapped the frame for an arbitrary one and sent
+    // the march off in a direction unrelated to the texture.
+    const float uvDerivativeScale = dot(duvdx, duvdx) + dot(duvdy, duvdy);
+    if (uvDerivativeScale <= 0.0f || abs(determinant) < 1e-8f * uvDerivativeScale)
     {
         const float3 up = (abs(N.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
         T = normalize(cross(up, N));
         B = cross(N, T);
+        worldUnitsPerUv = float2(0.0f, 0.0f);
         return;
     }
 
-    T = normalize(tangent);
-    B = normalize(bitangent);
+    tangent   /= determinant;
+    bitangent /= determinant;
+
+    worldUnitsPerUv = max(float2(length(tangent), length(bitangent)), 1e-20f);
+    T = tangent   / worldUnitsPerUv.x;
+    B = bitangent / worldUnitsPerUv.y;
+}
+
+// Depth below the reference plane, so a height at or above the reference sits flush
+// with the polygon and only what is below it is carved in.
+float SampleSurfaceDepth(float2 uv, float2 uvDdx, float2 uvDdy)
+{
+    return saturate(gParallaxReferenceHeight
+                  - gHeightTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).r);
 }
 
 // Ray marches the height field along the tangent-space view ray and returns the UV of
 // the first point the ray hits. Steep-parallax march plus one secant refinement, which
 // removes the stair-stepping a fixed-layer march leaves on shallow slopes.
+// uvSpan is the UV the ray travels while crossing the full depth of the height volume.
 float2 ParallaxOcclusionUv(
     float2 baseUv,
     float2 uvDdx,
     float2 uvDdy,
-    float3 viewDirTangent,   // surface -> eye, tangent space
-    float  heightScale,
+    float2 uvSpan,
     float  stepCount)
 {
     const float layerStep = 1.0f / stepCount;
-
-    // UV travelled by a ray crossing the full depth of the height volume. Grazing rays
-    // (small |z|) sweep much further across the texture than head-on ones.
-    const float2 uvSpan = (viewDirTangent.xy / max(abs(viewDirTangent.z), 1e-4f)) * heightScale;
     const float2 uvStep = uvSpan * layerStep;
 
     float  rayDepth = 0.0f;   // how far below the top plane the ray has travelled, 0..1
     float2 uv = baseUv;
-    float  surfaceDepth = 1.0f - gHeightTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).r;
+    float  surfaceDepth = SampleSurfaceDepth(uv, uvDdx, uvDdy);
 
     // SampleGrad, not Sample: the loop is dynamic, so the hardware cannot derive mip
     // derivatives itself. The gradients of the unoffset UV are the right ones to use.
@@ -181,16 +227,21 @@ float2 ParallaxOcclusionUv(
     {
         uv -= uvStep;
         rayDepth += layerStep;
-        surfaceDepth = 1.0f - gHeightTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).r;
+        surfaceDepth = SampleSurfaceDepth(uv, uvDdx, uvDdy);
     }
 
     // Interpolate between the last step outside the surface and the first one inside it.
+    // Once the march has crossed, depthAfter is <= 0 and depthBefore is > 0, so the
+    // denominator is strictly negative. Clamping it up towards +epsilon therefore
+    // replaced it with +1e-5 on every single pixel, drove the blend negative, and left
+    // saturate() returning 0 - so this refinement never ran and the march always handed
+    // back its raw quantised step. Clamp from below instead, away from zero.
     const float2 previousUv = uv + uvStep;
     const float depthAfter  = surfaceDepth - rayDepth;
-    const float depthBefore = (1.0f - gHeightTexture.SampleGrad(gLinearSampler, previousUv, uvDdx, uvDdy).r)
+    const float depthBefore = SampleSurfaceDepth(previousUv, uvDdx, uvDdy)
                             - (rayDepth - layerStep);
-    const float blend = depthAfter / max(depthAfter - depthBefore, 1e-5f);
-    return lerp(uv, previousUv, saturate(blend));
+    const float blend = saturate(depthAfter / min(depthAfter - depthBefore, -1e-6f));
+    return lerp(uv, previousUv, blend);
 }
 
 PSInput VSMain(VSInput input)
@@ -221,9 +272,10 @@ PSOutput PSMain(PSInput input)
     const float2 uvDdy = ddy(uv);
 
     float3 T, B;
-    BuildTangentFrame(input.WorldPosition, uv, N, T, B);
+    float2 worldUnitsPerUv;
+    BuildTangentFrame(input.WorldPosition, uv, N, T, B, worldUnitsPerUv);
 
-    if (gUseParallaxOcclusion && gHasHeightMap)
+    if (gUseParallaxOcclusion && gHasHeightMap && worldUnitsPerUv.x > 0.0f)
     {
         const float3 toEye = gCameraPositionWS - input.WorldPosition;
         const float  distanceToEye = length(toEye);
@@ -248,11 +300,36 @@ PSOutput PSMain(PSInput input)
                     lerp((float)gParallaxMaxSteps, (float)gParallaxMinSteps, saturate(viewDirTangent.z)),
                     1.0f, 256.0f);
 
-                const float2 parallaxUv = ParallaxOcclusionUv(
-                    uv, uvDdx, uvDdy, viewDirTangent,
-                    gParallaxHeightScale * distanceFade, stepCount);
+                // gParallaxHeightScale is a UV-space depth and has to stay one. Routing
+                // it through world units and back per axis looks more rigorous but folds
+                // the mesh's own UV density back into a value that was deliberately
+                // independent of it, so a stretched UV island silently multiplies the
+                // sweep - by up to 3.3x on the tavern wall bay, and differently on every
+                // triangle. Keep the sweep purely in texture space.
+                float2 uvSpan = (viewDirTangent.xy / viewDirTangent.z)
+                              * gParallaxHeightScale * distanceFade;
 
-                uv = parallaxUv;
+                // Bound the sweep so one step never skips more than a few height texels.
+                // The step budget is fixed, so without this the sweep grows without limit
+                // as the angle steepens - hundreds of UV units at a few degrees of
+                // grazing - and the march samples what is effectively noise, which drags
+                // surface detail into long smears along the view direction. The limit is
+                // approached smoothly: clamping the length outright pins every pixel past
+                // the threshold to the same offset, and the boundary itself shows up as a
+                // ring across the surface.
+                float heightWidth, heightHeight;
+                gHeightTexture.GetDimensions(heightWidth, heightHeight);
+                const float maxSweep = stepCount * kParallaxMaxTexelsPerStep
+                                     / max(max(heightWidth, heightHeight), 1.0f);
+                // Fourth-order rolloff rather than second: it leaves the sweep
+                // essentially untouched while the march can still resolve it, instead of
+                // shaving a sixth off it at ordinary viewing angles, and still tends to
+                // maxSweep as the ray goes tangential.
+                const float sweepRatio = length(uvSpan) / max(maxSweep, 1e-9f);
+                const float sweepRatioSq = sweepRatio * sweepRatio;
+                uvSpan *= rsqrt(sqrt(1.0f + sweepRatioSq * sweepRatioSq));
+
+                uv = ParallaxOcclusionUv(uv, uvDdx, uvDdy, uvSpan, stepCount);
             }
         }
     }
@@ -284,12 +361,13 @@ PSOutput PSMain(PSInput input)
         // displaced detail describe the same surface.
         N = normalize(T * tsNormal.x + B * tsNormal.y + N * tsNormal.z);
     }
-    // Pack the normal target as oct-encoded world normal in XY plus scene depth in Z.
+    // Pack the normal target as oct-encoded world normal in XY plus scene depth in Z, and
+    // the material's reflectivity in W.
     // RTGI reads this surface texture as "normal + depth" for world-position
     // reconstruction and neighbourhood validation, while the deferred lighting pass
     // decodes the normal back from the XY oct representation.
     const float2 octNormal = EncodeOctNormal(N);
-    output.Normal = float4(octNormal, input.Position.z, 0.0f);
+    output.Normal = float4(octNormal, input.Position.z, PteroEncodeSurfaceSpecular(gSpecularFactor));
 
     // --- Material (roughness, metallic, AO) ---
     float4 metallicSample = gMetallicTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);

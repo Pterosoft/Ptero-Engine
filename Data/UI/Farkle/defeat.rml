@@ -1,0 +1,45 @@
+<rml>
+<head>
+    <title>Farkle — Defeat</title>
+    <link type="text/rcss" href="farkle.rcss" />
+    <link type="text/rcss" href="results.rcss" />
+</head>
+<body id="defeat-ui" class="result-screen defeat">
+    <div id="result-board" class="result-board">
+        <div class="board-shade"></div>
+        <div class="defeat-scorecard parchment">
+            <div class="defeat-player">
+                <div id="result-player-name" class="result-name">Player</div>
+                <div id="result-player-score" class="result-score">2,150</div>
+            </div>
+            <div class="scorecard-divider"><img sprite="fleur"/></div>
+            <div class="defeat-opponent">
+                <img class="winner-crown" sprite="result-crown"/>
+                <div id="result-opponent-name" class="result-name">Opponent</div>
+                <div id="result-opponent-score" class="result-score">2,700</div>
+            </div>
+        </div>
+        <div class="defeat-summary">
+            <div class="defeat-summary-heading"><span class="heading-line"></span><img sprite="fleur"/><h1 class="summary-heading">Match Summary</h1><img sprite="fleur"/><span class="heading-line"></span></div>
+            <div class="summary-rows parchment">
+                <div class="summary-row"><span class="summary-key">Best Roll</span><span id="result-best-roll" class="summary-value">Three 1s</span></div>
+                <div class="summary-row"><span class="summary-key">Banked Total</span><span id="result-banked-total" class="summary-value numeric">1,300</span></div>
+                <div class="summary-row last"><span class="summary-key">Missed Chance</span><span id="result-missed-chance" class="summary-value">Farkle on final turn</span></div>
+            </div>
+            <div class="result-flourish defeat-flourish"><span></span><img sprite="fleur"/><span></span></div>
+            <div id="result-flavor" class="result-flavor">Luck turns with the next roll.</div>
+        </div>
+        <div id="result-actions" class="result-actions">
+            <button id="rematch-button" class="result-action result-primary" data-action="rematch"><span class="button-chevron leading">‹</span><span>Rematch</span><span class="button-chevron trailing">›</span></button>
+            <button id="main-menu-button" class="result-action" data-action="main-menu">Main Menu</button>
+            <button id="continue-button" class="result-action" data-action="continue">Continue</button>
+        </div>
+    </div>
+    <div class="result-masthead">
+        <div class="result-sign"></div>
+        <div id="result-title" class="result-title">Defeat</div>
+        <div class="title-flourish"><span></span><img sprite="fleur"/><span></span></div>
+        <div id="result-subtitle" class="result-subtitle">Better Company Next Time</div>
+    </div>
+</body>
+</rml>

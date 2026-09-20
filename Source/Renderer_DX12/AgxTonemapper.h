@@ -25,11 +25,16 @@ public:
     // inputResource  – the scene colour render target (PIXEL_SHADER_RESOURCE state).
     // inputCpuSrv    – CPU descriptor handle for that resource.
     // settings       – current tonemap parameters.
+    // autoExposureCpuSrv – SRV of the AutoExposure pass's exposure buffer, or a
+    //   null handle when automatic exposure is off or unavailable, in which case
+    //   the manual Ev100 is used. A valid handle must be supplied whenever
+    //   settings.ExposureMode is automatic.
     void Apply(
         ID3D12GraphicsCommandList*  commandList,
         ID3D12Resource*             inputResource,
         D3D12_CPU_DESCRIPTOR_HANDLE inputCpuSrv,
-        const AgxTonemapSettings&   settings);
+        const AgxTonemapSettings&   settings,
+        D3D12_CPU_DESCRIPTOR_HANDLE autoExposureCpuSrv = {});
 
     // Ui-displayable GPU handle of the tonemapped output (shared heap slot).
     D3D12_GPU_DESCRIPTOR_HANDLE GetOutputGpuSrv()   const { return mOutputUiSrvGpu; }
@@ -79,7 +84,9 @@ private:
         float Ev100Max;
         float ToeStrength;
         float ShoulderStrength;
-        float Pad0[3]{};
+        float Ev100;
+        UINT  UseAutoExposure;
+        float Pad0[1]{};
 
         AgxGradeRegionCb Global;
         AgxGradeRegionCb Shadows;
@@ -98,9 +105,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
     void*                                       mMappedCb = nullptr;
 
-    // Private 2-slot shader-visible descriptor heap.
+    // Private 3-slot shader-visible descriptor heap.
     //   slot 0 – t0: input SRV (refreshed via CopyDescriptors each frame)
     //   slot 1 – u0: output UAV
+    //   slot 2 – t1: adapted-exposure SRV (refreshed each frame; a null raw-buffer
+    //                view when automatic exposure is off, which reads as zero
+    //                rather than leaving a descriptor pointing at a dead resource)
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mComputeHeap;
     UINT                                         mComputeHeapStride = 0;
 

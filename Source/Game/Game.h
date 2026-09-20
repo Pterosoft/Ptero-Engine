@@ -1,23 +1,35 @@
 #pragma once
-
 #include "GameAPI.h"
-#include "GameCamera.h"
-
-// The game module's runtime state. One instance lives for the lifetime of the loaded DLL;
-// Game_Start / Game_Stop bracket a play session inside it, so anything that should survive
-// a stop-and-play cycle belongs here rather than in the session itself.
-class Game
-{
+#include <array>
+#include <deque>
+#include <random>
+#include <string>
+class Game {
 public:
     static Game& Get();
-
-    bool Start(const GameCameraState& initialCamera);
-    void Update(const GameFrameContext& frame, GameCameraState& camera);
+    bool Start(const GameCameraState&,const GameServices&);
+    void Update(const GameFrameContext&,GameCameraState&);
     void Stop();
-
-    bool IsRunning() const { return mIsRunning; }
-
+    bool IsRunning() const { return mRunning; }
 private:
-    GameCamera mCamera;
-    bool mIsRunning = false;
+    enum class Phase { Menu, Choosing, Rolling, Opponent, Delay, Travelling, Result };
+    struct Die { int Entity=-1,Value=1;bool Held=false,Selected=false,Rolling=false;GameTransform Home{},From{};float Spin=1; };
+    GameServices mHost{};std::array<Die,6> mDice;
+    std::mt19937 mRandom{std::random_device{}()};std::deque<std::string> mLog;
+    Phase mPhase=Phase::Menu;GameCameraState mCamera{},mCameraFrom{},mCameraTo{};
+    bool mRunning=false,mOpponent=false,mPaused=false,mHasRoll=false,mWon=false;
+    int mPlayerScore=0,mOpponentScore=0,mTurn=0,mFinalPlayer=-1,mBestRoll=0;
+    std::string mBestRollName="—",mMessage;float mTimer=0,mCameraTime=0;
+    // Background playlist: one Music1..MusicN track at a time, reshuffled when it ends.
+    // mTrack is the one currently on the music channel, kept only so the next draw can
+    // avoid repeating it. Cleared when a Victory/Defeat sting takes the channel over.
+    bool mMusic=false;int mTrack=-1;
+    // Where a throw lands, derived from the camera rather than authored, so nudging the
+    // view keeps the dice under the on-screen prompt instead of drifting off it.
+    float mThrow[3]{};
+    int Score(unsigned) const;unsigned Available() const;unsigned Selection() const;unsigned BestSelection() const;
+    void Action(int);void BeginMatch();void BeginTurn();void RollDice();void FinishRoll();void EndTurn(bool);void FinishMatch();void Travel(bool);void Animate(float);void Refresh();
+    void Log(const std::string&);void Text(const char*,const std::string&);void Ui(int,const char*,const char* = "");void Load(const char*);
+    void Sound(const char*);void Music(const char*);void UpdateMusic();
+    void AimThrow();GameTransform Landing(int) const;void HideDice();
 };

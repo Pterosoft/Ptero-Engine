@@ -44,7 +44,11 @@ namespace
         UINT64 size,
         D3D12_HEAP_TYPE heapType,
         D3D12_RESOURCE_STATES initialState,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& outResource)
+        Microsoft::WRL::ComPtr<ID3D12Resource>& outResource,
+        // What DRED prints when a page fault lands in or near this allocation.
+        // "(unnamed)" in a crash log identifies nothing, which is the difference
+        // between reading the cause off the log and guessing at it.
+        const wchar_t* debugName = nullptr)
     {
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type                 = heapType;
@@ -64,13 +68,20 @@ namespace
         desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags              = D3D12_RESOURCE_FLAG_NONE;
 
-        return SUCCEEDED(device->CreateCommittedResource(
+        if (FAILED(device->CreateCommittedResource(
             &heapProps,
             D3D12_HEAP_FLAG_NONE,
             &desc,
             initialState,
             nullptr,
-            IID_PPV_ARGS(&outResource)));
+            IID_PPV_ARGS(&outResource))))
+        {
+            return false;
+        }
+
+        if (debugName != nullptr)
+            outResource->SetName(debugName);
+        return true;
     }
 
     std::filesystem::path FindProjectDataDirectory()
@@ -239,7 +250,7 @@ void EntityMeshRenderer::Render(
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
         const std::size_t selectedLodIndex = SelectLodIndex(i, entity, *meshPtr, cameraPosition);
 
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, selectedLodIndex))
+        if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, selectedLodIndex))
         {
             ++cbSlot;
             continue;
@@ -359,6 +370,7 @@ void EntityMeshRenderer::Render(
                                        texPaths.baseColorTintB, texPaths.baseColorTintA };
             matOut.MetallicFactor  = texPaths.metallicFactor;
             matOut.RoughnessFactor = texPaths.roughnessFactor;
+            matOut.SpecularFactor  = texPaths.specularFactor;
             matOut.NormalScale     = texPaths.normalScale;
             matOut.AoStrength      = texPaths.aoStrength;
             matOut.OpacityFactor   = texPaths.opacityFactor;
@@ -377,6 +389,7 @@ void EntityMeshRenderer::Render(
             matOut.ParallaxMinSteps     = (std::max)(1, texPaths.parallaxMinSteps);
             matOut.ParallaxMaxSteps     = (std::max)(matOut.ParallaxMinSteps, texPaths.parallaxMaxSteps);
             matOut.ParallaxFadeDistance = texPaths.parallaxFadeDistance;
+            matOut.ParallaxReferenceHeight = texPaths.parallaxReferenceHeight;
             matOut.CameraPositionWS     = cameraPosition;
 
             std::string metallicPath = texPaths.metallic;
@@ -565,6 +578,99 @@ void EntityMeshRenderer::Shutdown()
     mFallbackGpuHandle = {};
 }
 
+void EntityMeshRenderer::LogLiveGpuBufferRanges() const
+{
+    PTERO_LOG_ERROR("Meshes", "Live mesh GPU buffers at the time of the fault (%llu entries):",
+        static_cast<unsigned long long>(mGpuMeshes.size()));
+
+    for (const auto& [key, gpuMesh] : mGpuMeshes)
+    {
+        if (!gpuMesh.VertexBuffer || !gpuMesh.IndexBuffer)
+            continue;
+
+        const D3D12_GPU_VIRTUAL_ADDRESS vbStart = gpuMesh.VertexBufferView.BufferLocation;
+        const D3D12_GPU_VIRTUAL_ADDRESS ibStart = gpuMesh.IndexBufferView.BufferLocation;
+        PTERO_LOG_ERROR("Meshes",
+            "  mesh=%p lod=%llu indices=%u  VB 0x%llx..0x%llx (%u B)  IB 0x%llx..0x%llx (%u B)",
+            static_cast<const void*>(key.first),
+            static_cast<unsigned long long>(key.second),
+            gpuMesh.IndexCount,
+            static_cast<unsigned long long>(vbStart),
+            static_cast<unsigned long long>(vbStart + gpuMesh.VertexBufferView.SizeInBytes),
+            gpuMesh.VertexBufferView.SizeInBytes,
+            static_cast<unsigned long long>(ibStart),
+            static_cast<unsigned long long>(ibStart + gpuMesh.IndexBufferView.SizeInBytes),
+            gpuMesh.IndexBufferView.SizeInBytes);
+    }
+
+    // The constant buffers are bound by every one of those draws, so their ranges
+    // belong in the same picture.
+    const auto logBuffer = [](const char* name, const Microsoft::WRL::ComPtr<ID3D12Resource>& resource)
+    {
+        if (!resource) return;
+        const D3D12_GPU_VIRTUAL_ADDRESS start = resource->GetGPUVirtualAddress();
+        const UINT64 size = resource->GetDesc().Width;
+        PTERO_LOG_ERROR("Meshes", "  %s 0x%llx..0x%llx (%llu B)", name,
+            static_cast<unsigned long long>(start),
+            static_cast<unsigned long long>(start + size),
+            static_cast<unsigned long long>(size));
+    };
+    logBuffer("entity CB      ", mConstantBuffer);
+    logBuffer("material CB    ", mMaterialCB);
+    logBuffer("depth-pass CB  ", mDepthPassConstantBuffer);
+    logBuffer("point-shadow CB", mPointShadowFaceConstantBuffer);
+    logBuffer("rain surface CB", mRainSurfaceConstantBuffer);
+}
+
+void EntityMeshRenderer::RetireBuffer(Microsoft::WRL::ComPtr<ID3D12Resource> resource, const char* what)
+{
+    if (!resource) return;
+
+    RetiredBuffer retired;
+    retired.Address = resource->GetGPUVirtualAddress();
+    retired.SizeBytes = resource->GetDesc().Width;
+    retired.What = (what != nullptr) ? what : "";
+    // One extra frame of slack over the number in flight, because the buffer
+    // is retired part-way through a frame that has already recorded draws
+    // referencing it.
+    retired.FramesRemaining = static_cast<int>(kFramesInFlight) + 1;
+    retired.Resource = std::move(resource);
+
+    PTERO_LOG_DEBUG("Meshes",
+        "Retiring %s at GPU VA 0x%llx..0x%llx (%llu bytes), releasing in %d frames (frame %llu).",
+        retired.What,
+        static_cast<unsigned long long>(retired.Address),
+        static_cast<unsigned long long>(retired.Address + retired.SizeBytes),
+        static_cast<unsigned long long>(retired.SizeBytes),
+        retired.FramesRemaining,
+        static_cast<unsigned long long>(mFrameCounter));
+
+    mRetiredBuffers.push_back(std::move(retired));
+}
+
+void EntityMeshRenderer::RetireExpiredBuffers()
+{
+    for (auto it = mRetiredBuffers.begin(); it != mRetiredBuffers.end(); )
+    {
+        if (--it->FramesRemaining <= 0)
+        {
+            // Logged at the moment the memory actually goes back, which is the
+            // event a later page fault in this range would be pointing at.
+            PTERO_LOG_DEBUG("Meshes",
+                "Releasing %s at GPU VA 0x%llx..0x%llx (frame %llu).",
+                it->What,
+                static_cast<unsigned long long>(it->Address),
+                static_cast<unsigned long long>(it->Address + it->SizeBytes),
+                static_cast<unsigned long long>(mFrameCounter));
+            it = mRetiredBuffers.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
 void EntityMeshRenderer::SetRainSurfaceState(bool enabled, float wetnessIntensity)
 {
     if (!EnsureRainSurfaceConstantBuffer() || mMappedRainSurfaceCB == nullptr)
@@ -611,13 +717,17 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, 0))
+        // The detail the camera pass is using for this entity, not LOD 0. See
+        // LastSelectedLod: asking for the finest LOD here made every shadow face
+        // redraw every prop at full resolution.
+        const std::size_t casterLod = LastSelectedLod(i);
+        if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, casterLod))
         {
             ++slot;
             continue;
         }
 
-        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, 0 });
+        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, casterLod });
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -678,13 +788,17 @@ void EntityMeshRenderer::RenderDepthOnly(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        if (!EnsureEntityGpuMesh(commandList, i, meshPtr, 0))
+        // The detail the camera pass is using for this entity, not LOD 0. See
+        // LastSelectedLod: asking for the finest LOD here made every shadow face
+        // redraw every prop at full resolution.
+        const std::size_t casterLod = LastSelectedLod(i);
+        if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, casterLod))
         {
             ++slot;
             continue;
         }
 
-        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, 0 });
+        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, casterLod });
         if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
         {
             ++slot;
@@ -944,6 +1058,8 @@ bool EntityMeshRenderer::EnsureRainSurfaceConstantBuffer()
         return false;
     }
 
+    mRainSurfaceConstantBuffer->SetName(L"EntityMesh_RainSurfaceCB");
+
     if (FAILED(mRainSurfaceConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedRainSurfaceCB))))
     {
         mLastError = "EntityMeshRenderer: Failed to map rain surface constant buffer.";
@@ -957,17 +1073,36 @@ bool EntityMeshRenderer::EnsureRainSurfaceConstantBuffer()
 bool EntityMeshRenderer::EnsureEntityGpuMesh(
     ID3D12GraphicsCommandList* commandList,
     std::size_t entityIndex,
-    const Mesh* mesh,
+    const std::shared_ptr<Mesh>& meshAsset,
     std::size_t lodIndex)
 {
+    const Mesh* mesh = meshAsset.get();
     const MeshCacheKey cacheKey{ mesh, lodIndex };
     auto it = mGpuMeshes.find(cacheKey);
     if (it != mGpuMeshes.end())
     {
         // Buffers are already up to date for this asset and LOD, whichever
-        // entity asked for them.
-        it->second.LastUsedFrame = mFrameCounter;
-        return true;
+        // entity asked for them - as long as the entry really was built from
+        // this asset. The entry owns the asset, so the address cannot have been
+        // recycled under it; this checks the other way the two can drift, an
+        // asset reimported in place and now a different size. The draw takes its
+        // index ranges from the asset and its index buffer from here, so a
+        // disagreement between them reads past the end of the buffer.
+        // The owner comparison comes first so GetLod is only reached for the asset
+        // this entry was actually built from, which is known to have the LOD.
+        if (it->second.SourceMeshOwner == meshAsset &&
+            it->second.IndexCount == static_cast<UINT>(mesh->GetLod(lodIndex).Indices.size()))
+        {
+            it->second.LastUsedFrame = mFrameCounter;
+            return true;
+        }
+
+        // Stale. The buffers may still be named by in-flight frames, so they go
+        // to the retire list rather than being freed here, and the entry is
+        // rebuilt below.
+        RetireBuffer(std::move(it->second.VertexBuffer), "stale mesh vertex buffer");
+        RetireBuffer(std::move(it->second.IndexBuffer), "stale mesh index buffer");
+        mGpuMeshes.erase(it);
     }
 
     // No stale-entry sweep here, deliberately. The key is the asset, so an
@@ -1006,6 +1141,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
 
     EntityGpuMesh gpuMesh;
     gpuMesh.SourceMesh = mesh;
+    gpuMesh.SourceMeshOwner = meshAsset;
     gpuMesh.LodIndex = lodIndex;
     mSceneContentChanged = true;
 
@@ -1014,7 +1150,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
 
     // Vertex buffer: upload heap → default heap via CopyBufferRegion.
     if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_DEFAULT,
-        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.VertexBuffer))
+        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.VertexBuffer, L"Mesh_VertexBuffer"))
     {
         return false;
     }
@@ -1023,7 +1159,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     // own size twice for the rest of the session.
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexUpload;
     if (!CreateCommittedBuffer(device, vbSize, D3D12_HEAP_TYPE_UPLOAD,
-        D3D12_RESOURCE_STATE_GENERIC_READ, vertexUpload))
+        D3D12_RESOURCE_STATE_GENERIC_READ, vertexUpload, L"Mesh_VertexUpload"))
     {
         return false;
     }
@@ -1037,7 +1173,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     vertexUpload->Unmap(0, nullptr);
 
     commandList->CopyBufferRegion(gpuMesh.VertexBuffer.Get(), 0, vertexUpload.Get(), 0, vbSize);
-    RetireBuffer(std::move(vertexUpload));
+    RetireBuffer(std::move(vertexUpload), "mesh vertex staging buffer");
     auto vbBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         gpuMesh.VertexBuffer.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1050,13 +1186,13 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
 
     // Index buffer
     if (!CreateCommittedBuffer(device, ibSize, D3D12_HEAP_TYPE_DEFAULT,
-        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.IndexBuffer))
+        D3D12_RESOURCE_STATE_COPY_DEST, gpuMesh.IndexBuffer, L"Mesh_IndexBuffer"))
     {
         return false;
     }
     Microsoft::WRL::ComPtr<ID3D12Resource> indexUpload;
     if (!CreateCommittedBuffer(device, ibSize, D3D12_HEAP_TYPE_UPLOAD,
-        D3D12_RESOURCE_STATE_GENERIC_READ, indexUpload))
+        D3D12_RESOURCE_STATE_GENERIC_READ, indexUpload, L"Mesh_IndexUpload"))
     {
         return false;
     }
@@ -1070,7 +1206,7 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     indexUpload->Unmap(0, nullptr);
 
     commandList->CopyBufferRegion(gpuMesh.IndexBuffer.Get(), 0, indexUpload.Get(), 0, ibSize);
-    RetireBuffer(std::move(indexUpload));
+    RetireBuffer(std::move(indexUpload), "mesh index staging buffer");
     auto ibBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         gpuMesh.IndexBuffer.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -1197,7 +1333,7 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
             mConstantBuffer->Unmap(0, nullptr);
             mMappedCB = nullptr;
         }
-        RetireBuffer(std::move(mConstantBuffer));
+        RetireBuffer(std::move(mConstantBuffer), "entity constant buffer");
     }
     mConstantBuffer.Reset();
     mCBCapacity = 0;
@@ -1241,6 +1377,8 @@ bool EntityMeshRenderer::EnsureConstantBuffer(std::size_t requiredEntityCount)
         return false;
     }
 
+    mConstantBuffer->SetName(L"EntityMesh_EntityCB");
+
     if (FAILED(mConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedCB))))
     {
         mLastError = "EntityMeshRenderer: Failed to map constant buffer.";
@@ -1269,7 +1407,7 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
             mDepthPassConstantBuffer->Unmap(0, nullptr);
             mMappedDepthPassCB = nullptr;
         }
-        RetireBuffer(std::move(mDepthPassConstantBuffer));
+        RetireBuffer(std::move(mDepthPassConstantBuffer), "depth-pass constant buffer");
     }
     mDepthPassConstantBuffer.Reset();
     mDepthPassCBCapacity = 0;
@@ -1311,6 +1449,8 @@ bool EntityMeshRenderer::EnsureDepthPassConstantBuffer(std::size_t requiredEntit
         mLastError = "EntityMeshRenderer: Failed to create shadow-pass constant buffer.";
         return false;
     }
+
+    mDepthPassConstantBuffer->SetName(L"EntityMesh_DepthPassCB");
 
     if (FAILED(mDepthPassConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedDepthPassCB))))
     {
@@ -1366,6 +1506,8 @@ bool EntityMeshRenderer::EnsurePointShadowFaceConstantBuffer()
         mLastError = "EntityMeshRenderer: Failed to create point-shadow face constant buffer.";
         return false;
     }
+
+    mPointShadowFaceConstantBuffer->SetName(L"EntityMesh_PointShadowFaceCB");
 
     if (FAILED(mPointShadowFaceConstantBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedPointShadowFaceCB))))
     {
@@ -1534,7 +1676,7 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
             mMaterialCB->Unmap(0, nullptr);
             mMappedMatCB = nullptr;
         }
-        RetireBuffer(std::move(mMaterialCB));
+        RetireBuffer(std::move(mMaterialCB), "material constant buffer");
     }
     mMaterialCB.Reset();
     mMatCBCapacity = 0;
@@ -1568,6 +1710,8 @@ bool EntityMeshRenderer::EnsureMaterialConstantBuffer(std::size_t requiredDrawCo
         mLastError = "EntityMeshRenderer: Failed to create material constant buffer.";
         return false;
     }
+    mMaterialCB->SetName(L"EntityMesh_MaterialCB");
+
     if (FAILED(mMaterialCB->Map(0, nullptr, reinterpret_cast<void**>(&mMappedMatCB))))
     {
         mLastError = "EntityMeshRenderer: Failed to map material constant buffer.";
@@ -1712,6 +1856,9 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         // Read scalar parameters; use safe value() calls with sensible defaults.
         t.metallicFactor  = node.value("metallicFactor",          1.f);
         t.roughnessFactor = node.value("roughnessFactor",         1.f);
+        // Materials authored before the specular slider existed carry no key; 0.5 is the
+        // value that reproduces exactly how they used to shade.
+        t.specularFactor  = node.value("specularFactor",           0.5f);
         t.normalScale     = node.value("normalScale",             1.f);
         // JSON uses "ambientOcclusionStrength" for the AO multiplier.
         t.aoStrength      = node.value("ambientOcclusionStrength", 1.f);
@@ -1726,6 +1873,7 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         t.parallaxMinSteps      = node.value("parallaxMinSteps",     8);
         t.parallaxMaxSteps      = node.value("parallaxMaxSteps",     32);
         t.parallaxFadeDistance  = node.value("parallaxFadeDistance", 30.f);
+        t.parallaxReferenceHeight = node.value("heightReference",     1.f);
 
         // UV tiling and offset are stored as two-element arrays [u, v].
         auto readFloat2 = [&node](const char* key, float& outU, float& outV)

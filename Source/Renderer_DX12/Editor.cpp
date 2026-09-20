@@ -302,6 +302,11 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
         return true;
     }
 
+    // Baseline the undo history against whatever the editor starts with, so the
+    // first edit records that state rather than the default-constructed empty
+    // one an undo would then restore.
+    ResetUndoHistory();
+
     ReportProgress(L"Loading editor geometry icon...");
     LoadGeometryIcon(commandList);
     std::string iconStatus;
@@ -327,6 +332,8 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
 
 void Editor::Shutdown()
 {
+    RestoreEditorAfterPlay();
+    mPlayStartRequested=false;
     if (mSceneLoadWorker.joinable())
     {
         mSceneLoadState.CancelRequested.store(true);
@@ -597,7 +604,7 @@ bool Editor::PasteCopiedEntity()
     mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
     mSelectedEntityIndices.clear();
     mSelectedEntityIndices.push_back(mSelectedEntityIndex);
-    mSceneDirty = true;
+    MarkSceneChanged();
     PTERO_LOG_INFO("Editor", "Pasted entity '%s' at index %d. Scene now holds %llu entities.",
                    mEntities.back().Name.c_str(), mSelectedEntityIndex,
                    static_cast<unsigned long long>(mEntities.size()));
@@ -629,7 +636,7 @@ bool Editor::DeleteSelectedEntity()
 
     mSelectedEntityIndex = -1;
     mSelectedEntityIndices.clear();
-    mSceneDirty = true;
+    MarkSceneChanged();
     return true;
 }
 
@@ -682,6 +689,125 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     }
 }
 
+const NodeGraphDocument& Editor::GetRuntimeNodeGraph() const
+{
+    return mPlaySceneActive ? mPlayNodeGraph : NodeGraphEditor::Document();
+}
+
+void Editor::RestoreEditorAfterPlay()
+{
+    if (!mPlaySceneActive) return;
+    // Game callbacks must finish before replacing the entity vector they address.
+    if (mSceneRenderer && mSceneRenderer->IsGameRunning()) mSceneRenderer->StopGame();
+    mEntities.swap(mEntitiesBeforePlay);
+    mEntitiesBeforePlay.clear();
+    for (auto& restore : mRestorePlaySettings) restore();
+    mRestorePlaySettings.clear();
+    mPlaySceneActive=false;
+    if (mSceneRenderer) {
+        mSceneRenderer->SetEntities(&mEntities);
+        mSceneRenderer->SetNodeGraph(&NodeGraphEditor::Document());
+    }
+}
+
+void Editor::StopPlaySession()
+{
+    mPlayStartRequested=false;
+    RestoreEditorAfterPlay();
+}
+
+bool Editor::IsPlaySessionActive() const
+{
+    return mPlaySceneActive || (mSceneRenderer && mSceneRenderer->IsGameRunning());
+}
+
+void Editor::DrawPlayModeMenuItems()
+{
+    // The bool* overload is what makes a menu action checkable, so each entry gets a
+    // throwaway mirror of the mode and the real assignment happens below - a checked
+    // entry that is clicked must stay checked, not toggle itself off.
+    //
+    // Greyed out while a session runs: the mode is read when the session starts, so
+    // offering to change it mid-play would only look like it did something.
+    const bool available = !IsPlaySessionActive();
+    bool inViewport = !mPlayInNewWindow;
+    bool inNewWindow = mPlayInNewWindow;
+    if (QtUi::MenuItem("Play In Viewport", nullptr, &inViewport, available))
+        mPlayInNewWindow = false;
+    if (QtUi::MenuItem("Play In New Window", nullptr, &inNewWindow, available))
+        mPlayInNewWindow = true;
+}
+
+void Editor::UpdatePlaySession()
+{
+    if (mPlaySceneActive && mSceneRenderer && !mSceneRenderer->IsGameRunning())
+        RestoreEditorAfterPlay();
+    if (!mPlayStartRequested || !mSceneRenderer) return;
+    mPlayStartRequested=false;
+    if (IsSceneLoading()) {
+        mGameStartErrorMessage="Wait for the level to finish loading before Play.";
+        return;
+    }
+    try {
+        // Copy entity values, retaining shared mesh assets already resident on the GPU.
+        mEntitiesBeforePlay=mEntities;
+        mPlaySceneActive=true;
+        // The viewport stops handling interaction for the session, so a marquee drag
+        // that was in progress would otherwise still be latched when it ends.
+        mViewportSelection.IsDragging=false;
+        mPlayNodeGraph=NodeGraphEditor::Document();
+        auto remember=[this](auto* setting) {
+            if (setting) mRestorePlaySettings.emplace_back([setting, value=*setting] { *setting=value; });
+        };
+        remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings);
+        remember(mSharpenSettings); remember(mDlssSettings); remember(mGlobalIlluminationMode);
+        remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRtaoSettings);
+        remember(mGtaoSettings); remember(mSsrSettings); remember(mChromaticAberrationSettings);
+        remember(mAgxSettings); remember(mVolumetricFogSettings); remember(mVolumetricCloudSettings);
+        remember(mBloomSettings);
+        // Playing in the viewport, F11 hides the panels for the session. Stopping puts
+        // them back rather than leaving the editor fullscreen with nothing running.
+        remember(&mViewportFullscreen);
+        const bool grid=mSceneRenderer->IsGridEnabled(), wireframe=mSceneRenderer->IsWireframeEnabled();
+        mRestorePlaySettings.emplace_back([this, grid, wireframe] {
+            mSceneRenderer->SetGridEnabled(grid); mSceneRenderer->SetWireframeEnabled(wireframe);
+        });
+        if (_stricmp(std::filesystem::path(mCurrentSceneFilePath).filename().string().c_str(), "Farkle.json")!=0) {
+            wchar_t executable[MAX_PATH]{};
+            GetModuleFileNameW(nullptr, executable, MAX_PATH);
+            auto directory=std::filesystem::path(executable).parent_path();
+            std::filesystem::path level;
+            for (int i=0; i<6; ++i) {
+                auto candidate=directory / "Data" / "Levels" / "Farkle.json";
+                if (std::filesystem::exists(candidate)) { level=candidate; break; }
+                directory=directory.parent_path();
+            }
+            if (level.empty()) throw std::runtime_error("Could not find Data/Levels/Farkle.json.");
+            Scene scene;
+            scene.Entities=&mEntities; scene.NodeGraph=&mPlayNodeGraph;
+            scene.TimeOfDay=mTimeOfDaySettings; scene.Taa=mTaaSettings; scene.Smaa=mSmaaSettings;
+            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings;
+            scene.GlobalIllumination=mGlobalIlluminationMode; scene.Rtgi=mRtgiSettings;
+            scene.RadianceCascades=mRadianceCascadesSettings; scene.Rtao=mRtaoSettings;
+            scene.Gtao=mGtaoSettings; scene.Ssr=mSsrSettings;
+            scene.ChromaticAberration=mChromaticAberrationSettings; scene.Agx=mAgxSettings;
+            scene.VolumetricFog=mVolumetricFogSettings; scene.VolumetricCloud=mVolumetricCloudSettings;
+            scene.Bloom=mBloomSettings;
+            mEntities.clear();
+            SceneSerializer serializer(&scene);
+            if (!serializer.Deserialize(level.string())) throw std::runtime_error("Could not load the Farkle play level.");
+        }
+        mSceneRenderer->SetEntities(&mEntities);
+        mSceneRenderer->SetNodeGraph(&mPlayNodeGraph);
+        mSceneRenderer->SetGridEnabled(false); mSceneRenderer->SetWireframeEnabled(false);
+        if (!mSceneRenderer->StartGame(mPlayInNewWindow)) throw std::runtime_error(mSceneRenderer->GetGameStartErrorMessage());
+        mGameStartErrorMessage.clear();
+    } catch (const std::exception& error) {
+        mGameStartErrorMessage=error.what();
+        RestoreEditorAfterPlay();
+    }
+}
+
 bool Editor::LoadSceneFromFile(const std::string& filepath)
 {
     Scene scene;
@@ -722,6 +848,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
             mLastSceneStatusMessage = "Scene loaded: " + filepath;
             mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
             mSceneDirty = false;
+            ResetUndoHistory();
             NodeGraphEditor::SetDocument(nodeGraph);
             mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
             return true;
@@ -814,12 +941,13 @@ void Editor::ResetScene()
     mLastSceneStatusMessage = "New scene created.";
     mNextGeometryInstanceId = 1;
     mSceneDirty = false;
+    ResetUndoHistory();
 
     NodeGraphEditor::SetDocument(NodeGraphDocument{});
     mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
 }
 
-bool Editor::PromptToSaveUnsavedScene(HWND ownerWindowHandle)
+bool Editor::ConfirmDiscardUnsavedScene(HWND ownerWindowHandle)
 {
     if (!HasUnsavedChanges())
     {
@@ -873,7 +1001,7 @@ bool Editor::SaveSceneAs(HWND ownerWindowHandle)
 
 bool Editor::OpenScene(HWND ownerWindowHandle)
 {
-    if (!PromptToSaveUnsavedScene(ownerWindowHandle))
+    if (!ConfirmDiscardUnsavedScene(ownerWindowHandle))
     {
         return false;
     }
@@ -894,7 +1022,7 @@ bool Editor::OpenScene(HWND ownerWindowHandle)
 
 bool Editor::NewScene(HWND ownerWindowHandle)
 {
-    if (!PromptToSaveUnsavedScene(ownerWindowHandle))
+    if (!ConfirmDiscardUnsavedScene(ownerWindowHandle))
     {
         return false;
     }
@@ -945,6 +1073,7 @@ void Editor::UpdateSceneLoading()
 
         mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
         mSceneDirty = false;
+        ResetUndoHistory();
     }
     else
     {
@@ -1131,7 +1260,7 @@ void Editor::FinishViewportSelection(
             const bool applied = mTerrainRenderer->ApplyBrushAt(pickXZ, &statusMessage);
             if (applied)
             {
-                mSceneDirty = true;
+                MarkSceneChanged();
                 mLastTerrainBrushMessage = statusMessage;
             }
             else if (!statusMessage.empty())
@@ -1327,6 +1456,52 @@ void Editor::FinishViewportSelection(
         mSelectedEntityIndices.push_back(bestIdx);
 }
 
+// ---------------------------------------------------------------------------
+// Gizmo sizing
+//
+// The gizmo must keep a roughly constant size on screen however far away the
+// entity is. It used to do that per axis, by projecting one world unit along
+// the axis, measuring the pixels that covered, and extrapolating to the length
+// that would cover 72 of them.
+//
+// Perspective is not linear, so that extrapolation is only valid when the
+// measured unit is both small on screen and perpendicular to the view. Point
+// the camera down an axis and the projected unit shrinks towards nothing; the
+// extrapolation then divides by it and asks for an axis thousands of units
+// long, which projects somewhere absurd and gets clamped to the viewport edge.
+// That is the gizmo exploding into lines across the screen, and because the
+// rotate rings take their radii from the same lengths, the rings explode with
+// it.
+//
+// One length, derived from the depth the perspective divide actually uses,
+// replaces all three. It cannot blow up, and axes that point away from the
+// camera now foreshorten instead of compensating - which is what they should
+// do, and what makes the gizmo readable end-on.
+// ---------------------------------------------------------------------------
+
+float Editor::ComputeGizmoWorldScale(
+    const DirectX::XMFLOAT3& pivotWorldPosition,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera) const
+{
+    using namespace DirectX;
+
+    if (viewportSize.y <= 1.0f)
+        return 0.0f;
+
+    // View-space Z, not the euclidean distance: the divide that turns clip
+    // space into pixels uses the former, so it alone sets the scale.
+    const XMVECTOR viewPosition =
+        XMVector3TransformCoord(XMLoadFloat3(&pivotWorldPosition), camera.GetViewMatrix());
+    const float viewDepth = XMVectorGetZ(viewPosition);
+    if (viewDepth <= camera.GetNearPlane())
+        return 0.0f;
+
+    const float worldUnitsPerPixel =
+        2.0f * viewDepth * std::tan(camera.GetFovYRadians() * 0.5f) / viewportSize.y;
+    return kGizmoScreenLength * worldUnitsPerPixel;
+}
+
 void Editor::HandleManualGizmoInteraction(
     const UiVec2& viewportOrigin,
     const UiVec2& viewportSize,
@@ -1336,6 +1511,7 @@ void Editor::HandleManualGizmoInteraction(
 {
     if (!selectedEntity || !viewportHovered || mActiveGizmo == GizmoType::None)
     {
+        mManualGizmo.HoveredHandle = ManualGizmoHandle::None;
         if (!QtUi::IsMouseDown(QtUiMouseButton_Left))
         {
             mManualGizmo.IsActive = false;
@@ -1348,35 +1524,28 @@ void Editor::HandleManualGizmoInteraction(
     using namespace DirectX;
 
     const XMFLOAT3 origin = selectedEntity->Transform.Position;
-    constexpr float desiredAxisScreenLength = 72.0f;
 
     UiVec2 pivotScreen;
     UiVec2 xScreen;
     UiVec2 yScreen;
     UiVec2 zScreen;
     if (!TryProjectWorldToViewport(origin, viewportOrigin, viewportSize, camera, pivotScreen, true))
-        return;
-
-    auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, UiVec2& axisScreenEnd, float& axisWorldLength) -> bool
     {
-        UiVec2 unitScreenEnd;
-        if (!TryProjectWorldToViewport(
-                XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
-                viewportOrigin,
-                viewportSize,
-                camera,
-                unitScreenEnd,
-                true))
-        {
-            return false;
-        }
+        mManualGizmo.HoveredHandle = ManualGizmoHandle::None;
+        return;
+    }
 
-        const UiVec2 unitScreenDirection(unitScreenEnd.x - pivotScreen.x, unitScreenEnd.y - pivotScreen.y);
-        const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
-        if (pixelsPerWorldUnit <= 0.0001f)
-            return false;
+    // One length for every axis: see ComputeGizmoWorldScale. The hit tests and
+    // the drawing both call it, so what is clicked is always what is drawn.
+    const float axisWorldLength = ComputeGizmoWorldScale(origin, viewportSize, camera);
+    if (axisWorldLength <= 0.0f)
+    {
+        mManualGizmo.HoveredHandle = ManualGizmoHandle::None;
+        return;
+    }
 
-        axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
+    auto projectAxisEnd = [&](const XMFLOAT3& axisWorldDirection, UiVec2& axisScreenEnd) -> bool
+    {
         return TryProjectWorldToViewport(
             XMFLOAT3(
                 origin.x + axisWorldDirection.x * axisWorldLength,
@@ -1389,12 +1558,12 @@ void Editor::HandleManualGizmoInteraction(
             true);
     };
 
-    float xAxisWorldLength = 0.0f;
-    float yAxisWorldLength = 0.0f;
-    float zAxisWorldLength = 0.0f;
-    const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
-    const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
-    const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+    const float xAxisWorldLength = axisWorldLength;
+    const float yAxisWorldLength = axisWorldLength;
+    const float zAxisWorldLength = axisWorldLength;
+    const bool hasXAxis = projectAxisEnd(XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen);
+    const bool hasYAxis = projectAxisEnd(XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen);
+    const bool hasZAxis = projectAxisEnd(XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen);
 
     auto distanceToSegment = [](const UiVec2& point, const UiVec2& segmentStart, const UiVec2& segmentEnd) -> float
     {
@@ -1513,8 +1682,14 @@ void Editor::HandleManualGizmoInteraction(
         return !(hasNegative && hasPositive);
     };
 
-    if (!mManualGizmo.IsActive && QtUi::IsMouseClicked(QtUiMouseButton_Left))
+    // The handle under the cursor is worked out every frame, not only when the
+    // mouse goes down: the drawing highlights it, so you can see what you are
+    // about to grab before you grab it. Running one chain for both means the
+    // highlight can never point at a different handle than the click takes.
+    if (!mManualGizmo.IsActive)
     {
+        const bool clicked = QtUi::IsMouseClicked(QtUiMouseButton_Left);
+        mManualGizmo.HoveredHandle = ManualGizmoHandle::None;
         const float axisHitThreshold = 10.0f;
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && hasYAxis)
         {
@@ -1522,9 +1697,14 @@ void Editor::HandleManualGizmoInteraction(
                                   pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f + (yScreen.y - pivotScreen.y) * 0.35f);
             if (pointInTriangle(io.MousePos, pivotScreen, UiVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xyCorner))
             {
-                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXYPlane : ManualGizmoHandle::Scale,
+                const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXYPlane : ManualGizmoHandle::Scale;
+                mManualGizmo.HoveredHandle = handle;
+                if (clicked)
+                {
+                    beginPlaneDrag(handle,
                                XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
                                XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+                }
                 return;
             }
         }
@@ -1535,9 +1715,14 @@ void Editor::HandleManualGizmoInteraction(
                                   pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f + (zScreen.y - pivotScreen.y) * 0.35f);
             if (pointInTriangle(io.MousePos, pivotScreen, UiVec2(pivotScreen.x + (xScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (xScreen.y - pivotScreen.y) * 0.35f), xzCorner))
             {
-                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXZPlane : ManualGizmoHandle::Scale,
+                const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXZPlane : ManualGizmoHandle::Scale;
+                mManualGizmo.HoveredHandle = handle;
+                if (clicked)
+                {
+                    beginPlaneDrag(handle,
                                XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength,
                                XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+                }
                 return;
             }
         }
@@ -1548,28 +1733,42 @@ void Editor::HandleManualGizmoInteraction(
                                   pivotScreen.y + (yScreen.y - pivotScreen.y) * 0.35f + (zScreen.y - pivotScreen.y) * 0.35f);
             if (pointInTriangle(io.MousePos, pivotScreen, UiVec2(pivotScreen.x + (yScreen.x - pivotScreen.x) * 0.35f, pivotScreen.y + (yScreen.y - pivotScreen.y) * 0.35f), yzCorner))
             {
-                beginPlaneDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYZPlane : ManualGizmoHandle::Scale,
+                const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYZPlane : ManualGizmoHandle::Scale;
+                mManualGizmo.HoveredHandle = handle;
+                if (clicked)
+                {
+                    beginPlaneDrag(handle,
                                XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength,
                                XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+                }
                 return;
             }
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasXAxis && distanceToSegment(io.MousePos, pivotScreen, xScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXAxis : ManualGizmoHandle::ScaleXAxis, XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
+            const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateXAxis : ManualGizmoHandle::ScaleXAxis;
+            mManualGizmo.HoveredHandle = handle;
+            if (clicked)
+                beginAxisDrag(handle, XMFLOAT3(1.0f, 0.0f, 0.0f), xScreen, xAxisWorldLength);
             return;
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasYAxis && distanceToSegment(io.MousePos, pivotScreen, yScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYAxis : ManualGizmoHandle::ScaleYAxis, XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
+            const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateYAxis : ManualGizmoHandle::ScaleYAxis;
+            mManualGizmo.HoveredHandle = handle;
+            if (clicked)
+                beginAxisDrag(handle, XMFLOAT3(0.0f, 0.0f, 1.0f), yScreen, yAxisWorldLength);
             return;
         }
 
         if ((mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale) && hasZAxis && distanceToSegment(io.MousePos, pivotScreen, zScreen) <= axisHitThreshold)
         {
-            beginAxisDrag(mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateZAxis : ManualGizmoHandle::ScaleZAxis, XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
+            const ManualGizmoHandle handle = mActiveGizmo == GizmoType::Translate ? ManualGizmoHandle::TranslateZAxis : ManualGizmoHandle::ScaleZAxis;
+            mManualGizmo.HoveredHandle = handle;
+            if (clicked)
+                beginAxisDrag(handle, XMFLOAT3(0.0f, 1.0f, 0.0f), zScreen, zAxisWorldLength);
             return;
         }
 
@@ -1595,6 +1794,13 @@ void Editor::HandleManualGizmoInteraction(
 
             if (bestRingDistance <= rotateHitThreshold)
             {
+                mManualGizmo.HoveredHandle = ManualGizmoHandle::Rotate;
+                // Which ring the cursor is nearest is also which ring the
+                // drawing lights up, so the pick is stored either way.
+                mManualGizmo.HoveredRotationAxis = rotationAxis;
+                if (!clicked)
+                    return;
+
                 mManualGizmo.IsActive = true;
                 mManualGizmo.ActiveHandle = ManualGizmoHandle::Rotate;
                 mManualGizmo.StartMouse = io.MousePos;
@@ -1648,7 +1854,7 @@ void Editor::HandleManualGizmoInteraction(
         if (!NearlyEqual(selectedEntity->Transform.Position, snappedPosition))
         {
             selectedEntity->Transform.Position = snappedPosition;
-            mSceneDirty = true;
+            MarkSceneChanged();
         }
         break;
     }
@@ -1692,7 +1898,7 @@ void Editor::HandleManualGizmoInteraction(
         else
             selectedEntity->Transform.Rotation.y += angleDelta;
         if (!NearlyEqual(selectedEntity->Transform.Rotation, mManualGizmo.StartRotation))
-            mSceneDirty = true;
+            MarkSceneChanged();
         break;
     }
     default:
@@ -1710,7 +1916,7 @@ void Editor::CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition)
     mEntities.push_back(std::move(e));
     mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
     mSelectedEntityIndices = { mSelectedEntityIndex };
-    mSceneDirty = true;
+    MarkSceneChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -1724,6 +1930,21 @@ void Editor::SetViewportStatisticsText(const char* text)
 
 void Editor::HandleKeyboardShortcuts()
 {
+    // Playing inside the viewport, the keyboard belongs to the game - 1 through 6 pick
+    // dice, R rolls, W and S walk. Leaving the editor's unmodified shortcuts live would
+    // have every one of those also change the gizmo or delete the selected entity. The
+    // Play button stays on screen, so there is always a way back out.
+    //
+    // F11 still switches fullscreen, but the game asks for it through the game API
+    // rather than the editor reading the key, so that the request works the same way
+    // when the game's own pause menu is what raised it.
+    if (QtUi::IsGamePlaying())
+    {
+        if (QtUi::ConsumeGameFullscreenRequest())
+            mViewportFullscreen = !mViewportFullscreen;
+        return;
+    }
+
     if (QtUi::GetIO().WantTextInput)
         return;
 
@@ -1745,6 +1966,25 @@ void Editor::HandleKeyboardShortcuts()
     if (io.KeyCtrl && QtUi::IsKeyPressed(QtUiKey_S, false))
     {
         SaveScene(windowHandle);
+        return;
+    }
+
+    // Undo and redo, before the unmodified single-key shortcuts so a stray Ctrl
+    // cannot fall through to a gizmo change.
+    //
+    // Redo answers to both Ctrl+Y and Ctrl+Shift+Z. Windows editors are split
+    // between the two and neither is wrong, so binding both costs nothing and
+    // saves the user finding out which one this engine picked.
+    if (io.KeyCtrl && !io.KeyShift && QtUi::IsKeyPressed(QtUiKey_Z, false))
+    {
+        Undo();
+        return;
+    }
+
+    if (io.KeyCtrl && (QtUi::IsKeyPressed(QtUiKey_Y, false) ||
+                       (io.KeyShift && QtUi::IsKeyPressed(QtUiKey_Z, false))))
+    {
+        Redo();
         return;
     }
 
@@ -2164,25 +2404,16 @@ void Editor::DrawManualGizmoPivot(
         dl->AddCircleFilled(screenPos, 6.0f, UI_COL32(255, 200, 0, 230));
         dl->AddCircle(screenPos, 6.0f, UI_COL32(0, 0, 0, 220), 0, 2.0f);
 
-        constexpr float desiredAxisScreenLength = 72.0f;
         const XMFLOAT3 origin = selectedEntity->Transform.Position;
 
-        auto projectFixedScreenAxis = [&](const XMFLOAT3& axisWorldDirection, UiVec2& axisScreenEnd, float& axisWorldLength) -> bool
+        // One length for every axis, shared with the hit tests: see
+        // ComputeGizmoWorldScale.
+        const float axisWorldLength = ComputeGizmoWorldScale(origin, viewportSize, camera);
+        if (axisWorldLength <= 0.0f)
+            return;
+
+        auto projectAxisEnd = [&](const XMFLOAT3& axisWorldDirection, UiVec2& axisScreenEnd) -> bool
         {
-            UiVec2 unitScreenEnd;
-            if (!projectAxisPoint(
-                    XMFLOAT3(origin.x + axisWorldDirection.x, origin.y + axisWorldDirection.y, origin.z + axisWorldDirection.z),
-                    unitScreenEnd))
-            {
-                return false;
-            }
-
-            const UiVec2 unitScreenDirection(unitScreenEnd.x - screenPos.x, unitScreenEnd.y - screenPos.y);
-            const float pixelsPerWorldUnit = std::sqrt(unitScreenDirection.x * unitScreenDirection.x + unitScreenDirection.y * unitScreenDirection.y);
-            if (pixelsPerWorldUnit <= 0.0001f)
-                return false;
-
-            axisWorldLength = desiredAxisScreenLength / pixelsPerWorldUnit;
             return projectAxisPoint(
                 XMFLOAT3(
                     origin.x + axisWorldDirection.x * axisWorldLength,
@@ -2194,12 +2425,43 @@ void Editor::DrawManualGizmoPivot(
         UiVec2 xAxisScreen;
         UiVec2 yAxisScreen;
         UiVec2 zAxisScreen;
-        float xAxisWorldLength = 0.0f;
-        float yAxisWorldLength = 0.0f;
-        float zAxisWorldLength = 0.0f;
-        const bool hasXAxis = projectFixedScreenAxis(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisScreen, xAxisWorldLength);
-        const bool hasYAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisScreen, yAxisWorldLength);
-        const bool hasZAxis = projectFixedScreenAxis(XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisScreen, zAxisWorldLength);
+        const float xAxisWorldLength = axisWorldLength;
+        const float yAxisWorldLength = axisWorldLength;
+        const float zAxisWorldLength = axisWorldLength;
+        const bool hasXAxis = projectAxisEnd(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisScreen);
+        const bool hasYAxis = projectAxisEnd(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisScreen);
+        const bool hasZAxis = projectAxisEnd(XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisScreen);
+
+        // The handle the user is about to grab, or has grabbed. Highlighting it
+        // is what tells them which axis they are on before the drag moves
+        // anything - the old gizmo drew all three identically and the only way
+        // to find out was to drag and watch.
+        const ManualGizmoHandle emphasised = mManualGizmo.IsActive
+            ? mManualGizmo.ActiveHandle
+            : mManualGizmo.HoveredHandle;
+
+        // A highlighted axis is drawn near-white and thicker; the other two dim
+        // back so the one in use reads at a glance rather than by comparison.
+        const auto axisColor = [&](UiU32 base, std::initializer_list<ManualGizmoHandle> owned)
+        {
+            const bool anyEmphasis = emphasised != ManualGizmoHandle::None;
+            if (!anyEmphasis)
+                return base;
+
+            const bool isEmphasised = std::find(owned.begin(), owned.end(), emphasised) != owned.end();
+            if (isEmphasised)
+                return UI_COL32(255, 248, 190, 255);
+
+            // Dim, not hidden: the other axes still say which way they point.
+            // UI_COL32 packs R, G, B, A into bytes 0..3, so the alpha byte is
+            // replaced in place and the colour is left alone.
+            return (base & 0x00FFFFFFu) | (static_cast<UiU32>(110) << 24);
+        };
+
+        const auto axisThickness = [&](std::initializer_list<ManualGizmoHandle> owned)
+        {
+            return std::find(owned.begin(), owned.end(), emphasised) != owned.end() ? 4.0f : 2.5f;
+        };
 
         if (mActiveGizmo == GizmoType::Translate || mActiveGizmo == GizmoType::Scale)
         {
@@ -2219,20 +2481,28 @@ void Editor::DrawManualGizmoPivot(
                 dl->AddTriangleFilled(end, left, right, color);
             };
 
+            // Each axis owns two handles - the translate one and the scale one -
+            // because the same line is both, depending on the active gizmo.
             if (hasXAxis)
             {
-                dl->AddLine(screenPos, xAxisScreen, UI_COL32(220, 70, 70, 255), 2.5f);
-                drawArrowHead(screenPos, xAxisScreen, UI_COL32(220, 70, 70, 255));
+                const auto owned = { ManualGizmoHandle::TranslateXAxis, ManualGizmoHandle::ScaleXAxis };
+                const UiU32 color = axisColor(UI_COL32(220, 70, 70, 255), owned);
+                dl->AddLine(screenPos, xAxisScreen, color, axisThickness(owned));
+                drawArrowHead(screenPos, xAxisScreen, color);
             }
             if (hasYAxis)
             {
-                dl->AddLine(screenPos, yAxisScreen, UI_COL32(80, 160, 255, 255), 2.5f);
-                drawArrowHead(screenPos, yAxisScreen, UI_COL32(80, 160, 255, 255));
+                const auto owned = { ManualGizmoHandle::TranslateYAxis, ManualGizmoHandle::ScaleYAxis };
+                const UiU32 color = axisColor(UI_COL32(80, 160, 255, 255), owned);
+                dl->AddLine(screenPos, yAxisScreen, color, axisThickness(owned));
+                drawArrowHead(screenPos, yAxisScreen, color);
             }
             if (hasZAxis)
             {
-                dl->AddLine(screenPos, zAxisScreen, UI_COL32(70, 220, 120, 255), 2.5f);
-                drawArrowHead(screenPos, zAxisScreen, UI_COL32(70, 220, 120, 255));
+                const auto owned = { ManualGizmoHandle::TranslateZAxis, ManualGizmoHandle::ScaleZAxis };
+                const UiU32 color = axisColor(UI_COL32(70, 220, 120, 255), owned);
+                dl->AddLine(screenPos, zAxisScreen, color, axisThickness(owned));
+                drawArrowHead(screenPos, zAxisScreen, color);
             }
 
             const float planeHandleScale = 0.35f;
@@ -2241,8 +2511,9 @@ void Editor::DrawManualGizmoPivot(
                 const UiVec2 xyA(screenPos.x + (xAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (xAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 xyB(screenPos.x + (yAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (yAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 xyC(xyA.x + (xyB.x - screenPos.x) * planeHandleScale, xyA.y + (xyB.y - screenPos.y) * planeHandleScale);
-                dl->AddTriangleFilled(screenPos, xyA, xyC, UI_COL32(220, 150, 90, 60));
-                dl->AddTriangle(screenPos, xyA, xyC, UI_COL32(220, 150, 90, 160), 1.5f);
+                const auto owned = { ManualGizmoHandle::TranslateXYPlane, ManualGizmoHandle::Scale };
+                dl->AddTriangleFilled(screenPos, xyA, xyC, axisColor(UI_COL32(220, 150, 90, 60), owned));
+                dl->AddTriangle(screenPos, xyA, xyC, axisColor(UI_COL32(220, 150, 90, 160), owned), 1.5f);
             }
 
             if (hasXAxis && hasZAxis)
@@ -2250,8 +2521,9 @@ void Editor::DrawManualGizmoPivot(
                 const UiVec2 xzA(screenPos.x + (xAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (xAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 xzB(screenPos.x + (zAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (zAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 xzC(xzA.x + (xzB.x - screenPos.x) * planeHandleScale, xzA.y + (xzB.y - screenPos.y) * planeHandleScale);
-                dl->AddTriangleFilled(screenPos, xzA, xzC, UI_COL32(180, 120, 220, 60));
-                dl->AddTriangle(screenPos, xzA, xzC, UI_COL32(180, 120, 220, 160), 1.5f);
+                const auto owned = { ManualGizmoHandle::TranslateXZPlane, ManualGizmoHandle::Scale };
+                dl->AddTriangleFilled(screenPos, xzA, xzC, axisColor(UI_COL32(180, 120, 220, 60), owned));
+                dl->AddTriangle(screenPos, xzA, xzC, axisColor(UI_COL32(180, 120, 220, 160), owned), 1.5f);
             }
 
             if (hasYAxis && hasZAxis)
@@ -2259,8 +2531,9 @@ void Editor::DrawManualGizmoPivot(
                 const UiVec2 yzA(screenPos.x + (yAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (yAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 yzB(screenPos.x + (zAxisScreen.x - screenPos.x) * planeHandleScale, screenPos.y + (zAxisScreen.y - screenPos.y) * planeHandleScale);
                 const UiVec2 yzC(yzA.x + (yzB.x - screenPos.x) * planeHandleScale, yzA.y + (yzB.y - screenPos.y) * planeHandleScale);
-                dl->AddTriangleFilled(screenPos, yzA, yzC, UI_COL32(120, 200, 220, 60));
-                dl->AddTriangle(screenPos, yzA, yzC, UI_COL32(120, 200, 220, 160), 1.5f);
+                const auto owned = { ManualGizmoHandle::TranslateYZPlane, ManualGizmoHandle::Scale };
+                dl->AddTriangleFilled(screenPos, yzA, yzC, axisColor(UI_COL32(120, 200, 220, 60), owned));
+                dl->AddTriangle(screenPos, yzA, yzC, axisColor(UI_COL32(120, 200, 220, 160), owned), 1.5f);
             }
         }
 
@@ -2296,9 +2569,29 @@ void Editor::DrawManualGizmoPivot(
                 }
             };
 
-            drawProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, UI_COL32(220, 70, 70, 220));
-            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, UI_COL32(70, 220, 120, 220));
-            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, UI_COL32(80, 160, 255, 255));
+            // All three rings share one handle, so which ring is emphasised is
+            // decided by the rotation axis the pick chose, not the handle.
+            const XMFLOAT3 emphasisedAxis = mManualGizmo.IsActive
+                ? mManualGizmo.AxisWorldDirection
+                : mManualGizmo.HoveredRotationAxis;
+            const bool ringEmphasis = (emphasised == ManualGizmoHandle::Rotate);
+
+            const auto ringColor = [&](UiU32 base, const XMFLOAT3& ringAxis)
+            {
+                if (!ringEmphasis)
+                    return base;
+                const bool isThisRing =
+                    std::fabs(emphasisedAxis.x - ringAxis.x) < 0.01f &&
+                    std::fabs(emphasisedAxis.y - ringAxis.y) < 0.01f &&
+                    std::fabs(emphasisedAxis.z - ringAxis.z) < 0.01f;
+                if (isThisRing)
+                    return UI_COL32(255, 248, 190, 255);
+                return (base & 0x00FFFFFFu) | (static_cast<UiU32>(90) << 24);
+            };
+
+            drawProjectedRing(XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, ringColor(UI_COL32(220, 70, 70, 220), XMFLOAT3(1.0f, 0.0f, 0.0f)));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 0.0f, 1.0f), yAxisWorldLength, ringColor(UI_COL32(70, 220, 120, 220), XMFLOAT3(0.0f, 0.0f, 1.0f)));
+            drawProjectedRing(XMFLOAT3(1.0f, 0.0f, 0.0f), xAxisWorldLength, XMFLOAT3(0.0f, 1.0f, 0.0f), zAxisWorldLength, ringColor(UI_COL32(80, 160, 255, 255), XMFLOAT3(0.0f, 1.0f, 0.0f)));
         }
 
         if (mActiveGizmo == GizmoType::Scale)
@@ -2318,8 +2611,9 @@ void Editor::DrawManualGizmoPivot(
 // DrawGameUiOverlay
 //
 // Forwards pointer and keyboard input to the game UI. The compositing itself happens in
-// the renderer, over the viewport surface; this runs from the viewport draw because that
-// is where the viewport rectangle needed to map cursor position into UI pixels is known.
+// the renderer, over whichever surface is presenting; this runs from the viewport draw
+// because that is where the viewport rectangle needed to map cursor position into UI
+// pixels is known.
 // ---------------------------------------------------------------------------
 
 void Editor::DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewportSize)
@@ -2331,8 +2625,12 @@ void Editor::DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewp
     if (!gameUi.IsInitialized())
         return;
 
-    gameUi.SetVisible(mShowGameUi);
+    gameUi.SetVisible(QtUi::IsGamePlaying() || mShowGameUi);
 
+    // The same arithmetic serves both play modes: the rectangle passed in comes from
+    // QtUi, which reports the Play window's surface while that window owns presentation
+    // and the editor's viewport otherwise.
+    //
     // Input goes to the game UI on exactly the frames it is on screen, so a hidden or
     // stopped UI can never swallow clicks meant for the editor viewport.
     if (!mSceneRenderer->IsGameUiActive() || viewportSize.x <= 1.0f || viewportSize.y <= 1.0f)
@@ -2343,17 +2641,17 @@ void Editor::DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewp
         return;
     }
 
-    // Nothing is drawn here: the UI texture is composited into the viewport surface by
+    // Nothing is drawn here: the UI texture is composited into the presenting surface by
     // QtViewportRenderer, alongside the scene blit. This function only owns input, which
-    // is where the viewport rectangle is actually needed.
+    // is where the rectangle is actually needed.
     const UiVec2 mousePosition = QtUi::GetIO().MousePos;
-    const bool insideViewport =
+    const bool insideSurface =
         mousePosition.x >= viewportOrigin.x && mousePosition.x < viewportOrigin.x + viewportSize.x &&
         mousePosition.y >= viewportOrigin.y && mousePosition.y < viewportOrigin.y + viewportSize.y;
-    const bool hasPointer = QtUi::IsWindowHovered() && insideViewport;
+    const bool hasPointer = QtUi::IsWindowHovered() && insideSurface;
 
     // The UI target is sized to the render resolution, which is not necessarily the size
-    // the viewport image is displayed at, so pointer coordinates are scaled into UI pixels.
+    // the image is displayed at, so pointer coordinates are scaled into UI pixels.
     const float scaleX = static_cast<float>(gameUi.GetWidth()) / viewportSize.x;
     const float scaleY = static_cast<float>(gameUi.GetHeight()) / viewportSize.y;
 
@@ -2365,7 +2663,11 @@ void Editor::DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewp
         QtUi::IsMouseDown(1),
         QtUi::IsMouseDown(2));
 
-    if (hasPointer)
+    // Keyboard follows focus rather than the pointer: a pause menu is navigated with the
+    // arrow keys and Enter, and the cursor is rarely still over the window when it opens.
+    // Outside a play session it stays tied to the pointer, so the UI Editor's preview
+    // cannot eat keys aimed at the editor.
+    if (hasPointer || QtUi::GameWindowHasFocus())
         gameUi.UpdateKeyboardInput();
 }
 
@@ -2421,11 +2723,10 @@ void Editor::DrawToolbar(
         if (QtUi::IsItemHovered()) QtUi::SetTooltip("%s", tooltip);
     };
 
-    // Play button: hands the camera over to Game.dll and back. It is only meaningful once
-    // the renderer exists, since that is what owns the play session.
+    // Play transfers the live renderer at the next frame boundary.
     auto PlayButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon)
     {
-        const bool playing = (mSceneRenderer != nullptr) && mSceneRenderer->IsGameRunning();
+        const bool playing = IsPlaySessionActive();
         if (playing) QtUi::PushStyleColor(QtUiCol_Button, QtUi::GetStyleColorVec4(QtUiCol_ButtonActive));
         const bool clicked = (icon.ptr != 0)
             ? QtUi::ImageButton("Play", TextureIdFromHandle(icon), UiVec2(iconSize, iconSize))
@@ -2434,10 +2735,8 @@ void Editor::DrawToolbar(
 
         if (clicked && mSceneRenderer != nullptr)
         {
-            mSceneRenderer->ToggleGame();
-            mGameStartErrorMessage = mSceneRenderer->IsGameRunning()
-                ? std::string()
-                : mSceneRenderer->GetGameStartErrorMessage();
+            if (playing) mSceneRenderer->StopGame();
+            else RequestPlaySession();
         }
 
         if (QtUi::IsItemHovered())
@@ -2445,9 +2744,24 @@ void Editor::DrawToolbar(
             if (!mGameStartErrorMessage.empty())
                 QtUi::SetTooltip("Play failed: %s", mGameStartErrorMessage.c_str());
             else if (playing)
-                QtUi::SetTooltip("Stop the game (Esc)\nWASD moves, hold right mouse to look, Shift sprints");
+                QtUi::SetTooltip("Stop the game\nEscape pauses; F11 switches fullscreen");
+            else if (mPlayInNewWindow)
+                QtUi::SetTooltip("Play in a new window\nRight-click for the play mode");
             else
-                QtUi::SetTooltip("Play - hand the camera to the game code in Game.dll");
+                QtUi::SetTooltip("Play in the viewport\nRight-click for the play mode");
+        }
+
+        // The mode lives on a right-click menu rather than a second toolbar button: it
+        // is picked once and then left alone, so it does not deserve permanent space
+        // next to the control you actually press. The same two entries are in the Play
+        // menu, which is where anyone who does not think to right-click will look.
+        //
+        // Last, because the menu items it builds become "the last item" and would take
+        // the tooltip and hover queries above with them.
+        if (QtUi::BeginPopupContextItem("play-mode"))
+        {
+            DrawPlayModeMenuItems();
+            QtUi::EndPopup();
         }
     };
 
@@ -2519,7 +2833,7 @@ void Editor::DrawViewport(
         if (QtUi::BeginMenu("Options"))
         {
             QtUi::MenuItem("Renderer Statistics", nullptr, &mShowViewportStatistics);
-            QtUi::MenuItem("Placement Icons", nullptr, &mShowViewportPlacementIcons);
+            QtUi::MenuItem("Placement Icons & Light Shapes", nullptr, &mShowViewportPlacementIcons);
             QtUi::MenuItem("Grid", nullptr, &mShowViewportGrid);
             QtUi::MenuItem("Game UI", nullptr, &mShowGameUi);
             if (mSceneRenderer != nullptr)
@@ -2590,18 +2904,27 @@ void Editor::DrawViewport(
     }
 
     DrawGameUiOverlay(viewportOrigin, viewportSize);
-    DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
-    DrawTerrainViewportOverlay(viewportOrigin, viewportSize, camera);
 
-    const bool viewportHovered = QtUi::IsWindowHovered();
-    HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
-
-    DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+    // Playing in the viewport, the viewport shows the game and nothing else: light
+    // gizmos, placement icons and collision hulls are authoring aids drawn over the
+    // scene, and a click in there belongs to the game rather than to entity selection.
+    // The panels stay live, so the level can still be edited from the Level Explorer and
+    // Properties while it runs - it is only the picture that is the game's.
+    const bool playing = QtUi::IsGamePlaying();
+    const bool viewportHovered = !playing && QtUi::IsWindowHovered();
+    if (!playing)
+    {
+        DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
+        DrawLightShapeGizmos(viewportOrigin, viewportSize, camera);
+        DrawTerrainViewportOverlay(viewportOrigin, viewportSize, camera);
+        HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
+        DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
+    }
 
     // -----------------------------------------------------------------------
     // Proxy view: draw convex hull wireframes for all entities with collision data.
     // -----------------------------------------------------------------------
-    if (mProxyEnabled)
+    if (mProxyEnabled && !playing)
     {
         using namespace DirectX;
         const XMMATRIX viewProjMatrix = XMMatrixMultiply(
@@ -2648,7 +2971,7 @@ void Editor::DrawViewport(
         }
     }
 
-    if (mActiveGizmo == GizmoType::None && mViewportSelection.IsDragging)
+    if (mActiveGizmo == GizmoType::None && mViewportSelection.IsDragging && !playing)
     {
         UiDrawList* drawList = QtUi::GetWindowDrawList();
         UiVec2 selectionMin((std::min)(mViewportSelection.Start.x, mViewportSelection.Current.x), (std::min)(mViewportSelection.Start.y, mViewportSelection.Current.y));
@@ -2657,7 +2980,8 @@ void Editor::DrawViewport(
         drawList->AddRect(selectionMin, selectionMax, UI_COL32(255, 210, 120, 220), 0.0f, 0, 1.5f);
     }
 
-    HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
+    if (!playing)
+        HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
 
     QtUi::End();
     QtUi::PopStyleVar();
@@ -2984,7 +3308,7 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
                         mEntities.push_back(std::move(entity));
                         mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
                         mSelectedEntityIndices = { mSelectedEntityIndex };
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                         mLastSceneStatusMessage = "Created terrain from '" + modal.RawPath + "'.";
                         modal.Open = false;
 
@@ -3052,12 +3376,12 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
         if (QtUi::Combo("Type", &brushTypeIndex, brushNames, std::size(brushNames)))
         {
             tc.Brush = static_cast<TerrainComponent::BrushType>(brushTypeIndex);
-            mSceneDirty  = true;
+            MarkSceneChanged();
         }
-        if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,   0.1f, 0.1f, 1000.0f)) mSceneDirty = true;
-        if (QtUi::DragFloat("Strength (m/s, raise/lower)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) mSceneDirty = true;
-        if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) mSceneDirty = true;
-        if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) mSceneDirty = true;
+        if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,   0.1f, 0.1f, 1000.0f)) MarkSceneChanged();
+        if (QtUi::DragFloat("Strength (m/s, raise/lower)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) MarkSceneChanged();
+        if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) MarkSceneChanged();
+        if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) MarkSceneChanged();
 
         QtUi::Separator();
         bool brushActive = mTerrainBrushModeActive;
@@ -3105,7 +3429,7 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
             }
         }
         if (layerSceneDirty)
-            mSceneDirty = true;
+            MarkSceneChanged();
 
         if (!mLastTerrainBrushMessage.empty())
         {
@@ -3145,7 +3469,7 @@ void Editor::DrawLightStyleControls(
         // want 10 steps per second; the continuous fire curves want about 1, and
         // carrying 10 over to them turns a flame into a buzzing lamp.
         styleSpeed = LightStyles::GetStyleInfo(style).DefaultSpeed;
-        mSceneDirty = true;
+        MarkSceneChanged();
     }
     QtUi::SetItemTooltip(
         "Fire and Torch are continuous noise curves; the rest are the classic\n"
@@ -3157,19 +3481,19 @@ void Editor::DrawLightStyleControls(
     if (QtUi::DragFloat("Speed", &styleSpeed, 0.05f, 0.0f, 60.0f, "%.2f"))
     {
         styleSpeed = (std::max)(styleSpeed, 0.0f);
-        mSceneDirty = true;
+        MarkSceneChanged();
     }
     QtUi::SetItemTooltip("Pattern steps per second, or the noise rate for Fire and Torch.");
 
     if (QtUi::SliderFloat("Amount", &styleAmplitude, 0.0f, 2.0f, "%.2f"))
     {
         styleAmplitude = (std::max)(styleAmplitude, 0.0f);
-        mSceneDirty = true;
+        MarkSceneChanged();
     }
     QtUi::SetItemTooltip("0 holds the light constant, 1 applies the style in full.");
 
     if (QtUi::DragFloat("Phase Offset", &stylePhaseOffset, 0.05f, -60.0f, 60.0f, "%.2f s"))
-        mSceneDirty = true;
+        MarkSceneChanged();
     QtUi::SetItemTooltip("Offsets this light into the curve, so two torches in one room do not flicker in lockstep.");
 
     if (style == LightStyleId::Custom)
@@ -3179,7 +3503,7 @@ void Editor::DrawLightStyleControls(
         if (QtUi::InputText("Pattern", patternBuffer, std::size(patternBuffer)))
         {
             customStylePattern = patternBuffer;
-            mSceneDirty = true;
+            MarkSceneChanged();
         }
         QtUi::SetItemTooltip("Letters 'a' (black) to 'z', where 'm' is the light's authored brightness.");
     }
@@ -3324,7 +3648,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
     if (QtUi::InputText("Name", entityNameBuffer, std::size(entityNameBuffer)))
     {
         selectedEntity->Name = entityNameBuffer;
-        mSceneDirty = true;
+        MarkSceneChanged();
     }
 
     QtUi::Separator();
@@ -3332,7 +3656,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
     if (QtUi::CollapsingHeader("Transform", QtUiTreeNodeFlags_DefaultOpen))
     {
         if (QtUi::DragFloat3("Position", &selectedEntity->Transform.Position.x, 0.01f))
-            mSceneDirty = true;
+            MarkSceneChanged();
         float rotationDegrees[3]
         {
             RadiansToDegrees(selectedEntity->Transform.Rotation.x),
@@ -3344,10 +3668,10 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             selectedEntity->Transform.Rotation.x = DegreesToRadians(rotationDegrees[0]);
             selectedEntity->Transform.Rotation.y = DegreesToRadians(rotationDegrees[1]);
             selectedEntity->Transform.Rotation.z = DegreesToRadians(rotationDegrees[2]);
-            mSceneDirty = true;
+            MarkSceneChanged();
         }
         if (QtUi::DragFloat3("Scale",    &selectedEntity->Transform.Scale.x,    0.01f))
-            mSceneDirty = true;
+            MarkSceneChanged();
     }
 
     if (selectedEntity->PointLight.has_value())
@@ -3361,20 +3685,20 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Combo("Type##pl", &lightTypeIndex, lightTypeNames, static_cast<int>(std::size(lightTypeNames))))
             {
                 pl.Type = static_cast<LightType>(lightTypeIndex);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             if (pl.Type != LightType::Point)
             {
                 QtUi::TextDisabled("Emits along the entity's local -Z: unrotated points straight down.");
             }
 
-            if (QtUi::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f)) mSceneDirty = true;
-            if (QtUi::DragFloat("Radius",         &pl.Radius,          0.1f,  0.0f, 1000.0f)) mSceneDirty = true;
+            if (QtUi::DragFloat("Intensity (lm)", &pl.IntensityLumens, 10.0f, 0.0f, 100000.0f)) MarkSceneChanged();
+            if (QtUi::DragFloat("Radius",         &pl.Radius,          0.1f,  0.0f, 1000.0f)) MarkSceneChanged();
             float col[3] = { pl.ColorR, pl.ColorG, pl.ColorB };
-            if (QtUi::ColorEdit3("Color##pl", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; mSceneDirty = true; }
-            if (QtUi::Checkbox("Cast Shadows##pl",          &pl.CastShadows)) mSceneDirty = true;
-            if (QtUi::Checkbox("Affect Volumetric Fog##pl", &pl.AffectVolumetricFog)) mSceneDirty = true;
-            if (QtUi::Checkbox("Affect Global Illumination##pl", &pl.AffectGlobalIllumination)) mSceneDirty = true;
+            if (QtUi::ColorEdit3("Color##pl", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; MarkSceneChanged(); }
+            if (QtUi::Checkbox("Cast Shadows##pl",          &pl.CastShadows)) MarkSceneChanged();
+            if (QtUi::Checkbox("Affect Volumetric Fog##pl", &pl.AffectVolumetricFog)) MarkSceneChanged();
+            if (QtUi::Checkbox("Affect Global Illumination##pl", &pl.AffectGlobalIllumination)) MarkSceneChanged();
             QtUi::SetItemTooltip(
                 "Whether this light contributes to the indirect bounce - ray-traced GI,\n"
                 "radiance probes and cascades. Turn it off for a cinematic key or rim\n"
@@ -3384,15 +3708,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::SliderFloat("GI Contribution##pl", &pl.GiContribution, 0.0f, 4.0f, "%.2f"))
             {
                 pl.GiContribution = (std::max)(pl.GiContribution, 0.0f);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::SetItemTooltip("Scales the indirect bounce only, leaving the direct light at its authored intensity.");
             QtUi::EndDisabled();
-            if (QtUi::DragFloat("Falloff Exponent", &pl.FalloffExponent, 0.01f, 0.1f, 10.0f)) mSceneDirty = true;
-            if (QtUi::DragFloat("Source Radius",    &pl.SourceRadius,    0.001f, 0.0f, 1.0f)) mSceneDirty = true;
-            if (QtUi::Checkbox("Use Temperature",   &pl.UseTemperature)) mSceneDirty = true;
+            if (QtUi::DragFloat("Falloff Exponent", &pl.FalloffExponent, 0.01f, 0.1f, 10.0f)) MarkSceneChanged();
+            if (QtUi::DragFloat("Source Radius",    &pl.SourceRadius,    0.001f, 0.0f, 1.0f)) MarkSceneChanged();
+            if (QtUi::Checkbox("Use Temperature",   &pl.UseTemperature)) MarkSceneChanged();
             if (pl.UseTemperature)
-                if (QtUi::DragFloat("Temperature (K)", &pl.TemperatureKelvin, 100.0f, 1000.0f, 20000.0f)) mSceneDirty = true;
+                if (QtUi::DragFloat("Temperature (K)", &pl.TemperatureKelvin, 100.0f, 1000.0f, 20000.0f)) MarkSceneChanged();
 
             if (pl.Type == LightType::Spot)
             {
@@ -3400,13 +3724,13 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 if (QtUi::SliderFloat("Inner Angle##pl", &pl.SpotInnerConeDegrees, 0.0f, 179.0f, "%.1f deg"))
                 {
                     pl.SpotInnerConeDegrees = (std::min)(pl.SpotInnerConeDegrees, pl.SpotOuterConeDegrees);
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
                 QtUi::SetItemTooltip("Full angle of the hotspot, which receives the light's full intensity.");
                 if (QtUi::SliderFloat("Outer Angle##pl", &pl.SpotOuterConeDegrees, 0.1f, 179.0f, "%.1f deg"))
                 {
                     pl.SpotInnerConeDegrees = (std::min)(pl.SpotInnerConeDegrees, pl.SpotOuterConeDegrees);
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
                 QtUi::SetItemTooltip("Full angle where the cone reaches zero. Equal to the inner angle gives a hard edge.");
             }
@@ -3414,12 +3738,12 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             {
                 QtUi::SeparatorText("Rectangle");
                 if (QtUi::DragFloat("Width##pl", &pl.RectWidth, 0.01f, 0.001f, 1000.0f, "%.3f m"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 if (QtUi::DragFloat("Height##pl", &pl.RectHeight, 0.01f, 0.001f, 1000.0f, "%.3f m"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 QtUi::SetItemTooltip("The panel lies in the entity's local XY plane. A bigger panel gives softer shadows and a longer highlight.");
                 if (QtUi::Checkbox("Two Sided##pl", &pl.RectTwoSided))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 QtUi::SetItemTooltip("Off suits a window or a wall-mounted panel; on suits a floating strip lighting both ways.");
             }
 
@@ -3448,7 +3772,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 {
                     meshComponent.MeshPath = updatedMeshPath;
                     meshComponent.MeshAsset.reset();
-                    mSceneDirty = true;
+                    MarkSceneChanged();
 
                     const std::string defaultMaterialPath = FindDefaultMaterialPathForMesh(meshComponent.MeshPath);
                     if (!defaultMaterialPath.empty())
@@ -3462,7 +3786,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             {
                 meshComponent.MeshPath.clear();
                 meshComponent.MeshAsset.reset();
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             QtUi::Spacing();
@@ -3473,14 +3797,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Material", "Material JSON\0*.json\0All Files\0*.*\0", updatedMaterialPath))
                 {
                     meshComponent.MaterialPath = updatedMaterialPath;
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
             QtUi::SameLine();
             if (QtUi::Button("Clear Material"))
             {
                 meshComponent.MaterialPath.clear();
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (!meshComponent.MeshPath.empty())
@@ -3491,7 +3815,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (QtUi::Button("Use Geometry Default Material"))
                     {
                         meshComponent.MaterialPath = defaultMaterialPath;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
                 }
             }
@@ -3500,7 +3824,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::DragFloat("LOD Usage Scale", &meshComponent.LodUsageScale, 0.01f, 0.1f, 8.0f, "%.2f"))
             {
                 meshComponent.LodUsageScale = (std::clamp)(meshComponent.LodUsageScale, 0.1f, 8.0f);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             const char* lodDebugModes[] = { "Automatic", "LOD 0", "LOD 1", "LOD 2", "LOD 3" };
@@ -3508,7 +3832,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Combo("LOD Debug View", &lodDebugMode, lodDebugModes, std::size(lodDebugModes)))
             {
                 meshComponent.DebugForcedLod = lodDebugMode - 1;
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (meshComponent.MeshAsset)
@@ -3528,7 +3852,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::InputText("Event Path##ae", epBuf, sizeof(epBuf)))
             {
                 ae.EventPath = epBuf;
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (audioManager != nullptr)
@@ -3559,7 +3883,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                             {
                                 ae.EventPath = availableEvents[eventIndex].Path;
                                 strcpy_s(epBuf, ae.EventPath.c_str());
-                                mSceneDirty = true;
+                                MarkSceneChanged();
                             }
 
                             if (isSelected)
@@ -3584,7 +3908,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
 
             if (QtUi::Checkbox("Auto Play##ae", &ae.AutoPlay))
-                mSceneDirty = true;
+                MarkSceneChanged();
         }
     }
 
@@ -3599,15 +3923,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::InputText("Material##dc", matBuf, sizeof(matBuf)))
             {
                 dc.MaterialPath = matBuf;
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (QtUi::DragFloat("Size X##dc", &dc.SizeX, 0.01f, 0.001f, 1000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Size Y##dc", &dc.SizeY, 0.01f, 0.001f, 1000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Size Z##dc", &dc.SizeZ, 0.01f, 0.001f, 1000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
         }
     }
 
@@ -3688,22 +4012,22 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Combo("Shape##veg", &shapeIndex, shapeNames, std::size(shapeNames)))
             {
                 va.Shape = static_cast<VegetationAreaShape>(shapeIndex);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (va.Shape == VegetationAreaShape::Sphere)
             {
                 if (QtUi::DragFloat("Radius##veg", &va.ExtentX, 0.25f, 0.01f, 5000.0f))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
             else
             {
                 if (va.Shape == VegetationAreaShape::Box)
                 {
                     if (QtUi::DragFloat("Half Extent X##veg", &va.ExtentX, 0.25f, 0.01f, 5000.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Half Extent Y##veg", &va.ExtentY, 0.25f, 0.01f, 5000.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                 }
                 else
                 {
@@ -3712,14 +4036,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 }
 
                 if (QtUi::DragFloat("Half Height Z##veg", &va.ExtentZ, 0.25f, 0.01f, 5000.0f))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
 
             int seed = static_cast<int>(va.Seed);
             if (QtUi::DragInt("Seed##veg", &seed, 1.0f, 0, 1000000))
             {
                 va.Seed = static_cast<std::uint32_t>((std::max)(seed, 0));
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::SameLine();
             if (QtUi::Button("Reroll##veg"))
@@ -3728,19 +4052,19 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 // rule -- the fastest way out of an arrangement that looks
                 // wrong for reasons the sliders cannot express.
                 va.Seed = va.Seed * 1664525u + 1013904223u;
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             QtUi::SeparatorText("Snapping");
             if (QtUi::Checkbox("Snap to terrain##veg", &va.SnapToTerrain))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::Checkbox("Snap to geometry##veg", &va.SnapToGeometry))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Max snap distance##veg", &va.SnapMaxDistance, 1.0f, 0.01f, 10000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             if (QtUi::Checkbox("Exclusion volume##veg", &va.IsExclusionVolume))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemHovered())
             {
                 QtUi::SetTooltip(
@@ -3749,7 +4073,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
 
             if (QtUi::Checkbox("Show bounds##veg", &va.ShowBounds))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             // --- Layers --------------------------------------------------------
             QtUi::SeparatorText("Layers");
@@ -3759,7 +4083,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             {
                 va.Layers.emplace_back();
                 va.ActiveLayer = static_cast<int>(va.Layers.size()) - 1;
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (va.Layers.size() >= static_cast<std::size_t>(kVegetationMaxLayers))
@@ -3786,14 +4110,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     va.ActiveLayer = layerIndex;
 
                     if (QtUi::Checkbox("Enabled", &layer.Enabled))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
 
                     char nameBuf[128];
                     strncpy_s(nameBuf, layer.Name.c_str(), sizeof(nameBuf) - 1);
                     if (QtUi::InputText("Name", nameBuf, sizeof(nameBuf)))
                     {
                         layer.Name = nameBuf;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
 
                     char meshBuf[512];
@@ -3801,7 +4125,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (QtUi::InputText("Mesh", meshBuf, sizeof(meshBuf)))
                     {
                         layer.MeshPath = meshBuf;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
 
                     char matBuf[512];
@@ -3809,7 +4133,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (QtUi::InputText("Material", matBuf, sizeof(matBuf)))
                     {
                         layer.MaterialPath = matBuf;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
                     if (QtUi::IsItemHovered())
                     {
@@ -3821,33 +4145,33 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
 
                     QtUi::SeparatorText("Density");
                     if (QtUi::DragFloat("Per m2", &layer.Density, 0.01f, 0.0f, 200.0f, "%.3f"))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Spacing radius", &layer.CollisionRadius, 0.01f, 0.0f, 50.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::IsItemHovered())
                         QtUi::SetTooltip("Discards instances closer than this to one already placed. 0 disables.");
 
                     QtUi::SeparatorText("Variation");
                     if (QtUi::DragFloatRange2("Scale", &layer.MinScale, &layer.MaxScale, 0.01f, 0.01f, 20.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::Checkbox("Random yaw", &layer.RandomYaw))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Max tilt (deg)", &layer.MaxTiltDegrees, 0.1f, 0.0f, 45.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
 
                     QtUi::SeparatorText("Surface filtering");
                     if (QtUi::SliderFloat("Align to normal", &layer.AlignToNormal, 0.0f, 1.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::IsItemHovered())
                         QtUi::SetTooltip("0 keeps instances upright, 1 follows the slope. Trees want 0, ground cover ~0.3.");
                     if (QtUi::DragFloat("Max slope (deg)", &layer.MaxSlopeDegrees, 0.5f, 0.0f, 90.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Min altitude", &layer.MinAltitude, 0.5f, -100000.0f, 100000.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Max altitude", &layer.MaxAltitude, 0.5f, -100000.0f, 100000.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::DragFloat("Sink offset", &layer.SinkOffset, 0.005f, 0.0f, 5.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
 
                     QtUi::SeparatorText("Terrain layer mask");
                     int mask = layer.TerrainLayerMask;
@@ -3855,7 +4179,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                             mask < 0 ? "disabled" : "%d"))
                     {
                         layer.TerrainLayerMask = mask;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
                     if (QtUi::IsItemHovered())
                     {
@@ -3867,23 +4191,23 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (layer.TerrainLayerMask >= 0)
                     {
                         if (QtUi::SliderFloat("Mask threshold", &layer.TerrainLayerThreshold, 0.0f, 1.0f))
-                            mSceneDirty = true;
+                            MarkSceneChanged();
                     }
 
                     QtUi::SeparatorText("Rendering");
                     if (QtUi::DragFloat("Cull distance", &layer.CullDistance, 1.0f, 1.0f, 20000.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::SliderFloat("Fade fraction", &layer.FadeFraction, 0.0f, 1.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::Checkbox("Cast shadows", &layer.CastShadows))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
 
                     char billboardBuf[512];
                     strncpy_s(billboardBuf, layer.BillboardTexturePath.c_str(), sizeof(billboardBuf) - 1);
                     if (QtUi::InputText("Billboard card", billboardBuf, sizeof(billboardBuf)))
                     {
                         layer.BillboardTexturePath = billboardBuf;
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
                     if (QtUi::IsItemHovered())
                     {
@@ -3896,10 +4220,10 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (!layer.BillboardTexturePath.empty())
                     {
                         if (QtUi::DragFloat("Billboard scale", &layer.BillboardScale, 0.01f, 0.01f, 10.0f))
-                            mSceneDirty = true;
+                            MarkSceneChanged();
                     }
                     if (QtUi::Checkbox("Contribute to ray tracing", &layer.ContributeToRayTracing))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::IsItemHovered())
                     {
                         QtUi::SetTooltip(
@@ -3914,7 +4238,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (QtUi::Combo("Bend model", &bendIndex, bendNames, std::size(bendNames)))
                     {
                         layer.BendModel = static_cast<VegetationBendModel>(bendIndex);
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     }
                     if (QtUi::IsItemHovered())
                     {
@@ -3925,15 +4249,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     }
 
                     if (QtUi::SliderFloat("Wind influence", &layer.WindInfluence, 0.0f, 4.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::SliderFloat("Stiffness", &layer.Stiffness, 0.05f, 8.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (QtUi::SliderFloat("Flutter amount", &layer.FlutterAmount, 0.0f, 4.0f))
-                        mSceneDirty = true;
+                        MarkSceneChanged();
                     if (layer.BendModel == VegetationBendModel::Grass)
                     {
                         if (QtUi::SliderFloat("Interaction influence", &layer.InteractionInfluence, 0.0f, 4.0f))
-                            mSceneDirty = true;
+                            MarkSceneChanged();
                     }
 
                     QtUi::Separator();
@@ -3951,7 +4275,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 va.Layers.erase(va.Layers.begin() + layerToRemove);
                 if (va.ActiveLayer >= static_cast<int>(va.Layers.size()))
                     va.ActiveLayer = (std::max)(0, static_cast<int>(va.Layers.size()) - 1);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
         }
     }
@@ -3963,40 +4287,40 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             auto& rc = *selectedEntity->Rain;
 
             if (QtUi::Checkbox("Enabled##rain", &rc.Enabled))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Physics");
             float wind[3] = { rc.WindX, rc.WindY, rc.WindZ };
             if (QtUi::DragFloat3("Wind##rain", wind, 0.05f, -20.0f, 20.0f))
             {
                 rc.WindX = wind[0]; rc.WindY = wind[1]; rc.WindZ = wind[2];
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             if (QtUi::DragFloat("Gravity##rain", &rc.Gravity, 0.1f, 0.0f, 50.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Bounding Box");
             if (QtUi::DragFloat("Extent X##rain", &rc.BoxExtentX, 0.5f, 1.0f, 200.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Extent Y##rain", &rc.BoxExtentY, 0.5f, 1.0f, 200.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Extent Z##rain", &rc.BoxExtentZ, 0.5f, 1.0f, 200.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Visual");
             if (QtUi::DragFloat("Intensity##rain", &rc.Intensity, 0.01f, 0.0f, 8.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Streak Length##rain", &rc.StreakLength, 0.005f, 0.01f, 2.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             float col[4] = { rc.ColorR, rc.ColorG, rc.ColorB, rc.ColorA };
             if (QtUi::ColorEdit4("Color##rain", col))
             {
                 rc.ColorR = col[0]; rc.ColorG = col[1];
                 rc.ColorB = col[2]; rc.ColorA = col[3];
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             if (QtUi::DragFloat("Wetness##rain", &rc.WetnessIntensity, 0.01f, 0.0f, 1.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
         }
     }
 
@@ -4007,7 +4331,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             auto& ps = *selectedEntity->ParticleSystem;
 
             if (QtUi::Checkbox("Enabled##ps", &ps.Enabled))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Material");
             QtUi::TextWrapped("Material: %s", ps.MaterialPath.empty() ? "(none)" : ps.MaterialPath.c_str());
@@ -4022,43 +4346,43 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                         updatedMaterialPath))
                 {
                     ps.MaterialPath = updatedMaterialPath;
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
             QtUi::SameLine();
             if (QtUi::Button("Clear##psmat"))
             {
                 ps.MaterialPath.clear();
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             QtUi::SeparatorText("Emission");
             if (QtUi::Checkbox("Burst##ps", &ps.Burst))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Off: emit continuously at Spawn Rate. On: emit Burst Count particles every Burst Interval.");
 
             if (ps.Burst)
             {
                 if (QtUi::DragInt("Burst Count##ps", &ps.BurstCount, 1.0f, 0, 4096))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 if (QtUi::DragFloat("Burst Interval##ps", &ps.BurstInterval, 0.01f, 0.01f, 60.0f, "%.2f s"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
             else
             {
                 if (QtUi::DragFloat("Spawn Rate##ps", &ps.SpawnRate, 1.0f, 0.0f, 20000.0f, "%.0f /s"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
 
             if (QtUi::DragFloat("Lifetime##ps", &ps.Lifetime, 0.01f, 0.01f, 60.0f, "%.2f s"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Lifetime Variance##ps", &ps.LifetimeVariance, 0.0f, 0.95f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragInt("Max Particles##ps", &ps.MaxParticles, 16.0f, 1, kParticleMaxPerSystem))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Ceiling on the buffer. The system only allocates what Spawn Rate x Lifetime actually needs.");
             if (QtUi::Checkbox("Prewarm##ps", &ps.Prewarm))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Start already at steady state instead of building up from empty on load.");
 
             QtUi::SeparatorText("Shape");
@@ -4067,7 +4391,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Combo("Shape##ps", &shapeIndex, shapeNames, static_cast<int>(std::size(shapeNames))))
             {
                 ps.Shape = static_cast<ParticleEmitterShape>(shapeIndex);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::TextDisabled("The emitter faces the entity's local +Z (world up when unrotated).");
 
@@ -4077,19 +4401,19 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 if (QtUi::DragFloat3("Extents##ps", extents, 0.01f, 0.0f, 100.0f))
                 {
                     ps.ShapeExtents = { extents[0], extents[1], extents[2] };
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
             else if (ps.Shape != ParticleEmitterShape::Point)
             {
                 if (QtUi::DragFloat("Radius##ps", &ps.ShapeRadius, 0.01f, 0.0f, 100.0f, "%.3f m"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
 
             if (ps.Shape == ParticleEmitterShape::Cone)
             {
                 if (QtUi::SliderFloat("Cone Angle##ps", &ps.ConeAngleDegrees, 0.0f, 180.0f, "%.1f deg"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
 
             if (ps.Shape == ParticleEmitterShape::Sphere ||
@@ -4097,94 +4421,94 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 ps.Shape == ParticleEmitterShape::Disc)
             {
                 if (QtUi::SliderFloat("Shell Bias##ps", &ps.ShapeShellBias, 0.0f, 1.0f, "%.2f"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 QtUi::SetItemTooltip("0 fills the shape, 1 puts every particle on its surface. A ring of flame around a log is a Disc at 1.");
             }
 
             QtUi::SeparatorText("Motion");
             if (QtUi::DragFloat("Initial Speed##ps", &ps.InitialSpeed, 0.01f, 0.0f, 100.0f, "%.2f m/s"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Speed Variance##ps", &ps.SpeedVariance, 0.0f, 1.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             float acceleration[3] = { ps.Acceleration.x, ps.Acceleration.y, ps.Acceleration.z };
             if (QtUi::DragFloat3("Acceleration##ps", acceleration, 0.05f, -50.0f, 50.0f))
             {
                 ps.Acceleration = { acceleration[0], acceleration[1], acceleration[2] };
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::SetItemTooltip("Positive Z for fire (hot gas rising); -9.8 Z for debris that falls.");
 
             if (QtUi::DragFloat("Drag##ps", &ps.Drag, 0.01f, 0.0f, 20.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Wind Influence##ps", &ps.WindInfluence, 0.0f, 4.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("How strongly the scene-wide wind pushes this system.");
 
             if (QtUi::DragFloat("Turbulence##ps", &ps.TurbulenceStrength, 0.01f, 0.0f, 20.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("What turns a cone of sprites into something that licks and curls. The main knob for fire.");
             if (QtUi::DragFloat("Turbulence Scale##ps", &ps.TurbulenceFrequency, 0.01f, 0.01f, 10.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Turbulence Speed##ps", &ps.TurbulenceSpeed, 0.01f, 0.0f, 10.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Vortex##ps", &ps.VortexStrength, 0.01f, -20.0f, 20.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Swirl about the emitter's up axis, for a flame that twists as it rises.");
 
             QtUi::SeparatorText("Size and Rotation");
             if (QtUi::DragFloat("Start Size##ps", &ps.StartSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("End Size##ps", &ps.EndSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Size Variance##ps", &ps.SizeVariance, 0.0f, 1.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Rotation Speed##ps", &ps.RotationSpeedDegrees, 1.0f, -720.0f, 720.0f, "%.0f deg/s"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Rotation Variance##ps", &ps.RotationSpeedVariance, 0.0f, 1.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderFloat("Random Start Rotation##ps", &ps.RandomStartRotation, 0.0f, 1.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Color Over Life");
             float colorStart[4] = { ps.ColorStart.x, ps.ColorStart.y, ps.ColorStart.z, ps.ColorStart.w };
             if (QtUi::ColorEdit4("Start##pscol", colorStart))
             {
                 ps.ColorStart = { colorStart[0], colorStart[1], colorStart[2], colorStart[3] };
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             float colorMid[4] = { ps.ColorMid.x, ps.ColorMid.y, ps.ColorMid.z, ps.ColorMid.w };
             if (QtUi::ColorEdit4("Mid##pscol", colorMid))
             {
                 ps.ColorMid = { colorMid[0], colorMid[1], colorMid[2], colorMid[3] };
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             float colorEnd[4] = { ps.ColorEnd.x, ps.ColorEnd.y, ps.ColorEnd.z, ps.ColorEnd.w };
             if (QtUi::ColorEdit4("End##pscol", colorEnd))
             {
                 ps.ColorEnd = { colorEnd[0], colorEnd[1], colorEnd[2], colorEnd[3] };
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             if (QtUi::SliderFloat("Mid Point##pscol", &ps.ColorMidPoint, 0.01f, 0.99f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Where the middle key sits along the particle's life. Low values hold a flame's hot core longer.");
             if (QtUi::DragFloat("Emissive Intensity##ps", &ps.EmissiveIntensity, 0.05f, 0.0f, 200.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Multiplies the material's emissive colour. The main brightness control for fire.");
 
             QtUi::SeparatorText("Flipbook");
             QtUi::TextDisabled("Leave at 1x1 to inherit the material's own atlas layout.");
             if (QtUi::SliderInt("Columns##ps", &ps.FlipbookColumns, 1, 16))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderInt("Rows##ps", &ps.FlipbookRows, 1, 16))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Frames Per Second##ps", &ps.FlipbookFps, 0.5f, 0.0f, 120.0f, "%.1f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("0 spreads the whole atlas across the particle's lifetime, which is what a hand-authored flame sheet wants.");
             if (QtUi::Checkbox("Blend Frames##ps", &ps.FlipbookBlendFrames))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::Checkbox("Random Start Frame##ps", &ps.FlipbookRandomStartFrame))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Rendering");
             const char* facingNames[] = { "Billboard", "Velocity Stretched", "Horizontal", "Vertical" };
@@ -4192,23 +4516,23 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Combo("Facing##ps", &facingIndex, facingNames, static_cast<int>(std::size(facingNames))))
             {
                 ps.Facing = static_cast<ParticleFacingMode>(facingIndex);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             if (ps.Facing == ParticleFacingMode::VelocityStretched)
             {
                 if (QtUi::DragFloat("Stretch##ps", &ps.StretchFactor, 0.005f, 0.0f, 4.0f, "%.3f"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
             if (QtUi::Checkbox("Soft Particles##ps", &ps.SoftParticles))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Fades sprites where they meet geometry, so a flame does not cut a hard line into the floor.");
             if (ps.SoftParticles)
             {
                 if (QtUi::DragFloat("Soft Fade##ps", &ps.SoftFadeDistance, 0.01f, 0.001f, 10.0f, "%.3f m"))
-                    mSceneDirty = true;
+                    MarkSceneChanged();
             }
             if (QtUi::DragFloat("Cull Distance##ps", &ps.CullDistance, 1.0f, 1.0f, 10000.0f, "%.0f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Light and Global Illumination");
             QtUi::TextWrapped(
@@ -4216,18 +4540,18 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 "That one light drives the deferred shading, the ray-traced GI bounce and "
                 "the volumetric fog together.");
             if (QtUi::Checkbox("Emit Light##ps", &ps.EmitLight))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::BeginDisabled(!ps.EmitLight);
             if (QtUi::DragFloat("Intensity (lm)##ps", &ps.LightIntensityLumens, 10.0f, 0.0f, 100000.0f, "%.0f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Light Radius##ps", &ps.LightRadius, 0.1f, 0.001f, 1000.0f, "%.2f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Height Offset##ps", &ps.LightHeightOffset, 0.01f, -50.0f, 50.0f, "%.2f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("A fire's apparent light source sits inside the flame, not at its base.");
             if (QtUi::Checkbox("Color From Particles##ps", &ps.UseParticleColorForLight))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Take the light's colour from the particle gradient, so recolouring the fire recolours the light.");
             if (!ps.UseParticleColorForLight)
             {
@@ -4237,16 +4561,16 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     ps.LightColorR = lightColor[0];
                     ps.LightColorG = lightColor[1];
                     ps.LightColorB = lightColor[2];
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
             if (QtUi::SliderFloat("GI Contribution##ps", &ps.GiContribution, 0.0f, 4.0f, "%.2f"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Scales the indirect bounce only. Lower it when a fire is washing out a small room's GI.");
             if (QtUi::Checkbox("Cast Shadows##pslight", &ps.LightCastShadows))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::Checkbox("Affect Volumetric Fog##pslight", &ps.LightAffectVolumetricFog))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::SeparatorText("Flicker");
             DrawLightStyleControls(
@@ -4257,7 +4581,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 ps.LightStylePhaseOffset,
                 ps.LightCustomStylePattern);
             if (QtUi::Checkbox("Flicker The Sprites Too##ps", &ps.StyleDrivesParticleEmissive))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::SetItemTooltip("Applies the same curve to the sprites' brightness, so the flame dims with the light it casts.");
             QtUi::EndDisabled();
         }
@@ -4272,11 +4596,11 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             QtUi::SeparatorText("Area");
             QtUi::TextDisabled("Surface centred on the entity's position (Z = water level).");
             if (QtUi::DragFloat("Size X##water", &wc.SizeX, 0.5f, 1.0f, 100000.0f, "%.1f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Size Y##water", &wc.SizeY, 0.5f, 1.0f, 100000.0f, "%.1f m"))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::SliderInt("Resolution##water", &wc.Resolution, 2, 512))
-                mSceneDirty = true;
+                MarkSceneChanged();
             QtUi::TextDisabled("Grid vertices per axis (%d triangles).",
                 (wc.Resolution - 1) * (wc.Resolution - 1) * 2);
 
@@ -4286,13 +4610,13 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Button("Ocean##water"))
             {
                 wc.MaterialPath = "Materials/Ocean.json";
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::SameLine();
             if (QtUi::Button("Water##waterpreset"))
             {
                 wc.MaterialPath = "Materials/Water.json";
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
             QtUi::SameLine();
             if (QtUi::Button("Select...##water"))
@@ -4305,15 +4629,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                         updatedMaterialPath))
                 {
                     wc.MaterialPath = updatedMaterialPath;
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
 
             QtUi::SeparatorText("Waves");
             if (QtUi::DragFloat("Wave Scale##water", &wc.WaveScale, 0.01f, 0.0f, 5.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::DragFloat("Detail Tiling##water", &wc.DetailTiling, 0.25f, 0.0f, 200.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             QtUi::TextDisabled("Wave model is material-driven: set \"useFFT\": true");
             QtUi::TextDisabled("in the material's water block for the cascaded FFT ocean.");
@@ -4327,7 +4651,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 "Thickness", "Reflection (environment)", "Transmission (volume)", "Foam",
                 "Neutral 0.18 (exposure test)", "Sun specular" };
             if (QtUi::Combo("Debug View##water", &wc.DebugMode, debugModes, std::size(debugModes)))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (wc.DebugMode != 0)
                 QtUi::TextDisabled("Debug view active - shading is overridden.");
         }
@@ -4356,14 +4680,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     updatedMaterialPath))
                 {
                     tc.MaterialPath = updatedMaterialPath;
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                 }
             }
             QtUi::SameLine();
             if (QtUi::Button("Clear Terrain Material"))
             {
                 tc.MaterialPath.clear();
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
 
             if (mTerrainRenderer != nullptr)
@@ -4443,7 +4767,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     if (!ddsPath.empty())
                         tc.HeightmapDdsPath = ddsPath;
 
-                    mSceneDirty = true;
+                    MarkSceneChanged();
                     if (mTerrainRenderer != nullptr)
                     {
                         mTerrainRenderer->MarkTerrainDirty(
@@ -4459,27 +4783,27 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             // stalls the GPU and can crash on allocations near the VRAM
             // ceiling.
             if (QtUi::DragInt("Width (samples)",  &tc.Width,  1.0f, 1, 8192))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
                 mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
 
             if (QtUi::DragInt("Height (samples)", &tc.Height, 1.0f, 1, 8192))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
                 mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
 
             if (QtUi::DragFloat("World Size (m)",   &tc.WorldSize,    1.0f, 1.0f, 100000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
                 mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
 
             if (QtUi::DragFloat("Height Scale (m)",  &tc.HeightScale,  1.0f, 0.001f, 100000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
                 mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
 
             if (QtUi::DragFloat("Height Offset (m)", &tc.HeightOffset, 0.1f, -100000.0f, 100000.0f))
-                mSceneDirty = true;
+                MarkSceneChanged();
             if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
                 mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
 
@@ -4490,12 +4814,12 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                              brushNames, std::size(brushNames)))
             {
                 tc.Brush = static_cast<TerrainComponent::BrushType>(brushTypeIndex);
-                mSceneDirty = true;
+                MarkSceneChanged();
             }
-            if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,  0.1f, 0.1f, 1000.0f)) mSceneDirty = true;
-            if (QtUi::DragFloat("Strength (m/s)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) mSceneDirty = true;
-            if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) mSceneDirty = true;
-            if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) mSceneDirty = true;
+            if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,  0.1f, 0.1f, 1000.0f)) MarkSceneChanged();
+            if (QtUi::DragFloat("Strength (m/s)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) MarkSceneChanged();
+            if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) MarkSceneChanged();
+            if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) MarkSceneChanged();
 
             QtUi::Separator();
             bool brushActive = mTerrainBrushModeActive;
@@ -4514,7 +4838,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                     mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
             }
             if (layerSceneDirty)
-                mSceneDirty = true;
+                MarkSceneChanged();
 
             if (!mLastTerrainBrushMessage.empty())
             {
@@ -4676,9 +5000,10 @@ void Editor::DrawAudioManagerWindow(AudioManager* audioManager)
         const bool resonanceAvailable = audioManager->IsResonanceAudioAvailable();
         bool resonanceEnabled = audioManager->IsResonanceAudioEnabled();
 
-        QtUi::BeginDisabled(!resonanceAvailable);
-        if (QtUi::Checkbox("Enable Resonance Audio", &resonanceEnabled))
-            audioManager->SetResonanceAudioEnabled(resonanceEnabled);
+        // Greyed out on purpose: there is no engine-owned Resonance DSP left to bypass,
+        // so a live checkbox here would be a switch wired to nothing.
+        QtUi::BeginDisabled(true);
+        QtUi::Checkbox("Enable Resonance Audio", &resonanceEnabled);
         QtUi::EndDisabled();
 
         QtUi::SameLine();
@@ -4690,8 +5015,9 @@ void Editor::DrawAudioManagerWindow(AudioManager* audioManager)
         QtUi::TextWrapped("%s", audioManager->GetResonanceAudioStatus().c_str());
         QtUi::Spacing();
         QtUi::TextDisabled(
-            "3D FMOD events use Resonance Audio Source DSPs and are mixed through "
-            "the Resonance Audio Listener on FMOD's master channel group.");
+            "Spatialisation lives in the FMOD project, not here: each event carries its "
+            "own Resonance Source and Listener effect. The engine only loads the plugin, "
+            "which the banks need in order to load at all.");
     }
 
     QtUi::Separator();
@@ -4758,6 +5084,17 @@ void Editor::Draw(
     bool showStatistics,
     AudioManager* audioManager)
 {
+    if (QtUi::IsStandaloneGame() || mPlaySceneActive)
+    {
+        QtUi::Begin("Viewport", nullptr, QtUiWindowFlags_NoDecoration);
+        const UiVec2 origin=QtUi::GetCursorScreenPos();
+        const UiVec2 size=QtUi::GetContentRegionAvail();
+        mLastViewportContentOrigin=origin;
+        mLastViewportContentSize=size;
+        DrawGameUiOverlay(origin, size);
+        QtUi::End();
+        return;
+    }
     mSceneStatusMessage     = sceneStatusMessage;
     mViewportStatisticsText = statisticsText;
     mSavedCameraPosition    = camera.GetPosition();

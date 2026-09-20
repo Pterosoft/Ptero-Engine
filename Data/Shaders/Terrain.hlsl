@@ -7,6 +7,8 @@
 //   b1 PS  - base colour tint and material parameters
 //   t0 PS  - base-colour texture (sampled with s0 anisotropic wrap)
 
+#include "SurfaceSpecular.hlsli"
+
 cbuffer TerrainConstants : register(b0)
 {
     float4x4 gMVP;    // pre-transposed model-view-projection
@@ -25,7 +27,8 @@ cbuffer TerrainMaterial : register(b1)
     float4 gLayerTint[4];      // per-layer tint / solid colour
     int    gHasBaseMap;        // legacy: 0 = use tint as solid colour
     int    gUseVertexColour;   // legacy: 0/1
-    int2   _Pad0;
+    float  gSpecular;          // reflectivity, 0.5 = neutral (SurfaceSpecular.hlsli)
+    int    _Pad0;
 };
 
 // Layer textures.  In legacy (gLayerCount == 0) mode only gLayer0 is used and
@@ -131,7 +134,7 @@ PSOutput PSMain(PSInput input)
     // --- Normal (oct-encoded world normal) ---
     const float3 N = normalize(input.WorldNormal);
     const float2 octNormal = EncodeOctNormal(N);
-    output.Normal = float4(octNormal, input.Position.z, 0.0f);
+    output.Normal = float4(octNormal, input.Position.z, PteroEncodeSurfaceSpecular(gSpecular));
 
     // --- Material ---
     output.Material = float4(

@@ -12,6 +12,10 @@
 // "thickness" tolerance cannot hold across the frustum. Marching in world units keeps
 // Thickness an actual distance, which is far easier to author against.
 
+// Same F0 the deferred resolve uses, so a surface does not reflect one amount under direct
+// light and a different amount in its own reflection.
+#include "SurfaceSpecular.hlsli"
+
 cbuffer SsrConstants : register(b0)
 {
     float4x4 gViewProj;      // world -> clip, matching the jittered frame
@@ -186,7 +190,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             reflection = gSceneColor.SampleLevel(gLinearClamp, hitUv, 0.0f).rgb;
 
             const float3 albedo = gAlbedo.Load(int3(pixel, 0)).rgb;
-            const float3 F0 = lerp(0.04f.xxx, albedo, metallic);
+            const float specular = PteroDecodeSurfaceSpecular(gNormal.Load(int3(pixel, 0)).w);
+            const float3 F0 = PteroComputeF0(albedo, metallic, specular);
             const float3 fresnel = F0 + (1.0f.xxx - F0) * pow(1.0f - saturate(dot(N, V)), 5.0f);
 
             // A reflection that leaves the screen has no data behind it, so fade it out

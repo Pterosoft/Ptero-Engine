@@ -1,0 +1,139 @@
+/* RmlUi 6.3. All resources local; no browser CSS, script engine or custom shaders. */
+/* This engine's 6.3 build resolves font src from CWD, not from this stylesheet.
+   Absolute local paths make the document load from both Editor and Binaries.
+   If relocating the project, run Tools/relocate-fonts.ps1 once. */
+@font-face { font-family: "Pirata One"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Pirata_One/PirataOne-Regular.ttf"; }
+@font-face { font-family: "Grenze Gotisch"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Grenze_Gotisch/static/GrenzeGotisch-Regular.ttf"; }
+@font-face { font-family: "IM FELL English SC"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/IM_Fell_English_SC/IMFellEnglishSC-Regular.ttf"; }
+@font-face { font-family: "EB Garamond"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/EB_Garamond/static/EBGaramond-Regular.ttf"; }
+@font-face { font-family: "Fondamento"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Fondamento/Fondamento-Regular.ttf"; }
+
+@spritesheet farkle {
+    src: Textures/farkle-atlas.png;
+    parchment: 38px 48px 450px 930px;
+    parchment-inner: 98px 111px 330px 804px;
+    sign: 533px 25px 985px 305px;
+    wood: 534px 356px 984px 226px;
+    wood-inner: 590px 408px 870px 122px;
+    button-paper: 534px 619px 482px 138px;
+    button-dark: 1032px 619px 478px 138px;
+    slot: 663px 783px 205px 196px;
+    fleur: 1198px 780px 180px 208px;
+}
+
+body { width: 100%; height: 100%; margin: 0; background-color: #00000000; font-family: "EB Garamond"; font-size: 2.22vh; color: #22190fff; }
+#game-content { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#turn-message { position: absolute; left: 25%; width: 48%; top: 62.9%; text-align: center; color: #efd5a2ff; font-size: 2.05vh; font-effect: shadow(1px 1px #000000ff); }
+.ones-note { font-size: 1.45vh; text-align: center; padding-top: 0.4vh; }
+.pause-actions { display: flex; justify-content: space-between; margin-top: 2vh; }
+.pause-actions button { font-size: 2vh; color: #3a2412ff; padding: 0.5vh; }
+.pause-actions button:hover, .pause-actions button:focus { color: #9b5625ff; }
+div, h1 { display: block; }
+* { box-sizing: border-box; }
+h1 { margin: 0; font-family: "Grenze Gotisch"; font-weight: normal; font-size: 3.05vh; line-height: 1.1; text-align: center; }
+button { display: inline-block; margin: 0; padding: 0; border: 0px; font-family: "IM FELL English SC"; font-weight: normal; text-align: center; cursor: pointer; tab-index: auto; }
+button:hover, button:focus { color: #fff0beff; }
+button:disabled { opacity: 0.45; cursor: unavailable; tab-index: none; }
+img { image-color: #ffffffff; }
+.hidden { display: none; }
+.parchment { decorator: ninepatch(parchment, parchment-inner, 3.2vh); }
+
+#score-panel { position: absolute; left: 5.9%; top: 13.3%; width: 17.4%; height: 59.9%; }
+.score-content { position: absolute; left: 10%; right: 10%; top: 6.4%; bottom: 5%; text-align: center; }
+.ornament-rule { display: flex; align-items: center; justify-content: center; height: 3.2vh; margin-bottom: 0.8vh; }
+.ornament-rule img { width: 2.6vh; height: 3vh; margin: 0 1vh; }
+.rule { width: 35%; height: 1px; background-color: #795a32a0; }
+.player-name { font-family: "IM FELL English SC"; font-size: 3.3vh; line-height: 1.2; }
+.score { font-size: 6.4vh; line-height: 1.12; margin-top: 0.1vh; }
+.divider { height: 2.7vh; line-height: 2.7vh; border-top: 1px #71502d90; margin-top: 1.4vh; color: #79582fff; font-size: 1.1vh; text-align: center; }
+.opponent { font-size: 2.8vh; }
+.opponent-score { font-size: 5.6vh; }
+.turn-ledger { decorator: ninepatch(wood, wood-inner, 1.15vh); color: #e3bd7fff; padding: 0.8vh 1.65vh; margin-top: 0; text-align: left; }
+.ledger-row { height: 4.65vh; line-height: 4.65vh; border-bottom: 1px #af87463c; font-size: 2.35vh; }
+.ledger-row.last { border-bottom-width: 0; }
+.ledger-value { float: right; font-size: 3.05vh; }
+.motto-fleur { width: 2.5vh; height: 2.9vh; margin-top: 1.65vh; }
+.motto { margin-top: 0.7vh; font-family: "IM FELL English SC"; font-size: 1.6vh; letter-spacing: 0.21vh; line-height: 1.2; }
+
+#masthead { position: absolute; top: 1.2%; left: 34.9%; width: 29.8%; height: 30%; text-align: center; }
+.sign { position: relative; width: 100%; height: 74%; decorator: image(sign); }
+#game-title { position: absolute; top: 42%; left: 0; width: 100%; font-family: "Pirata One"; font-size: 10.4vh; line-height: 1; color: #e5c38bff; font-effect: shadow(2px 3px #000000b0); }
+.turn-sign { position: relative; margin: 0.8vh auto 0; width: 70%; height: 6.6vh; line-height: 6.6vh; decorator: image(button-dark); font-family: "IM FELL English SC"; font-size: 3.6vh; color: #efcc90ff; }
+.turn-fleur { position: absolute; top: 1.65vh; width: 2.65vh; height: 3.1vh; }
+.turn-fleur.left { left: 8%; }
+.turn-fleur.right { right: 8%; }
+
+#play-area { position: absolute; left: 31.2%; top: 37%; width: 37.3%; height: 24.9%; border: 1px #b8955455; }
+.corner { position: absolute; width: 2.9vh; height: 3.4vh; opacity: 0.65; }
+.top-left { left: -1.45vh; top: -1.7vh; }
+.top-right { right: -1.45vh; top: -1.7vh; }
+.bottom-left { left: -1.45vh; bottom: -1.7vh; }
+.bottom-right { right: -1.45vh; bottom: -1.7vh; }
+#roll-prompt { position: absolute; width: 100%; top: 28%; text-align: center; color: #d2b580dd; font-size: 2.9vh; line-height: 1.15; font-effect: shadow(1px 2px #000000a0); }
+#roll-prompt img { margin-top: 1.6vh; width: 2.6vh; height: 3vh; opacity: 0.72; }
+#rolled-dice { display: none; position: absolute; bottom: 3%; width: 100%; text-align: center; }
+.has-dice #rolled-dice { display: block; }
+.has-dice #roll-prompt { display: none; }
+.die { display: inline-block; position: relative; width: 5.5vh; height: 5.5vh; margin: 0 0.75vh; background-color: #e8cda2ff; border: 2px #a9834fff; border-radius: 0.8vh; }
+.die:hover, .die:focus, .die.selected { border-color: #ffda7cff; background-color: #fff0c8ff; }
+.die.selected { top: -0.8vh; }
+.die.held { opacity: 0.35; }
+.pip { display: none; position: absolute; width: 17%; height: 17%; border-radius: 1vh; background-color: #21170fff; }
+.p1 { left: 17%; top: 17%; } .p2 { left: 17%; top: 42%; } .p3 { left: 67%; top: 17%; }
+.p4 { left: 42%; top: 42%; } .p5 { left: 17%; top: 67%; } .p6 { left: 67%; top: 42%; } .p7 { left: 67%; top: 67%; }
+.face-1 .p4, .face-2 .p1, .face-2 .p7, .face-3 .p1, .face-3 .p4, .face-3 .p7,
+.face-4 .p1, .face-4 .p3, .face-4 .p5, .face-4 .p7,
+.face-5 .p1, .face-5 .p3, .face-5 .p4, .face-5 .p5, .face-5 .p7,
+.face-6 .p1, .face-6 .p2, .face-6 .p3, .face-6 .p5, .face-6 .p6, .face-6 .p7 { display: block; }
+
+#scoring-panel { position: absolute; top: 13.3%; right: 5.8%; width: 20.5%; height: 37.5%; }
+.scoring-content { position: absolute; left: 10%; right: 10%; top: 6.7%; bottom: 6%; }
+.compact { height: 1vh; line-height: 1vh; margin-top: 0.8vh; font-size: 0.85vh; }
+.scoring-row { position: relative; height: 3vh; line-height: 3vh; border-bottom: 1px #926a3735; font-size: 1.92vh; white-space: nowrap; }
+.mini-die { position: relative; display: inline-block; width: 2.4vh; height: 2.4vh; top: 0.45vh; background-color: #20190fff; border-radius: 0.35vh; }
+.mini-die .pip { background-color: #e3c896ff; }
+.combination { margin-left: 0.95vh; }
+.points { float: right; }
+.scoring-break { margin-top: 0.6vh; height: 1vh; }
+.rule-symbol { display: inline-block; width: 2.4vh; text-align: center; font-size: 2.1vh; }
+.no-line { border-bottom-width: 0; }
+
+#log-panel { position: absolute; right: 5.8%; top: 51.8%; width: 20.5%; height: 31.9%; }
+.log-content { position: absolute; left: 10%; right: 9%; top: 6.3%; bottom: 8%; }
+#game-log { height: 21.2vh; overflow-y: auto; padding-right: 0.8vh; margin-top: 0.1vh; }
+.log-row { position: relative; height: 3.65vh; line-height: 3.65vh; border-bottom: 1px #99744128; font-size: 1.94vh; white-space: nowrap; }
+.gain { float: right; color: #305d20ff; }
+scrollbarvertical { width: 0.65vh; margin-left: 0.4vh; }
+scrollbarvertical slidertrack { background-color: #67461d25; border-radius: 0.3vh; }
+scrollbarvertical sliderbar { min-height: 2.5vh; background-color: #77512288; border-radius: 0.3vh; }
+scrollbarvertical sliderbar:hover { background-color: #674219cc; }
+scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { height: 0; }
+
+#dice-tray { position: absolute; left: 25.1%; top: 66.5%; width: 48%; height: 19%; decorator: ninepatch(wood, wood-inner, 3.2vh); color: #dfb879ff; }
+.selected-area { position: absolute; left: 3.4%; width: 65%; top: 10%; bottom: 10%; }
+.tray-heading { text-align: center; font-size: 2.5vh; font-family: "IM FELL English SC"; height: 4.6vh; line-height: 3.5vh; border-bottom: 1px #99703970; }
+#selected-dice { display: flex; justify-content: space-between; margin-top: 1.1vh; }
+.dice-slot { width: 14.4%; height: 8.7vh; decorator: image(slot); color: #ad834bd0; font-family: "EB Garamond"; font-size: 4.1vh; line-height: 8.4vh; }
+.dice-slot:hover, .dice-slot:focus { color: #ffe3a0ff; background-color: #a7782725; }
+.dice-slot .die { margin: 1.3vh 0 0; }
+.round-area { position: absolute; right: 2.3%; top: 11%; width: 28%; height: 78%; border-left: 1px #9d7c4670; text-align: center; }
+.round-heading { font-family: "IM FELL English SC"; font-size: 2.45vh; margin-top: 0.8vh; }
+.gold-divider { font-size: 1.1vh; line-height: 1.4vh; margin: 0.7vh 2vh 0; border-top: 1px #95714266; }
+#round-score { color: #ead1a4ff; font-size: 6.1vh; line-height: 1.1; }
+#actions { position: absolute; top: 86.1%; left: 26.7%; width: 45.4%; height: 7%; display: flex; justify-content: space-between; }
+.action { width: 32%; height: 100%; decorator: image(button-paper); font-size: 3.05vh; color: #24190eff; line-height: 6.6vh; }
+.action:hover, .action:focus { color: #fff0c4ff; decorator: image(button-dark); }
+.action:active { color: #f4c66fff; }
+.action.primary { border: 1px #e3b25eff; border-radius: 1.1vh; font-effect: shadow(0px 1px #f7db9560); }
+.action.primary:hover, .action.primary:focus { font-effect: shadow(0px 0px #00000000); }
+.shortcut { font-family: "EB Garamond"; font-size: 2.2vh; margin-left: 1.5vh; }
+.footer-link { position: absolute; bottom: 3.6%; color: #d3b686ff; font-size: 2.3vh; font-family: "EB Garamond"; line-height: 4vh; }
+#help-button { left: 2.6%; } #pause-button { right: 2.7%; }
+.keycap { display: inline-block; height: 3.8vh; min-width: 4.5vh; padding: 0 0.7vh; border: 1px #927748cc; border-radius: 0.4vh; background-color: #17150fe8; margin-right: 1.3vh; font-size: 2.1vh; line-height: 3.5vh; }
+
+#dialog { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.dialog-card { position: absolute; left: 30%; top: 27%; width: 40%; padding: 4vh; text-align: center; }
+.dialog-card h1 { font-size: 4.5vh; }
+#dialog-text { font-size: 2.65vh; line-height: 1.35; }
+#dialog-flavor { font-family: "Fondamento"; font-size: 2.4vh; color: #735125ff; margin: 2.5vh 0; }
+#close-button { width: 70%; height: 6.5vh; }

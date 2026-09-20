@@ -21,6 +21,10 @@ static constexpr float kSunDiscHalfAngleRad = kSunDiscHalfAngleDeg * (3.14159265
 
 bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
 {
+    // Kept in the signature so the caller still states the scene's depth format, but
+    // the sky pass binds no depth target - see the pipeline state below.
+    UNREFERENCED_PARAMETER(depthFormat);
+
     ID3D12Device* device = DX12Context_GetDevice();
     if (!device) return false;
 
@@ -67,7 +71,11 @@ bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
         psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         psoDesc.NumRenderTargets      = 1;
         psoDesc.RTVFormats[0]         = colorFormat;
-        psoDesc.DSVFormat             = depthFormat;
+        // No depth target: the sky pass binds colour only. D3D12 requires UNKNOWN here
+        // when no DSV is bound, and GPU-based validation rejects the draw outright -
+        // "the depth stencil format does not match that specified by the current
+        // pipeline state" - which is undefined behaviour, not a warning.
+        psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
         psoDesc.SampleDesc.Count      = 1;
 
         // No vertex input — the VS generates the fullscreen triangle procedurally.
@@ -79,10 +87,13 @@ bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
         psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
         psoDesc.RasterizerState.DepthClipEnable       = TRUE;
 
-        // Write to pixels where depth = 1.0 (i.e. no geometry), depth func LESS_EQUAL.
-        psoDesc.DepthStencilState.DepthEnable    = TRUE;
-        psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; // sky doesn't write depth
-        psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        // Depth off, to match the pass. This used to ask for a LESS_EQUAL test so the
+        // sky only reached pixels with no geometry, but the pass binds no depth buffer,
+        // so that test has never actually run: the sky covers the whole target and the
+        // lighting pass composites geometry over it afterwards. Declaring a test that
+        // cannot happen only made the pipeline state disagree with what was bound.
+        psoDesc.DepthStencilState.DepthEnable    = FALSE;
+        psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
         psoDesc.DepthStencilState.StencilEnable  = FALSE;
 
         // Normal opaque blend.

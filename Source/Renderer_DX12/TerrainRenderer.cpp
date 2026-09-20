@@ -976,6 +976,7 @@ TerrainRenderer::TerrainMaterialInfo TerrainRenderer::ResolveTerrainMaterial(con
 
         materialInfo.Metallic = source->value("metallicFactor", materialInfo.Metallic);
         materialInfo.Roughness = source->value("roughnessFactor", materialInfo.Roughness);
+        materialInfo.Specular = source->value("specularFactor", materialInfo.Specular);
         materialInfo.AoStrength = source->value("ambientOcclusionStrength", materialInfo.AoStrength);
 
         const auto texturesIt = source->find("textures");
@@ -1620,6 +1621,7 @@ void TerrainRenderer::Render(
         mat->BaseTint        = materialInfo.BaseTint;
         mat->Metallic        = materialInfo.Metallic;
         mat->Roughness       = materialInfo.Roughness;
+        mat->Specular        = materialInfo.Specular;
         mat->AoStrength      = materialInfo.AoStrength;
         mat->HasBaseMap      = 0;
 

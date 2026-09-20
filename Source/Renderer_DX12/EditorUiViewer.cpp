@@ -80,13 +80,13 @@ void Editor::DrawUiEditorPanel()
 
     // ------------------------------------------------------------- document
     // Rescanned every frame the panel is open, so a file written a second ago
-    // is in the list without reopening anything. The directory holds a handful
-    // of documents; this is not a cost worth caching against.
+    // is in the list without reopening anything, including nested UI packages.
+    // Entries keep their full path relative to Data/UI.
     const std::vector<std::string> documents = RmlUiRenderer::ListAvailableDocuments();
 
     if (documents.empty())
     {
-        QtUi::TextDisabled("No .rml documents found under Data/UI.");
+        QtUi::TextDisabled("No .rml documents found in Data/UI or its subfolders.");
     }
     else
     {
@@ -95,20 +95,24 @@ void Editor::DrawUiEditorPanel()
         for (const std::string& document : documents)
             items.push_back(document.c_str());
 
-        // Keep the combo pointing at whatever is actually loaded, so an
-        // external load (game code, a node graph) is reflected here.
+        // Follow external loads only when the loaded path changes. Resetting
+        // every frame would undo a user's selection before they can press Load.
         const std::string& loaded = ui.GetLoadedDocumentName();
-        if (!loaded.empty())
+        if (loaded != mUiEditorObservedDocument)
         {
-            const auto it = std::find(documents.begin(), documents.end(), loaded);
-            if (it != documents.end())
-                mUiEditorDocumentIndex = static_cast<int>(std::distance(documents.begin(), it));
+            mUiEditorObservedDocument = loaded;
+            if (!loaded.empty())
+                mUiEditorSelectedDocument = loaded;
         }
-        if (mUiEditorDocumentIndex >= static_cast<int>(documents.size()))
-            mUiEditorDocumentIndex = 0;
 
-        QtUi::SetNextItemWidth(240.0f);
+        // Preserve the selected path when rescanning inserts/removes earlier items.
+        const auto selected = std::find(documents.begin(), documents.end(), mUiEditorSelectedDocument);
+        mUiEditorDocumentIndex = selected != documents.end()
+            ? static_cast<int>(std::distance(documents.begin(), selected)) : 0;
+
+        QtUi::SetNextItemWidth(320.0f);
         QtUi::Combo("Document", &mUiEditorDocumentIndex, items.data(), static_cast<int>(items.size()));
+        mUiEditorSelectedDocument = documents[static_cast<std::size_t>(mUiEditorDocumentIndex)];
 
         QtUi::SameLine();
         if (QtUi::Button("Load"))

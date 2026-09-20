@@ -1,6 +1,7 @@
 #pragma once
 #include "UiTypes.h"
 #include <cstddef>
+#include <string>
 #include <windows.h>
 #include <commdlg.h>
 
@@ -86,7 +87,9 @@ enum
     QtUiKey_N = 'N',
     QtUiKey_O = 'O',
     QtUiKey_S = 'S',
-    QtUiKey_V = 'V'
+    QtUiKey_V = 'V',
+    QtUiKey_Y = 'Y',
+    QtUiKey_Z = 'Z'
 };
 // One row of a field's type-ahead list. Both pointers must outlive the call.
 struct UiCompletion
@@ -131,6 +134,30 @@ void Shutdown();
 void NewFrame();
 void EndFrame();
 HWND ViewportHandle();
+void SetStandaloneGame(bool enabled);
+bool IsStandaloneGame();
+// Puts a play session on screen. With separateWindow the game gets its own top-level
+// window and the editor's controls are frozen behind it; without it the game plays
+// inside the editor viewport and every panel stays live, which is the mode to use while
+// still editing. `title` names the separate window and is ignored otherwise.
+void OpenGameWindow(bool separateWindow, const char *title);
+void CloseGameWindow();
+void ToggleGameFullscreen();
+// True when the game owns the keyboard: the window hosting it is in the foreground and
+// no text field is taking input. In-viewport play answers for the editor window.
+bool GameWindowHasFocus();
+// True only while a surface other than the editor viewport owns presentation - the Play
+// window, or a standalone build. Callers use it to decide whether the editor's own
+// chrome and swap chain are still the ones in play, so in-viewport sessions are
+// deliberately not counted here.
+bool IsGameWindowOpen();
+// True while a play session is running in any mode, including inside the viewport.
+bool IsGamePlaying();
+bool ConsumeGameCloseRequest();
+// In-viewport play borrows the editor's own fullscreen viewport mode, which the editor
+// owns. A game asking for fullscreen therefore raises a request here for the editor to
+// consume, rather than QtUi resizing a window that is not the game's.
+bool ConsumeGameFullscreenRequest();
 HWND HostHandle();
 // The editor's QMainWindow, as void* so this header stays Qt-free. Null before
 // Initialize; used by tool windows that are written against Qt directly.

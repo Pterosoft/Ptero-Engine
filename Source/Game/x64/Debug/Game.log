@@ -1,0 +1,8 @@
+﻿K:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppBuild.targets(537,5): warning MSB8004: Output Directory does not end with a trailing slash.  This build instance will add the slash as it is required to allow proper evaluation of the Output Directory.
+  pch.cpp
+  dllmain.cpp
+  Game.cpp
+  GameCamera.cpp
+  Generating Code...
+     Creating library ..\..\Binaries\Game.lib and object ..\..\Binaries\Game.exp
+  Game.vcxproj -> K:\Ptero-Engine\Binaries\Game.dll

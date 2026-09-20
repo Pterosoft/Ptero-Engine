@@ -125,6 +125,10 @@ void RmlUiRenderInterface::Shutdown()
 {
     mGeometry.clear();
     mTextures.clear();
+    // Shutdown runs after the device has been drained, so anything still waiting out
+    // its countdown can go now rather than leaking with the interface.
+    mPendingGeometryReleases.clear();
+    mPendingTextureReleases.clear();
     mFreeSrvDescriptors.clear();
 
     if (mConstantBuffer && mMappedConstants)
@@ -373,6 +377,10 @@ void RmlUiRenderInterface::BeginFrame(
     mScissorEnabled = false;
     mHasTransform = false;
 
+    // One tick per frame: anything released long enough ago that no submitted frame
+    // can still name it goes back to the driver here, and nowhere else.
+    TickPendingReleases();
+
     const float width = static_cast<float>(mViewportWidth);
     const float height = static_cast<float>(mViewportHeight);
 
@@ -536,7 +544,39 @@ void RmlUiRenderInterface::RenderGeometry(
 
 void RmlUiRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
 {
-    mGeometry.erase(static_cast<std::uintptr_t>(geometry));
+    const auto it = mGeometry.find(static_cast<std::uintptr_t>(geometry));
+    if (it == mGeometry.end())
+        return;
+
+    // Not freed here: frames already submitted may still be drawing this geometry.
+    // See mPendingGeometryReleases.
+    mPendingGeometryReleases.push_back({ std::move(it->second), kFramesInFlight + 1 });
+    mGeometry.erase(it);
+}
+
+void RmlUiRenderInterface::TickPendingReleases()
+{
+    for (auto it = mPendingGeometryReleases.begin(); it != mPendingGeometryReleases.end(); )
+    {
+        if (--it->FramesRemaining <= 0)
+            it = mPendingGeometryReleases.erase(it);
+        else
+            ++it;
+    }
+
+    for (auto it = mPendingTextureReleases.begin(); it != mPendingTextureReleases.end(); )
+    {
+        if (--it->FramesRemaining <= 0)
+        {
+            // The descriptor slot goes back only now, with the resource it names.
+            ReleaseSrvDescriptor(it->TextureData);
+            it = mPendingTextureReleases.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 Rml::TextureHandle RmlUiRenderInterface::CreateTextureFromPixels(
@@ -710,7 +750,9 @@ void RmlUiRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
     if (it == mTextures.end())
         return;
 
-    ReleaseSrvDescriptor(it->second);
+    // Neither the resource nor its descriptor slot is released here - in-flight
+    // frames may still sample through both. See mPendingTextureReleases.
+    mPendingTextureReleases.push_back({ std::move(it->second), kFramesInFlight + 1 });
     mTextures.erase(it);
 }
 

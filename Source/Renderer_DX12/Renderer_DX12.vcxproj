@@ -169,6 +169,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="AgxTonemapper.h" />
+    <ClInclude Include="AutoExposure.h" />
     <ClInclude Include="AgxTonemapSettings.h" />
     <ClInclude Include="AreaTex.h" />
     <ClInclude Include="BloomRenderer.h" />
@@ -251,6 +252,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AgxTonemapper.cpp" />
+    <ClCompile Include="AutoExposure.cpp" />
     <ClCompile Include="BloomRenderer.cpp" />
     <ClCompile Include="DecalRenderer.cpp" />
     <ClCompile Include="DeferredLightingPass.cpp" />
@@ -269,6 +271,8 @@
     <ClCompile Include="EditorMainMenu.cpp" />
     <ClCompile Include="EditorConsole.cpp" />
     <ClCompile Include="EditorUiViewer.cpp" />
+    <ClCompile Include="EditorUndo.cpp" />
+    <ClCompile Include="EditorLightGizmos.cpp" />
     <ClCompile Include="..\System\src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="EngineCVars.cpp" />

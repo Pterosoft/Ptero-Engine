@@ -12,8 +12,26 @@ struct VolumetricFogSettings
     // World-space fog volume controls.
     float StartDistance = 0.1f;
     float MaxDistance = 100.0f;
+
+    // Extinction coefficient sigma_t, per world unit: the fraction of light the
+    // medium removes over one metre. A ray of length d keeps exp(-Density * d).
+    // The injection shader used to scale this by a private 0.2 before use, so a
+    // value here means five times what it used to.
     float Density = 0.02f;
+
     float Anisotropy = 0.5f;
+
+    // sigma_s / sigma_t - how much of what the medium removes it scatters back
+    // out rather than absorbing. 1 is a non-absorbing medium; anything below it
+    // leaves the fog grey where no light reaches instead of pure black.
+    float ScatteringAlbedo = 0.9f;
+
+    // Weight on indirect light sampled from the radiance probe grid. This is
+    // the only light an interior with no sky and no time-of-day gets, so it is
+    // on by default - but it makes the fog pass ask for the probe grid, which
+    // costs a probe update each frame if nothing else already needed one.
+    // Set to 0 to drop both the contribution and the cost.
+    float GiIntensity = 1.0f;
 
     // Optional exponential height falloff. 0 disables height-based thinning.
     float BaseHeight = 0.0f;

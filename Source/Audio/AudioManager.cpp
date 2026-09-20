@@ -6,6 +6,7 @@
 #include "fmod_errors.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -139,69 +140,23 @@ bool AudioManager::InitializeResonanceAudio(FMOD::System* coreSystem, std::strin
         return false;
     }
 
-    FMOD::DSP* listenerDsp = nullptr;
-    result = coreSystem->createDSPByPlugin(listenerPluginHandle, &listenerDsp);
-    if (!FmodOk(result, outError, "FMOD::System::createDSPByPlugin(Resonance Audio Listener)"))
-        return false;
-
-    FMOD::ChannelGroup* masterChannelGroup = nullptr;
-    result = coreSystem->getMasterChannelGroup(&masterChannelGroup);
-    if (result != FMOD_OK || masterChannelGroup == nullptr)
-    {
-        listenerDsp->release();
-        outError = result == FMOD_OK
-            ? "FMOD::System::getMasterChannelGroup returned a null channel group."
-            : std::string("FMOD::System::getMasterChannelGroup: ") + FMOD_ErrorString(result);
-        return false;
-    }
-
-    result = masterChannelGroup->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, listenerDsp);
-    if (result != FMOD_OK)
-    {
-        listenerDsp->release();
-        return FmodOk(result, outError, "FMOD::ChannelGroup::addDSP(Resonance Audio Listener)");
-    }
-
-    listenerDsp->setBypass(!m_resonanceAudioEnabled);
-    m_resonanceListenerDsp = listenerDsp;
+    // Loading the plugin is the whole job. The engine deliberately installs no Resonance
+    // DSP of its own, because there is no safe place to put one: a Listener on the master
+    // channel group does not mix with what passes through it, it replaces it. Measured on
+    // the current banks, adding one dropped an unspatialised music event from 13.7% to
+    // 3.2% of full scale - it only reproduces what Sources fed into the soundfield, and
+    // music and UI are deliberately not routed through a Source.
+    //
+    // So the Resonance chain lives entirely in the FMOD project, per event, which is also
+    // where its gain staging has to be. The spatialised events each carry a matched
+    // Source and Listener; everything else carries neither.
+    (void)listenerPluginHandle;
     m_resonanceAudioAvailable = true;
-    m_resonanceAudioStatus = "Resonance Audio Listener and Source DSPs loaded from " + pluginPath.string();
+    m_resonanceAudioStatus =
+        "Resonance Audio plugin loaded from " + pluginPath.string() +
+        ". Spatialisation is authored per event in the FMOD banks; the engine installs no "
+        "Resonance DSPs of its own.";
     return true;
-}
-
-FMOD::DSP* AudioManager::AttachResonanceSource(FMOD::Studio::EventInstance* instance)
-{
-    if (!m_resonanceAudioAvailable || m_coreSystem == nullptr || instance == nullptr)
-        return nullptr;
-
-    // Studio creates the event channel group asynchronously. Flush once after
-    // start so the native Resonance source can be inserted before its panner.
-    m_studioSystem->flushCommands();
-
-    FMOD::ChannelGroup* eventChannelGroup = nullptr;
-    if (instance->getChannelGroup(&eventChannelGroup) != FMOD_OK || eventChannelGroup == nullptr)
-        return nullptr;
-
-    FMOD::DSP* sourceDsp = nullptr;
-    if (m_coreSystem->createDSPByPlugin(m_resonanceSourcePluginHandle, &sourceDsp) != FMOD_OK || sourceDsp == nullptr)
-        return nullptr;
-
-    if (eventChannelGroup->addDSP(FMOD_CHANNELCONTROL_DSP_HEAD, sourceDsp) != FMOD_OK)
-    {
-        sourceDsp->release();
-        return nullptr;
-    }
-
-    sourceDsp->setBypass(!m_resonanceAudioEnabled);
-    return sourceDsp;
-}
-
-void AudioManager::ReleaseResonanceDsp(void*& dspHandle)
-{
-    FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle);
-    if (dsp != nullptr)
-        dsp->release();
-    dspHandle = nullptr;
 }
 
 bool AudioManager::PlayEventByPath(const std::string& eventPath)
@@ -218,6 +173,7 @@ bool AudioManager::PlayEventByPath(const std::string& eventPath)
     result = desc->createInstance(&inst);
     if (result != FMOD_OK || !inst)
         return false;
+
 
     bool is3D = false;
     if (desc->is3D(&is3D) == FMOD_OK && is3D)
@@ -237,16 +193,137 @@ bool AudioManager::PlayEventByPath(const std::string& eventPath)
     }
 
     result = inst->start();
-    if (result == FMOD_OK)
-    {
-        if (is3D)
-        {
-            if (FMOD::DSP* resonanceDsp = AttachResonanceSource(inst))
-                m_oneShotResonanceDsps.push_back(resonanceDsp);
-        }
-    }
     inst->release();
     return result == FMOD_OK;
+}
+
+std::string AudioManager::ResolveEventPath(const std::string& nameOrPath) const
+{
+    if (nameOrPath.empty())
+        return {};
+
+    // Exact match first, so a caller that already knows the full path always wins.
+    for (const AudioEvent& candidate : m_events)
+        if (candidate.Path == nameOrPath)
+            return candidate.Path;
+
+    // Otherwise treat the argument as a leaf name and match the last path component.
+    // Case-insensitive, because FMOD Studio event names are authored by hand.
+    const auto equalsIgnoringCase = [](const std::string& left, const std::string& right)
+    {
+        if (left.size() != right.size())
+            return false;
+        for (std::size_t i = 0; i < left.size(); ++i)
+            if (std::tolower(static_cast<unsigned char>(left[i])) != std::tolower(static_cast<unsigned char>(right[i])))
+                return false;
+        return true;
+    };
+
+    for (const AudioEvent& candidate : m_events)
+    {
+        const std::size_t slash = candidate.Path.find_last_of('/');
+        const std::string leaf = (slash == std::string::npos) ? candidate.Path : candidate.Path.substr(slash + 1);
+        if (equalsIgnoringCase(leaf, nameOrPath))
+            return candidate.Path;
+    }
+
+    return {};
+}
+
+void AudioManager::PlaceAtListener(FMOD::Studio::EventInstance* instance) const
+{
+    if (instance == nullptr)
+        return;
+
+    const FMOD_3D_ATTRIBUTES attributes = Make3DAttributes(
+        m_listenerPosX, m_listenerPosY, m_listenerPosZ,
+        m_listenerFwdX, m_listenerFwdY, m_listenerFwdZ,
+        m_listenerUpX, m_listenerUpY, m_listenerUpZ);
+    instance->set3DAttributes(&attributes);
+}
+
+// Deliberately not routed through PlayEventByPath: that one drops the instance a metre
+// in front of the listener for the editor's preview button, which is a fabricated
+// position no game sound should inherit.
+bool AudioManager::PlayOneShotByName(const std::string& nameOrPath)
+{
+    if (!m_initialized)
+        return false;
+
+    const std::string path = ResolveEventPath(nameOrPath);
+    if (path.empty())
+        return false;
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    if (m_studioSystem->getEvent(path.c_str(), &desc) != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* inst = nullptr;
+    if (desc->createInstance(&inst) != FMOD_OK || !inst)
+        return false;
+
+    PlaceAtListener(inst);
+
+    const FMOD_RESULT result = inst->start();
+    inst->release();
+    return result == FMOD_OK;
+}
+
+bool AudioManager::PlayMusicByName(const std::string& nameOrPath)
+{
+    if (!m_initialized)
+        return false;
+
+    const std::string path = ResolveEventPath(nameOrPath);
+    if (path.empty())
+        return false;
+
+    FMOD::Studio::EventDescription* desc = nullptr;
+    if (m_studioSystem->getEvent(path.c_str(), &desc) != FMOD_OK || !desc)
+        return false;
+
+    FMOD::Studio::EventInstance* inst = nullptr;
+    if (desc->createInstance(&inst) != FMOD_OK || !inst)
+        return false;
+
+    PlaceAtListener(inst);
+
+    // Only swap the channel once the replacement is actually running, so a failed
+    // start leaves the current track playing instead of silence.
+    if (inst->start() != FMOD_OK)
+    {
+        inst->release();
+        return false;
+    }
+
+    StopMusic();
+    m_musicInstance = inst;
+    return true;
+}
+
+bool AudioManager::IsMusicPlaying()
+{
+    if (!m_musicInstance)
+        return false;
+
+    FMOD_STUDIO_PLAYBACK_STATE state = FMOD_STUDIO_PLAYBACK_STOPPED;
+    if (m_musicInstance->getPlaybackState(&state) != FMOD_OK || state == FMOD_STUDIO_PLAYBACK_STOPPED)
+    {
+        // The track ran out. Release it here so the caller's next poll is a plain
+        // null check and the instance does not leak until shutdown.
+        StopMusic();
+        return false;
+    }
+    return true;
+}
+
+void AudioManager::StopMusic()
+{
+    if (!m_musicInstance)
+        return;
+    m_musicInstance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
+    m_musicInstance->release();
+    m_musicInstance = nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,20 +538,10 @@ void AudioManager::Shutdown()
 
     StopAll();
 
-    for (void*& dsp : m_oneShotResonanceDsps)
-        ReleaseResonanceDsp(dsp);
-    m_oneShotResonanceDsps.clear();
-
-    for (std::size_t instanceIndex = 0; instanceIndex < m_instances.size(); ++instanceIndex)
-    {
-        FMOD::Studio::EventInstance* inst = m_instances[instanceIndex];
+    for (FMOD::Studio::EventInstance* inst : m_instances)
         if (inst)
             inst->release();
-        if (instanceIndex < m_instanceResonanceDsps.size())
-            ReleaseResonanceDsp(m_instanceResonanceDsps[instanceIndex]);
-    }
     m_instances.clear();
-    m_instanceResonanceDsps.clear();
 
     for (FMOD::Studio::Bank* bank : m_banks)
         bank->unload();
@@ -482,7 +549,6 @@ void AudioManager::Shutdown()
 
     if (m_studioSystem)
     {
-        ReleaseResonanceDsp(m_resonanceListenerDsp);
         m_studioSystem->release();
         m_studioSystem = nullptr;
     }
@@ -500,7 +566,6 @@ void AudioManager::RefreshEventList()
 {
     m_events.clear();
     m_instances.clear();
-    m_instanceResonanceDsps.clear();
 
     if (!m_studioSystem)
         return;
@@ -539,7 +604,6 @@ void AudioManager::RefreshEventList()
 
     // Resize instance slots to match.
     m_instances.resize(m_events.size(), nullptr);
-    m_instanceResonanceDsps.resize(m_events.size(), nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +624,7 @@ bool AudioManager::PlayEvent(int index)
     result = desc->createInstance(&inst);
     if (result != FMOD_OK || !inst)
         return false;
+
 
     desc->loadSampleData();
     m_studioSystem->flushSampleLoading();
@@ -588,8 +653,6 @@ bool AudioManager::PlayEvent(int index)
         return false;
     }
 
-    if (is3D)
-        m_instanceResonanceDsps[static_cast<size_t>(index)] = AttachResonanceSource(inst);
     m_instances[static_cast<size_t>(index)] = inst;
     m_events[static_cast<size_t>(index)].IsPlaying = true;
     return true;
@@ -605,8 +668,6 @@ bool AudioManager::StopEvent(int index)
     if (inst)
     {
         inst->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
-        if (static_cast<size_t>(index) < m_instanceResonanceDsps.size())
-            ReleaseResonanceDsp(m_instanceResonanceDsps[static_cast<size_t>(index)]);
         inst->release();
         m_instances[static_cast<size_t>(index)] = nullptr;
     }
@@ -617,6 +678,8 @@ bool AudioManager::StopEvent(int index)
 // ---------------------------------------------------------------------------
 void AudioManager::StopAll()
 {
+    StopMusic();
+
     for (int i = 0; i < static_cast<int>(m_events.size()); ++i)
         StopEvent(i);
 
@@ -626,7 +689,6 @@ void AudioManager::StopAll()
         if (instance)
         {
             instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
-            ReleaseResonanceDsp(emitter.ResonanceDsp);
             instance->release();
             emitter.Instance = nullptr;
         }
@@ -762,6 +824,7 @@ bool AudioManager::PlayEmitter(EmitterHandle handle)
     if (desc->createInstance(&instance) != FMOD_OK || !instance)
         return false;
 
+
     desc->loadSampleData();
     m_studioSystem->flushSampleLoading();
 
@@ -787,10 +850,6 @@ bool AudioManager::PlayEmitter(EmitterHandle handle)
         return false;
     }
 
-    bool is3D = false;
-    if (desc->is3D(&is3D) == FMOD_OK && is3D)
-        emitter.ResonanceDsp = AttachResonanceSource(instance);
-
     return true;
 }
 
@@ -804,7 +863,6 @@ bool AudioManager::StopEmitter(EmitterHandle handle)
     if (instance)
     {
         instance->stop(FMOD_STUDIO_STOP_ALLOWFADEOUT);
-        ReleaseResonanceDsp(emitter.ResonanceDsp);
         instance->release();
         emitter.Instance = nullptr;
     }
@@ -814,31 +872,15 @@ bool AudioManager::StopEmitter(EmitterHandle handle)
 
 void AudioManager::SetResonanceAudioEnabled(bool enabled)
 {
+    // Not a switch any more. Every event in the banks is routed through a Resonance
+    // Source, so bypassing the one listener that decodes them would not turn
+    // spatialisation off, it would turn the sound off. The flag is kept only so the
+    // editor panel has something to report.
     m_resonanceAudioEnabled = enabled;
 
-    if (FMOD::DSP* listenerDsp = static_cast<FMOD::DSP*>(m_resonanceListenerDsp))
-        listenerDsp->setBypass(!enabled);
-
-    for (void* dspHandle : m_instanceResonanceDsps)
-    {
-        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle))
-            dsp->setBypass(!enabled);
-    }
-
-    for (void* dspHandle : m_oneShotResonanceDsps)
-    {
-        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(dspHandle))
-            dsp->setBypass(!enabled);
-    }
-
-    for (EmitterState& emitter : m_emitters)
-    {
-        if (FMOD::DSP* dsp = static_cast<FMOD::DSP*>(emitter.ResonanceDsp))
-            dsp->setBypass(!enabled);
-    }
-
     m_resonanceAudioStatus = m_resonanceAudioAvailable
-        ? (enabled ? "Resonance Audio is active for FMOD 3D events."
-                   : "Resonance Audio is loaded but bypassed.")
+        ? "Resonance Audio is configured per event in the FMOD project: the spatialised "
+          "events carry a matched Source and Listener, music and UI carry neither. The "
+          "engine installs no Resonance DSPs, so there is nothing to switch here."
         : "Resonance Audio is unavailable.";
 }

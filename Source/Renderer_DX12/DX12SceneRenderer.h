@@ -26,6 +26,7 @@
 #include "RtAmbientOcclusion.h"
 #include "RtAOSettings.h"
 #include "AgxTonemapper.h"
+#include "AutoExposure.h"
 #include "AgxTonemapSettings.h"
 #include "ChromaticAberrationRenderer.h"
 #include "ChromaticAberrationSettings.h"
@@ -104,6 +105,8 @@ private:
     std::wstring mDebugName;
 };
 
+class AudioManager;
+
 class DX12SceneRenderer
 {
 public:
@@ -179,6 +182,11 @@ public:
     // the UI are the same write and can never disagree.
     bool& GetGridEnabledRef() { return mGridEnabled; }
     bool& GetWireframeEnabledRef() { return mEntityMeshRenderer.GetWireframeEnabledRef(); }
+
+    // For the device-removed report: what was resident, and where. The mesh buffers
+    // come from the mesh renderer; the render targets are this class's own, and are
+    // the things a geometry-pass draw writes through.
+    void LogLiveGpuBufferRanges() const;
     void  InvalidateEntityPipeline() { mEntityMeshRenderer.InvalidatePipeline(); }
     float& GetViewDistanceMetersRef() { return mViewDistanceMeters; }
 
@@ -370,10 +378,21 @@ public:
     // ---- Play mode -------------------------------------------------------
     // While a play session runs, Game.dll drives the camera instead of the
     // editor fly-cam; the editor pose is restored when the session stops.
-    bool StartGame();
+    // separateWindow picks between the two play modes: its own top-level window, or
+    // inside the editor viewport with the panels still live.
+    bool StartGame(bool separateWindow);
     void StopGame();
-    void ToggleGame();
+    void ToggleGame(bool separateWindow);
     bool IsGameRunning() const { return mGameHost.IsRunning(); }
+    // Which mode the running session was started in. Meaningless while stopped.
+    bool IsGameInSeparateWindow() const { return mGameInSeparateWindow; }
+    bool mGameStopRequested = false;
+    std::array<bool, 256> mFarkleKeys{};
+
+    // Registered by the host once FMOD is up. Null until then, and null for good when
+    // audio failed to initialise, so every use is guarded: play sessions run silently
+    // rather than not at all.
+    void SetAudioManager(AudioManager* audioManager) { mAudioManager = audioManager; }
 
     // Single predicate for "the game UI should be on screen this frame", shared by the
     // UI render pass, the viewport composite and input forwarding so the three can never
@@ -500,6 +519,7 @@ private:
     // session puts the viewport back exactly where the artist left it, and the mouse
     // position is tracked here because the game is handed deltas, not absolute pixels.
     GameHost mGameHost;
+    AudioManager* mAudioManager = nullptr;
 
     // Game-facing UI. It renders to its own target and is composited over the scene
     // image, so it is deliberately not part of the post-processing chain.
@@ -541,6 +561,7 @@ private:
     float mGameLastMouseX = 0.0f;
     float mGameLastMouseY = 0.0f;
     bool mGameHasLastMousePosition = false;
+    bool mGameInSeparateWindow = false;
     float mViewDistanceMeters = 8000.0f;
 
     BufferResource mVertexBuffer;
@@ -749,6 +770,7 @@ private:
 
     // AgX tonemapper.
     AgxTonemapper        mAgxTonemapper;
+    AutoExposure         mAutoExposure;
     AgxTonemapSettings   mAgxSettings;
 
     // Volumetric fog froxel renderer.
@@ -772,6 +794,13 @@ private:
     // indices into it and re-uploads it to the deferred pass.
     DeferredLightingPass::PointLightGpu mCachedPointLights[DeferredLightingPass::kMaxPointLights]{};
     int                                 mNumCachedPointLights = 0;
+
+    // Which of those lights the fog is allowed to scatter, recorded while the
+    // lights are gathered. The fog's own array is compacted from this just
+    // before the fog dispatch rather than here, because the point shadow pass
+    // has not assigned shadow indices yet and the fog needs them to shadow its
+    // shafts.
+    bool                                mCachedPointLightAffectsFog[DeferredLightingPass::kMaxPointLights]{};
 
     // The same lights weighted for indirect lighting only, so a particle
     // system's GI Contribution can tame a fire's bounce without dimming the

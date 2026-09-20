@@ -155,6 +155,15 @@ public:
         return mLastError.empty() ? nullptr : mLastError.c_str();
     }
 
+    // Writes the GPU address range of every mesh buffer currently in the cache.
+    //
+    // Called from the device-removed path. A page fault reports an address and
+    // DRED will not say whose it is, so the only way to attribute it is to print
+    // what lives where at the moment it happens. An address that falls inside a
+    // range names the buffer; one that falls just past the end of a range is a
+    // draw reading off the end of it, which is the more interesting answer.
+    void LogLiveGpuBufferRanges() const;
+
 private:
     // GPU-side buffers for one entity's mesh.
     struct EntityGpuMesh
@@ -173,6 +182,18 @@ private:
         // The MeshAsset pointer used when these buffers were built; used to
         // detect when the mesh has been replaced and buffers must be rebuilt.
         const Mesh*              SourceMesh = nullptr;
+        // A strong reference to that same asset, held for exactly one reason:
+        // the cache key is its address, and an address is only unique while the
+        // object is alive. Pressing Play frees a whole level of meshes and
+        // immediately allocates another level's worth, so the allocator hands a
+        // new Mesh the address a cached entry is still filed under. The lookup
+        // then hits, the draw binds the old mesh's index buffer, and the submesh
+        // ranges - which come from the new asset, not from the cache - run off
+        // the end of it into whatever follows. That is a GPU page fault inside
+        // DrawIndexedInstanced, seconds after a level change, with nothing in
+        // between to connect it to. Owning the asset makes the key unique for as
+        // long as the entry exists, which is what the keying already assumed.
+        std::shared_ptr<const Mesh> SourceMeshOwner;
         // Frame this entry was last drawn from, for evicting geometry a level
         // reload left behind.
         std::uint64_t            LastUsedFrame = 0;
@@ -235,7 +256,10 @@ private:
         int    HasAoMap         = 0;
         int    HasEmissiveMap   = 0;
         int    HasPackedMaterialMap = 0;
-        float  _Pad1[2]         = {};
+        // Reflectivity; 0.5 is neutral. Occupies the first half of what used to be two
+        // words of padding, so the row layout the shader expects is unchanged.
+        float  SpecularFactor   = 0.5f;
+        float  _Pad1            = 0.f;
         float  OpacityFactor    = 1.f;
         float  AlphaCutoff      = 0.5f;
         int    HasOpacityMap    = 0;
@@ -256,7 +280,9 @@ private:
         float  ParallaxFadeDistance = 30.f;
         // Needed to build the tangent-space view ray the parallax march walks along.
         DirectX::XMFLOAT3 CameraPositionWS = { 0.f, 0.f, 0.f };
-        float  _Pad3            = 0.f;
+        // Height value that sits at the polygon surface; 1 = white is the top of the
+        // volume, which is what a plain 0-1 height map wants.
+        float  ParallaxReferenceHeight = 1.f;
         std::byte Padding[80]{};
     };
     static_assert(sizeof(MaterialConstants) == 256);
@@ -290,6 +316,7 @@ private:
         float baseColorTintA  = 1.f;
         float metallicFactor  = 0.f;  // default: non-metallic (slider sits at 0)
         float roughnessFactor = 1.f;
+        float specularFactor  = 0.5f; // neutral reflectivity (0.04 dielectric F0)
         float normalScale     = 1.f;
         float aoStrength      = 1.f;
         float opacityFactor   = 1.f;
@@ -307,15 +334,18 @@ private:
         int   parallaxMinSteps     = 8;
         int   parallaxMaxSteps     = 32;
         float parallaxFadeDistance = 30.f;
+        float parallaxReferenceHeight = 1.f;
     };
 
     bool CreatePipeline(DXGI_FORMAT albedoFormat, DXGI_FORMAT normalFormat,
                         DXGI_FORMAT materialFormat, DXGI_FORMAT depthFormat,
                         UINT msaaSampleCount);
+    // Takes the asset by shared_ptr rather than raw pointer so the cache entry can
+    // keep it alive; see EntityGpuMesh::SourceMeshOwner.
     bool EnsureEntityGpuMesh(
         ID3D12GraphicsCommandList* commandList,
         std::size_t entityIndex,
-        const Mesh* mesh,
+        const std::shared_ptr<Mesh>& mesh,
         std::size_t lodIndex);
     bool EnsureConstantBuffer(std::size_t requiredEntityCount);
     bool EnsureDepthPassConstantBuffer(std::size_t requiredEntityCount);
@@ -398,28 +428,28 @@ private:
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> Resource;
         int FramesRemaining = 0;
+        // Captured at retirement: once the ComPtr is released the resource cannot
+        // be asked for its own address, and the address is what a page-fault
+        // report gives us to match against.
+        D3D12_GPU_VIRTUAL_ADDRESS Address = 0;
+        UINT64 SizeBytes = 0;
+        const char* What = "";
     };
     std::vector<RetiredBuffer> mRetiredBuffers;
 
-    void RetireBuffer(Microsoft::WRL::ComPtr<ID3D12Resource> resource)
-    {
-        if (!resource) return;
-        // One extra frame of slack over the number in flight, because the buffer
-        // is retired part-way through a frame that has already recorded draws
-        // referencing it.
-        mRetiredBuffers.push_back({ std::move(resource), static_cast<int>(kFramesInFlight) + 1 });
-    }
+    // Records the GPU address range as well as retiring the resource, and logs the
+    // release when the countdown expires.
+    //
+    // A page fault reports an address. DRED is supposed to name the allocation it
+    // fell in, but the name only survives if the driver kept it, and here it does
+    // not - every crash so far has said "(unnamed)" for resources that carry debug
+    // names. The address is therefore the only thing that identifies the buffer,
+    // so both ends are logged and the fault address can simply be matched against
+    // the ranges. Retirements are rare - a constant buffer growing, a mesh evicted
+    // - so this costs nothing per frame.
+    void RetireBuffer(Microsoft::WRL::ComPtr<ID3D12Resource> resource, const char* what);
 
-    void RetireExpiredBuffers()
-    {
-        for (auto it = mRetiredBuffers.begin(); it != mRetiredBuffers.end(); )
-        {
-            if (--it->FramesRemaining <= 0)
-                it = mRetiredBuffers.erase(it);
-            else
-                ++it;
-        }
-    }
+    void RetireExpiredBuffers();
 
     // Geometry a level reload or a deleted entity left behind would otherwise
     // sit in VRAM for the rest of the session. Entries go through the retire
@@ -433,8 +463,8 @@ private:
         {
             if (mFrameCounter - it->second.LastUsedFrame > kMeshEvictionFrames)
             {
-                RetireBuffer(std::move(it->second.VertexBuffer));
-                RetireBuffer(std::move(it->second.IndexBuffer));
+                RetireBuffer(std::move(it->second.VertexBuffer), "evicted mesh vertex buffer");
+                RetireBuffer(std::move(it->second.IndexBuffer), "evicted mesh index buffer");
                 it = mGpuMeshes.erase(it);
             }
             else
@@ -501,6 +531,28 @@ private:
     // LOD chosen for each entity last frame, so selection can hysteresis rather
     // than oscillate. Mutable because selection is logically a const query.
     mutable std::unordered_map<std::size_t, std::size_t> mEntityLodState;
+
+    // The LOD the camera pass last chose for this entity, or 0 if it has not been
+    // drawn yet.
+    //
+    // The shadow and depth passes used to ask for LOD 0 unconditionally, so every
+    // shadow-casting light rendered every entity at full detail, six times - once
+    // per cube face - with no LOD, no frustum culling and no radius culling. A
+    // single 600k-triangle prop therefore cost 3.6M triangles per light per frame
+    // in the shadow pass alone, however far away or however small it was on screen.
+    // Adding one such prop to a level was enough to push a frame past the two
+    // second GPU watchdog and have Windows reset the driver, which surfaces as
+    // DXGI_ERROR_DEVICE_HUNG in the middle of a long run of DrawIndexedInstanced.
+    //
+    // Rendering a caster at the detail the camera is already using for it is the
+    // normal thing to do, and it is never more detail than the lit result can show.
+    // Lagging a frame behind the camera pass does not matter: an LOD switch that is
+    // invisible in the lit image is invisible in its shadow.
+    std::size_t LastSelectedLod(std::size_t entityIndex) const
+    {
+        const auto it = mEntityLodState.find(entityIndex);
+        return it != mEntityLodState.end() ? it->second : 0;
+    }
 
     // Resolve a single-material file path to its base-color DDS path.
     // Returns an empty string if the material cannot be read or has no base-color texture.

@@ -146,6 +146,14 @@ public:
         return mFarPlane;
     }
 
+    // Needed to size editor gizmos: how many pixels a world unit spans at a
+    // given depth follows from the vertical field of view and the viewport
+    // height, and nothing else.
+    float GetFovYRadians() const
+    {
+        return mFovYRadians;
+    }
+
     float GetNearPlane() const
     {
         return mNearPlane;

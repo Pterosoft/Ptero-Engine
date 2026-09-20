@@ -1,0 +1,53 @@
+<rml>
+<head>
+    <title>Farkle — Victory</title>
+    <link type="text/rcss" href="farkle.rcss" />
+    <link type="text/rcss" href="results.rcss" />
+</head>
+<body id="victory-ui" class="result-screen victory">
+    <div id="result-board" class="result-board">
+        <div class="board-shade"></div>
+        <div class="victory-columns">
+            <div class="result-player parchment">
+                <img class="player-emblem crown-emblem" sprite="result-crown" />
+                <div id="result-player-name" class="result-name">Player</div>
+                <div class="result-score-rule"></div>
+                <div id="result-player-score" class="result-score">3,000</div>
+                <div class="result-flourish"><span></span><img sprite="fleur"/><span></span></div>
+            </div>
+            <div class="result-summary parchment">
+                <h1 class="summary-heading">Match Summary</h1>
+                <div class="summary-rows">
+                    <div class="summary-row"><span class="summary-key">Best Roll</span><span id="result-best-roll" class="summary-value">Straight (1–6)</span></div>
+                    <div class="summary-row"><span class="summary-key">Banked Total</span><span id="result-banked-total" class="summary-value numeric">1,850</span></div>
+                    <div class="summary-row last"><span id="result-bonus-label" class="summary-key">Bonus</span><span id="result-bonus" class="summary-value">+50 Tavern Favor</span></div>
+                </div>
+                <div class="summary-flourish result-flourish"><span></span><img sprite="fleur"/><span></span></div>
+                <img class="tavern-engraving" sprite="result-tankard" />
+                <div id="result-flavor" class="result-flavor">Fortune favours the bold.</div>
+                <div class="bottom-flourish result-flourish"><span></span><img sprite="fleur"/><span></span></div>
+            </div>
+            <div class="result-opponent parchment">
+                <img class="player-emblem lion-emblem" sprite="result-lion" />
+                <div id="result-opponent-name" class="result-name">Opponent</div>
+                <div class="result-score-rule"></div>
+                <div id="result-opponent-score" class="result-score">2,450</div>
+                <div class="result-flourish"><span></span><img sprite="fleur"/><span></span></div>
+            </div>
+        </div>
+        <div id="result-actions" class="result-actions">
+            <button id="rematch-button" class="result-action result-primary" data-action="rematch"><img class="button-fleur leading" sprite="fleur"/><span>Rematch</span><img class="button-fleur trailing" sprite="fleur"/></button>
+            <button id="main-menu-button" class="result-action" data-action="main-menu"><img class="button-fleur leading" sprite="fleur"/><span>Main Menu</span><img class="button-fleur trailing" sprite="fleur"/></button>
+            <button id="continue-button" class="result-action" data-action="continue"><img class="button-fleur leading" sprite="fleur"/><span>Continue</span><img class="button-fleur trailing" sprite="fleur"/></button>
+        </div>
+    </div>
+    <div class="result-masthead">
+        <div class="result-sign"></div>
+        <img class="victory-laurel left" sprite="result-laurel-left" />
+        <img class="victory-laurel right" sprite="result-laurel-right" />
+        <div id="result-title" class="result-title">Victory</div>
+        <div class="title-flourish"><span></span><img sprite="fleur"/><span></span></div>
+        <div id="result-subtitle" class="result-subtitle">Good Dice · Better Company</div>
+    </div>
+</body>
+</rml>

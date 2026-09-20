@@ -12,7 +12,32 @@
 
 // Bump this whenever the structures or the exported entry points change so the host can
 // refuse a stale Game.dll instead of reading garbage out of it.
-inline constexpr std::uint32_t GameApiVersion = 1;
+inline constexpr std::uint32_t GameApiVersion = 3;
+
+struct GameTransform { float Position[3]{}; float Rotation[3]{}; float Scale[3]{1,1,1}; };
+// UTF-8 strings are borrowed during the call. No STL or engine objects cross DLLs.
+struct GameServices {
+    void* User = nullptr;
+    int (*FindEntity)(void*, const char*) = nullptr;
+    bool (*GetTransform)(void*, int, GameTransform*) = nullptr;
+    void (*SetTransform)(void*, int, const GameTransform*) = nullptr;
+    bool (*LoadUi)(void*, const char*) = nullptr;
+    // 0=text, 1=markup, 2=add class, 3=remove class, 4=enable, 5=disable.
+    void (*Ui)(void*, int, const char*, const char*) = nullptr;
+    int (*PollAction)(void*) = nullptr;
+    void (*RequestStop)(void*) = nullptr;
+    void (*ToggleFullscreen)(void*) = nullptr;
+    // Audio. Events are named, not pathed: the host resolves "DiceRoll" against the
+    // loaded FMOD banks, so moving an event between folders in FMOD Studio does not
+    // break the game. PlaySound is fire-and-forget. PlayMusic replaces whatever is on
+    // the single music channel and returns false when the track could not be started,
+    // which is also how the game learns that this host has no audio at all.
+    void (*PlaySound)(void*, const char*) = nullptr;
+    bool (*PlayMusic)(void*, const char*) = nullptr;
+    bool (*IsMusicPlaying)(void*) = nullptr;
+};
+enum GameAction { NoAction, Roll, Bank, Clear, Help, Pause, Close, Rematch, MainMenu,
+    Continue, Fullscreen, StartMatch, SelectDie = 20, RemoveDie = 30, ExitGame = 40 };
 
 // One frame of already-resolved input. The host owns key bindings and window focus rules;
 // the game only sees the resulting intent so it never has to touch the Win32 input APIs.
@@ -59,7 +84,7 @@ extern "C"
 
     // Start / Stop bracket a play session. Start receives the camera pose the host was
     // using so the game can continue from wherever the editor camera was left.
-    __declspec(dllexport) bool __stdcall Game_Start(const GameCameraState* initialCamera);
+    __declspec(dllexport) bool __stdcall Game_Start(const GameCameraState* initialCamera, const GameServices* services);
     __declspec(dllexport) void __stdcall Game_Update(const GameFrameContext* frame, GameCameraState* camera);
     __declspec(dllexport) void __stdcall Game_Stop();
 }
@@ -67,6 +92,6 @@ extern "C"
 
 using GameGetApiVersionFn = std::uint32_t(__stdcall*)();
 using GameGetNameFn = const char* (__stdcall*)();
-using GameStartFn = bool(__stdcall*)(const GameCameraState*);
+using GameStartFn = bool(__stdcall*)(const GameCameraState*, const GameServices*);
 using GameUpdateFn = void(__stdcall*)(const GameFrameContext*, GameCameraState*);
 using GameStopFn = void(__stdcall*)();

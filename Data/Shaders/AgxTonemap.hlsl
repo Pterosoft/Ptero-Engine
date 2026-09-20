@@ -4,9 +4,10 @@
 //   https://iolite-engine.com/blog_posts/minimal_agx_implementation
 //
 // The shader applies:
-//   1. Exposure adjustment (EV stops).
-//   2. AgX log-space inset (maps linear scene-referred light into a perceptual
-//      signal with controlled shoulder and toe).
+//   1. Exposure: EV100 (higher = darker), clamped to [Ev100Min, Ev100Max], plus
+//      an EV trim. This is the only thing that decides overall brightness.
+//   2. AgX log-space inset over AgX's own fixed 16.5-stop window (maps linear
+//      scene-referred light into a perceptual signal with shoulder and toe).
 //   3. Parametric sigmoid contrast curve.
 //   4. Saturation adjustment in the output-referred space.
 //
@@ -41,13 +42,13 @@ struct GradeRegion
 
 cbuffer AgxConstantBuffer : register(b0)
 {
-    float Exposure;        // EV stops; positive = brighter
-    float Ev100Min;        // lower AgX exposure bound
-    float Ev100Max;        // upper AgX exposure bound
+    float Exposure;        // EV stops of trim; positive = brighter
+    float Ev100Min;        // lower clamp on Ev100
+    float Ev100Max;        // upper clamp on Ev100
     float ToeStrength;     // shadow shaping; 1.0 = default
     float ShoulderStrength;// highlight shaping; 1.0 = default
-    float _Pad0;
-    float _Pad1;
+    float Ev100;           // photographic exposure value; higher = darker
+    uint  UseAutoExposure; // 1 = take Ev100 from gAutoExposure instead
     float _Pad2;
 
     GradeRegion GlobalGrade;
@@ -66,6 +67,11 @@ cbuffer AgxConstantBuffer : register(b0)
 // ---------------------------------------------------------------------------
 Texture2D<float4>   gInput  : register(t0);
 RWTexture2D<float4> gOutput : register(u0);
+
+// The adapted exposure, maintained entirely on the GPU by the two
+// AutoExposure passes. Reading it here rather than feeding it back through
+// this pass's constant buffer is what keeps that buffer static frame to frame.
+ByteAddressBuffer   gAutoExposure : register(t1);
 
 // ---------------------------------------------------------------------------
 // AgX helpers
@@ -96,15 +102,28 @@ float3 SanitizeColor(float3 color)
     return clamp(color, 0.0f.xxx, 65504.0f.xxx);
 }
 
-static const float kUiEvMin = -6.0f;
-static const float kUiEvMax = 16.0f;
-static const float kAgxNativeMinEv = -12.47393f;
-static const float kAgxNativeMaxEv = 4.026069f;
+// AgX's log encoding window. These are a fixed property of the display
+// transform, not a per-scene control: the whole point of AgX is that every
+// scene is viewed through the same 16.5-stop window, and you move the *scene*
+// into that window with exposure. Driving these two bounds from the UI - which
+// is what this shader used to do - is what let a collapsed Min/Max pair shrink
+// the window to a per-channel step function and posterise the frame.
+static const float kAgxMinEv = -12.47393f;
+static const float kAgxMaxEv = 4.026069f;
 
-float RemapUiEvToAgxEv(float uiEv)
+// EV100 -> linear exposure scale (Lagarde & de Rousiers, "Moving Frostbite to
+// PBR"): the incident luminance that should map to white is 1.2 * 2^EV100, so
+// the scene is divided by it. One EV unit is one photographic stop and a higher
+// EV100 gives a darker image, exactly like stopping a camera down.
+//
+// Caveat on the absolute numbers: this renderer's scene-linear values are not
+// cd/m2. Lights are normalised against an 800 lm reference (kRefLumens in
+// DX12SceneRenderer.cpp), so "1.0" means one reference bulb, not one nit. The
+// EV100 slider is therefore photographic in *behaviour* - one unit per stop,
+// higher is darker - but its zero point is this engine's, not a light meter's.
+float Ev100ToExposureScale(float ev100)
 {
-    const float t = saturate((uiEv - kUiEvMin) / (kUiEvMax - kUiEvMin));
-    return lerp(kAgxNativeMaxEv, kAgxNativeMinEv, t);
+    return 1.0f / max(1.2f * exp2(ev100), 1e-6f);
 }
 
 float3 ApplySaturation(float3 color, float saturation)
@@ -212,16 +231,10 @@ float3 AgxEncode(float3 color)
     color = mul(agxInputMatrix, color);
     color = SanitizeColor(color);
 
-    // The UI exposes a friendly scene-stop range [-6, 16], but this renderer's
-    // scene-linear lighting is not authored in calibrated EV100 luminance units.
-    // Remap the UI values into AgX's native working-stop range before encoding.
-    const float remappedEvMin = RemapUiEvToAgxEv(Ev100Min);
-    const float remappedEvMax = RemapUiEvToAgxEv(Ev100Max);
-    const float agxMinEv = min(remappedEvMin, remappedEvMax);
-    const float agxMaxEv = max(max(remappedEvMin, remappedEvMax), agxMinEv + 0.001f);
+    // Encode over AgX's fixed window. Exposure has already placed the scene
+    // inside it, so there is nothing scene-dependent left to do here.
     const float3 logColor = log2(max(color, 1e-10f.xxx));
-    color = clamp(logColor, agxMinEv, agxMaxEv);
-    color = saturate((color - agxMinEv) / (agxMaxEv - agxMinEv));
+    color = saturate((logColor - kAgxMinEv) / (kAgxMaxEv - kAgxMinEv));
 
     // Apply the default contrast sigmoid.
     return AgxDefaultContrastApprox(color);
@@ -255,8 +268,19 @@ void CSMain(uint3 dispatchId : SV_DispatchThreadID)
 
     float3 color = SanitizeColor(inputColor.rgb);
 
-    // 1. Exposure (EV stops)
-    color *= pow(2.0f, Exposure);
+    // 1. Exposure. In manual mode Ev100 is used as authored; in automatic mode
+    //    the histogram meter supplies it, already clamped and time-smoothed.
+    //    Either way it is held inside [Ev100Min, Ev100Max]. The Exposure slider
+    //    is a trim on top, in stops, positive = brighter - which is also how
+    //    the automatic exposure is biased, applied after the clamp.
+    float ev100 = Ev100;
+    if (UseAutoExposure != 0)
+    {
+        const float metered = asfloat(gAutoExposure.Load(0));
+        ev100 = (isnan(metered) || isinf(metered)) ? Ev100 : metered;
+    }
+    ev100 = clamp(ev100, min(Ev100Min, Ev100Max), max(Ev100Min, Ev100Max));
+    color *= Ev100ToExposureScale(ev100) * exp2(Exposure);
     color = SanitizeColor(color);
 
     // 2. AgX base transform into encoded display space.

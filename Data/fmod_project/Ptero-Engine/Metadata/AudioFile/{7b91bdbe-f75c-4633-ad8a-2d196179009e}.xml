@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<objects serializationModel="Studio.02.03.00">
+	<object class="AudioFile" id="{7b91bdbe-f75c-4633-ad8a-2d196179009e}">
+		<property name="assetPath">
+			<value>music_defeat_stinger.wav</value>
+		</property>
+		<property name="frequencyInKHz">
+			<value>48</value>
+		</property>
+		<property name="channelCount">
+			<value>2</value>
+		</property>
+		<property name="length">
+			<value>7.5</value>
+		</property>
+		<relationship name="masterAssetFolder">
+			<destination>{c2a4bb11-9683-48ec-8078-9afda058d972}</destination>
+		</relationship>
+	</object>
+</objects>

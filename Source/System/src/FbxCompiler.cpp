@@ -267,6 +267,7 @@ namespace
                 { "normalScale",      1.0f },
                 { "ambientOcclusionStrength", 1.0f },
                 { "heightScale",     0.05f },
+                { "heightReference", 1.0f },
                 { "opacity",         1.0f },
                 { "alphaCutoff",     0.5f },
                 { "doubleSided",     false },

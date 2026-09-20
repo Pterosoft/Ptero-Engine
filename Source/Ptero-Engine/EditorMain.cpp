@@ -8,6 +8,8 @@
 #include <string>
 #include <sstream>
 #include <chrono>
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 
 static AudioManager gAudioManager;
 
@@ -16,6 +18,7 @@ typedef bool(__stdcall* RendererDX12RenderFn)();
 typedef bool(__stdcall* RendererDX12ResizeFn)(UINT, UINT);
 typedef bool(__stdcall* RendererDX12HandleWindowMessageFn)(HWND, UINT, WPARAM, LPARAM);
 typedef void(__stdcall* RendererDX12ShutdownFn)();
+typedef bool(__stdcall* RendererDX12ConfirmCloseFn)(HWND);
 typedef const char* (__stdcall* RendererDX12GetLastErrorFn)();
 typedef void(__stdcall* RendererDX12ProgressFn)(const wchar_t* message);
 typedef void(__stdcall* RendererDX12SetProgressCallbackFn)(RendererDX12ProgressFn callback);
@@ -36,6 +39,7 @@ RendererDX12RenderFn gRendererRender = nullptr;
 RendererDX12ResizeFn gRendererResize = nullptr;
 RendererDX12HandleWindowMessageFn gRendererHandleWindowMessage = nullptr;
 RendererDX12ShutdownFn gRendererShutdown = nullptr;
+RendererDX12ConfirmCloseFn gRendererConfirmClose = nullptr;
 RendererDX12GetLastErrorFn gRendererGetLastError = nullptr;
 RendererDX12SetProgressCallbackFn gRendererSetProgressCallback = nullptr;
 RendererDX12SetAudioManagerFn gRendererSetAudioManager = nullptr;
@@ -46,6 +50,18 @@ bool gRendererFailureReported = false;
 bool gRendererEnteredRenderLoop = false;
 bool gRendererPresentedFirstFrame = false;
 HWND gMainWindowHandle = nullptr;
+std::wstring gStandaloneLevel;
+
+// True when it is safe to close. The renderer owns the level and its unsaved
+// state, so the question belongs there; this only asks. A renderer that never
+// came up, or an older DLL without the export, closes without asking - there is
+// no level to lose in either case.
+bool ConfirmApplicationClose(HWND hWnd)
+{
+    if (!gRendererReady || gRendererConfirmClose == nullptr)
+        return true;
+    return gRendererConfirmClose(hWnd);
+}
 
 void BeginApplicationShutdown(HWND hWnd)
 {
@@ -103,7 +119,8 @@ void UpdateMainWindowTitle(const wchar_t* statusSuffix)
         return;
     }
 
-    std::wstring titleText = szTitle;
+    std::wstring titleText = gStandaloneLevel.empty() ? szTitle : L"Farkle - F11 Fullscreen";
+    if (!gStandaloneLevel.empty()) statusSuffix = nullptr;
     if (statusSuffix != nullptr && statusSuffix[0] != L'\0')
     {
         titleText += L" ";
@@ -153,6 +170,7 @@ void CleanupRenderer()
     gRendererResize = nullptr;
     gRendererHandleWindowMessage = nullptr;
     gRendererShutdown = nullptr;
+    gRendererConfirmClose = nullptr;
     gRendererGetLastError = nullptr;
     gRendererSetProgressCallback = nullptr;
     gRendererSetAudioManager = nullptr;
@@ -174,6 +192,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
+
+    int argumentCount=0;
+    LPWSTR* arguments=CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments) {
+        for (int i=1; i<argumentCount; ++i) {
+            if (wcscmp(arguments[i], L"--game")==0) {
+                if (i+1>=argumentCount || !arguments[i+1][0]) {
+                    LocalFree(arguments);
+                    MessageBoxW(nullptr, L"--game requires a level path.", L"Game startup", MB_OK|MB_ICONERROR);
+                    return 1;
+                }
+                gStandaloneLevel=arguments[++i];
+            }
+        }
+        LocalFree(arguments);
+    }
+    if (!gStandaloneLevel.empty()) nCmdShow=SW_SHOWMAXIMIZED;
 
     // Show the splash screen before doing any heavyweight initialization.
     SplashScreen::Show(hInstance);
@@ -222,7 +257,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                 break;
             }
 
-            if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+            if (!gStandaloneLevel.empty() || !TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
             {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
@@ -352,6 +387,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
         gRendererResize = reinterpret_cast<RendererDX12ResizeFn>(GetProcAddress(gRendererModule, "RendererDX12_Resize"));
         gRendererHandleWindowMessage = reinterpret_cast<RendererDX12HandleWindowMessageFn>(GetProcAddress(gRendererModule, "RendererDX12_HandleWindowMessage"));
        gRendererShutdown = reinterpret_cast<RendererDX12ShutdownFn>(GetProcAddress(gRendererModule, "RendererDX12_Shutdown"));
+        // Optional: an older renderer DLL simply closes without asking.
+        gRendererConfirmClose = reinterpret_cast<RendererDX12ConfirmCloseFn>(GetProcAddress(gRendererModule, "RendererDX12_ConfirmClose"));
         gRendererGetLastError = reinterpret_cast<RendererDX12GetLastErrorFn>(GetProcAddress(gRendererModule, "RendererDX12_GetLastError"));
         gRendererSetProgressCallback = reinterpret_cast<RendererDX12SetProgressCallbackFn>(GetProcAddress(gRendererModule, "RendererDX12_SetProgressCallback"));
         gRendererSetAudioManager = reinterpret_cast<RendererDX12SetAudioManagerFn>(GetProcAddress(gRendererModule, "RendererDX12_SetAudioManager"));
@@ -375,6 +412,18 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
         }
         else
         {
+            if (!gStandaloneLevel.empty())
+            {
+                using ConfigureGameFn = void(__stdcall*)(const wchar_t*);
+                auto configureGame=reinterpret_cast<ConfigureGameFn>(GetProcAddress(gRendererModule, "RendererDX12_ConfigureStandaloneGame"));
+                if (!configureGame) {
+                    ReportRendererFailure(hWnd, "Renderer_DX12.dll does not support standalone Play. Rebuild the editor and renderer together.");
+                    CleanupRenderer();
+                    DestroyWindow(hWnd);
+                    return FALSE;
+                }
+                configureGame(gStandaloneLevel.c_str());
+            }
             UpdateMainWindowTitle(L"[renderer exports resolved]");
             SplashScreen::UpdateStatus(L"Initializing DirectX 12...");
 
@@ -415,6 +464,12 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
    PrepareInitialMainWindowFrame(hWnd);
 
+   if (!gStandaloneLevel.empty() && !gRendererReady) {
+       SplashScreen::Close();
+       DestroyWindow(hWnd);
+       return FALSE;
+   }
+
    // Close the splash screen and show the main window now that startup is complete.
    SplashScreen::Close();
    ShowWindow(hWnd, nCmdShow);
@@ -449,11 +504,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_SYSCOMMAND:
         if ((wParam & 0xFFF0) == SC_CLOSE)
         {
+            if (!ConfirmApplicationClose(hWnd))
+                return 0;
             BeginApplicationShutdown(hWnd);
             return 0;
         }
         break;
     case WM_CLOSE:
+        // Ask about unsaved level changes before anything is torn down, so
+        // Cancel simply carries on rendering. New and Open already asked; the
+        // window's own close button was the one way to lose an edited level
+        // without being told.
+        if (!ConfirmApplicationClose(hWnd))
+            return 0;
         // Hide the window immediately so shutdown work does not appear as a frozen app.
         BeginApplicationShutdown(hWnd);
         return 0;

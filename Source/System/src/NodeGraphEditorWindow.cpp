@@ -1239,7 +1239,17 @@ public:
     {
         setWindowTitle(QStringLiteral("Node Graph"));
         setObjectName(QStringLiteral("nodeGraphWindow"));
-        resize(1280, 820);
+
+        // The canvas is unbounded, so there is no content size to open at - this is simply
+        // room enough to work in. Clamped to the desktop: on a laptop screen the untrimmed
+        // size puts the status bar and part of the palette off the bottom, and a window
+        // that opens larger than the screen cannot be dragged back into view.
+        QSize opening(1280, 820);
+        if (const QScreen* display = screen())
+        {
+            opening = opening.boundedTo(display->availableGeometry().size() * 0.9);
+        }
+        resize(opening);
 
         mContext.OnEdited = [this] { MarkEdited(); };
 

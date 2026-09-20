@@ -11,6 +11,10 @@
 // upright as they crossed the LOD boundary on a windy day.
 
 #include "Vegetation_Common.hlsli"
+// Foliage does not expose a reflectivity knob of its own; it writes the neutral default
+// so the specular channel is valid across the whole G-Buffer, including at MSAA edges
+// where the resolve averages this channel with a neighbouring surface.
+#include "SurfaceSpecular.hlsli"
 
 cbuffer VegetationPassConstants : register(b0)
 {
@@ -189,7 +193,7 @@ PSOutput PSMain(PSInput input)
     const float3 N = normalize(input.WorldNormal);
 
     output.Albedo   = float4(texColor.rgb * gBaseColorTint.rgb, texColor.a * gBaseColorTint.a);
-    output.Normal   = float4(EncodeOctNormal(N), input.Position.z, 0.0f);
+    output.Normal   = float4(EncodeOctNormal(N), input.Position.z, PteroEncodeSurfaceSpecular(kPteroDefaultSpecular));
     // No material maps at billboard range; the scalar factors are all the
     // lighting needs to keep the card consistent with the mesh LODs.
     output.Material = float4(gRoughnessFactor, gMetallicFactor, 1.0f, 0.0f);

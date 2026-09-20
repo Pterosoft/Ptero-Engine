@@ -26,6 +26,14 @@ cbuffer CameraConstants : register(b0)
 // spot's cone ends.
 #include "LightShapes.hlsli"
 
+// The probe SH packing and grid addressing are shared with the volumetric fog,
+// which samples the same grid per froxel.
+#include "RadianceProbeCommon.hlsli"
+
+// The material reflectivity knob and the F0 it produces, shared with SSR and the
+// ray-traced specular pass so all three agree on how reflective a surface is.
+#include "SurfaceSpecular.hlsli"
+
 #define LIGHT_TYPE_RECT PTERO_LIGHT_TYPE_RECT
 
 cbuffer SceneLighting : register(b1)
@@ -74,10 +82,6 @@ cbuffer ProbeConstants : register(b3)
     float  _ProbePad0;
 };
 
-struct ProbeSH
-{
-    float4 c[7];
-};
 
 // -------------------------------------------------------------------------
 // Textures / samplers
@@ -367,69 +371,21 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
     return lerp(primaryVisibility, secondaryVisibility, seamBlend);
 }
 
-float3 EvaluateProbeSH(ProbeSH sh, float3 dir)
-{
-    float x = dir.x;
-    float y = dir.y;
-    float z = dir.z;
-
-    float basis0 = 0.282095f * 3.14159265f;
-    float basis1 = 0.488603f * y * 2.09439510f;
-    float basis2 = 0.488603f * z * 2.09439510f;
-    float basis3 = 0.488603f * x * 2.09439510f;
-    float basis4 = 1.092548f * x * y * 0.78539816f;
-    float basis5 = 1.092548f * y * z * 0.78539816f;
-    float basis6 = 0.315392f * (3.0f * z * z - 1.0f) * 0.78539816f;
-    float basis7 = 1.092548f * x * z * 0.78539816f;
-    float basis8 = 0.546274f * (x * x - y * y) * 0.78539816f;
-
-    float3 result = float3(0, 0, 0);
-    result.r = sh.c[0].x * basis0 + sh.c[0].w * basis1 + sh.c[1].z * basis2 + sh.c[2].y * basis3
-             + sh.c[3].x * basis4 + sh.c[3].w * basis5 + sh.c[4].z * basis6 + sh.c[5].y * basis7
-             + sh.c[6].x * basis8;
-    result.g = sh.c[0].y * basis0 + sh.c[1].x * basis1 + sh.c[1].w * basis2 + sh.c[2].z * basis3
-             + sh.c[3].y * basis4 + sh.c[4].x * basis5 + sh.c[4].w * basis6 + sh.c[5].z * basis7
-             + sh.c[6].y * basis8;
-    result.b = sh.c[0].z * basis0 + sh.c[1].y * basis1 + sh.c[2].x * basis2 + sh.c[2].w * basis3
-             + sh.c[3].z * basis4 + sh.c[4].y * basis5 + sh.c[5].x * basis6 + sh.c[5].w * basis7
-             + sh.c[6].z * basis8;
-    return max(result, 0.0f);
-}
-
-uint FlattenProbeCoord(uint3 coord)
-{
-    return coord.x + coord.y * gProbeGridX + coord.z * gProbeGridX * gProbeGridY;
-}
-
 float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
 {
-    if (gProbeGridX == 0 || gProbeGridY == 0 || gProbeGridZ == 0 || gProbeSpacing <= 0.0f)
+    const uint3 gridSize = uint3(gProbeGridX, gProbeGridY, gProbeGridZ);
+    if (!PteroProbeGridValid(gridSize, gProbeSpacing))
         return float3(0.0f, 0.0f, 0.0f);
 
-    float3 probeCoordF = (worldPos - gProbeOrigin) / gProbeSpacing;
-    float3 clampedCoordF = clamp(probeCoordF, 0.0f.xxx, float3(gProbeGridX - 1, gProbeGridY - 1, gProbeGridZ - 1));
-    float3 baseCoordF = floor(clampedCoordF);
-    float3 fracCoord = saturate(clampedCoordF - baseCoordF);
+    const PteroProbeGridTap tap = PteroProbeGridLookup(gridSize, gProbeOrigin, gProbeSpacing, worldPos);
 
-    uint3 baseCoord = uint3(baseCoordF);
-    uint3 nextCoord = min(baseCoord + 1u, uint3(gProbeGridX - 1, gProbeGridY - 1, gProbeGridZ - 1));
-
-    float3 c000 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(baseCoord.x, baseCoord.y, baseCoord.z))], normal);
-    float3 c100 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(nextCoord.x, baseCoord.y, baseCoord.z))], normal);
-    float3 c010 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(baseCoord.x, nextCoord.y, baseCoord.z))], normal);
-    float3 c110 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(nextCoord.x, nextCoord.y, baseCoord.z))], normal);
-    float3 c001 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(baseCoord.x, baseCoord.y, nextCoord.z))], normal);
-    float3 c101 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(nextCoord.x, baseCoord.y, nextCoord.z))], normal);
-    float3 c011 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(baseCoord.x, nextCoord.y, nextCoord.z))], normal);
-    float3 c111 = EvaluateProbeSH(gRadianceProbes[FlattenProbeCoord(uint3(nextCoord.x, nextCoord.y, nextCoord.z))], normal);
-
-    float3 cx00 = lerp(c000, c100, fracCoord.x);
-    float3 cx10 = lerp(c010, c110, fracCoord.x);
-    float3 cx01 = lerp(c001, c101, fracCoord.x);
-    float3 cx11 = lerp(c011, c111, fracCoord.x);
-    float3 cxy0 = lerp(cx00, cx10, fracCoord.y);
-    float3 cxy1 = lerp(cx01, cx11, fracCoord.y);
-    return lerp(cxy0, cxy1, fracCoord.z);
+    float3 irradiance = float3(0.0f, 0.0f, 0.0f);
+    [unroll]
+    for (uint corner = 0; corner < 8; ++corner)
+    {
+        irradiance += tap.Weight[corner] * PteroEvaluateProbeSH(gRadianceProbes[tap.Index[corner]], normal);
+    }
+    return irradiance;
 }
 
 // -------------------------------------------------------------------------
@@ -441,10 +397,12 @@ float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
 // N           – unit surface normal
 // albedo      – base colour
 // metallic, roughness – PBR material parameters
+// specularLevel – material reflectivity knob; 0.5 is neutral (see SurfaceSpecular.hlsli).
+//                Named apart from the Cook-Torrance `specular` term computed below.
 // -------------------------------------------------------------------------
 float3 EvalBRDF(float3 L_in, float3 lightRadiance,
                 float3 V, float3 N,
-                float3 albedo, float metallic, float roughness)
+                float3 albedo, float metallic, float roughness, float specularLevel)
 {
     float NdotL = saturate(dot(N, L_in));
     if (NdotL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
@@ -467,7 +425,7 @@ float3 EvalBRDF(float3 L_in, float3 lightRadiance,
     float G   = G_V * G_L;
 
     // Schlick Fresnel
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 F0 = PteroComputeF0(albedo, metallic, specularLevel);
     float3 F  = F0 + (1.0f - F0) * pow(1.0f - HdotV, 5.0f);
 
     // Specular term (Cook-Torrance)
@@ -550,7 +508,9 @@ float4 PSMain(PSInput input) : SV_Target
             float normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
             float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
             rangeMask *= rangeMask;
-            float falloff = rangeMask * pow(max(dist, 1e-3f), -max(gPointLights[i].FalloffExponent, 0.001f))
+            float falloff = rangeMask
+                          * pow(PteroLightFalloffDistance(gPointLights[i], dist),
+                                -max(gPointLights[i].FalloffExponent, 0.001f))
                           * glassShape.ShapeMask;
             float pointFacing = saturate(dot(N, L_pt));
             float3 H = normalize(V + L_pt);
@@ -564,6 +524,9 @@ float4 PSMain(PSInput input) : SV_Target
 
     float  roughness = max(materialSample.r, 0.04f); // G-buffer R
     float  metallic  = materialSample.g;             // G-buffer G
+    // Reflectivity rides in the normal target's W channel; 0 means the pass that wrote
+    // this pixel does not carry the channel, which decodes to the neutral default.
+    float  specular  = PteroDecodeSurfaceSpecular(normalSample.w);
     // Override the baked G-Buffer AO with the ray-traced AO when available.
     float  ao        = materialSample.b;             // G-buffer B
     float  rtao      = ao;
@@ -586,7 +549,7 @@ float4 PSMain(PSInput input) : SV_Target
     // ---- Sun directional light with PCF shadow ----
     float  shadowFactor = SampleShadowPCF(worldPos);
     float3 L_sun        = normalize(-gSunDirection);
-    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness);
+    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular);
 
     // ---- Sky ambient (hemisphere diffuse + rough-specular approximation) ----
     // Only upward-facing surfaces see the sky hemisphere.
@@ -596,11 +559,18 @@ float4 PSMain(PSInput input) : SV_Target
     // pitch-black even without GI enabled.
     float  skyWeight   = max(N.z, 0.0f);
     float  skyVis      = saturate(shadowFactor * 0.95f + 0.05f); // 5% in full shadow, 100% in sun
-    float3 F0          = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 F0          = PteroComputeF0(albedo, metallic, specular);
     float3 ambientDiff = gSkyAmbient * skyWeight * skyVis * (1.0f - metallic) * albedo;
     float3 F_amb       = F0 + (max(float3(1,1,1) * (1.0f - roughness), F0) - F0)
                              * pow(1.0f - saturate(dot(N, V)), 5.0f);
-    float3 ambientSpec = gSkyAmbient * skyWeight * skyVis * F_amb * (1.0f / (roughness * roughness + 1.0f));
+    // The environment term is gathered along the *reflected* direction, not the normal.
+    // Weighting it by N.z the way the diffuse hemisphere is weighted gives a vertical
+    // surface no environment specular whatsoever, which is the reason a metal wall - which
+    // has no diffuse term to fall back on - used to resolve to black. A rough surface
+    // gathers over a wide lobe, so its weight is pulled back toward the hemisphere average.
+    float3 R_env       = reflect(-V, N);
+    float  envWeight   = lerp(saturate(R_env.z * 0.5f + 0.5f), 0.5f, roughness);
+    float3 ambientSpec = gSkyAmbient * envWeight * skyVis * F_amb * (1.0f / (roughness * roughness + 1.0f));
     float3 ambient     = (ambientDiff + ambientSpec) * ao;
 
     // ---- Point lights ----
@@ -637,12 +607,14 @@ float4 PSMain(PSInput input) : SV_Target
         float  rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
         rangeMask *= rangeMask;
         float  falloffExponent = max(gPointLights[i].FalloffExponent, 0.001f);
-        float  distanceFalloff = pow(max(dist, 1e-3f), -falloffExponent);
+        // Not max(dist, 1e-3): an area emitter has no singularity to guard
+        // against, it has a size to stop inside of. See LightShapes.hlsli.
+        float  distanceFalloff = pow(PteroLightFalloffDistance(gPointLights[i], dist), -falloffExponent);
         float  falloff = rangeMask * distanceFalloff * shape.ShapeMask;
 
         float pointShadow = SamplePointShadow(i, worldPos, N);
         pointShadowDebug = min(pointShadowDebug, pointShadow);
-        pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness);
+        pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular);
     }
 
     if (gPointShadowDebugView > 0)

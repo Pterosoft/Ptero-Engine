@@ -71,6 +71,22 @@ public:
     bool PlayEvent(int index);
     bool PlayEventByPath(const std::string& eventPath);
 
+    // Resolve a bare event name ("DiceRoll") against the loaded banks and return its
+    // full path ("event:/Ambient/DiceRoll"), so callers do not have to know which
+    // folder the event was authored in.  A full path is returned unchanged when it
+    // exists.  Returns an empty string when nothing matches.
+    std::string ResolveEventPath(const std::string& nameOrPath) const;
+
+    // Fire-and-forget one-shot, looked up with ResolveEventPath().
+    bool PlayOneShotByName(const std::string& nameOrPath);
+
+    // Music channel.  Unlike the one-shots above it keeps its single instance alive,
+    // which is what lets a caller wait for the current track to finish before
+    // choosing the next one.  PlayMusicByName replaces whatever is already playing.
+    bool PlayMusicByName(const std::string& nameOrPath);
+    bool IsMusicPlaying();
+    void StopMusic();
+
     // Stop the currently playing instance for the event at the given index.
     bool StopEvent(int index);
 
@@ -98,7 +114,10 @@ public:
     // Returns true when the system was successfully initialised.
     bool IsInitialized() const { return m_initialized; }
 
-    // Resonance Audio is implemented as native FMOD source/listener DSPs.
+    // Resonance is configured entirely in the FMOD project: a spatialised event carries
+    // a matched Resonance Source and Listener, and everything else carries neither. The
+    // engine only loads the plugin, so this setter has nothing to switch - it records
+    // intent, and GetResonanceAudioStatus() reports the arrangement.
     void SetResonanceAudioEnabled(bool enabled);
     bool IsResonanceAudioEnabled() const { return m_resonanceAudioEnabled; }
     bool IsResonanceAudioAvailable() const { return m_resonanceAudioAvailable; }
@@ -112,7 +131,6 @@ private:
         float PositionX = 0.0f;
         float PositionY = 0.0f;
         float PositionZ = 0.0f;
-        void* ResonanceDsp = nullptr;
         bool Allocated = false;
         bool Playing = false;
     };
@@ -122,9 +140,14 @@ private:
 
     // Refresh m_events from all loaded banks.
     void RefreshEventList();
+    // Loads resonanceaudio.dll. That is the whole job: without it the banks fail to
+    // load with FMOD_ERR_PLUGIN_MISSING, and with it they bring their own DSP chain.
     bool InitializeResonanceAudio(FMOD::System* coreSystem, std::string& outError);
-    FMOD::DSP* AttachResonanceSource(FMOD::Studio::EventInstance* instance);
-    static void ReleaseResonanceDsp(void*& dsp);
+
+    // Sits the instance on the listener, so a 3D event plays at the level its mix says
+    // and stays there. Music and UI have no position in the world; the alternative is
+    // the default (0,0,0), which drifts in and out as the camera moves.
+    void PlaceAtListener(FMOD::Studio::EventInstance* instance) const;
 
     #pragma warning(push)
     #pragma warning(disable: 4251)
@@ -132,8 +155,6 @@ private:
         FMOD::System*          m_coreSystem = nullptr;
         std::vector<FMOD::Studio::Bank*>          m_banks;
         std::vector<FMOD::Studio::EventInstance*> m_instances;
-        std::vector<void*>                         m_instanceResonanceDsps;
-        std::vector<void*>                         m_oneShotResonanceDsps;
         std::vector<AudioEvent>                   m_events;
         std::filesystem::path                     m_audioDataPath;
         std::vector<std::string>                  m_loadedBanks;
@@ -141,13 +162,13 @@ private:
         std::string                               m_lastStatus;
         std::string                               m_resonanceAudioStatus;
         std::vector<EmitterState>                 m_emitters;
+        FMOD::Studio::EventInstance*              m_musicInstance = nullptr;
         bool                                      m_initialized = false;
         float m_listenerPosX = 0.0f, m_listenerPosY = 0.0f, m_listenerPosZ = 0.0f;
         float m_listenerFwdX = 0.0f, m_listenerFwdY = 0.0f, m_listenerFwdZ = -1.0f;
         float m_listenerUpX  = 0.0f, m_listenerUpY  = 1.0f, m_listenerUpZ  = 0.0f;
     #pragma warning(pop)
 
-    void*        m_resonanceListenerDsp = nullptr;
     unsigned int m_resonancePluginHandle = 0;
     unsigned int m_resonanceSourcePluginHandle = 0;
     bool          m_resonanceAudioEnabled = true;

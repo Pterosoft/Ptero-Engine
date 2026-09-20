@@ -202,9 +202,16 @@ float3 SkyRadiance(float3 dir)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main compute entry.
-// One thread group handles one probe (1 thread per probe, dispatched linearly).
+// One thread per probe, dispatched linearly in groups of kProbeUpdateGroupSize.
+//
+// This used to be numthreads(1,1,1) with one group per probe, which put a single
+// active lane in every wave and threw away almost all of the GPU's width. That is
+// what made a higher ray count look unaffordable and left the update pinned at one
+// ray per probe. The bounds check below already tolerates a partial final group.
 // ─────────────────────────────────────────────────────────────────────────────
-[numthreads(1, 1, 1)]
+#define kProbeUpdateGroupSize 64
+
+[numthreads(kProbeUpdateGroupSize, 1, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
     uint probeIdx = DTid.x;

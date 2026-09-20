@@ -253,11 +253,16 @@ private:
         uint32_t numPointLights);
 
     // ---- GPU helpers shared with TLAS build ----
+    //
+    // `debugName` is what DRED prints when a page fault lands in or near the
+    // allocation. Without it the crash log says "(unnamed)" and names nothing,
+    // which is worth very little when the question is which buffer was freed
+    // too early. Pass one for anything the GPU reads across frames.
     static bool CreateGpuBuffer(ID3D12Device* dev, UINT64 size,
         D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state,
-        ComPtr<ID3D12Resource>& out);
+        ComPtr<ID3D12Resource>& out, const wchar_t* debugName = nullptr);
     static bool CreateUploadBuf(ID3D12Device* dev, UINT64 size,
-        ComPtr<ID3D12Resource>& out);
+        ComPtr<ID3D12Resource>& out, const wchar_t* debugName = nullptr);
 
     bool     mIsInitialized         = false;
     bool     mInitFailed            = false;
@@ -450,6 +455,12 @@ private:
     {
         ComPtr<ID3D12Resource> Result;
         ComPtr<ID3D12Resource> Scratch;
+        // Keeps the asset the key addresses alive, so a freed mesh's address can
+        // never be handed to a new mesh that then matches this entry and raytraces
+        // the wrong geometry at the wrong pool offsets. A level swap - which is
+        // what Play is - frees and reallocates meshes back to back, which is
+        // exactly when an allocator recycles addresses.
+        std::shared_ptr<const Mesh> MeshOwner;
         uint32_t vertexOffset = 0;  // base index into the global vertex buffer
         uint32_t indexOffset  = 0;  // base index into the global index buffer
         uint32_t vertexCount  = 0;
@@ -497,16 +508,17 @@ private:
     bool mTlasReady = false;
 
     // Upload buffers that must stay alive until the GPU finishes the frame.
-    // Two-frame ring: index 0 is being built this frame, index 1 was the previous frame.
-    // We only release index 1 at the START of each BuildTlas (safe because the GPU
-    // will have finished the frame-N-1 commands by the time frame N+1 starts).
-    // Upload buffers kept alive until the GPU has finished consuming them.
+    // Deferred release: every GPU resource this pass replaces goes here instead of
+    // being freed where it is replaced, and dies when the ring next reaches its
+    // slot. That covers the BLAS geometry uploads, the instance-descriptor buffer,
+    // the geometry pools and the TLAS and its scratch - all of which are named by
+    // command lists that were recorded in earlier frames and have not executed yet.
     //
     // Depth must match the engine's frames in flight (DX12Context's FrameCount),
     // not two: with three frames queued the CPU can be three frames ahead of the
     // GPU, and a two-slot ring would free a BLAS's vertex or index upload while
     // an earlier frame's acceleration-structure build was still reading it.
     static constexpr uint32_t kFramesInFlight = 3;
-    std::vector<ComPtr<ID3D12Resource>> mPendingUploads[kFramesInFlight];
+    std::vector<ComPtr<ID3D12Resource>> mPendingReleases[kFramesInFlight];
     uint32_t mUploadRingIdx = 0;
 };

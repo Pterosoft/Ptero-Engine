@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>K:\Ptero-Engine\Cache\SystemBuild\System.dll</FullPath>
+      <FullPath>K:\Ptero-Engine\Binaries\System.dll</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

@@ -29,6 +29,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <chrono>
+#include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -57,6 +60,11 @@ class Editor
 {
 public:
     using ProgressCallback = void(__stdcall*)(const wchar_t* message);
+
+    // Roughly how long a gizmo axis should appear on screen, in pixels. One
+    // number for the whole gizmo: ComputeGizmoWorldScale turns it into a world
+    // length at the pivot's depth, and every axis and ring uses that.
+    static constexpr float kGizmoScreenLength = 72.0f;
 
     enum class ManualGizmoHandle
     {
@@ -186,7 +194,30 @@ public:
     bool SaveSceneAs(HWND ownerWindowHandle);
     bool OpenScene(HWND ownerWindowHandle);
     bool NewScene(HWND ownerWindowHandle);
+    // Shows the unsaved-changes prompt if there is anything to lose. Returns
+    // false only when the user cancels, meaning the caller must not proceed.
+    // Public because closing the editor has to ask the same question New and
+    // Open do, and that call arrives from the host's WM_CLOSE.
+    bool ConfirmDiscardUnsavedScene(HWND ownerWindowHandle);
     void UpdateSceneLoading();
+    // Requests from widgets are consumed before recording the next GPU frame.
+    void UpdatePlaySession();
+    void StopPlaySession();
+    // Asks for a play session to begin at the next frame boundary, in whichever mode
+    // SetPlayInNewWindow last selected. Starting is deferred because it swaps the entity
+    // vector the renderer is reading from.
+    void RequestPlaySession() { mPlayStartRequested = true; }
+    bool IsPlaySessionActive() const;
+    // Play in a window of its own, the way a shipped build runs, instead of inside the
+    // editor viewport. The mode is chosen before Play and read when the session starts,
+    // so changing it mid-session does nothing until the next one.
+    void SetPlayInNewWindow(bool enabled) { mPlayInNewWindow = enabled; }
+    bool IsPlayInNewWindow() const { return mPlayInNewWindow; }
+    bool* GetPlayInNewWindowPointer() { return &mPlayInNewWindow; }
+    // The two mode entries, so the Play menu and the Play button's context menu offer
+    // the same choice written once.
+    void DrawPlayModeMenuItems();
+    const NodeGraphDocument& GetRuntimeNodeGraph() const;
     bool IsSceneLoading() const;
     float GetSceneLoadProgress() const;
     std::string GetSceneLoadStatusMessage() const;
@@ -238,10 +269,19 @@ public:
         return mSceneDirty || NodeGraphEditor::Revision() != mNodeGraphRevisionAtSave;
     }
 
-    void MarkSceneDirty()
-    {
-        mSceneDirty = true;
-    }
+    // Every mutation calls this. It lights the unsaved-changes flag and records
+    // the pre-edit state for undo; see EditorUndo.cpp for why the two are one
+    // call rather than two.
+    void MarkSceneChanged();
+
+    // Kept as the older name for callers that only mean "this needs saving".
+    void MarkSceneDirty() { MarkSceneChanged(); }
+
+    bool CanUndo() const { return !mUndoStack.empty(); }
+    bool CanRedo() const { return !mRedoStack.empty(); }
+    bool Undo();
+    bool Redo();
+    void ResetUndoHistory();
 
     const std::string& GetCurrentSceneFilePath() const
     {
@@ -345,6 +385,11 @@ private:
     {
         bool IsActive = false;
         ManualGizmoHandle ActiveHandle = ManualGizmoHandle::None;
+        // What the cursor is over while nothing is being dragged, so the
+        // drawing can light it up before the mouse goes down. Set by the same
+        // pick that starts the drag, so the two cannot disagree.
+        ManualGizmoHandle HoveredHandle = ManualGizmoHandle::None;
+        DirectX::XMFLOAT3 HoveredRotationAxis{};
         UiVec2 StartMouse{};
         DirectX::XMFLOAT3 StartPosition{};
         DirectX::XMFLOAT3 StartRotation{};
@@ -449,6 +494,16 @@ private:
     // Composites the RmlUi target over the viewport image and forwards pointer input to it.
     void DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewportSize);
     void DrawTerrainViewportOverlay(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+
+    // Wireframe reach and shape for every light in the scene: the sphere of a
+    // point, the cone of a spot, the quad of a rect. Defined in
+    // EditorLightGizmos.cpp; gated on the placement-icon switch.
+    void DrawLightShapeGizmos(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+    // World length that projects to about kGizmoScreenLength pixels at the
+    // pivot. Zero when the pivot is behind the near plane, which means the
+    // gizmo cannot be drawn or hit-tested at all this frame.
+    float ComputeGizmoWorldScale(const DirectX::XMFLOAT3& pivotWorldPosition, const UiVec2& viewportSize, const EditorCamera& camera) const;
+
     void DrawManualGizmoPivot(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera, const Entity* selectedEntity) const;
     bool TryProjectWorldToViewport(
         const DirectX::XMFLOAT3& worldPosition,
@@ -481,7 +536,6 @@ private:
     void SetViewportStatisticsText(const char* text);
     void HandleKeyboardShortcuts();
     void ResetScene();
-    bool PromptToSaveUnsavedScene(HWND ownerWindowHandle);
     void SetSceneLoadProgress(float progress, const char* statusMessage);
     static bool SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData);
 
@@ -519,6 +573,8 @@ private:
     // hold RML ids, property names and CSS values, none of which is worth
     // truncating to save bytes in an editor panel.
     int  mUiEditorDocumentIndex = 0;
+    std::string mUiEditorSelectedDocument;
+    std::string mUiEditorObservedDocument;
     int  mUiEditorPreviewSizeIndex = 1;      // 640 x 360
     bool mUiEditorInteractive = true;
     bool mUiEditorHadPointer = false;
@@ -570,7 +626,54 @@ private:
     std::string mCurrentSceneFilePath;
     std::string mLastSceneStatusMessage;
     std::optional<Entity> mCopiedEntity;
+    // One recoverable state of the level. Entities carry shared_ptr handles to
+    // their mesh assets, so copying the vector copies component values and
+    // shares the geometry - a snapshot is strings and POD, not megabytes.
+    struct SceneUndoState
+    {
+        std::vector<Entity> Entities;
+        int SelectedEntityIndex = -1;
+        std::vector<int> SelectedEntityIndices;
+    };
+
+    static constexpr std::size_t kMaxUndoSteps = 64;
+    // Edits closer together than this are one step, so a gizmo drag does not
+    // fill the history with sixty identical-looking frames of itself.
+    static constexpr std::chrono::milliseconds kUndoCoalesceWindow{ 400 };
+
+    std::deque<SceneUndoState> mUndoStack;
+    std::deque<SceneUndoState> mRedoStack;
+    // The last committed state. MarkSceneChanged runs after the edit, so this
+    // is what it pushes: the scene as it was before.
+    SceneUndoState mUndoBaseline;
+    std::chrono::steady_clock::time_point mLastSceneChangeTime{};
+    bool mApplyingUndoState = false;
+
+    // Marks the scope in which Undo and Redo rewrite the scene, so the
+    // MarkSceneChanged calls that rewriting provokes do not record themselves.
+    struct UndoApplyGuard
+    {
+        explicit UndoApplyGuard(Editor& editor) : mEditor(editor) { mEditor.mApplyingUndoState = true; }
+        ~UndoApplyGuard() { mEditor.mApplyingUndoState = false; }
+        UndoApplyGuard(const UndoApplyGuard&) = delete;
+        UndoApplyGuard& operator=(const UndoApplyGuard&) = delete;
+        Editor& mEditor;
+    };
+
+    SceneUndoState CaptureSceneState() const;
+    void ApplySceneState(const SceneUndoState& state);
+
     bool mSceneDirty = false;
+    bool mPlayStartRequested = false;
+    bool mPlaySceneActive = false;
+    // Which of the two play modes the next Play uses. Defaults to the viewport: the
+    // level, the panels and the game stay on one screen, which is what you want while
+    // still building the level. See SetPlayInNewWindow.
+    bool mPlayInNewWindow = false;
+    std::vector<Entity> mEntitiesBeforePlay;
+    NodeGraphDocument mPlayNodeGraph;
+    std::vector<std::function<void()>> mRestorePlaySettings;
+    void RestoreEditorAfterPlay();
     // NodeGraphEditor::Revision() as it was when the level was last saved or loaded.
     unsigned mNodeGraphRevisionAtSave = 0;
 

@@ -270,22 +270,10 @@ void DeferredLightingPass::SetProbeSrv(
         pc.ProbeGridZ = static_cast<uint32_t>((std::max)(settings->GridZ, 0));
         pc.ProbeSpacing = settings->Spacing;
 
-        float ox = settings->OriginX;
-        float oy = settings->OriginY;
-        float oz = settings->OriginZ;
-        if (settings->FollowCamera && settings->Spacing > 0.0f)
-        {
-            const float halfX = (std::max)(settings->GridX - 1, 0) * settings->Spacing * 0.5f;
-            const float halfY = (std::max)(settings->GridY - 1, 0) * settings->Spacing * 0.5f;
-            const float halfZ = (std::max)(settings->GridZ - 1, 0) * settings->Spacing * 0.5f;
-            auto snap = [](float v, float s)
-            {
-                return std::floor(v / s) * s;
-            };
-            ox = snap(cameraPosition.x - halfX, settings->Spacing);
-            oy = snap(cameraPosition.y - halfY, settings->Spacing);
-            oz = snap(cameraPosition.z - halfZ, settings->Spacing);
-        }
+        float ox = 0.0f;
+        float oy = 0.0f;
+        float oz = 0.0f;
+        ResolveProbeGridOrigin(*settings, cameraPosition.x, cameraPosition.y, cameraPosition.z, ox, oy, oz);
 
         pc.ProbeOriginX = ox;
         pc.ProbeOriginY = oy;

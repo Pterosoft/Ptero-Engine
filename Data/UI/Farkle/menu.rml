@@ -1,0 +1,11 @@
+<rml>
+<head><title>Farkle</title><link type="text/rcss" href="farkle.rcss"/><link type="text/rcss" href="results.rcss"/>
+<style>
+#menu-card { position: absolute; left: 34%; top: 17%; width: 32%; padding: 4vh; text-align: center; }
+#menu-title { font-family: "Pirata One"; font-size: 9vh; margin-bottom: 1vh; }
+.menu-note { font-family: "Fondamento"; font-size: 2.4vh; margin-bottom: 3vh; }
+.menu-action { display: block; width: 100%; height: 6.5vh; line-height: 6.5vh; margin: 1vh 0; font-size: 2.9vh; decorator: image(button-dark); color: #eccc91ff; }
+.menu-action:hover, .menu-action:focus { color: #fff3caff; }
+</style></head>
+<body><div id="menu-card" class="parchment"><div id="menu-title">Farkle</div><div class="menu-note">Good dice. Better company.</div><button id="start-button" class="menu-action">New Match</button><button id="fullscreen-button" class="menu-action">Fullscreen [F11]</button><button id="exit-button" class="menu-action">Exit to Editor</button></div></body>
+</rml>

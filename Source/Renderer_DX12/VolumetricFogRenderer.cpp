@@ -32,6 +32,10 @@ namespace
     constexpr UINT kMaxDepthSlices = 128;
     constexpr uint64_t kMaxTotalFroxels = 4ull * 1024ull * 1024ull;
 
+    // Matches kPointShadowResourceFormat in PointShadowMapRenderer.h. Only used
+    // to describe the null stand-in view, which is never sampled.
+    constexpr DXGI_FORMAT kPointShadowSrvFormat = DXGI_FORMAT_R32_FLOAT;
+
     struct FogGridDimensions
     {
         UINT TileSize = 8;
@@ -256,44 +260,20 @@ void VolumetricFogRenderer::Dispatch(
     ID3D12GraphicsCommandList* cmdList,
     D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
     const VolumetricFogSettings& settings,
-    const float viewProjInv[16],
-    const float currViewProj[16],
-    const float cameraPos[3],
-    float nearPlane,
-    float farPlane,
-    float sunDirX,
-    float sunDirY,
-    float sunDirZ,
-    float sunColorR,
-    float sunColorG,
-    float sunColorB,
-    float skyColorR,
-    float skyColorG,
-    float skyColorB,
-    const FogPointLight* pointLights,
-    uint32_t numPointLights)
+    const FrameInputs& inputs)
 {
     if (cmdList == nullptr || !mIsInitialized || !mConstantBuffer || !mLightingVolume || !mIntegratedFog)
         return;
 
-    UploadConstants(
-        settings,
-        viewProjInv,
-        currViewProj,
-        cameraPos,
-        nearPlane,
-        farPlane,
-        sunDirX,
-        sunDirY,
-        sunDirZ,
-        sunColorR,
-        sunColorG,
-        sunColorB,
-        skyColorR,
-        skyColorG,
-        skyColorB,
-        pointLights,
-        numPointLights);
+    // Advance before the upload so this frame writes a slot the GPU has finished
+    // with. Dispatch runs exactly once per frame, and both dispatches below bind
+    // the same slot, so the injection and accumulation passes always agree.
+    mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+
+    UploadConstants(settings, inputs);
+
+    const D3D12_GPU_VIRTUAL_ADDRESS constantsAddress =
+        mConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(mFrameSlot) * sizeof(FogConstants);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
     if (descriptorHeaps[0] != nullptr)
@@ -310,11 +290,22 @@ void VolumetricFogRenderer::Dispatch(
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     cmdList->ResourceBarrier(2, toUav);
 
+    // A scene with no probe grid, or with no shadow-casting light, still has to
+    // bind something of the right type at t1 and t2. The shader is gated on the
+    // matching constants and never reads these, but leaving a descriptor table
+    // unbound is undefined regardless of what the shader does with it.
+    const D3D12_GPU_DESCRIPTOR_HANDLE probeSrv =
+        (inputs.ProbeSrv.ptr != 0) ? inputs.ProbeSrv : mNullProbeSrvGpu;
+    const D3D12_GPU_DESCRIPTOR_HANDLE pointShadowSrv =
+        (inputs.PointShadowSrv.ptr != 0) ? inputs.PointShadowSrv : mNullShadowSrvGpu;
+
     cmdList->SetComputeRootSignature(mInjectRootSignature.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, constantsAddress);
     cmdList->SetPipelineState(mInjectPipelineState.Get());
     cmdList->SetComputeRootDescriptorTable(1, sceneDepthSrv);
     cmdList->SetComputeRootDescriptorTable(2, mLightingUavGpu);
+    cmdList->SetComputeRootDescriptorTable(3, probeSrv);
+    cmdList->SetComputeRootDescriptorTable(4, pointShadowSrv);
     cmdList->Dispatch(
         (mFroxelWidth + kInjectGroupX - 1) / kInjectGroupX,
         (mFroxelHeight + kInjectGroupY - 1) / kInjectGroupY,
@@ -329,7 +320,7 @@ void VolumetricFogRenderer::Dispatch(
     cmdList->ResourceBarrier(1, &lightingToSrv);
 
     cmdList->SetComputeRootSignature(mAccumulateRootSignature.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, constantsAddress);
     cmdList->SetPipelineState(mAccumulatePipelineState.Get());
     cmdList->SetComputeRootDescriptorTable(1, mLightingSrvGpu);
     cmdList->SetComputeRootDescriptorTable(2, mIntegratedUavGpu);
@@ -356,19 +347,29 @@ bool VolumetricFogRenderer::CreateRootSignatures()
         return false;
     }
 
-    D3D12_DESCRIPTOR_RANGE injectRanges[2]{};
+    // t0 scene depth, u0 lighting volume, t1 radiance probe SH, t2 point shadow
+    // cubemap atlas. Four single-descriptor tables rather than one range: the
+    // handles are allocated by four different owners out of the shared heap and
+    // are nowhere near each other in it.
+    D3D12_DESCRIPTOR_RANGE injectRanges[4]{};
     injectRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[0].NumDescriptors = 1;
     injectRanges[0].BaseShaderRegister = 0;
     injectRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     injectRanges[1].NumDescriptors = 1;
     injectRanges[1].BaseShaderRegister = 0;
+    injectRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[2].NumDescriptors = 1;
+    injectRanges[2].BaseShaderRegister = 1;
+    injectRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[3].NumDescriptors = 1;
+    injectRanges[3].BaseShaderRegister = 2;
 
-    D3D12_ROOT_PARAMETER injectParams[3]{};
+    D3D12_ROOT_PARAMETER injectParams[5]{};
     injectParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     injectParams[0].Descriptor.ShaderRegister = 0;
     injectParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (UINT i = 0; i < 2; ++i)
+    for (UINT i = 0; i < 4; ++i)
     {
         injectParams[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         injectParams[i + 1].DescriptorTable.NumDescriptorRanges = 1;
@@ -377,7 +378,7 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     }
 
     D3D12_ROOT_SIGNATURE_DESC injectDesc{};
-    injectDesc.NumParameters = 3;
+    injectDesc.NumParameters = 5;
     injectDesc.pParameters = injectParams;
     injectDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -457,7 +458,9 @@ bool VolumetricFogRenderer::CreateConstantBuffer()
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = sizeof(FogConstants);
+    // One copy per in-flight frame. FogConstants is alignas(256), so sizeof() is a
+    // multiple of 256 and every slot start is already a legal CBV address.
+    desc.Width = sizeof(FogConstants) * kFramesInFlight;
     desc.Height = 1;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
@@ -511,6 +514,40 @@ bool VolumetricFogRenderer::CreateResolutionResources(const VolumetricFogSetting
     return true;
 }
 
+bool VolumetricFogRenderer::CreateNullDescriptors()
+{
+    if (mNullDescriptorsCreated)
+        return true;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    if (!AllocateDescriptor(mNullProbeSrvCpu, mNullProbeSrvGpu, mLastError)) return false;
+    if (!AllocateDescriptor(mNullShadowSrvCpu, mNullShadowSrvGpu, mLastError)) return false;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC probeDesc{};
+    probeDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    probeDesc.Format = DXGI_FORMAT_UNKNOWN;
+    probeDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    probeDesc.Buffer.FirstElement = 0;
+    probeDesc.Buffer.NumElements = 1;
+    // Must match ProbeSH in RadianceProbeCommon.hlsli: seven float4s.
+    probeDesc.Buffer.StructureByteStride = 7 * 4 * sizeof(float);
+    device->CreateShaderResourceView(nullptr, &probeDesc, mNullProbeSrvCpu);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC shadowDesc{};
+    shadowDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    shadowDesc.Format = kPointShadowSrvFormat;
+    shadowDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    shadowDesc.Texture2DArray.MipLevels = 1;
+    shadowDesc.Texture2DArray.ArraySize = 1;
+    device->CreateShaderResourceView(nullptr, &shadowDesc, mNullShadowSrvCpu);
+
+    mNullDescriptorsCreated = true;
+    return true;
+}
+
 bool VolumetricFogRenderer::CreateDescriptors()
 {
     ID3D12Device* device = DX12Context_GetDevice();
@@ -525,6 +562,9 @@ bool VolumetricFogRenderer::CreateDescriptors()
         if (!AllocateDescriptor(mIntegratedUavCpu, mIntegratedUavGpu, mLastError)) return false;
         mDescriptorsAllocated = true;
     }
+
+    if (!CreateNullDescriptors())
+        return false;
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -546,22 +586,7 @@ bool VolumetricFogRenderer::CreateDescriptors()
 
 void VolumetricFogRenderer::UploadConstants(
     const VolumetricFogSettings& settings,
-    const float viewProjInv[16],
-    const float currViewProj[16],
-    const float cameraPos[3],
-    float nearPlane,
-    float farPlane,
-    float sunDirX,
-    float sunDirY,
-    float sunDirZ,
-    float sunColorR,
-    float sunColorG,
-    float sunColorB,
-    float skyColorR,
-    float skyColorG,
-    float skyColorB,
-    const FogPointLight* pointLights,
-    uint32_t numPointLights)
+    const FrameInputs& inputs)
 {
     FogConstants constants{};
     const auto maxu = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a : b; };
@@ -576,14 +601,16 @@ void VolumetricFogRenderer::UploadConstants(
     constants.FroxelHeight = maxu(1u, dimensions.Height);
     constants.DepthSlices = dimensions.DepthSlices;
     constants.DebugView = static_cast<uint32_t>(maxi(0, settings.DebugView));
-    constants.NearPlane = maxf(0.001f, nearPlane);
-    constants.FarPlane = maxf(constants.NearPlane + 0.001f, farPlane);
+    constants.NearPlane = maxf(0.001f, inputs.NearPlane);
+    constants.FarPlane = maxf(constants.NearPlane + 0.001f, inputs.FarPlane);
     constants.StartDistance = maxf(constants.NearPlane, settings.StartDistance);
     constants.MaxDistance = maxf(constants.StartDistance + 0.001f, settings.MaxDistance);
     constants.Density = maxf(0.0f, settings.Density);
     constants.Anisotropy = std::clamp(settings.Anisotropy, -0.95f, 0.95f);
     constants.BaseHeight = settings.BaseHeight;
     constants.HeightFalloff = maxf(0.0f, settings.HeightFalloff);
+    constants.ScatteringAlbedo = std::clamp(settings.ScatteringAlbedo, 0.0f, 1.0f);
+    constants.GiIntensity = maxf(0.0f, settings.GiIntensity);
 
     constants.FogColor[0] = settings.ColorR;
     constants.FogColor[1] = settings.ColorG;
@@ -594,31 +621,70 @@ void VolumetricFogRenderer::UploadConstants(
     constants.EmissiveColor[2] = settings.EmissiveColorB;
     constants.EmissiveIntensity = maxf(0.0f, settings.EmissiveIntensity);
 
-    constants.CameraPos[0] = cameraPos[0];
-    constants.CameraPos[1] = cameraPos[1];
-    constants.CameraPos[2] = cameraPos[2];
-
-    constants.SunDir[0] = sunDirX;
-    constants.SunDir[1] = sunDirY;
-    constants.SunDir[2] = sunDirZ;
-
-    constants.SunColor[0] = sunColorR;
-    constants.SunColor[1] = sunColorG;
-    constants.SunColor[2] = sunColorB;
-
-    constants.SkyColor[0] = skyColorR;
-    constants.SkyColor[1] = skyColorG;
-    constants.SkyColor[2] = skyColorB;
-
-    constants.NumPointLights = (std::min)(numPointLights, kMaxPointLights);
-    for (uint32_t i = 0; i < constants.NumPointLights; ++i)
+    if (inputs.CameraPos != nullptr)
     {
-        constants.PointLights[i] = pointLights[i];
+        constants.CameraPos[0] = inputs.CameraPos[0];
+        constants.CameraPos[1] = inputs.CameraPos[1];
+        constants.CameraPos[2] = inputs.CameraPos[2];
     }
 
-    std::memcpy(constants.ViewProjInv, viewProjInv, sizeof(constants.ViewProjInv));
-    std::memcpy(constants.CurrViewProj, currViewProj, sizeof(constants.CurrViewProj));
-    std::memcpy(mMappedConstants, &constants, sizeof(constants));
+    constants.SunDir[0] = inputs.SunDir[0];
+    constants.SunDir[1] = inputs.SunDir[1];
+    constants.SunDir[2] = inputs.SunDir[2];
+
+    constants.SunColor[0] = inputs.SunColor[0];
+    constants.SunColor[1] = inputs.SunColor[1];
+    constants.SunColor[2] = inputs.SunColor[2];
+
+    constants.SkyColor[0] = inputs.SkyColor[0];
+    constants.SkyColor[1] = inputs.SkyColor[1];
+    constants.SkyColor[2] = inputs.SkyColor[2];
+
+    constants.NumPointLights = (inputs.PointLights != nullptr)
+        ? (std::min)(inputs.NumPointLights, kMaxPointLights)
+        : 0u;
+    for (uint32_t i = 0; i < constants.NumPointLights; ++i)
+    {
+        constants.PointLights[i] = inputs.PointLights[i];
+    }
+
+    // Zeroed grid dimensions are what the shader tests before it touches the
+    // probe buffer, so a frame without a grid never reads the stand-in
+    // descriptor bound in its place.
+    if (inputs.ProbeSrv.ptr != 0 && constants.GiIntensity > 0.0f)
+    {
+        constants.ProbeGridX = inputs.ProbeGridX;
+        constants.ProbeGridY = inputs.ProbeGridY;
+        constants.ProbeGridZ = inputs.ProbeGridZ;
+        constants.ProbeSpacing = inputs.ProbeSpacing;
+        constants.ProbeOrigin[0] = inputs.ProbeOrigin[0];
+        constants.ProbeOrigin[1] = inputs.ProbeOrigin[1];
+        constants.ProbeOrigin[2] = inputs.ProbeOrigin[2];
+    }
+
+    if (inputs.PointShadowSrv.ptr != 0
+        && inputs.PointShadowFaceViewProj != nullptr
+        && inputs.PointShadowLightCount > 0)
+    {
+        constants.PointShadowLightCount =
+            (std::min)(inputs.PointShadowLightCount, DeferredLightingPass::kMaxShadowCastingPointLights);
+        constants.PointShadowMapSize = inputs.PointShadowMapSize;
+        constants.PointShadowBias = inputs.PointShadowBias;
+
+        const size_t faceCount = static_cast<size_t>(constants.PointShadowLightCount)
+            * static_cast<size_t>(DeferredLightingPass::kPointShadowFacesPerLight);
+        std::memcpy(
+            constants.PointShadowFaceViewProj,
+            inputs.PointShadowFaceViewProj,
+            faceCount * sizeof(DirectX::XMFLOAT4X4));
+    }
+
+    if (inputs.ViewProjInv != nullptr)
+        std::memcpy(constants.ViewProjInv, inputs.ViewProjInv, sizeof(constants.ViewProjInv));
+    if (inputs.CurrViewProj != nullptr)
+        std::memcpy(constants.CurrViewProj, inputs.CurrViewProj, sizeof(constants.CurrViewProj));
+
+    std::memcpy(mMappedConstants + mFrameSlot, &constants, sizeof(constants));
 
     mFroxelWidth = constants.FroxelWidth;
     mFroxelHeight = constants.FroxelHeight;

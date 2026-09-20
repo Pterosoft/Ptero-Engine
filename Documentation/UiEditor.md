@@ -24,7 +24,9 @@ Documents and their `.rcss` are read from disk on load, so:
 2. **Reload** in the panel.
 3. Click.
 
-The document list is rescanned every frame the panel is open, so a file written a second ago is already in it.
+The document list recursively scans `Data/UI` and all its subfolders every frame the panel is open, so a newly written document appears without restarting. Entries show their full path relative to `Data/UI`, such as `Farkle/farkle.rml` or `Menus/Settings/audio.rml`; identical filenames in different folders remain separate. `.rml` extensions are matched without regard to case, and inaccessible folders are skipped.
+
+Select an entry and press **Load**. Your selection stays in place until you load it, even while another document is open or the list refreshes. **Reload** uses the same relative path. Game code and the node graph's UI load action accept these same paths. Linked stylesheets and textures resolve relative to the document or stylesheet that references them.
 
 ## Inspector
 

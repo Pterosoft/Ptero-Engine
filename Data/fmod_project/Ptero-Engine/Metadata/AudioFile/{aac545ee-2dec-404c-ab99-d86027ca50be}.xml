@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<objects serializationModel="Studio.02.03.00">
+	<object class="AudioFile" id="{aac545ee-2dec-404c-ab99-d86027ca50be}">
+		<property name="assetPath">
+			<value>Emilio_Villalba.-_Zanfona_s._XV_(Hurdy_gurdy)._Je_vivroie_liement.webm.1080p.vp9.wav</value>
+		</property>
+		<property name="isStreaming">
+			<value>true</value>
+		</property>
+		<property name="frequencyInKHz">
+			<value>48</value>
+		</property>
+		<property name="channelCount">
+			<value>2</value>
+		</property>
+		<property name="length">
+			<value>98.377854166666665</value>
+		</property>
+		<relationship name="masterAssetFolder">
+			<destination>{c2a4bb11-9683-48ec-8078-9afda058d972}</destination>
+		</relationship>
+	</object>
+</objects>

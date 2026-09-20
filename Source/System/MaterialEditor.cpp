@@ -84,9 +84,11 @@ namespace
             { "emissiveColor", materialDefinition.EmissiveColor },
             { "metallicFactor", materialDefinition.MetallicFactor },
             { "roughnessFactor", materialDefinition.RoughnessFactor },
+            { "specularFactor", materialDefinition.SpecularFactor },
             { "normalScale", materialDefinition.NormalScale },
             { "ambientOcclusionStrength", materialDefinition.AmbientOcclusionStrength },
             { "heightScale", materialDefinition.HeightScale },
+            { "heightReference", materialDefinition.HeightReference },
             { "opacity", materialDefinition.Opacity },
             { "alphaCutoff", materialDefinition.AlphaCutoff },
             { "glassIor", materialDefinition.GlassIor },
@@ -218,9 +220,11 @@ namespace
 
             outMaterialDefinition.MetallicFactor = sourceJson.value("metallicFactor", outMaterialDefinition.MetallicFactor);
             outMaterialDefinition.RoughnessFactor = sourceJson.value("roughnessFactor", outMaterialDefinition.RoughnessFactor);
+            outMaterialDefinition.SpecularFactor = sourceJson.value("specularFactor", outMaterialDefinition.SpecularFactor);
             outMaterialDefinition.NormalScale = sourceJson.value("normalScale", outMaterialDefinition.NormalScale);
             outMaterialDefinition.AmbientOcclusionStrength = sourceJson.value("ambientOcclusionStrength", outMaterialDefinition.AmbientOcclusionStrength);
             outMaterialDefinition.HeightScale = sourceJson.value("heightScale", outMaterialDefinition.HeightScale);
+            outMaterialDefinition.HeightReference = sourceJson.value("heightReference", outMaterialDefinition.HeightReference);
             outMaterialDefinition.Opacity = sourceJson.value("opacity", outMaterialDefinition.Opacity);
             outMaterialDefinition.AlphaCutoff = sourceJson.value("alphaCutoff", outMaterialDefinition.AlphaCutoff);
             outMaterialDefinition.GlassIor = sourceJson.value("glassIor", outMaterialDefinition.GlassIor);

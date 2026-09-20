@@ -451,8 +451,18 @@ namespace
         return json{
             { "Enabled", settings.Enabled },
             { "Exposure", settings.Exposure },
+            { "Ev100", settings.Ev100 },
             { "Ev100Min", settings.Ev100Min },
             { "Ev100Max", settings.Ev100Max },
+            { "ExposureMode", static_cast<int>(settings.ExposureMode) },
+            { "AutoExposureLowPercent", settings.AutoExposureLowPercent },
+            { "AutoExposureHighPercent", settings.AutoExposureHighPercent },
+            { "AutoExposureSpeedUp", settings.AutoExposureSpeedUp },
+            { "AutoExposureSpeedDown", settings.AutoExposureSpeedDown },
+            { "AutoExposureHistogramLogMin", settings.AutoExposureHistogramLogMin },
+            { "AutoExposureHistogramLogMax", settings.AutoExposureHistogramLogMax },
+            { "AutoExposureGreyPoint", settings.AutoExposureGreyPoint },
+            { "AutoExposureMeteringMask", settings.AutoExposureMeteringMask },
             { "ToeStrength", settings.ToeStrength },
             { "ShoulderStrength", settings.ShoulderStrength },
             { "Global", SerializeAgxGradeRegion(settings.Global) },
@@ -472,6 +482,8 @@ namespace
             { "MaxDistance", settings.MaxDistance },
             { "Density", settings.Density },
             { "Anisotropy", settings.Anisotropy },
+            { "ScatteringAlbedo", settings.ScatteringAlbedo },
+            { "GiIntensity", settings.GiIntensity },
             { "BaseHeight", settings.BaseHeight },
             { "HeightFalloff", settings.HeightFalloff },
             { "ColorR", settings.ColorR },
@@ -597,8 +609,29 @@ namespace
     {
         settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
         settings.Exposure = settingsJson.value("Exposure", settings.Exposure);
-        settings.Ev100Min = settingsJson.value("Ev100Min", settings.Ev100Min);
-        settings.Ev100Max = settingsJson.value("Ev100Max", settings.Ev100Max);
+
+        // Levels saved before AgX got a real exposure control stored Ev100Min /
+        // Ev100Max as the log-encoding window, where a default of [-1, 16] was
+        // normal. Read as the exposure clamp they are now, that pair would drag
+        // the exposure to -1 EV and open the level several stops too dark, so a
+        // scene with no "Ev100" key keeps the defaults for all three.
+        if (settingsJson.contains("Ev100"))
+        {
+            settings.Ev100 = settingsJson.value("Ev100", settings.Ev100);
+            settings.Ev100Min = settingsJson.value("Ev100Min", settings.Ev100Min);
+            settings.Ev100Max = settingsJson.value("Ev100Max", settings.Ev100Max);
+        }
+
+        settings.ExposureMode = static_cast<AgxExposureMode>(
+            settingsJson.value("ExposureMode", static_cast<int>(settings.ExposureMode)));
+        settings.AutoExposureLowPercent = settingsJson.value("AutoExposureLowPercent", settings.AutoExposureLowPercent);
+        settings.AutoExposureHighPercent = settingsJson.value("AutoExposureHighPercent", settings.AutoExposureHighPercent);
+        settings.AutoExposureSpeedUp = settingsJson.value("AutoExposureSpeedUp", settings.AutoExposureSpeedUp);
+        settings.AutoExposureSpeedDown = settingsJson.value("AutoExposureSpeedDown", settings.AutoExposureSpeedDown);
+        settings.AutoExposureHistogramLogMin = settingsJson.value("AutoExposureHistogramLogMin", settings.AutoExposureHistogramLogMin);
+        settings.AutoExposureHistogramLogMax = settingsJson.value("AutoExposureHistogramLogMax", settings.AutoExposureHistogramLogMax);
+        settings.AutoExposureGreyPoint = settingsJson.value("AutoExposureGreyPoint", settings.AutoExposureGreyPoint);
+        settings.AutoExposureMeteringMask = settingsJson.value("AutoExposureMeteringMask", settings.AutoExposureMeteringMask);
         settings.ToeStrength = settingsJson.value("ToeStrength", settings.ToeStrength);
         settings.ShoulderStrength = settingsJson.value("ShoulderStrength", settings.ShoulderStrength);
         if (settingsJson.contains("Global")) DeserializeAgxGradeRegion(settingsJson["Global"], settings.Global);
@@ -616,6 +649,8 @@ namespace
         settings.MaxDistance = settingsJson.value("MaxDistance", settings.MaxDistance);
         settings.Density = settingsJson.value("Density", settings.Density);
         settings.Anisotropy = settingsJson.value("Anisotropy", settings.Anisotropy);
+        settings.ScatteringAlbedo = settingsJson.value("ScatteringAlbedo", settings.ScatteringAlbedo);
+        settings.GiIntensity = settingsJson.value("GiIntensity", settings.GiIntensity);
         settings.BaseHeight = settingsJson.value("BaseHeight", settings.BaseHeight);
         settings.HeightFalloff = settingsJson.value("HeightFalloff", settings.HeightFalloff);
         settings.ColorR = settingsJson.value("ColorR", settings.ColorR);

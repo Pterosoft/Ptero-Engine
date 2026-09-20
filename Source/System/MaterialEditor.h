@@ -53,6 +53,12 @@ struct MaterialDefinition
     std::array<float, 3> EmissiveColor{ 0.0f, 0.0f, 0.0f };
     float MetallicFactor = 1.0f;
     float RoughnessFactor = 1.0f;
+    // Reflectivity. Scales the surface's normal-incidence reflectance: 0.5 is the neutral
+    // value, giving the textbook 0.04 dielectric F0 and leaving a metal at its base colour.
+    // It is the knob that decides how much specular a surface has without a specular map,
+    // and it applies to metals too - a fully metallic surface has no diffuse term, so with
+    // nothing in the scene for it to mirror it otherwise resolves to black.
+    float SpecularFactor = 0.5f;
     float NormalScale = 1.0f;
     float AmbientOcclusionStrength = 1.0f;
     float HeightScale = 0.05f;
@@ -77,6 +83,11 @@ struct MaterialDefinition
     // Metres. Past this the parallax offset fades out so distant surfaces stop paying for
     // a ray march they cannot resolve. 0 keeps it at full strength everywhere.
     float ParallaxFadeDistance = 30.0f;
+    // Which height value sits at the polygon surface. 1 is right for a 0-1 height map.
+    // Substance-style maps are signed around 0.5 and top out well below 1; set this to
+    // the map's brightest value so the relief starts at the surface instead of half a
+    // volume below it, which otherwise turns the offset into a uniform slab shift.
+    float HeightReference = 1.0f;
 
     bool IsDoubleSided = false;
     bool UseAlphaCutout = false;

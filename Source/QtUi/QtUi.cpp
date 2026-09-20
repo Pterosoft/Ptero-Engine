@@ -42,6 +42,11 @@ struct Node
     bool fired = false, edited = false, closed = false, expanded = false, populated = false;
     // Frames of content-driven sizing still owed to a freshly opened auto-resizing window.
     int autoSize = 0;
+    // A framed tool window, which measures its content again every time it is opened.
+    bool autoFit = false;
+    // Smallest size content sizing may settle on, taken from whatever the caller asked for
+    // with SetNextWindowSize. A panel that opens roomy on purpose keeps its room.
+    QSize sizeFloor;
     QVariant value;
     // Last known cell, so reconciling a widget costs no layout search.
     QPointer<QGridLayout> cell;
@@ -173,6 +178,24 @@ EventCounter *events = nullptr;
 std::unique_ptr<QApplication> app;
 QMainWindow *shell = nullptr;
 Surface *surface = nullptr;
+bool standaloneGame = false;
+bool gameFullscreen = false;
+WINDOWPLACEMENT gamePlacement{sizeof(WINDOWPLACEMENT)};
+LONG_PTR gameWindowStyle = 0;
+bool gameCloseRequested = false;
+bool gameFullscreenRequested = false;
+bool playWindowActive = false;
+// A play session running inside the editor viewport. It owns input and the viewport
+// image, but not the window: the editor keeps its menus, panels and swap chain, which
+// is exactly what separates this mode from the Play window.
+bool viewportGame = false;
+class PlayWindow : public QWidget {
+protected:
+    void closeEvent(QCloseEvent* event) override { gameCloseRequested=true; event->ignore(); }
+};
+PlayWindow* playWindow = nullptr;
+Surface* playSurface = nullptr;
+Surface* ActiveSurface() { return playWindowActive ? playSurface : surface; }
 Overlay *overlay = nullptr;
 HWND host = nullptr;
 bool saveLayout = true;
@@ -474,6 +497,44 @@ QWidget *bodyFor(Node &n)
 {
     return n.widget->findChild<QWidget *>("uiBody", Qt::FindChildrenRecursively);
 }
+// Windows only puts a taskbar button on a window that nothing owns. Every panel here is
+// owned by the editor shell so that it stays above it, which would leave a minimized one
+// with nowhere to click to bring it back - the reason minimize used to be left off the
+// frame altogether. WS_EX_APPWINDOW asks for the button anyway, so minimize behaves the
+// way it does everywhere else. The shell reads this when the window is first shown, so it
+// has to be set while the window is still hidden.
+void addTaskbarButton(QWidget *w)
+{
+    const HWND handle = reinterpret_cast<HWND>(w->winId());
+    if (!handle)
+        return;
+    const LONG_PTR style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+    if (!(style & WS_EX_APPWINDOW))
+        SetWindowLongPtrW(handle, GWL_EXSTYLE, style | WS_EX_APPWINDOW);
+}
+// A dock torn off the shell is a Qt::Tool window, and Windows draws nothing but a close
+// box on a tool window's caption however the style bits are set - so a floated panel could
+// be dragged around but never maximized. Make it an ordinary window instead.
+//
+// Re-asserted rather than connected to topLevelChanged once: Qt rebuilds these flags from
+// scratch whenever it changes the dock's window state, which includes every drag of an
+// already-floating panel, not only the moment it leaves the shell. Never while a mouse
+// button is down - setWindowFlags destroys and recreates the native window, which would
+// drop a drag in progress.
+void keepDockManageable(QWidget *w)
+{
+    auto *dock = qobject_cast<QDockWidget *>(w);
+    if (!dock || !dock->isFloating() || QApplication::mouseButtons() != Qt::NoButton)
+        return;
+    const Qt::WindowFlags flags = dock->windowFlags();
+    if ((flags & Qt::WindowType_Mask) == Qt::Window && (flags & Qt::WindowMaximizeButtonHint))
+        return;
+    dock->setWindowFlags(Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                         Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint |
+                         Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint);
+    addTaskbarButton(dock);
+    dock->show();
+}
 // Size an auto-resizing window to its content, clamped to the screen.
 //
 // The content sits inside a QScrollArea, whose size hint deliberately does not track the
@@ -488,9 +549,9 @@ void autoSizeWindow(Node &n)
     QWidget *w = n.widget;
     if (!w || !w->isVisible())
         return;
-    // A window the user has maximized has been given its size; keep counting
-    // the frames down but do not fight it.
-    if (w->isMaximized() || w->isFullScreen())
+    // A window the user has maximized has been given its size, and one that has been
+    // minimized is not being looked at; keep counting the frames down but do not fight it.
+    if (w->isMaximized() || w->isFullScreen() || w->isMinimized())
         return;
     QWidget *body = bodyFor(n);
     if (!body)
@@ -498,7 +559,9 @@ void autoSizeWindow(Node &n)
     if (QLayout *bodyLayout = body->layout())
         bodyLayout->activate();
 
-    const QSize content = body->sizeHint();
+    // What the caller asked for is a floor, not the answer: content larger than that
+    // still grows the window, content smaller than it leaves the window as asked.
+    const QSize content = body->sizeHint().expandedTo(n.sizeFloor);
     if (content.isEmpty())
         return;
 
@@ -508,15 +571,21 @@ void autoSizeWindow(Node &n)
     const int maxWidth = int(available.width() * 0.9);
     const int maxHeight = int(available.height() * 0.9) - chrome;
 
+    const int barWidth = QApplication::style()->pixelMetric(QStyle::PM_ScrollBarExtent);
     int width = content.width();
     int height = content.height();
     if (height > maxHeight)
     {
         // A vertical scroll bar is about to appear; widen so it does not eat the content.
         height = maxHeight;
-        width += QApplication::style()->pixelMetric(QStyle::PM_ScrollBarExtent);
+        width += barWidth;
     }
-    width = std::min(width, maxWidth);
+    if (width > maxWidth)
+    {
+        // Same the other way round: a horizontal bar takes a strip off the bottom.
+        width = maxWidth;
+        height = std::min(height + barWidth, maxHeight);
+    }
 
     if (w->size() != QSize(width, height))
         w->resize(width, height);
@@ -567,7 +636,7 @@ namespace QtUi
 bool Initialize(HWND owner, bool persistLayout)
 {
     host = owner;
-    saveLayout = persistLayout;
+    saveLayout = persistLayout && !standaloneGame;
     frame = 0;
     if (!qApp)
     {
@@ -604,25 +673,20 @@ bool Initialize(HWND owner, bool persistLayout)
     p.setColor(QPalette::Disabled, QPalette::Text, QColor("#797a7d"));
     p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#797a7d"));
     QApplication::setPalette(p);
-    QDir dir(QCoreApplication::applicationDirPath());
-    do
-    {
-        const QString path = dir.filePath("Data/Fonts/PlayfairDisplay-Regular.ttf");
-        if (QFile::exists(path))
-        {
-            int id = QFontDatabase::addApplicationFont(path);
-            const auto families = QFontDatabase::applicationFontFamilies(id);
-            if (!families.empty())
-            {
-                QFont font(families.front());
-                font.setPixelSize(11);
-                QApplication::setFont(font);
-                for (const char *type : {"QMenuBar", "QMenu", "QDockWidget", "QToolTip"})
-                    QApplication::setFont(font, type);
-            }
-            break;
-        }
-    } while (dir.cdUp());
+    // The editor writes in the system UI font - the one Windows puts in a title bar - at
+    // the size the system asks for. It used to load Playfair Display out of Data/Fonts,
+    // but a display serif at 11 pixels is the wrong tool for panels that are mostly dense
+    // labels and numbers, and it never matched the window chrome around it. Playfair is
+    // still the HUD's font: RmlUiRenderer loads it for the documents under Data/UI, which
+    // is game content and nothing to do with the editor's own chrome.
+    //
+    // The class overrides are set to the same font deliberately. Qt takes a menu's font
+    // from the system's menu metrics rather than from the general UI font, and the two
+    // are not guaranteed to agree.
+    const QFont uiFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    QApplication::setFont(uiFont);
+    for (const char *type : {"QMenuBar", "QMenu", "QDockWidget", "QToolTip"})
+        QApplication::setFont(uiFont, type);
     qApp->setStyleSheet(
         "QMainWindow::separator { background:#333438; width:5px; height:5px; }"
         "QDockWidget::title { background:#222326; padding:6px; border-bottom:1px solid #393a3e; }"
@@ -654,6 +718,7 @@ bool Initialize(HWND owner, bool persistLayout)
     bar->setFont(QApplication::font());
     bar->setObjectName("viewportMenu");
     layout->addWidget(bar);
+    if (standaloneGame) bar->hide();
     surface = new Surface(center);
     surface->banksWheelForCamera = true;
     surface->setObjectName("SceneViewport");
@@ -675,6 +740,8 @@ bool Initialize(HWND owner, bool persistLayout)
 }
 void Shutdown()
 {
+    delete playWindow; playWindow=nullptr; playSurface=nullptr; playWindowActive=false;
+    viewportGame=false;
     if (shell && saveLayout)
     {
         QSettings settings;
@@ -712,7 +779,7 @@ void *ShellWidget()
 }
 float FramebufferScale()
 {
-    return surface ? static_cast<float>(surface->devicePixelRatioF()) : 1.0f;
+    return ActiveSurface() ? static_cast<float>(ActiveSurface()->devicePixelRatioF()) : 1.0f;
 }
 float EventMilliseconds()
 {
@@ -770,8 +837,96 @@ float FrameMilliseconds()
 }
 HWND ViewportHandle()
 {
-    return surface ? reinterpret_cast<HWND>(surface->winId()) : nullptr;
+    return ActiveSurface() ? reinterpret_cast<HWND>(ActiveSurface()->winId()) : nullptr;
 }
+void OpenGameWindow(bool separateWindow, const char *title)
+{
+    if (standaloneGame) { if (surface) surface->setFocus(); return; }
+    gameCloseRequested=false; gameFullscreenRequested=false;
+    if (!separateWindow) {
+        // Nothing to open: the editor's own surface keeps presenting and its panels stay
+        // enabled. Only input ownership moves, so focus the viewport - otherwise the
+        // first key the player presses would go to whichever panel was last clicked.
+        viewportGame=true;
+        if (surface) { surface->setFocus(); }
+        return;
+    }
+    if (playWindowActive) return;
+    if (!playWindow) {
+        playWindow=new PlayWindow;
+        auto* layout=new QVBoxLayout(playWindow);
+        layout->setContentsMargins(0,0,0,0);
+        playSurface=new Surface(playWindow);
+        playSurface->setAttribute(Qt::WA_NativeWindow);
+        playSurface->setAttribute(Qt::WA_PaintOnScreen);
+        playSurface->setAttribute(Qt::WA_NoSystemBackground);
+        playSurface->setFocusPolicy(Qt::StrongFocus);
+        layout->addWidget(playSurface);
+        // Both native surfaces stay alive. DXGI switches at a frame boundary.
+        playSurface->winId();
+    }
+    playWindowActive=true;
+    // Retitled on every open rather than at construction: the name comes from the game
+    // module, and a rebuilt Game.dll may well report a different one.
+    playWindow->setWindowTitle(title && *title ? QString::fromUtf8(title) : QStringLiteral("Play"));
+    // Freeze retained editor controls while the renderer belongs to the game.
+    shell->setEnabled(false);
+    playWindow->showMaximized();
+    playWindow->activateWindow(); playSurface->setFocus();
+}
+void CloseGameWindow()
+{
+    if (standaloneGame) { if (host) PostMessageW(host, WM_CLOSE, 0, 0); return; }
+    viewportGame=false; gameFullscreenRequested=false;
+    if (!playWindowActive) return;
+    playWindowActive=false; gameCloseRequested=false;
+    // Keep the HWND alive while DXGI retains its swap chain.
+    playWindow->hide(); shell->setEnabled(true);
+    SetForegroundWindow(host); surface->setFocus();
+}
+void ToggleGameFullscreen()
+{
+    // The editor owns the in-viewport fullscreen mode, so record the wish and let it act.
+    if (viewportGame) { gameFullscreenRequested=true; return; }
+    if (playWindowActive) {
+        if (playWindow->isFullScreen()) playWindow->showMaximized();
+        else playWindow->showFullScreen();
+        return;
+    }
+    if (!standaloneGame || !host) return;
+    if (!gameFullscreen) {
+        gameWindowStyle = GetWindowLongPtrW(host, GWL_STYLE);
+        GetWindowPlacement(host, &gamePlacement);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (!GetMonitorInfoW(MonitorFromWindow(host, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+        SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle & ~WS_OVERLAPPEDWINDOW);
+        SetWindowPos(host, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+            monitor.rcMonitor.right-monitor.rcMonitor.left, monitor.rcMonitor.bottom-monitor.rcMonitor.top,
+            SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    } else {
+        SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle);
+        SetWindowPlacement(host, &gamePlacement);
+        SetWindowPos(host, nullptr, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    }
+    gameFullscreen = !gameFullscreen;
+}
+void SetStandaloneGame(bool enabled) { standaloneGame = enabled; }
+bool IsStandaloneGame() { return standaloneGame; }
+bool IsGameWindowOpen() { return standaloneGame || playWindowActive; }
+bool IsGamePlaying() { return standaloneGame || playWindowActive || viewportGame; }
+bool GameWindowHasFocus()
+{
+    // Playing inside the viewport, the editor window *is* the game window. Text fields
+    // still win: typing a name into the Properties panel must not also move the player.
+    if (viewportGame)
+        return host && GetAncestor(GetForegroundWindow(), GA_ROOT)==GetAncestor(host, GA_ROOT) &&
+               !io.WantTextInput;
+    HWND gameHost=playWindowActive ? reinterpret_cast<HWND>(playWindow->winId()) : host;
+    return IsGameWindowOpen() && gameHost && GetAncestor(GetForegroundWindow(), GA_ROOT)==gameHost;
+}
+bool ConsumeGameCloseRequest() { bool result=gameCloseRequested; gameCloseRequested=false; return result; }
+bool ConsumeGameFullscreenRequest() { bool result=gameFullscreenRequested; gameFullscreenRequested=false; return result; }
 BOOL fileDialog(OPENFILENAMEA *request, bool save)
 {
     QStringList filters;
@@ -857,11 +1012,12 @@ bool CameraInputAllowed()
     const HWND hitWindow = WindowFromPoint(p);
     const HWND viewportWindow = ViewportHandle();
     return (hitWindow == viewportWindow || IsChild(viewportWindow, hitWindow)) &&
-           GetAncestor(GetForegroundWindow(), GA_ROOT) == GetAncestor(host, GA_ROOT) && PtInRect(&r, p) &&
+           (GameWindowHasFocus() || GetAncestor(GetForegroundWindow(), GA_ROOT) == GetAncestor(host, GA_ROOT)) && PtInRect(&r, p) &&
            !io.WantTextInput;
 }
 bool KeyboardCameraInputAllowed()
 {
+    if (IsGamePlaying()) return GameWindowHasFocus();
     // The renderer reads WASD with GetAsyncKeyState, which reports the physical key
     // regardless of who owns the keyboard focus - so without this the editor camera flew
     // around while the user was typing in another application entirely. Unlike
@@ -908,7 +1064,7 @@ void NewFrame()
     io.Framerate = io.DeltaTime > 0 ? 1 / io.DeltaTime : 0;
     const QPoint mouse = QCursor::pos();
     io.MousePos = {float(mouse.x()), float(mouse.y())};
-    const bool active = GetAncestor(GetForegroundWindow(), GA_ROOT) == GetAncestor(host, GA_ROOT);
+    const bool active = GameWindowHasFocus() || (!playWindowActive && GetAncestor(GetForegroundWindow(), GA_ROOT) == GetAncestor(host, GA_ROOT));
     for (int k = 0; k < 256; ++k)
     {
         bool down = active && (GetAsyncKeyState(k) & 0x8000);
@@ -947,7 +1103,7 @@ void EndFrame()
         for (auto it = nodes.lower_bound(prefix); it != nodes.end() && it->first.startsWith(prefix); ++it)
             it->second->seen = frame;
     for (auto &[id, n] : nodes)
-        if (n->seen != frame)
+        if (!playWindowActive && n->seen != frame)
         {
             if (n->widget)
                 n->widget->hide();
@@ -979,7 +1135,7 @@ void EndFrame()
     // rasterization plus a DWM composite, so leave it hidden unless the frame actually
     // produced draw commands, and only move it when the viewport really moved.
     overlay->painted.swap(overlay->commands);
-    if (!overlay->painted.empty() && IsWindowVisible(host) && !IsIconic(host) && surface->isVisible())
+    if (!IsGameWindowOpen() && !overlay->painted.empty() && IsWindowVisible(host) && !IsIconic(host) && surface->isVisible())
     {
         const QRect bounds(surface->mapToGlobal(QPoint(0, 0)), surface->size());
         if (overlay->geometry() != bounds)
@@ -998,7 +1154,7 @@ void EndFrame()
     // automatically when the corresponding leaf widget/action is destroyed.
     // Nothing becomes collectable until it has gone unseen for 300 frames, so sweeping
     // every frame just pays for a dynamic_cast per node per frame for nothing.
-    for (auto it = nodes.begin(); frame % 60 == 0 && it != nodes.end();)
+    for (auto it = nodes.begin(); !playWindowActive && frame % 60 == 0 && it != nodes.end();)
     {
         auto &n = *it->second;
         const bool leaf = n.widget && (!n.widget->layout() || n.widget->property("uiControl").toBool()) &&
@@ -1099,39 +1255,52 @@ bool Begin(const char *name, bool *open, int flags)
         }
         else
         {
-            // QDialog defaults to a close-only caption, which left every tool
-            // window - the UI Editor preview above all - stuck at whatever size
-            // it opened at. Ask for the full caption instead, so the frame has a
-            // maximize box and double-clicking the title bar works.
+            // Deliberately not a Qt::Tool window. Asking for the maximize hint on one
+            // achieves nothing: a tool window gets WS_EX_TOOLWINDOW, and Windows draws
+            // only a close box on that caption whatever style bits are set - which is why
+            // every panel here was stuck at the size it opened at, maximize hint or no.
+            // An ordinary window frame carries the full caption, so the buttons appear and
+            // double-clicking the title bar works.
             //
-            // No minimize: a Qt::Tool window has no taskbar button, so minimizing
-            // one would put it somewhere the user cannot get it back from.
+            // Minimize comes with it. It was left off before because a tool window has no
+            // taskbar button, so a minimized panel was somewhere the user could not get it
+            // back from; addTaskbarButton() below is what removes that objection.
             auto *dialog = new QDialog(shell,
-                Qt::Tool | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
+                Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint |
                 Qt::WindowMaximizeButtonHint | Qt::WindowCloseButtonHint);
             dialog->setWindowTitle(title);
             dialog->setObjectName(name);
-            const bool autoResize = (flags & QtUiWindowFlags_AlwaysAutoResize) != 0;
             body = makeBody(dialog, (flags & QtUiWindowFlags_NoDecoration) == 0);
             n.widget = dialog;
-            // Undecorated HUD overlays carry no size of their own, so the roomy dialog
-            // default would blanket the viewport. Hug the content instead, the way the
-            // immediate-mode caller expects; only sized or decorated windows keep it.
-            if ((flags & QtUiWindowFlags_NoDecoration) && nextSize.x <= 0)
+            if (flags & QtUiWindowFlags_NoDecoration)
             {
-                // Undecorated overlays are not scroll-wrapped, so the layout can size them.
-                dialog->layout()->setSizeConstraint(QLayout::SetFixedSize);
-            }
-            else if (autoResize)
-            {
-                // Sized from its content in End(), once that content actually exists.
-                // Deliberately not SetFixedSize: that also makes the window unresizable,
-                // which leaves the user stuck if the guess is wrong.
-                n.autoSize = 6;
+                // Undecorated HUD overlays carry no size of their own, so a roomy default
+                // would blanket the viewport. Hug the content instead, the way the
+                // immediate-mode caller expects - these are not windows the user resizes,
+                // so the layout can own the size outright. One that asked for a size is
+                // given it by dimensions() below and left alone.
+                if (nextSize.x <= 0)
+                    dialog->layout()->setSizeConstraint(QLayout::SetFixedSize);
             }
             else
             {
-                dialog->resize(720, 640);
+                // Every framed window opens at the size of what it holds, not at a guess.
+                // The old fallback was a flat 720x640, which left the small panels mostly
+                // empty and clipped the wide ones behind a scroll bar; AlwaysAutoResize was
+                // the exception when it should have been the rule. A size the caller asked
+                // for survives as the floor - see Node::sizeFloor.
+                //
+                // Sized from its content in End(), once that content actually exists.
+                // Deliberately not SetFixedSize: that also makes the window unresizable,
+                // which leaves the user stuck if the measurement is wrong.
+                if (nextSize.x > 0)
+                    n.sizeFloor.setWidth(int(nextSize.x));
+                if (nextSize.y > 0)
+                    n.sizeFloor.setHeight(int(nextSize.y));
+                n.autoFit = true;
+                n.autoSize = 6;
+                addTaskbarButton(dialog);
             }
             QObject::connect(dialog, &QDialog::finished, dialog, [&n] { n.closed = true; });
             if (flags & QtUiWindowFlags_NoDecoration)
@@ -1150,6 +1319,17 @@ bool Begin(const char *name, bool *open, int flags)
     }
     const bool visible = !open || *open;
     dimensions(n.widget, fresh);
+    keepDockManageable(n.widget);
+    // A window coming back on screen is measured again: what it holds now is not
+    // necessarily what it held when the user last closed it. Reopening also undoes a
+    // minimize - the menu is the one route back to a panel that was minimized and then
+    // switched off, and it would otherwise tick the item without showing anything.
+    if (visible && n.autoFit && !fresh && !n.widget->isVisible())
+    {
+        if (n.widget->isMinimized())
+            n.widget->setWindowState(n.widget->windowState() & ~Qt::WindowMinimized);
+        n.autoSize = 6;
+    }
     n.widget->setVisible(visible);
     push(bodyFor(n), id, &n);
     return visible;
@@ -2265,14 +2445,14 @@ double GetTime()
 UiVec2 GetContentRegionAvail()
 {
     const bool scene = scopes.back().key == "window/Viewport";
-    QWidget *w = scene ? surface : scopes.back().body;
+    QWidget *w = scene ? ActiveSurface() : scopes.back().body;
     const int margin = scene ? 0 : 16;
     return w ? UiVec2(float(std::max(1, w->width() - margin)), float(std::max(1, w->height() - margin)))
              : UiVec2(640, 480);
 }
 UiVec2 GetCursorScreenPos()
 {
-    QWidget *w = scopes.back().key == "window/Viewport" ? surface : scopes.back().body;
+    QWidget *w = scopes.back().key == "window/Viewport" ? ActiveSurface() : scopes.back().body;
     QPoint p = w->mapToGlobal(QPoint(0, 0));
     return {float(p.x()), float(p.y())};
 }

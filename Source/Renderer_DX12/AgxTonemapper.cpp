@@ -137,7 +137,13 @@ bool AgxTonemapper::CreatePipeline()
     uavRange.BaseShaderRegister = 0; // u0
     uavRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER params[3]{};
+    D3D12_DESCRIPTOR_RANGE exposureRange{};
+    exposureRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    exposureRange.NumDescriptors     = 1;
+    exposureRange.BaseShaderRegister = 1; // t1
+    exposureRange.OffsetInDescriptorsFromTableStart = 0;
+
+    D3D12_ROOT_PARAMETER params[4]{};
 
     params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
@@ -154,8 +160,13 @@ bool AgxTonemapper::CreatePipeline()
     params[2].DescriptorTable.pDescriptorRanges   = &uavRange;
     params[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
 
+    params[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges   = &exposureRange;
+    params[3].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 3;
+    rsDesc.NumParameters = 4;
     rsDesc.pParameters   = params;
     rsDesc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -191,10 +202,11 @@ bool AgxTonemapper::CreatePipeline()
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mConstantBuffer)));
     DX12_THROW_IF_FAILED(mConstantBuffer->Map(0, nullptr, &mMappedCb));
 
-    // Private 2-slot shader-visible descriptor heap (slot 0 = SRV, slot 1 = UAV).
+    // Private 3-slot shader-visible descriptor heap
+    // (slot 0 = input SRV, slot 1 = output UAV, slot 2 = exposure SRV).
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heapDesc.NumDescriptors = 2;
+    heapDesc.NumDescriptors = 3;
     heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     DX12_THROW_IF_FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&mComputeHeap)));
     mComputeHeapStride = device->GetDescriptorHandleIncrementSize(
@@ -262,7 +274,8 @@ void AgxTonemapper::Apply(
     ID3D12GraphicsCommandList*  commandList,
     ID3D12Resource*             inputResource,
     D3D12_CPU_DESCRIPTOR_HANDLE inputCpuSrv,
-    const AgxTonemapSettings&   settings)
+    const AgxTonemapSettings&   settings,
+    D3D12_CPU_DESCRIPTOR_HANDLE autoExposureCpuSrv)
 {
     if (!mIsInitialized || !commandList || !inputResource)
         return;
@@ -292,10 +305,18 @@ void AgxTonemapper::Apply(
         };
 
         cb.Exposure = settings.Exposure;
+        // Min == Max is legal and useful: it pins the exposure to one value.
+        // The shader orders the pair itself, so no guard is needed here.
+        cb.Ev100 = settings.Ev100;
         cb.Ev100Min = settings.Ev100Min;
-        cb.Ev100Max = (settings.Ev100Max > settings.Ev100Min + 0.001f)
-            ? settings.Ev100Max
-            : (settings.Ev100Min + 0.001f);
+        cb.Ev100Max = settings.Ev100Max;
+
+        // Only claim automatic exposure when the meter actually produced a
+        // buffer this frame; otherwise the shader falls back to manual rather
+        // than reading a null descriptor as an exposure of zero EV.
+        cb.UseAutoExposure =
+            (settings.ExposureMode == AgxExposureMode::AutoHistogram && autoExposureCpuSrv.ptr != 0)
+                ? 1u : 0u;
 
         cb.ToeStrength = settings.ToeStrength;
         cb.ShoulderStrength = settings.ShoulderStrength;
@@ -314,6 +335,27 @@ void AgxTonemapper::Apply(
     D3D12_CPU_DESCRIPTOR_HANDLE slot0 = mComputeHeap->GetCPUDescriptorHandleForHeapStart();
     device->CopyDescriptorsSimple(1, slot0, inputCpuSrv,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // Slot 2 – the adapted exposure. When there is none, write a null raw-buffer
+    // SRV: it reads as zero, and leaving the previous frame's descriptor there
+    // would point at a resource the meter may since have released.
+    D3D12_CPU_DESCRIPTOR_HANDLE slot2 = slot0;
+    slot2.ptr += static_cast<SIZE_T>(mComputeHeapStride) * 2;
+    if (autoExposureCpuSrv.ptr != 0)
+    {
+        device->CopyDescriptorsSimple(1, slot2, autoExposureCpuSrv,
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    else
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrv{};
+        nullSrv.Format                  = DXGI_FORMAT_R32_TYPELESS;
+        nullSrv.ViewDimension           = D3D12_SRV_DIMENSION_BUFFER;
+        nullSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        nullSrv.Buffer.NumElements      = 4;
+        nullSrv.Buffer.Flags            = D3D12_BUFFER_SRV_FLAG_RAW;
+        device->CreateShaderResourceView(nullptr, &nullSrv, slot2);
+    }
 
     // Resource barriers:
     //   input  – PIXEL_SHADER_RESOURCE -> NON_PIXEL_SHADER_RESOURCE (compute read)
@@ -343,6 +385,10 @@ void AgxTonemapper::Apply(
     D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = gpuBase;
     uavGpu.ptr += mComputeHeapStride;
     commandList->SetComputeRootDescriptorTable(2, uavGpu); // u0
+
+    D3D12_GPU_DESCRIPTOR_HANDLE exposureGpu = gpuBase;
+    exposureGpu.ptr += static_cast<UINT64>(mComputeHeapStride) * 2;
+    commandList->SetComputeRootDescriptorTable(3, exposureGpu); // t1
 
     const UINT groupsX = (mWidth  + 7) / 8;
     const UINT groupsY = (mHeight + 7) / 8;

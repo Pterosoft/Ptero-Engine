@@ -4,6 +4,8 @@
 
 #include "..\SDKs\Streamline\include\sl.h"
 
+#include <d3d12sdklayers.h>
+
 #include <algorithm>
 #include <array>
 #include <exception>
@@ -78,6 +80,10 @@ namespace
         ComPtr<ID3D12Device> Device;
         ComPtr<ID3D12CommandQueue> CommandQueue;
         ComPtr<IDXGISwapChain3> SwapChain;
+        // One device and renderer, two retained presentation surfaces. Parking the
+        // editor chain preserves its last frame while Play owns the renderer.
+        ComPtr<IDXGISwapChain3> ParkedSwapChain;
+        HWND ParkedWindowHandle = nullptr;
 
         ComPtr<ID3D12DescriptorHeap> RtvHeap;
         ComPtr<ID3D12DescriptorHeap> SrvHeap;
@@ -387,6 +393,31 @@ extern "C"
             ReportContextProgress(L"Creating DXGI factory...");
             ThrowIfFailedWithContext(CreateDXGIFactory2(0, IID_PPV_ARGS(&ctx.Factory)), "CreateDXGIFactory2");
 
+            // GPU-based validation, opt in with -gpuvalidation on the command line.
+            //
+            // DRED is a post-mortem: it names the operation that was running and the
+            // address that faulted, but not who owned that address or which draw
+            // read it. GBV rewrites every shader to bounds-check its accesses, so an
+            // index buffer read past its end, or a descriptor pointing at a released
+            // resource, is reported at the draw that did it, by name, while the
+            // device is still alive. It costs far too much to leave on - hence the
+            // switch - but it is the tool for a page fault whose address is in freed
+            // memory and whose owner nothing has named.
+            {
+                const wchar_t* commandLine = GetCommandLineW();
+                const bool wantGpuValidation =
+                    commandLine != nullptr && wcsstr(commandLine, L"-gpuvalidation") != nullptr;
+                ComPtr<ID3D12Debug1> debugController;
+                if (wantGpuValidation && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
+                {
+                    debugController->EnableDebugLayer();
+                    debugController->SetEnableGPUBasedValidation(TRUE);
+                    PteroLog::Writef(PteroLog::Level::Warning, "Device",
+                        "GPU-based validation is ON (-gpuvalidation). Expect a large slowdown; "
+                        "validation failures are reported to the debug output.");
+                }
+            }
+
             // DRED costs a little per command list and is the only thing that
             // turns a device hang from "something timed out" into a named GPU
             // operation plus the address of the page fault. Enable it before the
@@ -403,6 +434,33 @@ extern "C"
 
             ReportContextProgress(L"Creating D3D12 device...");
             ThrowIfFailedWithContext(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&ctx.Device)), "D3D12CreateDevice");
+
+            // Validation messages go to the debugger's output window, which is no use
+            // to anyone running the editor normally and reporting what they saw. Route
+            // them into the session log instead, so a validation failure arrives with
+            // the rest of the evidence. Only worth doing when validation is on: with
+            // the debug layer off this queue stays empty.
+            {
+                ComPtr<ID3D12InfoQueue1> infoQueue;
+                if (SUCCEEDED(ctx.Device.As(&infoQueue)))
+                {
+                    DWORD callbackCookie = 0;
+                    infoQueue->RegisterMessageCallback(
+                        [](D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
+                           D3D12_MESSAGE_ID id, LPCSTR description, void*)
+                        {
+                            const PteroLog::Level level =
+                                (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION ||
+                                 severity == D3D12_MESSAGE_SEVERITY_ERROR)
+                                    ? PteroLog::Level::Error
+                                    : PteroLog::Level::Warning;
+                            PteroLog::Writef(level, "D3D12", "[%d] %s",
+                                             static_cast<int>(id),
+                                             description ? description : "(no description)");
+                        },
+                        D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &callbackCookie);
+                }
+            }
 
             ReportContextProgress(L"Creating D3D12 command queue...");
             D3D12_COMMAND_QUEUE_DESC queueDesc{};
@@ -650,6 +708,61 @@ extern "C"
     __declspec(dllexport) const char* __stdcall DX12Context_GetLastError()
     {
         return gLastContextError.empty() ? nullptr : gLastContextError.c_str();
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_SetPresentationWindow(HWND windowHandle)
+    {
+        auto& ctx = g_Context;
+        if (windowHandle == ctx.WindowHandle) return true;
+        try
+        {
+            if (!IsWindow(windowHandle) || !ctx.SwapChain || ctx.CommandListOpen)
+                throw std::runtime_error("Presentation can only switch between frames to a valid window.");
+            if (!FlushGPU(2000))
+                throw std::runtime_error("GPU wait timed out before switching presentation windows.");
+
+            ComPtr<IDXGISwapChain3> next;
+            if (ctx.ParkedWindowHandle == windowHandle)
+                next = ctx.ParkedSwapChain;
+            else
+            {
+                RECT rect{};
+                GetClientRect(windowHandle, &rect);
+                DXGI_SWAP_CHAIN_DESC1 desc{};
+                desc.BufferCount = FrameCount;
+                desc.Width = (std::max)(1L, rect.right);
+                desc.Height = (std::max)(1L, rect.bottom);
+                desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+                desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+                desc.SampleDesc.Count = 1;
+                desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+                ComPtr<IDXGISwapChain1> created;
+                ThrowIfFailedWithContext(ctx.Factory->CreateSwapChainForHwnd(
+                    ctx.CommandQueue.Get(), windowHandle, &desc, nullptr, nullptr, &created),
+                    "CreateSwapChainForHwnd(Play)");
+                ThrowIfFailedWithContext(created.As(&next), "QueryInterface(Play swap chain)");
+                ThrowIfFailedWithContext(ctx.Factory->MakeWindowAssociation(windowHandle, DXGI_MWA_NO_ALT_ENTER),
+                    "MakeWindowAssociation(Play)");
+            }
+            DXGI_SWAP_CHAIN_DESC1 desc{};
+            ThrowIfFailedWithContext(next->GetDesc1(&desc), "GetDesc1(Play swap chain)");
+            for (auto& target : ctx.RenderTargets) target.Reset();
+            ctx.ParkedSwapChain = ctx.SwapChain;
+            ctx.ParkedWindowHandle = ctx.WindowHandle;
+            ctx.SwapChain = next;
+            ctx.WindowHandle = windowHandle;
+            ctx.Width = desc.Width;
+            ctx.Height = desc.Height;
+            ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
+            ctx.FenceValues.fill(0);
+            return RecreateSwapChainRenderTargets();
+        }
+        catch (const std::exception& exception)
+        {
+            SetContextError(std::string("Could not switch presentation window: ") + exception.what());
+            return false;
+        }
     }
 
     __declspec(dllexport) bool __stdcall DX12Context_Resize(UINT width, UINT height)
@@ -924,16 +1037,58 @@ extern "C"
         D3D12_DRED_PAGE_FAULT_OUTPUT pageFault{};
         if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&pageFault)))
         {
+            // A VA of zero means the device died without faulting - a hang, not a
+            // bad address - and the two lists below will be empty. Saying so keeps
+            // a timeout from being read as a use-after-free.
             PteroLog::Writef(PteroLog::Level::Fatal, "Device",
-                             "Page fault at GPU virtual address 0x%llx.",
-                             static_cast<unsigned long long>(pageFault.PageFaultVA));
-            for (const D3D12_DRED_ALLOCATION_NODE* node = pageFault.pHeadRecentFreedAllocationNode;
-                 node != nullptr; node = node->pNext)
+                             "Page fault at GPU virtual address 0x%llx.%s",
+                             static_cast<unsigned long long>(pageFault.PageFaultVA),
+                             pageFault.PageFaultVA == 0
+                                 ? " No faulting address: the GPU hung rather than reading bad memory."
+                                 : "");
+
+            // Both lists matter and they answer different questions. A name in the
+            // freed list means something was released while the GPU still needed
+            // it; a name in the existing list means the address is live and the
+            // access ran off the end of it instead. Reporting only the freed list,
+            // as this used to, makes every hang look like a lifetime bug.
+            const auto logAllocations =
+                [](const char* label, const D3D12_DRED_ALLOCATION_NODE* head)
             {
-                PteroLog::Writef(PteroLog::Level::Fatal, "Device",
-                                 "    recently freed: %s",
-                                 node->ObjectNameA ? node->ObjectNameA : "(unnamed)");
-            }
+                int count = 0;
+                for (const D3D12_DRED_ALLOCATION_NODE* node = head;
+                     node != nullptr; node = node->pNext, ++count)
+                {
+                    // ID3D12Object::SetName stores the WIDE name, so ObjectNameA is
+                    // null for everything this engine names and reading only it
+                    // reported "(unnamed)" for resources that were named all along.
+                    // Prefer the wide name and fall back to the narrow one.
+                    char name[256] = {};
+                    if (node->ObjectNameW != nullptr && node->ObjectNameW[0] != L'\0')
+                    {
+                        WideCharToMultiByte(CP_UTF8, 0, node->ObjectNameW, -1,
+                                            name, sizeof(name) - 1, nullptr, nullptr);
+                    }
+                    else if (node->ObjectNameA != nullptr && node->ObjectNameA[0] != '\0')
+                    {
+                        std::snprintf(name, sizeof(name), "%s", node->ObjectNameA);
+                    }
+
+                    PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                     "    %s: %s (type %d)",
+                                     label,
+                                     name[0] ? name : "(unnamed)",
+                                     static_cast<int>(node->AllocationType));
+                }
+                if (count == 0)
+                {
+                    PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                     "    %s: none reported.", label);
+                }
+            };
+
+            logAllocations("recently freed", pageFault.pHeadRecentFreedAllocationNode);
+            logAllocations("still allocated", pageFault.pHeadExistingAllocationNode);
         }
     }
 
@@ -946,7 +1101,24 @@ extern "C"
     {
         // Flush the GPU command queue and wait for all in-flight work to complete.
         // Called before releasing resources that may still be referenced by the GPU.
-        return FlushGPU(2000);
+        const bool flushed = FlushGPU(2000);
+
+        // Almost every caller frees textures immediately afterwards and ignores this
+        // return value, so a flush that gives up two seconds in releases memory the
+        // GPU is still reading - a page fault a few frames later, in a pass that has
+        // nothing to do with whoever resized. It should never time out; say so loudly
+        // when it does rather than leaving the next failure unexplained.
+        if (!flushed)
+        {
+            auto& ctx = g_Context;
+            PteroLog::Writef(PteroLog::Level::Error, "Device",
+                "DX12Context_WaitForGPU timed out after 2000 ms. targetFence=%llu completedFence=%llu. "
+                "Anything released by the caller from here is being freed while the GPU may still be using it.",
+                static_cast<unsigned long long>(ctx.NextFenceValue - 1),
+                static_cast<unsigned long long>(ctx.Fence ? ctx.Fence->GetCompletedValue() : 0));
+        }
+
+        return flushed;
     }
 
     __declspec(dllexport) void __stdcall DX12Context_Shutdown()
@@ -986,6 +1158,8 @@ extern "C"
             ctx.RtvHeap.Reset();
             ctx.SrvHeap.Reset();
             ctx.SwapChain.Reset();
+            ctx.ParkedSwapChain.Reset();
+            ctx.ParkedWindowHandle = nullptr;
             ctx.Fence.Reset();
             ctx.CommandQueue.Reset();
             ctx.Device.Reset();

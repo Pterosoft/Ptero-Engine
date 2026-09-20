@@ -150,6 +150,9 @@
     <ClInclude Include="AgxTonemapper.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="AutoExposure.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="VolumetricCloudSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -384,6 +387,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="AgxTonemapper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AutoExposure.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="VolumetricCloudRenderer.cpp">

@@ -115,7 +115,7 @@ public:
 		const int sliceIndex = lightIndex * kFacesPerLight + faceIndex;
 		auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
 			mShadowDepthTexture.Get(),
-			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
 			D3D12_RESOURCE_STATE_DEPTH_WRITE,
 			D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);
 		commandList->ResourceBarrier(1, &toDepthWrite);
@@ -134,10 +134,14 @@ public:
 		if (!commandList || !mIsInitialized || lightIndex < 0 || lightIndex >= static_cast<int>(mLights.size()) || faceIndex < 0 || faceIndex >= kFacesPerLight)
 			return;
 
+		// ALL_SHADER_RESOURCE rather than PIXEL_SHADER_RESOURCE: the deferred
+		// lighting pixel shader is no longer the only reader. The volumetric fog
+		// injection is a compute pass and samples these same cubemaps, and a
+		// pixel-only state would have it read a resource in the wrong state.
 		auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
 			mShadowDepthTexture.Get(),
 			D3D12_RESOURCE_STATE_DEPTH_WRITE,
-			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
 			D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);
 		commandList->ResourceBarrier(1, &toSrv);
 	}
@@ -230,7 +234,7 @@ private:
 			&defaultHeap,
 			D3D12_HEAP_FLAG_NONE,
 			&texDesc,
-			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
 			&clearVal,
 			IID_PPV_ARGS(&mShadowDepthTexture))))
 		{

@@ -1,15 +1,25 @@
 {
     "AgxTonemapSettings": {
+        "AutoExposureGreyPoint": 0.18000000715255737,
+        "AutoExposureHighPercent": 0.8999999761581421,
+        "AutoExposureHistogramLogMax": 6.0,
+        "AutoExposureHistogramLogMin": -10.0,
+        "AutoExposureLowPercent": 0.10000000149011612,
+        "AutoExposureMeteringMask": 0.5,
+        "AutoExposureSpeedDown": 1.0,
+        "AutoExposureSpeedUp": 3.0,
         "Enabled": true,
-        "Ev100Max": 16.0,
-        "Ev100Min": -1.0,
-        "Exposure": 0.0,
+        "Ev100": 0.0,
+        "Ev100Max": 3.0,
+        "Ev100Min": 3.0,
+        "Exposure": 5.0,
+        "ExposureMode": 1,
         "Global": {
             "Contrast": {
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.10000000149011612,
+                "Total": 0.25,
                 "Yellow": 0.0
             },
             "Gain": {
@@ -164,22 +174,22 @@
         "Threshold": 0.8999999761581421
     },
     "CameraPosition": {
-        "X": 15.81268310546875,
-        "Y": -2.2977712154388428,
-        "Z": 12.269293785095215
+        "X": 8.379578590393066,
+        "Y": -9.724038124084473,
+        "Z": 10.2518310546875
     },
     "CameraRotation": {
-        "X": -0.6857956051826477,
-        "Y": -1.5749828815460205,
+        "X": -0.12579473853111267,
+        "Y": 5.400008678436279,
         "Z": 0.0
     },
     "ChromaticAberrationSettings": {
         "CenterX": 0.5,
         "CenterY": 0.5,
-        "Enabled": false,
+        "Enabled": true,
         "Falloff": 2.0,
         "SampleCount": 6,
-        "Strength": 2.0
+        "Strength": 3.0
     },
     "DlssSettings": {
         "Enabled": false,
@@ -226,7 +236,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 8.206521987915039,
+                    "x": 0.20652198791503906,
                     "y": -2.790607452392578,
                     "z": 0.0
                 },
@@ -338,8 +348,8 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 9.422050476074219,
-                    "y": -0.4307718276977539,
+                    "x": 1.4220504760742188,
+                    "y": -6.430771827697754,
                     "z": 7.680501937866211
                 },
                 "Rotation": {
@@ -366,8 +376,8 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 6.582049369812012,
-                    "y": -6.691983699798584,
+                    "x": -1.4179506301879883,
+                    "y": 0.308016300201416,
                     "z": 7.680501937866211
                 },
                 "Rotation": {
@@ -394,174 +404,6 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 21.64020347595215,
-                    "y": 20.93212890625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -0.8597965240478516,
-                    "y": 20.93212890625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -24.35979461669922,
-                    "y": 19.93212890625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": 1.5707963705062866
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -24.35979461669922,
-                    "y": -2.56787109375,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": 1.5707963705062866
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.14020538330078,
-                    "y": -2.56787109375,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": 1.5707963705062866
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.14020538330078,
-                    "y": 19.93212890625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": 1.5707963705062866
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/M_rock_wall_17.json",
-                "MeshPath": "Geometry/Modular/sm_Wall_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_5"
-            },
-            "TransformComponent": {
-                "Position": {
                     "x": -0.8597965240478516,
                     "y": -25.06787109375,
                     "z": 0.0
@@ -715,34 +557,6 @@
                     "x": 0.5,
                     "y": 0.5,
                     "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": 0,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Geometry/MET_BrickFurnace/MET_BrickFurnace.json",
-                "MeshPath": "Geometry/MET_BrickFurnace/Meshes/SM_MET_Brick_Furnace_01_c0_LOD2.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_22"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -15.839090347290039,
-                    "y": -1.6969181299209595,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": 0.0,
-                    "z": -1.5707963705062866
-                },
-                "Scale": {
-                    "x": 0.75,
-                    "y": 0.75,
-                    "z": 0.75
                 }
             }
         },
@@ -784,14 +598,14 @@
                 "EmissiveIntensity": 4.0,
                 "EmitLight": true,
                 "Enabled": true,
-                "EndSize": 5.050000190734863,
+                "EndSize": 9.0,
                 "Facing": 0,
                 "FlipbookBlendFrames": true,
                 "FlipbookColumns": 1,
                 "FlipbookFps": 0.0,
                 "FlipbookRandomStartFrame": true,
                 "FlipbookRows": 1,
-                "GiContribution": 1.0,
+                "GiContribution": 3.063999891281128,
                 "InitialSpeed": 1.350000023841858,
                 "Lifetime": 0.8999999761581421,
                 "LifetimeVariance": 0.3499999940395355,
@@ -802,8 +616,8 @@
                 "LightColorR": 1.0,
                 "LightCustomStylePattern": "mmnmmommommnonmmonqnmmo",
                 "LightHeightOffset": 0.44999998807907104,
-                "LightIntensityLumens": 4000.0,
-                "LightRadius": 511.00048828125,
+                "LightIntensityLumens": 4400.0,
+                "LightRadius": 45.0,
                 "LightStyle": 1,
                 "LightStyleAmplitude": 1.7100000381469727,
                 "LightStylePhaseOffset": 0.0,
@@ -828,7 +642,7 @@
                 "SpawnRate": 120.0,
                 "SpeedVariance": 0.44999998807907104,
                 "StartRotationDegrees": 0.0,
-                "StartSize": 1.9500000476837158,
+                "StartSize": 8.100000381469727,
                 "StretchFactor": 0.11999999731779099,
                 "StyleDrivesParticleEmissive": true,
                 "TurbulenceFrequency": 0.8500000238418579,
@@ -840,9 +654,9 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": -13.459304809570313,
-                    "y": -2.084812879562378,
-                    "z": 5.0
+                    "x": -26.459304809570313,
+                    "y": -1.084812879562378,
+                    "z": 1.0
                 },
                 "Rotation": {
                     "x": 0.0,
@@ -868,98 +682,14 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": -21.81967544555664,
-                    "y": 12.588611602783203,
-                    "z": -0.5361318588256836
-                },
-                "Rotation": {
-                    "x": 0.0,
-                    "y": 0.0,
-                    "z": -1.5707963705062866
-                },
-                "Scale": {
-                    "x": 1.25,
-                    "y": 1.25,
-                    "z": 1.25
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Geometry/MVV_LogPile/M_MVV_LogPile.json",
-                "MeshPath": "Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_22"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -15.662793159484863,
-                    "y": 13.357449531555176,
-                    "z": -0.5361318588256836
-                },
-                "Rotation": {
-                    "x": 0.0,
-                    "y": 0.0,
-                    "z": -1.3089969158172607
-                },
-                "Scale": {
-                    "x": 1.0,
-                    "y": 1.0,
-                    "z": 1.0
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Geometry/MVV_LogPile/M_MVV_LogPile.json",
-                "MeshPath": "Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_22"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -21.81967544555664,
+                    "x": -16.039552688598633,
                     "y": -17.183860778808594,
-                    "z": -0.5361318588256836
+                    "z": 0.07256406545639038
                 },
                 "Rotation": {
-                    "x": 0.0,
+                    "x": 1.5707963705062866,
                     "y": 0.0,
                     "z": -1.5707963705062866
-                },
-                "Scale": {
-                    "x": 1.25,
-                    "y": 1.25,
-                    "z": 1.25
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Geometry/MVV_LogPile/M_MVV_LogPile.json",
-                "MeshPath": "Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_22"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -15.982224464416504,
-                    "y": -14.535626411437988,
-                    "z": -0.5361318588256836
-                },
-                "Rotation": {
-                    "x": 0.0,
-                    "y": 0.0,
-                    "z": -2.0071287155151367
                 },
                 "Scale": {
                     "x": 1.0,
@@ -980,7 +710,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 4.111511707305908,
+                    "x": 0.1115117073059082,
                     "y": 16.108198165893555,
                     "z": 0.0
                 },
@@ -1008,7 +738,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 4.111511707305908,
+                    "x": 1.1115117073059082,
                     "y": -21.891801834106445,
                     "z": 0.0
                 },
@@ -1036,7 +766,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 5.908721923828125,
+                    "x": -0.091278076171875,
                     "y": 17.67135238647461,
                     "z": 19.0
                 },
@@ -1064,7 +794,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 2.908721923828125,
+                    "x": -3.091278076171875,
                     "y": 17.67135238647461,
                     "z": 19.0
                 },
@@ -1092,7 +822,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 13.087652206420898,
+                    "x": 5.087652206420898,
                     "y": -0.16333699226379395,
                     "z": 10.0
                 },
@@ -1120,7 +850,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 13.087652206420898,
+                    "x": 5.087652206420898,
                     "y": -0.663336992263794,
                     "z": 10.0
                 },
@@ -1148,7 +878,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 13.087652206420898,
+                    "x": 5.087652206420898,
                     "y": -1.163336992263794,
                     "z": 10.0
                 },
@@ -1176,7 +906,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 13.087652206420898,
+                    "x": 5.087652206420898,
                     "y": -2.663336992263794,
                     "z": 10.0
                 },
@@ -1204,7 +934,7 @@
             },
             "TransformComponent": {
                 "Position": {
-                    "x": 13.087652206420898,
+                    "x": 5.087652206420898,
                     "y": -1.663336992263794,
                     "z": 10.0
                 },
@@ -1217,6 +947,582 @@
                     "x": 1.25,
                     "y": 1.25,
                     "z": 1.25
+                }
+            }
+        },
+        {
+            "NameComponent": {
+                "Name": "RectLight_35"
+            },
+            "PointLightComponent": {
+                "AffectGlobalIllumination": true,
+                "AffectVolumetricFog": false,
+                "CastShadows": false,
+                "ColorB": 1.0,
+                "ColorG": 1.0,
+                "ColorR": 1.0,
+                "CustomStylePattern": "mmnmmommommnonmmonqnmmo",
+                "FalloffExponent": 1.0,
+                "GiContribution": 1.0,
+                "IntensityLumens": 3200.0,
+                "Radius": 1000.0,
+                "RectHeight": 40.0,
+                "RectTwoSided": false,
+                "RectWidth": 17.0,
+                "SourceRadius": 1.0,
+                "SpotInnerConeDegrees": 25.0,
+                "SpotOuterConeDegrees": 40.0,
+                "Style": 0,
+                "StyleAmplitude": 1.0,
+                "StylePhaseOffset": 0.0,
+                "StyleSpeed": 10.0,
+                "TemperatureKelvin": 8500.0,
+                "Type": 2,
+                "UseTemperature": true
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 12.517972946166992,
+                    "y": -2.5329132080078125,
+                    "z": 18.865589141845703
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.22254496812820435,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_WoodenShelves_Shelves_01/M_MVV_WoodenShelves_Shelves_01.json",
+                "MeshPath": "Geometry/MVV_WoodenShelves_Shelves_01/Meshes/SM_MVV_WoodenShelve01_c0_LOD0.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_38"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -7.998696327209473,
+                    "y": 19.474271774291992,
+                    "z": 9.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 3.1415927410125732
+                },
+                "Scale": {
+                    "x": 0.75,
+                    "y": 0.75,
+                    "z": 0.75
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json",
+                "MeshPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_39"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -5.303316593170166,
+                    "y": 19.181488037109375,
+                    "z": 12.020980834960938
+                },
+                "Rotation": {
+                    "x": 0.22925209999084473,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json",
+                "MeshPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_39"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -7.27419900894165,
+                    "y": 19.123779296875,
+                    "z": 12.020980834960938
+                },
+                "Rotation": {
+                    "x": 0.22925209999084473,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json",
+                "MeshPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_39"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -9.289068222045898,
+                    "y": 19.20010757446289,
+                    "z": 12.020980834960938
+                },
+                "Rotation": {
+                    "x": 0.22925209999084473,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json",
+                "MeshPath": "Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_39"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -11.327028274536133,
+                    "y": 19.15037727355957,
+                    "z": 12.020980834960938
+                },
+                "Rotation": {
+                    "x": 0.22925209999084473,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/dice/M_Dice.json",
+                "MeshPath": "Geometry/dice/source/dice_low.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Dice6"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 5.087652206420898,
+                    "y": -3.663336992263794,
+                    "z": 10.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.25,
+                    "y": 1.25,
+                    "z": 1.25
+                }
+            }
+        },
+        {
+            "AudioEmitterComponent": {
+                "AutoPlay": true,
+                "EventPath": "event:/Ambient/Fireplace"
+            },
+            "NameComponent": {
+                "Name": "AudioEmitter_43"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -26.139781951904297,
+                    "y": -1.604304313659668,
+                    "z": 3.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "AudioEmitterComponent": {
+                "AutoPlay": true,
+                "EventPath": "event:/Ambient/PubAmbient"
+            },
+            "NameComponent": {
+                "Name": "AudioEmitter_44"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 21.618518829345703,
+                    "y": 3.198481559753418,
+                    "z": 6.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_LogPile/M_MVV_LogPile.json",
+                "MeshPath": "Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_22"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -16.666208267211914,
+                    "y": 12.598420143127441,
+                    "z": 0.07256406545639038
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": -1.5707963705062866
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 10.216211318969727,
+                    "y": 19.874502182006836,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -11.783788681030273,
+                    "y": 19.874502182006836,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 21.216211318969727,
+                    "y": 8.874502182006836,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": -1.5707963705062866
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 21.216211318969727,
+                    "y": -13.125497817993164,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": -1.5707963705062866
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_HearthFrame.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_HearthFrame.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_40"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -23.576068878173828,
+                    "y": -1.2125093936920166,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 4.71238899230957
+                },
+                "Scale": {
+                    "x": 0.25,
+                    "y": 0.25,
+                    "z": 0.25
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -23.38652801513672,
+                    "y": 15.474504470825195,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 1.5707963705062866
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -23.38652801513672,
+                    "y": -17.947628021240234,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 1.5707963705062866
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_TrimmedWallBay2.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_42"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -24.012351989746094,
+                    "y": -0.5665882229804993,
+                    "z": 7.415236949920654
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 1.5707963705062866
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json",
+                "MeshPath": "Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_27"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 2.908721923828125,
+                    "y": 17.67135238647461,
+                    "z": 19.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json",
+                "MeshPath": "Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_27"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 5.908721923828125,
+                    "y": 17.67135238647461,
+                    "z": 19.0
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.25,
+                    "z": 1.0
                 }
             }
         }
@@ -1272,16 +1578,26 @@
         "AccumulationBlend": 1.0,
         "ColorLeakIntensity": 1.0,
         "DebugView": 0,
+        "DepthThreshold": 0.10000000149011612,
         "Enabled": true,
         "GiIntensity": 1.0,
-        "MaxBounces": 4,
+        "MaxBounces": 1,
+        "MaxHistoryLength": 10,
         "NextEventEstimation": true,
+        "NormalThreshold": 0.5,
         "NrdAtrousIterations": 5,
         "NrdDisocclusionThreshold": 0.20000000298023224,
         "NrdMaxAccumulationTime": 0.20000000298023224,
         "NrdSharpenAmount": 0.3499999940395355,
         "RadianceClamp": 10.199999809265137,
         "RaysPerPixel": 1,
+        "SpatialRadius": 20.0,
+        "SpatialReuseEnabled": false,
+        "SpatialSamples": 4,
+        "SpecularEnabled": true,
+        "SpecularIntensity": 0.10000000149011612,
+        "SpecularRoughnessThreshold": 0.6000000238418579,
+        "TemporalReuseEnabled": false,
         "UseNrdDenoiser": true
     },
     "SMAASettings": {
@@ -1294,14 +1610,14 @@
     },
     "SharpenSettings": {
         "ImageSharpeningEnabled": true,
-        "ImageSharpeningStrength": 0.20000000298023224,
-        "TextureMipLODBias": -1.5,
+        "ImageSharpeningStrength": 1.5,
+        "TextureMipLODBias": -3.0,
         "TextureSharpeningEnabled": true
     },
     "SsrSettings": {
         "DebugView": 0,
         "EdgeFadeStart": 0.8500000238418579,
-        "Enabled": true,
+        "Enabled": false,
         "Intensity": 1.0,
         "MaxDistance": 60.0,
         "MaxRoughness": 0.6000000238418579,
@@ -1312,8 +1628,8 @@
         "Thickness": 0.5
     },
     "TaaSettings": {
-        "BlendFactor": 0.05000000074505806,
-        "Enabled": false,
+        "BlendFactor": 0.20000000298023224,
+        "Enabled": true,
         "JitterScale": 1.0
     },
     "TimeOfDaySettings": {
@@ -1390,16 +1706,18 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.0012000000569969416,
+        "Density": 0.029999999329447746,
         "DepthSlices": 64,
-        "EmissiveColorB": 0.0,
-        "EmissiveColorG": 0.0,
-        "EmissiveColorR": 0.0,
-        "EmissiveIntensity": 0.0,
+        "EmissiveColorB": 1.0,
+        "EmissiveColorG": 1.0,
+        "EmissiveColorR": 1.0,
+        "EmissiveIntensity": 0.05000000074505806,
         "Enabled": true,
         "FroxelTileSize": 8,
+        "GiIntensity": 1.0,
         "HeightFalloff": 0.0,
         "MaxDistance": 100.0,
+        "ScatteringAlbedo": 0.8999999761581421,
         "StartDistance": 0.10000000149011612
     }
 }

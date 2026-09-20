@@ -12,6 +12,10 @@
 
 #include "RtGI_Common.hlsli"
 
+// Same F0 the deferred resolve uses, so the material's reflectivity knob reaches the
+// ray-traced reflections rather than only the direct highlight.
+#include "SurfaceSpecular.hlsli"
+
 // ─── Additional bindings beyond the base 5 root parameters ───────────────────
 // These match the extended root signature used by the specular pass (params 1-13).
 RaytracingAccelerationStructure t_SpecTLAS     : register(t2);   // shared TLAS
@@ -365,7 +369,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float4 albedoSample = t_Albedo.Load(int3(pixel, 0));
     float3 albedo       = albedoSample.rgb;
-    float3 F0           = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float  specular0    = PteroDecodeSurfaceSpecular(normalDepthSample.w);
+    float3 F0           = PteroComputeF0(albedo, metallic, specular0);
 
     float3 F = F_Schlick(VdotH, F0);
     float  G = G_Smith(NdotV, NdotL, clampedRoughness);
