@@ -190,6 +190,26 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterEnum("dlss.mode", &dlss.Mode, "DLSS quality preset.",
         { "off", "maxperformance", "balanced", "maxquality", "ultraperformance", "ultraquality", "dlaa" }, 0);
 
+    // A mode or sharpening change is picked up on the next frame: the render size is
+    // re-queried every frame and the dispatch reads the rest directly.
+    FsrSettings& fsr = renderer.GetFsrSettings();
+    CVar::RegisterBool ("fsr.enabled", &fsr.Enabled, "AMD FSR upscaling. DLSS takes precedence when both are on.",
+        [&fsr] { fsr.ResetHistory = true; });
+    CVar::RegisterEnum ("fsr.mode", &fsr.Mode, "FSR quality preset (render scale 1.0 / 1.5 / 1.7 / 2.0 / 3.0x).",
+        { "nativeaa", "quality", "balanced", "performance", "ultraperformance" }, 0,
+        [&fsr] { fsr.ResetHistory = true; });
+    CVar::RegisterBool ("fsr.sharpening", &fsr.Sharpening, "FSR's contrast-adaptive sharpening (RCAS) on the upscaled image.");
+    CVar::RegisterFloat("fsr.sharpness", &fsr.Sharpness, "RCAS strength; 0 is none, 1 is the most.", 0.0f, 1.0f);
+    CVar::RegisterBool ("fsr.reset", &fsr.ResetHistory, "Set to drop FSR's accumulated history on the next frame.");
+    CVar::RegisterBool ("fsr.framegen", &fsr.FrameGeneration,
+        "FSR frame generation: presents an interpolated frame between rendered ones. Replaces the swap chain on the next frame.");
+    CVar::RegisterBool ("fsr.framegen.debug.tearlines", &fsr.FrameGenerationDebugTearLines,
+        "Draws a moving bar per presented frame, to check that generated frames are shown.");
+    CVar::RegisterBool ("fsr.framegen.debug.resets", &fsr.FrameGenerationDebugResetIndicators,
+        "Marks frames on which frame generation reset its history.");
+    CVar::RegisterBool ("fsr.framegen.debug.view", &fsr.FrameGenerationDebugView,
+        "Shows frame generation's internal buffers instead of the image.");
+
     SharpenSettings& sharpen = renderer.GetSharpenSettings();
     CVar::RegisterBool ("sharpen.image.enabled", &sharpen.ImageSharpeningEnabled, "Post-process image sharpening.");
     CVar::RegisterFloat("sharpen.image.strength", &sharpen.ImageSharpeningStrength, "Image sharpening strength.", 0.0f, 1.5f,

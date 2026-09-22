@@ -1,0 +1,10 @@
+Ptero Engine session log
+Started 2026-09-22 14:25:18
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-22_14-25-18.txt
+----------------------------------------------------------------------
+[14:25:18.803] [INFO ] [Log         ] Logging to disk started.
+[14:25:18.803] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-22_14-25-18.txt
+[14:25:18.803] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[14:25:23.078] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[14:25:23.085] [INFO ] [CVar        ] 333 cvars registered. Type 'list' in the console to see them.
+[14:25:23.085] [INFO ] [Renderer    ] Renderer initialized.

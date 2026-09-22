@@ -17,6 +17,7 @@ extern "C"
 {
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_WaitForGPU();
     bool __stdcall DX12Context_AllocateSrvDescriptor(
         D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
         D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
@@ -142,9 +143,17 @@ bool XeGtaoRenderer::Initialize(UINT width, UINT height)
             if (!CreatePipelines())     return false;
         }
 
+        // A resize replaces textures the previous frames' dispatches still name, and
+        // rewrites their descriptors in place. Let those frames finish first.
+        if (mIsInitialized)
+            DX12Context_WaitForGPU();
+
         mWidth  = width;
         mHeight = height;
 
+        // Until both steps succeed the old descriptors may name released textures,
+        // so the pass must not dispatch: IsInitialized() stays false on failure.
+        mIsInitialized = false;
         if (!CreateResolutionBuffers(width, height)) return false;
         if (!CreateDescriptors())                    return false;
 
@@ -497,7 +506,7 @@ bool XeGtaoRenderer::CreateDescriptors()
     // Per-mip UAVs (one per mip level) + one all-mips SRV for MainPass
     for (int i = 0; i < 5; ++i)
     {
-        if (!AllocDesc(mDepthMipUavCpu[i], mDepthMipUavGpu[i], mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mDepthMipUavCpu[i], mDepthMipUavGpu[i], mLastError)) return false;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format                      = DXGI_FORMAT_R32_FLOAT;
         uavDesc.ViewDimension               = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -505,7 +514,7 @@ bool XeGtaoRenderer::CreateDescriptors()
         dev->CreateUnorderedAccessView(mViewspaceDepth.Get(), nullptr, &uavDesc, mDepthMipUavCpu[i]);
     }
     {
-        if (!AllocDesc(mDepthAllMipsSrvCpu, mDepthAllMipsSrvGpu, mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mDepthAllMipsSrvCpu, mDepthAllMipsSrvGpu, mLastError)) return false;
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                    = DXGI_FORMAT_R32_FLOAT;
         srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -518,13 +527,13 @@ bool XeGtaoRenderer::CreateDescriptors()
     // Working AO UAVs and SRVs
     for (int i = 0; i < 2; ++i)
     {
-        if (!AllocDesc(mWorkingAOUavCpu[i], mWorkingAOUavGpu[i], mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mWorkingAOUavCpu[i], mWorkingAOUavGpu[i], mLastError)) return false;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format        = DXGI_FORMAT_R8_UINT;
         uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         dev->CreateUnorderedAccessView(mWorkingAO[i].Get(), nullptr, &uavDesc, mWorkingAOUavCpu[i]);
 
-        if (!AllocDesc(mWorkingAOSrvCpu[i], mWorkingAOSrvGpu[i], mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mWorkingAOSrvCpu[i], mWorkingAOSrvGpu[i], mLastError)) return false;
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                    = DXGI_FORMAT_R8_UINT;
         srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -535,13 +544,13 @@ bool XeGtaoRenderer::CreateDescriptors()
 
     // Edges UAV + SRV
     {
-        if (!AllocDesc(mEdgesUavCpu, mEdgesUavGpu, mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mEdgesUavCpu, mEdgesUavGpu, mLastError)) return false;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format        = DXGI_FORMAT_R8_UNORM;
         uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         dev->CreateUnorderedAccessView(mWorkingEdges.Get(), nullptr, &uavDesc, mEdgesUavCpu);
 
-        if (!AllocDesc(mEdgesSrvCpu, mEdgesSrvGpu, mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mEdgesSrvCpu, mEdgesSrvGpu, mLastError)) return false;
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                    = DXGI_FORMAT_R8_UNORM;
         srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -552,13 +561,13 @@ bool XeGtaoRenderer::CreateDescriptors()
 
     // Output AO UAV + SRV
     {
-        if (!AllocDesc(mOutputUavCpu, mOutputUavGpu, mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mOutputUavCpu, mOutputUavGpu, mLastError)) return false;
         D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
         uavDesc.Format        = DXGI_FORMAT_R8_UNORM;
         uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         dev->CreateUnorderedAccessView(mOutputAO.Get(), nullptr, &uavDesc, mOutputUavCpu);
 
-        if (!AllocDesc(mOutputSrvCpu, mOutputSrvGpu, mLastError)) return false;
+        if (!mDescriptorsAllocated && !AllocDesc(mOutputSrvCpu, mOutputSrvGpu, mLastError)) return false;
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format                    = DXGI_FORMAT_R8_UNORM;
         srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -567,6 +576,7 @@ bool XeGtaoRenderer::CreateDescriptors()
         dev->CreateShaderResourceView(mOutputAO.Get(), &srvDesc, mOutputSrvCpu);
     }
 
+    mDescriptorsAllocated = true;
     return true;
 }
 

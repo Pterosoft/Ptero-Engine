@@ -252,6 +252,14 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             OutputDebugStringA("DX12SceneRenderer: Streamline initialization failed; DLSS unavailable.\n");
         }
 
+        // Non-fatal: without the FidelityFX DLLs FSR reports itself unavailable and
+        // the settings panel says why.
+        ReportProgress(L"Initializing AMD FSR...");
+        if (!mFsrRenderer.Initialize() && mFsrRenderer.GetLastErrorMessage())
+        {
+            PteroLog::Write(PteroLog::Level::Warning, "FSR", mFsrRenderer.GetLastErrorMessage());
+        }
+
         UpdateSceneConstants();
 
         // Initialize the entity mesh renderer so it is ready to receive entities each frame.
@@ -523,6 +531,39 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
     BeginTimingFrame();
     const auto frameTimingStart = std::chrono::steady_clock::now();
+
+    mMarkerCommandList = commandList;
+    mCurrentPassOrder.clear();
+    if (!mGpuProgressBuffer)
+    {
+        if (ID3D12Device* device = DX12Context_GetDevice())
+        {
+            const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_READBACK);
+            const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(256);
+            if (SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&mGpuProgressBuffer))))
+            {
+                mGpuProgressBuffer->SetName(L"GPU progress breadcrumbs");
+                void* mapped = nullptr;
+                if (SUCCEEDED(mGpuProgressBuffer->Map(0, nullptr, &mapped)))
+                    mGpuProgressMapped = static_cast<const UINT32*>(mapped);
+            }
+        }
+    }
+    commandList->QueryInterface(IID_PPV_ARGS(&mMarkerCommandList2));
+    ++mGpuProgressFrame;
+    WriteGpuProgress(0, 0, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN);
+    struct MarkerListReset
+    {
+        DX12SceneRenderer& Renderer;
+        ~MarkerListReset()
+        {
+            Renderer.WriteGpuProgress(3, 0, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT);
+            Renderer.mMarkerCommandList2.Reset();
+            Renderer.mMarkerCommandList = nullptr;
+            Renderer.mLastPassOrder.swap(Renderer.mCurrentPassOrder);
+        }
+    } markerListReset{ *this };
 
     // Advance the mesh renderer's constant-buffer ring before any of its passes
     // record. The shadow, depth and G-Buffer passes must all land in the same
@@ -1078,7 +1119,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
     // Close the G-Buffer pass: transition G-Buffer RTs to SRV state.
     mDeferredLightingPass.EndGeometryPass(commandList);
-    mDeferredLightingPass.ResolveGBuffer(commandList);
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "G-Buffer MSAA resolve");
+        mDeferredLightingPass.ResolveGBuffer(commandList);
+    }
     ResolveMsaaDepth(commandList);
     mMsaaResolveTimeMs = mDeferredLightingPass.GetLastResolveTimeMs();
 
@@ -2246,13 +2290,24 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     // PASS 7 – TAA resolve (optional)
     // -----------------------------------------------------------------------
+    const bool motionVectorsAvailable = mMotionVectorRenderer.GetOutputResource() != nullptr;
     const bool dlssWillEvaluate = !rtaoDebugViewActive
-        && mDlssSettings.Enabled
-        && mDlssRenderer.IsAvailable()
-        && mMotionVectorRenderer.GetOutputResource() != nullptr;
+        && IsDlssUpscalerActive()
+        && motionVectorsAvailable;
+    const bool fsrWillEvaluate = !rtaoDebugViewActive
+        && IsFsrUpscalerActive()
+        && mFsrRenderer.HasOutput()
+        && motionVectorsAvailable;
+    const bool upscalerWillEvaluate = dlssWillEvaluate || fsrWillEvaluate;
+    // Frame generation reads the same depth and motion vectors as the upscalers, so
+    // it keeps them being produced even when no upscaler is on.
+    const bool frameGenerationWillPrepare = !rtaoDebugViewActive
+        && mFrameGeneration.IsActive()
+        && motionVectorsAvailable;
 
-    if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+    if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
     {
+        PTERO_SCOPED_PASS_TIMER("Post", "TAA resolve");
         mTaaRenderer.Resolve(
             commandList,
             mSceneColorTarget.Get(),
@@ -2263,7 +2318,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         commandList->SetDescriptorHeaps(1, sharedHeaps);
     }
 
-    if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+    if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
     {
         ID3D12Resource*             smaaInputResource = mSceneColorTarget.Get();
         D3D12_CPU_DESCRIPTOR_HANDLE smaaInputSrv      = mSceneSrvCpuHandle;
@@ -2274,6 +2329,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             smaaInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
+        PTERO_SCOPED_PASS_TIMER("Post", "SMAA");
         mSmaaRenderer.Apply(commandList, smaaInputResource, smaaInputSrv, mSmaaSettings);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -2281,12 +2337,16 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // -----------------------------------------------------------------------
-    // PASS 7.5 – Motion vectors + DLSS SR (optional)
-    // Runs after TAA so the temporal resolve can remain available when DLSS is off.
-    // Bloom and AgX then consume the DLSS output when enabled.
+    // PASS 7.5 – Motion vectors + DLSS / FSR SR + FSR frame generation inputs (optional)
+    // Runs after TAA so the temporal resolve can remain available when no upscaler
+    // is on. Bloom and AgX then consume the upscaled output when there is one.
     // -----------------------------------------------------------------------
-    if (dlssWillEvaluate)
+    if (upscalerWillEvaluate || frameGenerationWillPrepare)
     {
+        // Captured before either upscaler consumes (and clears) its reset flag, so
+        // frame generation sees the same camera cut the upscaler did.
+        const bool historyReset = mDlssSettings.ResetHistory || mFsrSettings.ResetHistory || mTaaSettings.ResetHistory;
+
         if (mEntities != nullptr)
         {
             mMotionVectorRenderer.SetEntities(mEntities);
@@ -2295,12 +2355,12 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 mPreviousEntityTransforms,
                 mNonJitteredViewProjection,
                 mPreviousViewProjectionForRtgi,
-                mDlssSettings.ResetHistory);
+                mDlssSettings.ResetHistory || mFsrSettings.ResetHistory);
 
             // Vegetation contributes its own motion vectors, because its
             // movement comes from the wind bend rather than from an entity
-            // transform.  Skipping this would leave DLSS reprojecting foliage
-            // by camera motion alone, smearing the canopy whenever wind blows.
+            // transform.  Skipping this would leave the upscaler reprojecting
+            // foliage by camera motion alone, smearing the canopy whenever wind blows.
             if (mVegetationRenderer.GetTotalInstanceCount() > 0
                 && mMotionVectorRenderer.BeginExternalPass(commandList))
             {
@@ -2318,65 +2378,125 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             }
         }
 
-        DlssRenderer::CameraFrameData cameraData{};
-        cameraData.View = mNonJitteredViewMatrix;
-        cameraData.Projection = mNonJitteredProjectionMatrix;
-        cameraData.PrevViewProjection = mPreviousViewProjectionForRtgi;
-        cameraData.CameraPosition = mCamera.GetPosition();
-        cameraData.CameraUp = mCamera.GetUpVector();
-        cameraData.CameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
-        cameraData.CameraForward = mCamera.GetForwardVector();
-        cameraData.JitterX = mCurrentCameraJitter[0];
-        cameraData.JitterY = mCurrentCameraJitter[1];
-        cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
-        cameraData.NearPlane = 0.1f;
-        cameraData.FarPlane = mViewDistanceMeters;
-        cameraData.FovY = XM_PIDIV4;
-        cameraData.AspectRatio = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(mSceneHeight, 1u));
+        const XMFLOAT3 cameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
+        // mCurrentCameraJitter is the offset whose NDC shift is (2x/w, 2y/h). FSR
+        // counts pixels with +Y down, which flips the vertical component.
+        const float fsrJitterX = mCurrentCameraJitter[0];
+        const float fsrJitterY = -mCurrentCameraJitter[1];
 
-        ID3D12Resource* dlssInputResource = mSceneColorTarget.Get();
+        ID3D12Resource* colorInputResource = mSceneColorTarget.Get();
         ID3D12Resource* motionVectorResource = mMotionVectorRenderer.GetOutputResource();
-        const D3D12_RESOURCE_STATES dlssReadState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        const D3D12_RESOURCE_STATES upscalerReadState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 
+        // Scene colour is only an input to the upscalers; frame generation works
+        // from the presented back buffer instead.
+        if (upscalerWillEvaluate)
         {
             const auto colorToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
-                dlssInputResource,
+                colorInputResource,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                dlssReadState);
+                upscalerReadState);
             commandList->ResourceBarrier(1, &colorToAllShaderRead);
         }
 
-        if (mDepthBufferState != dlssReadState)
+        if (mDepthBufferState != upscalerReadState)
         {
             const auto depthToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
                 mSceneDepthTarget.Get(),
                 mDepthBufferState,
-                dlssReadState);
+                upscalerReadState);
             commandList->ResourceBarrier(1, &depthToSrv);
-            mDepthBufferState = dlssReadState;
+            mDepthBufferState = upscalerReadState;
         }
 
         {
             const auto motionVectorsToAllShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
                 motionVectorResource,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                dlssReadState);
+                upscalerReadState);
             commandList->ResourceBarrier(1, &motionVectorsToAllShaderRead);
         }
 
-        mDlssRenderer.Evaluate(
-            commandList,
-            dlssInputResource,
-            mSceneDepthTarget.Get(),
-            motionVectorResource,
-            cameraData,
-            mDlssSettings,
-            renderFrameIndex);
+        if (dlssWillEvaluate)
+        {
+            PTERO_SCOPED_PASS_TIMER("Post", "DLSS Upscaling");
+            DlssRenderer::CameraFrameData cameraData{};
+            cameraData.View = mNonJitteredViewMatrix;
+            cameraData.Projection = mNonJitteredProjectionMatrix;
+            cameraData.PrevViewProjection = mPreviousViewProjectionForRtgi;
+            cameraData.CameraPosition = mCamera.GetPosition();
+            cameraData.CameraUp = mCamera.GetUpVector();
+            cameraData.CameraRight = cameraRight;
+            cameraData.CameraForward = mCamera.GetForwardVector();
+            cameraData.JitterX = mCurrentCameraJitter[0];
+            cameraData.JitterY = mCurrentCameraJitter[1];
+            cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
+            cameraData.NearPlane = 0.1f;
+            cameraData.FarPlane = mViewDistanceMeters;
+            cameraData.FovY = XM_PIDIV4;
+            cameraData.AspectRatio = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(mSceneHeight, 1u));
 
+            mDlssRenderer.Evaluate(
+                commandList,
+                colorInputResource,
+                mSceneDepthTarget.Get(),
+                motionVectorResource,
+                cameraData,
+                mDlssSettings,
+                renderFrameIndex);
+        }
+        else if (fsrWillEvaluate)
+        {
+            PTERO_SCOPED_PASS_TIMER("Post", "FSR Upscaling");
+            FsrRenderer::FrameData frameData{};
+            frameData.JitterX = fsrJitterX;
+            frameData.JitterY = fsrJitterY;
+            frameData.FrameTimeDeltaMs = (std::max)(mFrameDeltaTimeMs, 0.1f);
+            frameData.NearPlane = 0.1f;
+            frameData.FarPlane = mViewDistanceMeters;
+            frameData.FovY = XM_PIDIV4;
+            frameData.Reset = mFsrSettings.ResetHistory || mTaaSettings.ResetHistory;
+
+            mFsrRenderer.Evaluate(
+                commandList,
+                colorInputResource,
+                mSceneDepthTarget.Get(),
+                motionVectorResource,
+                frameData,
+                mFsrSettings);
+        }
+
+        if (frameGenerationWillPrepare)
+        {
+            PTERO_SCOPED_PASS_TIMER("Post", "FSR Frame Generation Prepare");
+            FsrFrameGeneration::PrepareData prepareData{};
+            prepareData.RenderWidth = mSceneWidth;
+            prepareData.RenderHeight = mSceneHeight;
+            prepareData.JitterX = fsrJitterX;
+            prepareData.JitterY = fsrJitterY;
+            prepareData.FrameTimeDeltaMs = (std::max)(mFrameDeltaTimeMs, 0.1f);
+            prepareData.NearPlane = 0.1f;
+            prepareData.FarPlane = mViewDistanceMeters;
+            prepareData.FovY = XM_PIDIV4;
+            prepareData.Reset = historyReset;
+            prepareData.CameraPosition = mCamera.GetPosition();
+            prepareData.CameraUp = mCamera.GetUpVector();
+            prepareData.CameraRight = cameraRight;
+            prepareData.CameraForward = mCamera.GetForwardVector();
+
+            mFrameGeneration.Prepare(
+                commandList,
+                mSceneDepthTarget.Get(),
+                motionVectorResource,
+                prepareData,
+                mFsrSettings);
+        }
+
+        if (upscalerWillEvaluate)
         {
             const auto colorBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
-                dlssInputResource,
-                dlssReadState,
+                colorInputResource,
+                upscalerReadState,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             commandList->ResourceBarrier(1, &colorBackToPixelShaderRead);
         }
@@ -2384,16 +2504,16 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         {
             const auto motionVectorsBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
                 motionVectorResource,
-                dlssReadState,
+                upscalerReadState,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             commandList->ResourceBarrier(1, &motionVectorsBackToPixelShaderRead);
         }
 
-        if (mDepthBufferState == dlssReadState)
+        if (mDepthBufferState == upscalerReadState)
         {
             const auto depthBackToPixelShaderRead = CD3DX12_RESOURCE_BARRIER::Transition(
                 mSceneDepthTarget.Get(),
-                dlssReadState,
+                upscalerReadState,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             commandList->ResourceBarrier(1, &depthBackToPixelShaderRead);
             mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -2407,9 +2527,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // PASS 7.75 - Image sharpening (optional)
     // Runs after the selected AA/upscaling pass and before bloom/tonemapping.
     // -----------------------------------------------------------------------
-    const bool dlssOutputAvailable = mDlssSettings.Enabled
-        && mDlssRenderer.IsInitialized()
-        && !mDlssRenderer.IsEvaluationBypassed();
+    const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
     const bool imageSharpenWillApply = !rtaoDebugViewActive
         && mSharpenSettings.ImageSharpeningEnabled
         && mImageSharpenRenderer.IsInitialized();
@@ -2419,22 +2537,23 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         ID3D12Resource* sharpenInputResource = mSceneColorTarget.Get();
         D3D12_CPU_DESCRIPTOR_HANDLE sharpenInputSrv = mSceneSrvCpuHandle;
 
-        if (dlssOutputAvailable)
+        if (upscalerOutputAvailable)
         {
-            sharpenInputResource = mDlssRenderer.GetOutputResource();
-            sharpenInputSrv = mDlssRenderer.GetOutputCpuSrv();
+            sharpenInputResource = GetUpscalerOutputResource();
+            sharpenInputSrv = GetUpscalerOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
         {
             sharpenInputResource = mSmaaRenderer.GetOutputResource();
             sharpenInputSrv = mSmaaRenderer.GetOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             sharpenInputResource = mTaaRenderer.GetOutputResource();
             sharpenInputSrv = mTaaRenderer.GetOutputCpuSrv();
         }
 
+        PTERO_SCOPED_PASS_TIMER("Post", "Image sharpen");
         mImageSharpenRenderer.Apply(commandList, sharpenInputResource, sharpenInputSrv, mSharpenSettings);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -2455,22 +2574,23 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             bloomInputResource = mImageSharpenRenderer.GetOutputResource();
             bloomInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
         }
-        else if (dlssOutputAvailable)
+        else if (upscalerOutputAvailable)
         {
-            bloomInputResource = mDlssRenderer.GetOutputResource();
-            bloomInputSrv = mDlssRenderer.GetOutputCpuSrv();
+            bloomInputResource = GetUpscalerOutputResource();
+            bloomInputSrv = GetUpscalerOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
         {
             bloomInputResource = mSmaaRenderer.GetOutputResource();
             bloomInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             bloomInputResource = mTaaRenderer.GetOutputResource();
             bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
+        PTERO_SCOPED_PASS_TIMER("Post", "Bloom");
         mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -2497,17 +2617,17 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             agxInputResource = mImageSharpenRenderer.GetOutputResource();
             agxInputSrv = mImageSharpenRenderer.GetOutputCpuSrv();
         }
-        else if (dlssOutputAvailable)
+        else if (upscalerOutputAvailable)
         {
-            agxInputResource = mDlssRenderer.GetOutputResource();
-            agxInputSrv = mDlssRenderer.GetOutputCpuSrv();
+            agxInputResource = GetUpscalerOutputResource();
+            agxInputSrv = GetUpscalerOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
         {
             agxInputResource = mSmaaRenderer.GetOutputResource();
             agxInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             agxInputResource = mTaaRenderer.GetOutputResource();
             agxInputSrv      = mTaaRenderer.GetOutputCpuSrv();
@@ -2520,6 +2640,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         if (mAgxSettings.ExposureMode == AgxExposureMode::AutoHistogram &&
             mAutoExposure.IsInitialized())
         {
+            PTERO_SCOPED_PASS_TIMER("Post", "Auto exposure");
             const bool metered = mAutoExposure.Apply(
                 commandList,
                 agxInputResource,
@@ -2531,6 +2652,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 autoExposureSrv = mAutoExposure.GetExposureCpuSrv();
         }
 
+        PTERO_SCOPED_PASS_TIMER("Post", "AgX tonemap");
         mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings, autoExposureSrv);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -2568,22 +2690,23 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             caInputResource = mImageSharpenRenderer.GetOutputResource();
             caInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
         }
-        else if (dlssOutputAvailable)
+        else if (upscalerOutputAvailable)
         {
-            caInputResource = mDlssRenderer.GetOutputResource();
-            caInputSrv      = mDlssRenderer.GetOutputCpuSrv();
+            caInputResource = GetUpscalerOutputResource();
+            caInputSrv      = GetUpscalerOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
         {
             caInputResource = mSmaaRenderer.GetOutputResource();
             caInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
         }
-        else if (!dlssWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
         {
             caInputResource = mTaaRenderer.GetOutputResource();
             caInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
+        PTERO_SCOPED_PASS_TIMER("Post", "Chromatic aberration");
         mChromaticAberrationRenderer.Apply(
             commandList, caInputResource, caInputSrv, mChromaticAberrationSettings);
 
@@ -2603,6 +2726,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     if (IsGameUiActive() || IsUiPreviewActive())
     {
+        PTERO_SCOPED_PASS_TIMER("Post", "RmlUi");
         mRmlUiRenderer.Render(commandList);
 
         // The UI pass rebinds the render target, viewport and scissor; put the shared
@@ -2653,6 +2777,11 @@ void DX12SceneRenderer::Shutdown()
     mWaterRenderer.Shutdown();
     mVegetationRenderer.Shutdown();
     mDlssRenderer.Shutdown();
+    // Before DX12Context shuts down: the frame generation context was configured
+    // with the proxy swap chain, which must still exist when it is released.
+    mFrameGeneration.Release();
+    mFsrRenderer.Shutdown();
+    mFsrWasActive = false;
     mChromaticAberrationRenderer.Shutdown();
     mSsrRenderer.Shutdown();
     mTaaRenderer.Shutdown();
@@ -2717,9 +2846,14 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
     UINT renderHeight = outputHeight;
     const UINT previousSceneWidth = mSceneWidth;
     const UINT previousSceneHeight = mSceneHeight;
+    const bool fsrActive = IsFsrUpscalerActive();
     if (mDlssSettings.Enabled && mDlssRenderer.IsAvailable())
     {
         mDlssRenderer.QueryOptimalRenderSize(outputWidth, outputHeight, mDlssSettings, renderWidth, renderHeight);
+    }
+    else if (fsrActive)
+    {
+        mFsrRenderer.QueryRenderSize(outputWidth, outputHeight, mFsrSettings, renderWidth, renderHeight);
     }
     else if (mHasCustomSceneResolution)
     {
@@ -2732,9 +2866,27 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
         return true;
     }
 
-    const bool outputSizeChanged = !mDlssRenderer.IsInitialized()
-        || outputWidth != mDlssRenderer.GetOutputWidth()
-        || outputHeight != mDlssRenderer.GetOutputHeight();
+    // FSR owns a context and an output-size texture only while it is in use. The
+    // edge that turns it off also changes the render size back, so the resize below
+    // rebuilds the post chain at the right size; here only its memory is returned.
+    if (!fsrActive && mFsrWasActive)
+    {
+        mFsrRenderer.ReleaseResources();
+    }
+    mFsrWasActive = fsrActive;
+
+    // Only counted where DLSS exists: on a GPU without it the renderer is never
+    // initialised, and treating that as a pending resize would retry it - and
+    // rebuild the post chain - every frame.
+    const bool dlssOutputSizeChanged = mDlssRenderer.IsAvailable()
+        && (!mDlssRenderer.IsInitialized()
+            || outputWidth != mDlssRenderer.GetOutputWidth()
+            || outputHeight != mDlssRenderer.GetOutputHeight());
+    const bool fsrOutputSizeChanged = fsrActive
+        && (!mFsrRenderer.HasOutput()
+            || outputWidth != mFsrRenderer.GetOutputWidth()
+            || outputHeight != mFsrRenderer.GetOutputHeight());
+    const bool outputSizeChanged = dlssOutputSizeChanged || fsrOutputSizeChanged;
     const bool renderSizeChanged = !mSceneColorTarget
         || renderWidth != previousSceneWidth
         || renderHeight != previousSceneHeight;
@@ -2746,10 +2898,27 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
 
     if (!renderSizeChanged && outputSizeChanged)
     {
-        if (!mDlssRenderer.EnsureSize(renderWidth, renderHeight, outputWidth, outputHeight))
+        if (dlssOutputSizeChanged
+            && !mDlssRenderer.EnsureSize(renderWidth, renderHeight, outputWidth, outputHeight))
         {
             mLastErrorMessage = "Failed to resize the DLSS output resources.";
             return false;
+        }
+
+        if (fsrOutputSizeChanged && !mFsrRenderer.EnsureSize(renderWidth, renderHeight, outputWidth, outputHeight))
+        {
+            // Not fatal to the frame: FSR has no output, so the chain falls back
+            // to the raw scene colour and the panel shows why.
+            mFsrSettings.Enabled = false;
+            PteroLog::Writef(PteroLog::Level::Error, "FSR", "FSR switched off: %s",
+                mFsrRenderer.GetLastErrorMessage() ? mFsrRenderer.GetLastErrorMessage() : "could not create its resources.");
+            return true;
+        }
+
+        // The post chain runs at output size only while an upscaler feeds it.
+        if (!UpscalerOwnsPostAaOutput())
+        {
+            return true;
         }
 
         if (mBloomRenderer.IsInitialized())
@@ -2776,7 +2945,13 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
             mChromaticAberrationRenderer.Initialize(outputWidth, outputHeight);
         }
 
+        if (mRmlUiRenderer.IsInitialized())
+        {
+            mRmlUiRenderer.Resize(outputWidth, outputHeight);
+        }
+
         mDlssSettings.ResetHistory = true;
+        mFsrSettings.ResetHistory = true;
         return true;
     }
 
@@ -2786,7 +2961,9 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
 
 bool DX12SceneRenderer::ResizeSceneTarget(UINT width, UINT height)
 {
-    if (mDlssSettings.Enabled)
+    // An upscaler picks the render size from the window, so a requested viewport
+    // resolution does not apply while one is on.
+    if (mDlssSettings.Enabled || IsFsrUpscalerActive())
     {
         mHasCustomSceneResolution = false;
         return EnsureSceneTargetMatchesWindowSize();
@@ -2846,6 +3023,7 @@ bool DX12SceneRenderer::ApplyPendingMsaaSettings()
 
         mTaaSettings.ResetHistory = true;
         mDlssSettings.ResetHistory = true;
+        mFsrSettings.ResetHistory = true;
         mMsaaResolveTimeMs = 0.0f;
         return true;
     }
@@ -2866,6 +3044,26 @@ bool DX12SceneRenderer::ApplyPendingMsaaSettings()
 void DX12SceneRenderer::ClearCustomSceneResolution()
 {
     mHasCustomSceneResolution = false;
+}
+
+FsrRuntimeStatus DX12SceneRenderer::GetFsrRuntimeStatus()
+{
+    FsrRuntimeStatus status;
+    status.ApiAvailable = mFsrRenderer.IsAvailable() || mFrameGeneration.IsApiAvailable();
+    status.UpscalerActive = IsFsrUpscalerActive() && mFsrRenderer.HasOutput();
+    status.OverriddenByDlss = mFsrSettings.Enabled && IsDlssUpscalerActive();
+    status.FrameGenerationActive = mFrameGeneration.IsActive();
+    status.RenderWidth = mSceneWidth;
+    status.RenderHeight = mSceneHeight;
+    status.OutputWidth = status.UpscalerActive ? mFsrRenderer.GetOutputWidth() : mSceneWidth;
+    status.OutputHeight = status.UpscalerActive ? mFsrRenderer.GetOutputHeight() : mSceneHeight;
+    status.UpscalerVersion = mFsrRenderer.GetVersionName();
+    status.FrameGenerationVersion = mFrameGeneration.GetVersionName();
+    if (const char* error = mFsrRenderer.GetLastErrorMessage())
+        status.LastError = error;
+    else if (const char* frameGenerationError = mFrameGeneration.GetLastErrorMessage())
+        status.LastError = frameGenerationError;
+    return status;
 }
 
 bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
@@ -2910,13 +3108,23 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
 
     UINT outputWidth = mSceneWidth;
     UINT outputHeight = mSceneHeight;
-    if (DX12Context_GetRenderSize(&outputWidth, &outputHeight) && mDlssRenderer.IsAvailable())
+    const bool haveOutputSize = DX12Context_GetRenderSize(&outputWidth, &outputHeight);
+    if (haveOutputSize && mDlssRenderer.IsAvailable())
     {
         mDlssRenderer.EnsureSize(mSceneWidth, mSceneHeight, outputWidth, outputHeight);
     }
 
-    const UINT postProcessWidth = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputWidth : mSceneWidth;
-    const UINT postProcessHeight = (mDlssSettings.Enabled && mDlssRenderer.IsAvailable()) ? outputHeight : mSceneHeight;
+    if (haveOutputSize && IsFsrUpscalerActive()
+        && !mFsrRenderer.EnsureSize(mSceneWidth, mSceneHeight, outputWidth, outputHeight))
+    {
+        mFsrSettings.Enabled = false;
+        PteroLog::Writef(PteroLog::Level::Error, "FSR", "FSR switched off: %s",
+            mFsrRenderer.GetLastErrorMessage() ? mFsrRenderer.GetLastErrorMessage() : "could not create its resources.");
+    }
+
+    const bool upscaling = UpscalerOwnsPostAaOutput();
+    const UINT postProcessWidth = upscaling ? outputWidth : mSceneWidth;
+    const UINT postProcessHeight = upscaling ? outputHeight : mSceneHeight;
 
     if (mAgxTonemapper.IsInitialized())
     {
@@ -2961,6 +3169,7 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
     }
 
     mDlssSettings.ResetHistory = true;
+    mFsrSettings.ResetHistory = true;
 
     return true;
 }
@@ -2979,6 +3188,7 @@ bool DX12SceneRenderer::RecreateSceneTargetsForMsaaChange()
 
         mTaaSettings.ResetHistory = true;
         mDlssSettings.ResetHistory = true;
+        mFsrSettings.ResetHistory = true;
         return true;
     }
     catch (const std::exception& exception)
@@ -2992,6 +3202,64 @@ bool DX12SceneRenderer::RecreateSceneTargetsForMsaaChange()
         mLastErrorMessage = "Failed to recreate scene targets for the MSAA setting change: unknown exception.";
         OutputDebugStringA((mLastErrorMessage + "\n").c_str());
         return false;
+    }
+}
+
+void DX12SceneRenderer::WriteGpuProgress(UINT slot, UINT ordinal, D3D12_WRITEBUFFERIMMEDIATE_MODE mode)
+{
+    if (!mMarkerCommandList2 || !mGpuProgressBuffer)
+        return;
+    D3D12_WRITEBUFFERIMMEDIATE_PARAMETER parameter{};
+    parameter.Dest = mGpuProgressBuffer->GetGPUVirtualAddress() + slot * sizeof(UINT32);
+    parameter.Value = ((mGpuProgressFrame & 0xFFFFu) << 16) | (ordinal & 0xFFFFu);
+    mMarkerCommandList2->WriteBufferImmediate(1, &parameter, &mode);
+}
+
+void DX12SceneRenderer::LogGpuProgress() const
+{
+    if (mGpuProgressMapped == nullptr)
+        return;
+
+    const UINT32 frameBegun = mGpuProgressMapped[0] >> 16;
+    const UINT32 started = mGpuProgressMapped[1];
+    const UINT32 finished = mGpuProgressMapped[2];
+    const UINT32 frameDone = mGpuProgressMapped[3] >> 16;
+    const auto passName = [this](UINT32 ordinal) -> std::string
+    {
+        if (ordinal == 0 || ordinal > mLastPassOrder.size())
+            return "(unknown pass)";
+        return std::string(mLastPassOrder[ordinal - 1].first) + ": " + mLastPassOrder[ordinal - 1].second;
+    };
+
+    PTERO_LOG_ERROR("Renderer",
+        "GPU progress: CPU recorded scene frame %u; GPU began scene frame %u and finished scene frame %u.",
+        mGpuProgressFrame & 0xFFFFu, frameBegun, frameDone);
+    PTERO_LOG_ERROR("Renderer", "  last pass started:  #%u %s (frame %u)",
+        started & 0xFFFFu, passName(started & 0xFFFFu).c_str(), started >> 16);
+    PTERO_LOG_ERROR("Renderer", "  last pass finished: #%u %s (frame %u)",
+        finished & 0xFFFFu, passName(finished & 0xFFFFu).c_str(), finished >> 16);
+    if (started != finished)
+    {
+        PTERO_LOG_ERROR("Renderer", "  => the GPU is stuck inside #%u %s",
+            started & 0xFFFFu, passName(started & 0xFFFFu).c_str());
+    }
+    else if (frameBegun != frameDone)
+    {
+        PTERO_LOG_ERROR("Renderer", "  => the GPU is stuck between passes after #%u, outside any timed pass.",
+            finished & 0xFFFFu);
+    }
+    else
+    {
+        PTERO_LOG_ERROR("Renderer", "  => the scene work of that frame completed; the GPU is stuck after the scene (UI, upscaler outside a timed pass, or present).");
+    }
+}
+
+void DX12SceneRenderer::LogPassOrder() const
+{
+    PTERO_LOG_ERROR("Renderer", "GPU events opened by the last recorded frame (BeginEvent #N = pass):");
+    for (std::size_t i = 0; i < mLastPassOrder.size(); ++i)
+    {
+        PTERO_LOG_ERROR("Renderer", "  #%zu  %s: %s", i + 1, mLastPassOrder[i].first, mLastPassOrder[i].second);
     }
 }
 
@@ -4482,7 +4750,31 @@ void DX12SceneRenderer::UpdateSceneConstants()
     // Apply a sub-pixel Halton jitter to the projection matrix when TAA is enabled.
     // Jittering causes each frame to sample a slightly different sub-pixel location;
     // the TAA resolve pass then accumulates these into a stable anti-aliased image.
-    if (mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
+    //
+    // FSR needs jitter whether or not TAA is on, and uses its own sequence: its
+    // length grows with the upscale ratio so every output pixel is covered.
+    if (IsFsrUpscalerActive() && mSceneWidth > 0 && mSceneHeight > 0)
+    {
+        UINT outputWidth = mSceneWidth;
+        UINT outputHeight = mSceneHeight;
+        DX12Context_GetRenderSize(&outputWidth, &outputHeight);
+
+        float fsrJitterX = 0.0f;
+        float fsrJitterY = 0.0f;
+        mFsrRenderer.GetJitterOffset(mFsrJitterIndex++, mSceneWidth, outputWidth, fsrJitterX, fsrJitterY);
+
+        // FSR reports pixels with +Y down; the engine's offset shifts NDC by
+        // (2x/w, 2y/h), and NDC +Y is up.
+        mCurrentCameraJitter[0] = fsrJitterX;
+        mCurrentCameraJitter[1] = -fsrJitterY;
+
+        XMFLOAT4X4 projF;
+        XMStoreFloat4x4(&projF, projection);
+        projF._31 += mCurrentCameraJitter[0] * 2.0f / static_cast<float>(mSceneWidth);
+        projF._32 += mCurrentCameraJitter[1] * 2.0f / static_cast<float>(mSceneHeight);
+        projection = XMLoadFloat4x4(&projF);
+    }
+    else if (mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
     {
         // Halton(2,3) sequence gives a well-distributed low-discrepancy pattern.
         constexpr UINT HaltonSequenceLength = 16;

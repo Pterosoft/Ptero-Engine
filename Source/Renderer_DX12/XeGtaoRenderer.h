@@ -61,6 +61,11 @@ private:
 
     bool mIsInitialized = false;
     bool mInitFailed    = false;
+    // The 14 shader-visible slots are taken from the shared heap once and rewritten
+    // in place on a resize. That heap never frees, so allocating per resize ran it
+    // dry after enough viewport or upscaler changes, and the pass then dispatched
+    // through descriptors still naming the textures it had just released.
+    bool mDescriptorsAllocated = false;
     std::string mLastError;
 
     UINT mWidth  = 0;

@@ -10,8 +10,8 @@
         "AutoExposureSpeedUp": 3.0,
         "Enabled": true,
         "Ev100": 0.0,
-        "Ev100Max": 3.0,
-        "Ev100Min": 3.0,
+        "Ev100Max": 2.700000047683716,
+        "Ev100Min": 2.700000047683716,
         "Exposure": 5.0,
         "ExposureMode": 1,
         "Global": {
@@ -19,28 +19,28 @@
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.25,
+                "Total": 0.20000000298023224,
                 "Yellow": 0.0
             },
             "Gain": {
-                "Blue": 0.0,
+                "Blue": 0.10000000149011612,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": -0.029999999329447746,
                 "Yellow": 0.0
             },
             "Gamma": {
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": -0.019999999552965164,
                 "Yellow": 0.0
             },
             "Saturation": {
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.11999999731779099,
+                "Total": 0.0,
                 "Yellow": 0.0
             },
             "Vibrance": {
@@ -77,7 +77,7 @@
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": -0.11999999731779099,
                 "Yellow": 0.0
             },
             "Vibrance": {
@@ -97,9 +97,9 @@
                 "Yellow": 0.0
             },
             "Gain": {
-                "Blue": 0.0,
+                "Blue": 0.019999999552965164,
                 "Green": 0.0,
-                "Red": 0.0,
+                "Red": -0.019999999552965164,
                 "Total": 0.0,
                 "Yellow": 0.0
             },
@@ -130,13 +130,13 @@
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": 0.10000000149011612,
                 "Yellow": 0.0
             },
             "Gain": {
-                "Blue": 0.0,
+                "Blue": 0.019999999552965164,
                 "Green": 0.0,
-                "Red": 0.0,
+                "Red": -0.03999999910593033,
                 "Total": 0.0,
                 "Yellow": 0.0
             },
@@ -151,14 +151,14 @@
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": -0.18000000715255737,
                 "Yellow": 0.0
             },
             "Vibrance": {
                 "Blue": 0.0,
                 "Green": 0.0,
                 "Red": 0.0,
-                "Total": 0.0,
+                "Total": 0.24799999594688416,
                 "Yellow": 0.0
             }
         },
@@ -174,13 +174,13 @@
         "Threshold": 0.8999999761581421
     },
     "CameraPosition": {
-        "X": 8.379578590393066,
-        "Y": -9.724038124084473,
-        "Z": 10.2518310546875
+        "X": 12.429234504699707,
+        "Y": -22.114471435546875,
+        "Z": 12.933667182922363
     },
     "CameraRotation": {
-        "X": -0.12579473853111267,
-        "Y": 5.400008678436279,
+        "X": -0.2807946801185608,
+        "Y": 18.14004135131836,
         "Z": 0.0
     },
     "ChromaticAberrationSettings": {
@@ -196,34 +196,6 @@
         "Mode": 6
     },
     "Entities": [
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -0.8079163432121277,
-                    "y": -2.835052251815796,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
         {
             "MeshComponent": {
                 "DebugForcedLod": -1,
@@ -249,90 +221,6 @@
                     "x": 1.5,
                     "y": 1.100000023841858,
                     "z": 1.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.69208335876465,
-                    "y": -2.835052251815796,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.69208335876465,
-                    "y": 19.664947509765625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -0.8079166412353516,
-                    "y": 19.664947509765625,
-                    "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
                 }
             }
         },
@@ -435,118 +323,6 @@
                     "x": 21.64020347595215,
                     "y": -25.06787109375,
                     "z": 0.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -0.8079166412353516,
-                    "y": 19.664947509765625,
-                    "z": 19.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.69208335876465,
-                    "y": 19.664947509765625,
-                    "z": 19.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": 21.69208335876465,
-                    "y": -2.835052490234375,
-                    "z": 19.0
-                },
-                "Rotation": {
-                    "x": 1.5707963705062866,
-                    "y": -0.0,
-                    "z": -0.0
-                },
-                "Scale": {
-                    "x": 0.5,
-                    "y": 0.5,
-                    "z": 0.5
-                }
-            }
-        },
-        {
-            "MeshComponent": {
-                "DebugForcedLod": -1,
-                "LodUsageScale": 1.0,
-                "MaterialPath": "Materials/Floor_Planks.json",
-                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
-            },
-            "NameComponent": {
-                "Name": "Geometry_1"
-            },
-            "TransformComponent": {
-                "Position": {
-                    "x": -0.8079166412353516,
-                    "y": -2.835052490234375,
-                    "z": 19.0
                 },
                 "Rotation": {
                     "x": 1.5707963705062866,
@@ -1525,9 +1301,240 @@
                     "z": 1.0
                 }
             }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -11.46743392944336,
+                    "y": -3.446244955062866,
+                    "z": 18.1214542388916
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -11.46743392944336,
+                    "y": 17.66516876220703,
+                    "z": 18.19839096069336
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 9.680011749267578,
+                    "y": 17.66516876220703,
+                    "z": 18.1214542388916
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 9.680011749267578,
+                    "y": -3.454845428466797,
+                    "z": 18.1845703125
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 9.680011749267578,
+                    "y": -3.454845428466797,
+                    "z": -1.5745067596435547
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 9.680011749267578,
+                    "y": 18.729721069335938,
+                    "z": -1.5745067596435547
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -12.710674285888672,
+                    "y": 18.729721069335938,
+                    "z": -1.5745067596435547
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
+        },
+        {
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_45"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": -12.710674285888672,
+                    "y": -3.7538564205169678,
+                    "z": -1.5745067596435547
+                },
+                "Rotation": {
+                    "x": 1.5707963705062866,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 0.5,
+                    "y": 0.5,
+                    "z": 0.5
+                }
+            }
         }
     ],
     "FormatVersion": 2,
+    "FsrSettings": {
+        "Enabled": false,
+        "FrameGeneration": false,
+        "Mode": 1,
+        "Sharpening": true,
+        "Sharpness": 0.5
+    },
     "GTAOSettings": {
         "DebugView": 0,
         "DenoisePasses": 0,
@@ -1706,12 +1713,12 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.029999999329447746,
+        "Density": 0.03999999910593033,
         "DepthSlices": 64,
         "EmissiveColorB": 1.0,
         "EmissiveColorG": 1.0,
         "EmissiveColorR": 1.0,
-        "EmissiveIntensity": 0.05000000074505806,
+        "EmissiveIntensity": 0.0,
         "Enabled": true,
         "FroxelTileSize": 8,
         "GiIntensity": 1.0,

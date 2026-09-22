@@ -137,7 +137,7 @@
       <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
       <Message>Copying dxcompiler.dll and dxil.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -163,7 +163,7 @@
       <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
       <Message>Copying dxcompiler.dll and dxil.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -177,6 +177,10 @@
     <ClInclude Include="DecalRenderer.h" />
     <ClInclude Include="DlssRenderer.h" />
     <ClInclude Include="DlssSettings.h" />
+    <ClInclude Include="FfxLoader.h" />
+    <ClInclude Include="FsrFrameGeneration.h" />
+    <ClInclude Include="FsrRenderer.h" />
+    <ClInclude Include="FsrSettings.h" />
     <ClInclude Include="GtaoSettings.h" />
     <ClInclude Include="ImageSharpenRenderer.h" />
     <ClInclude Include="MotionVectorRenderer.h" />
@@ -258,6 +262,9 @@
     <ClCompile Include="DeferredLightingPass.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="DlssRenderer.cpp" />
+    <ClCompile Include="FfxLoader.cpp" />
+    <ClCompile Include="FsrFrameGeneration.cpp" />
+    <ClCompile Include="FsrRenderer.cpp" />
     <ClCompile Include="DX12Context.cpp" />
     <ClCompile Include="DX12RendererAPI.cpp" />
     <ClCompile Include="HeightmapImporter.cpp" />

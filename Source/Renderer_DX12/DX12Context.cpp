@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "DX12Helper.h"
 #include "System/PteroLog.h"
+#include "FfxLoader.h"
+#include "FidelityFX-SDK-2.3.0/Kits/FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.h"
 
 #include "..\SDKs\Streamline\include\sl.h"
 
@@ -8,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <exception>
 #include <filesystem>
 
@@ -84,6 +87,10 @@ namespace
         // editor chain preserves its last frame while Play owns the renderer.
         ComPtr<IDXGISwapChain3> ParkedSwapChain;
         HWND ParkedWindowHandle = nullptr;
+        // Set when the chain beside it is AMD FSR's frame generation proxy rather
+        // than a plain DXGI chain. The proxy is destroyed through this context.
+        ffxContext SwapChainContext = nullptr;
+        ffxContext ParkedSwapChainContext = nullptr;
 
         ComPtr<ID3D12DescriptorHeap> RtvHeap;
         ComPtr<ID3D12DescriptorHeap> SrvHeap;
@@ -108,6 +115,21 @@ namespace
     };
 
     DX12ContextState g_Context;
+
+    // The shared heap is a bump allocator that never frees. Running out used to be
+    // silent, and a pass that then kept its stale descriptors hung the GPU.
+    void LogSrvHeapExhausted()
+    {
+        static bool logged = false;
+        if (logged)
+            return;
+        logged = true;
+        PteroLog::Writef(PteroLog::Level::Error, "Device",
+            "The shared shader-visible descriptor heap is full (%u slots). A pass that "
+            "re-allocates descriptors on every resize is leaking them.",
+            g_Context.SrvDescriptorCapacity);
+    }
+
     HMODULE gStreamlineModule = nullptr;
     bool gOwnsStreamlineModule = false;
 
@@ -263,6 +285,108 @@ namespace
         }
 
         return true;
+    }
+
+    DXGI_SWAP_CHAIN_DESC1 MakeSwapChainDesc(UINT width, UINT height)
+    {
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.BufferCount = FrameCount;
+        desc.Width = width;
+        desc.Height = height;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        desc.SampleDesc.Count = 1;
+        desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        return desc;
+    }
+
+    // The proxy holds a reference to the chain it wraps, so the context goes first
+    // and the application's reference is the last one released.
+    void DestroySwapChain(ComPtr<IDXGISwapChain3>& swapChain, ffxContext& swapChainContext)
+    {
+        if (swapChainContext != nullptr)
+        {
+            if (const ffxFunctions* ffx = FfxLoader::Get())
+                ffx->DestroyContext(&swapChainContext, nullptr);
+            swapChainContext = nullptr;
+        }
+        swapChain.Reset();
+    }
+
+    // Replaces the active chain for the same window with a plain DXGI chain or with
+    // FSR's frame generation proxy. A window can have only one flip-model chain, so
+    // the old one is fully released before the new one is created.
+    void ReplaceActiveSwapChain(bool frameGenerationProxy)
+    {
+        auto& ctx = g_Context;
+        DXGI_SWAP_CHAIN_DESC1 current{};
+        ThrowIfFailedWithContext(ctx.SwapChain->GetDesc1(&current), "IDXGISwapChain3::GetDesc1");
+        // Only the size is carried over. The proxy reports its own flags, and the
+        // chain that replaces it must be exactly what the engine would have made.
+        DXGI_SWAP_CHAIN_DESC1 desc = MakeSwapChainDesc(current.Width, current.Height);
+
+        for (auto& target : ctx.RenderTargets)
+            target.Reset();
+        DestroySwapChain(ctx.SwapChain, ctx.SwapChainContext);
+
+        if (frameGenerationProxy)
+        {
+            const ffxFunctions* ffx = FfxLoader::Get();
+            IDXGISwapChain4* proxy = nullptr;
+            ffxReturnCode_t result = FFX_API_RETURN_ERROR;
+            if (ffx != nullptr)
+            {
+                ffxCreateContextDescFrameGenerationSwapChainVersionDX12 version{};
+                version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
+                version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
+
+                ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 create{};
+                create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
+                create.header.pNext = &version.header;
+                create.swapchain = &proxy;
+                create.hwnd = ctx.WindowHandle;
+                create.desc = &desc;
+                create.fullscreenDesc = nullptr;
+                create.dxgiFactory = ctx.Factory.Get();
+                create.gameQueue = ctx.CommandQueue.Get();
+                result = ffx->CreateContext(&ctx.SwapChainContext, &create.header, nullptr);
+            }
+
+            if (result == FFX_API_RETURN_OK && proxy != nullptr)
+            {
+                // The context hands back a reference the caller owns.
+                ctx.SwapChain.Attach(static_cast<IDXGISwapChain3*>(proxy));
+                PteroLog::Write(PteroLog::Level::Info, "FSR", "Frame generation swap chain installed.");
+            }
+            else
+            {
+                if (proxy != nullptr)
+                    proxy->Release();
+                if (ctx.SwapChainContext != nullptr && ffx != nullptr)
+                    ffx->DestroyContext(&ctx.SwapChainContext, nullptr);
+                ctx.SwapChainContext = nullptr;
+                SetContextError("Could not create the FSR frame generation swap chain (ffxCreateContext returned "
+                    + std::to_string(result) + "). "
+                    + (FfxLoader::GetLastError() ? FfxLoader::GetLastError() : ""));
+                PteroLog::Write(PteroLog::Level::Error, "FSR", gLastContextError.c_str());
+            }
+        }
+
+        if (!ctx.SwapChain)
+        {
+            ComPtr<IDXGISwapChain1> created;
+            ThrowIfFailedWithContext(ctx.Factory->CreateSwapChainForHwnd(
+                ctx.CommandQueue.Get(), ctx.WindowHandle, &desc, nullptr, nullptr, &created),
+                "CreateSwapChainForHwnd(replace)");
+            ThrowIfFailedWithContext(created.As(&ctx.SwapChain), "QueryInterface(replacement swap chain)");
+        }
+
+        ThrowIfFailedWithContext(ctx.Factory->MakeWindowAssociation(ctx.WindowHandle, DXGI_MWA_NO_ALT_ENTER),
+            "MakeWindowAssociation(replace)");
+        ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
+        ctx.FenceValues.fill(0);
+        ThrowIfFailedWithContext(RecreateSwapChainRenderTargets() ? S_OK : E_FAIL, "RecreateSwapChainRenderTargets");
     }
 
     std::filesystem::path FindStreamlinePluginDirectory()
@@ -469,15 +593,7 @@ extern "C"
             ThrowIfFailedWithContext(ctx.Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&ctx.CommandQueue)), "ID3D12Device::CreateCommandQueue");
 
             ReportContextProgress(L"Creating swap chain...");
-            DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
-            swapChainDesc.BufferCount = FrameCount;
-            swapChainDesc.Width = ctx.Width;
-            swapChainDesc.Height = ctx.Height;
-            swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-            swapChainDesc.SampleDesc.Count = 1;
-            swapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+            DXGI_SWAP_CHAIN_DESC1 swapChainDesc = MakeSwapChainDesc(ctx.Width, ctx.Height);
 
             ComPtr<IDXGISwapChain1> swapChain;
             ThrowIfFailedWithContext(ctx.Factory->CreateSwapChainForHwnd(
@@ -722,21 +838,18 @@ extern "C"
                 throw std::runtime_error("GPU wait timed out before switching presentation windows.");
 
             ComPtr<IDXGISwapChain3> next;
+            ffxContext nextContext = nullptr;
             if (ctx.ParkedWindowHandle == windowHandle)
+            {
                 next = ctx.ParkedSwapChain;
+                nextContext = ctx.ParkedSwapChainContext;
+            }
             else
             {
                 RECT rect{};
                 GetClientRect(windowHandle, &rect);
-                DXGI_SWAP_CHAIN_DESC1 desc{};
-                desc.BufferCount = FrameCount;
-                desc.Width = (std::max)(1L, rect.right);
-                desc.Height = (std::max)(1L, rect.bottom);
-                desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-                desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-                desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-                desc.SampleDesc.Count = 1;
-                desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+                const DXGI_SWAP_CHAIN_DESC1 desc = MakeSwapChainDesc(
+                    static_cast<UINT>((std::max)(1L, rect.right)), static_cast<UINT>((std::max)(1L, rect.bottom)));
                 ComPtr<IDXGISwapChain1> created;
                 ThrowIfFailedWithContext(ctx.Factory->CreateSwapChainForHwnd(
                     ctx.CommandQueue.Get(), windowHandle, &desc, nullptr, nullptr, &created),
@@ -748,9 +861,17 @@ extern "C"
             DXGI_SWAP_CHAIN_DESC1 desc{};
             ThrowIfFailedWithContext(next->GetDesc1(&desc), "GetDesc1(Play swap chain)");
             for (auto& target : ctx.RenderTargets) target.Reset();
+            // The parked slot holds one chain. Whatever it held before, other than
+            // the chain now becoming active, belongs to a window that is no longer
+            // presented to and is destroyed rather than overwritten, so its proxy
+            // context is released with it.
+            if (ctx.ParkedSwapChain && ctx.ParkedSwapChain != next)
+                DestroySwapChain(ctx.ParkedSwapChain, ctx.ParkedSwapChainContext);
             ctx.ParkedSwapChain = ctx.SwapChain;
+            ctx.ParkedSwapChainContext = ctx.SwapChainContext;
             ctx.ParkedWindowHandle = ctx.WindowHandle;
             ctx.SwapChain = next;
+            ctx.SwapChainContext = nextContext;
             ctx.WindowHandle = windowHandle;
             ctx.Width = desc.Width;
             ctx.Height = desc.Height;
@@ -847,6 +968,43 @@ extern "C"
         return g_Context.CommandQueue.Get();
     }
 
+    __declspec(dllexport) IDXGISwapChain* __stdcall DX12Context_GetSwapChain()
+    {
+        return g_Context.SwapChain.Get();
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_IsFrameGenerationSwapChain()
+    {
+        return g_Context.SwapChainContext != nullptr;
+    }
+
+    // Installs or removes FSR's frame generation proxy for the active window. Only
+    // between frames: the GPU is flushed and every back buffer reference dropped.
+    // Returns false when the proxy was asked for but could not be created; the
+    // window is then left with a working plain chain.
+    __declspec(dllexport) bool __stdcall DX12Context_SetFrameGenerationSwapChain(bool enable)
+    {
+        auto& ctx = g_Context;
+        if (enable == (ctx.SwapChainContext != nullptr))
+            return true;
+
+        try
+        {
+            if (!(ctx.Device && ctx.SwapChain && ctx.Factory && ctx.CommandQueue) || ctx.CommandListOpen)
+                throw std::runtime_error("The swap chain can only be replaced between frames.");
+            if (!FlushGPU(2000))
+                throw std::runtime_error("GPU wait timed out before replacing the swap chain.");
+
+            ReplaceActiveSwapChain(enable);
+            return enable == (ctx.SwapChainContext != nullptr);
+        }
+        catch (const std::exception& exception)
+        {
+            SetContextError(std::string("DX12Context_SetFrameGenerationSwapChain failed: ") + exception.what());
+            return false;
+        }
+    }
+
     __declspec(dllexport) bool __stdcall DX12Context_StreamlineInitialize()
     {
         auto& ctx = g_Context;
@@ -939,6 +1097,7 @@ extern "C"
         auto& ctx = g_Context;
         if (!ctx.SrvHeap || ctx.NextAvailableSrvDescriptor >= ctx.SrvDescriptorCapacity)
         {
+            LogSrvHeapExhausted();
             return false;
         }
 
@@ -961,7 +1120,10 @@ extern "C"
     {
         auto& ctx = g_Context;
         if (!ctx.SrvHeap || ctx.NextAvailableSrvDescriptor >= ctx.SrvDescriptorCapacity)
+        {
+            LogSrvHeapExhausted();
             return false;
+        }
 
         UINT idx = ctx.NextAvailableSrvDescriptor;
         *cpuHandle = ctx.SrvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -1019,6 +1181,50 @@ extern "C"
                                  "Command list %d ('%s') stopped after %u of %u operations.",
                                  listIndex, listName[0] ? listName : "unnamed",
                                  completed, node->BreadcrumbCount);
+
+                // The renderer wraps each pass in a GPU event. Replaying the Begin/End
+                // pairs up to the stopping point gives the events it was inside, by
+                // ordinal; the scene renderer logs which pass each ordinal is, since
+                // DRED keeps the event strings only on some drivers.
+                {
+                    const auto contextAt = [node](UINT op) -> const wchar_t*
+                    {
+                        for (UINT c = 0; c < node->BreadcrumbContextsCount && node->pBreadcrumbContexts; ++c)
+                        {
+                            if (node->pBreadcrumbContexts[c].BreadcrumbIndex == op)
+                                return node->pBreadcrumbContexts[c].pContextString;
+                        }
+                        return nullptr;
+                    };
+
+                    struct OpenEvent { UINT Ordinal; const wchar_t* Name; };
+                    std::vector<OpenEvent> openEvents;
+                    UINT beginCount = 0;
+                    const UINT replayEnd = (std::min)(completed + 1, node->BreadcrumbCount);
+                    for (UINT op = 0; op < replayEnd; ++op)
+                    {
+                        const D3D12_AUTO_BREADCRUMB_OP kind = node->pCommandHistory[op];
+                        if (kind == D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT)
+                            openEvents.push_back({ ++beginCount, contextAt(op) });
+                        else if (kind == D3D12_AUTO_BREADCRUMB_OP_ENDEVENT && !openEvents.empty())
+                            openEvents.pop_back();
+                    }
+
+                    if (openEvents.empty())
+                    {
+                        PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                         "    Inside no GPU event (%u events had been opened and closed before it).", beginCount);
+                    }
+                    for (const OpenEvent& open : openEvents)
+                    {
+                        char narrow[128] = {};
+                        if (open.Name != nullptr)
+                            WideCharToMultiByte(CP_UTF8, 0, open.Name, -1, narrow, sizeof(narrow) - 1, nullptr, nullptr);
+                        PteroLog::Writef(PteroLog::Level::Fatal, "Device",
+                                         "    Inside GPU event BeginEvent #%u%s%s", open.Ordinal,
+                                         narrow[0] ? " = " : " (see the pass list below)", narrow);
+                    }
+                }
 
                 // The few operations either side of where it stopped are what
                 // identify the pass.
@@ -1157,8 +1363,8 @@ extern "C"
 
             ctx.RtvHeap.Reset();
             ctx.SrvHeap.Reset();
-            ctx.SwapChain.Reset();
-            ctx.ParkedSwapChain.Reset();
+            DestroySwapChain(ctx.SwapChain, ctx.SwapChainContext);
+            DestroySwapChain(ctx.ParkedSwapChain, ctx.ParkedSwapChainContext);
             ctx.ParkedWindowHandle = nullptr;
             ctx.Fence.Reset();
             ctx.CommandQueue.Reset();

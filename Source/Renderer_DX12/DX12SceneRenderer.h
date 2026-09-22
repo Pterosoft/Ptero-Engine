@@ -51,6 +51,9 @@
 #include "RendererTimingSnapshot.h"
 #include "DlssRenderer.h"
 #include "DlssSettings.h"
+#include "FsrRenderer.h"
+#include "FsrFrameGeneration.h"
+#include "FsrSettings.h"
 #include "MotionVectorRenderer.h"
 #include "GameHost.h"
 #include "RmlUiRenderer.h"
@@ -187,18 +190,67 @@ public:
     // come from the mesh renderer; the render targets are this class's own, and are
     // the things a geometry-pass draw writes through.
     void LogLiveGpuBufferRanges() const;
+    // The pass each GPU event ordinal belongs to, so a device-removed report's
+    // "inside BeginEvent #N" can be read as a pass name.
+    void LogPassOrder() const;
     void  InvalidateEntityPipeline() { mEntityMeshRenderer.InvalidatePipeline(); }
     float& GetViewDistanceMetersRef() { return mViewDistanceMeters; }
 
+    // DLSS and FSR fill the same slot in the post chain, between TAA/SMAA and
+    // sharpening. DLSS takes it when both are switched on, so the two never run in
+    // the same frame.
+    bool IsDlssUpscalerActive() const
+    {
+        return mDlssSettings.Enabled && mDlssRenderer.IsAvailable();
+    }
+
+    bool IsFsrUpscalerActive() const
+    {
+        return !IsDlssUpscalerActive() && mFsrSettings.Enabled && mFsrRenderer.IsAvailable();
+    }
+
+    // While an upscaler owns the slot, TAA and SMAA are skipped: it does their job.
+    bool UpscalerOwnsPostAaOutput() const
+    {
+        return IsDlssUpscalerActive() || IsFsrUpscalerActive();
+    }
+
+    bool IsUpscalerOutputAvailable() const
+    {
+        if (IsDlssUpscalerActive())
+            return mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed();
+        return IsFsrUpscalerActive() && mFsrRenderer.HasOutput();
+    }
+
+    ID3D12Resource* GetUpscalerOutputResource() const
+    {
+        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputResource() : mFsrRenderer.GetOutputResource();
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE GetUpscalerOutputCpuSrv() const
+    {
+        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputCpuSrv() : mFsrRenderer.GetOutputCpuSrv();
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetUpscalerOutputGpuSrv() const
+    {
+        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputGpuSrv() : mFsrRenderer.GetOutputGpuSrv();
+    }
+
+    UiTextureID GetUpscalerOutputTextureId() const
+    {
+        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputTextureId() : mFsrRenderer.GetOutputTextureId();
+    }
+
     // Returns the final scene output for display:
-    //   AgX tonemapped → Bloom composited → sharpened image → DLSS upscaled → SMAA resolved → TAA resolved → raw scene colour (in priority order when enabled).
+    //   AgX tonemapped → Bloom composited → sharpened image → DLSS/FSR upscaled → SMAA resolved → TAA resolved → raw scene colour (in priority order when enabled).
     UiTextureID GetSceneTextureId() const
     {
-        const bool dlssOwnsPostAaOutput = mDlssSettings.Enabled && mDlssRenderer.IsAvailable();
-        const bool dlssOutputAvailable = mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed();
+        const bool upscalerOwnsPostAaOutput = UpscalerOwnsPostAaOutput();
+        const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
         const bool imageSharpenOutputAvailable = mSharpenSettings.ImageSharpeningEnabled
             && mImageSharpenRenderer.IsInitialized()
-            && (!dlssOwnsPostAaOutput || dlssOutputAvailable);
+            && (!upscalerOwnsPostAaOutput || upscalerOutputAvailable);
 
         if (mRtaoSettings.DebugView > 0)
             return mSceneTextureId;
@@ -212,22 +264,22 @@ public:
             return mBloomRenderer.GetOutputTextureId();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputTextureId();
-        if (dlssOutputAvailable)
-            return mDlssRenderer.GetOutputTextureId();
-        if (!dlssOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        if (upscalerOutputAvailable)
+            return GetUpscalerOutputTextureId();
+        if (!upscalerOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
             return mSmaaRenderer.GetOutputTextureId();
-        if (!dlssOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        if (!upscalerOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
             return mTaaRenderer.GetOutputTextureId();
         return mSceneTextureId;
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE GetSceneTextureHandle() const
     {
-        const bool dlssOwnsPostAaOutput = mDlssSettings.Enabled && mDlssRenderer.IsAvailable();
-        const bool dlssOutputAvailable = mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed();
+        const bool upscalerOwnsPostAaOutput = UpscalerOwnsPostAaOutput();
+        const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
         const bool imageSharpenOutputAvailable = mSharpenSettings.ImageSharpeningEnabled
             && mImageSharpenRenderer.IsInitialized()
-            && (!dlssOwnsPostAaOutput || dlssOutputAvailable);
+            && (!upscalerOwnsPostAaOutput || upscalerOutputAvailable);
 
         if (mRtaoSettings.DebugView > 0)
             return mSceneSrvGpuHandle;
@@ -239,11 +291,11 @@ public:
             return mBloomRenderer.GetOutputGpuSrv();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputGpuSrv();
-        if (dlssOutputAvailable)
-            return mDlssRenderer.GetOutputGpuSrv();
-        if (!dlssOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        if (upscalerOutputAvailable)
+            return GetUpscalerOutputGpuSrv();
+        if (!upscalerOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
             return mSmaaRenderer.GetOutputGpuSrv();
-        if (!dlssOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        if (!upscalerOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
             return mTaaRenderer.GetOutputGpuSrv();
         return mSceneSrvGpuHandle;
     }
@@ -305,6 +357,21 @@ public:
     DlssSettings& GetDlssSettings() { return mDlssSettings; }
     const DlssSettings& GetDlssSettings() const { return mDlssSettings; }
 
+    FsrSettings& GetFsrSettings() { return mFsrSettings; }
+    const FsrSettings& GetFsrSettings() const { return mFsrSettings; }
+
+    // Driven from the frame loop, which owns the swap chain it presents through.
+    FsrFrameGeneration& GetFrameGeneration() { return mFrameGeneration; }
+
+    // True when the settings ask for frame generation and the API can provide it,
+    // i.e. when the frame loop should install FSR's proxy swap chain.
+    bool WantsFrameGenerationSwapChain()
+    {
+        return mFsrSettings.FrameGeneration && mFrameGeneration.IsApiAvailable();
+    }
+
+    FsrRuntimeStatus GetFsrRuntimeStatus();
+
     UiTextureID GetPointShadowDebugTextureId() const
     {
         return static_cast<UiTextureID>(mPointShadowMapRenderer.GetShadowTextureArraySrvGpuHandle().ptr);
@@ -351,10 +418,34 @@ public:
             , mName(name)
             , mStart(std::chrono::steady_clock::now())
         {
+            // Also a GPU event, so a device-removed report can name the pass a hung
+            // or faulting operation belongs to: DRED keeps the event's string as
+            // breadcrumb context, where on its own it only knows "Dispatch #134".
+            mCommandList = renderer ? renderer->mMarkerCommandList : nullptr;
+            if (mCommandList != nullptr)
+            {
+                // DRED does not always keep the event strings, so the order is kept
+                // here too: the Nth BeginEvent in a command list is entry N.
+                renderer->mCurrentPassOrder.push_back({ category, name });
+                mOrdinal = static_cast<UINT>(renderer->mCurrentPassOrder.size());
+                renderer->WriteGpuProgress(1, mOrdinal, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN);
+                wchar_t label[96] = {};
+                const int written = swprintf_s(label, L"%hs: %hs", category, name);
+                if (written > 0)
+                    mCommandList->BeginEvent(0, label, static_cast<UINT>((written + 1) * sizeof(wchar_t)));
+                else
+                    mCommandList = nullptr;
+            }
         }
 
         ~PassTimer()
         {
+            if (mCommandList != nullptr)
+            {
+                mCommandList->EndEvent();
+                mRenderer->WriteGpuProgress(2, mOrdinal, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT);
+            }
+
             if (mRenderer == nullptr)
                 return;
 
@@ -368,6 +459,8 @@ public:
 
     private:
         DX12SceneRenderer* mRenderer;
+        ID3D12GraphicsCommandList* mCommandList = nullptr;
+        UINT               mOrdinal = 0;
         const char*        mCategory;
         const char*        mName;
         std::chrono::steady_clock::time_point mStart;
@@ -458,11 +551,11 @@ public:
     // Get the final scene color target resource for screenshot capture
     ID3D12Resource* GetSceneColorTargetResource() const
     {
-        const bool dlssOwnsPostAaOutput = mDlssSettings.Enabled && mDlssRenderer.IsAvailable();
-        const bool dlssOutputAvailable = mDlssSettings.Enabled && mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed();
+        const bool upscalerOwnsPostAaOutput = UpscalerOwnsPostAaOutput();
+        const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
         const bool imageSharpenOutputAvailable = mSharpenSettings.ImageSharpeningEnabled
             && mImageSharpenRenderer.IsInitialized()
-            && (!dlssOwnsPostAaOutput || dlssOutputAvailable);
+            && (!upscalerOwnsPostAaOutput || upscalerOutputAvailable);
 
         // Return the final output texture based on which post-process is active
         if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
@@ -471,11 +564,11 @@ public:
             return mBloomRenderer.GetOutputResource();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputResource();
-        if (dlssOutputAvailable)
-            return mDlssRenderer.GetOutputResource();
-        if (!dlssOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+        if (upscalerOutputAvailable)
+            return GetUpscalerOutputResource();
+        if (!upscalerOwnsPostAaOutput && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
             return mSmaaRenderer.GetOutputResource();
-        if (!dlssOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+        if (!upscalerOwnsPostAaOutput && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
             return mTaaRenderer.GetOutputResource();
         return mSceneColorTarget.Get();
     }
@@ -729,6 +822,13 @@ private:
     SharpenSettings mSharpenSettings;
     DlssRenderer mDlssRenderer;
     DlssSettings mDlssSettings;
+    FsrRenderer mFsrRenderer;
+    FsrSettings mFsrSettings;
+    FsrFrameGeneration mFrameGeneration;
+    // FSR's context and output are freed while it is off; this notices the edge.
+    bool mFsrWasActive = false;
+    // Counts frames for FSR's own jitter sequence, which is longer than TAA's.
+    UINT mFsrJitterIndex = 0;
     MotionVectorRenderer mMotionVectorRenderer;
 
     // Sky rendering and time-of-day lighting.
@@ -823,6 +923,30 @@ private:
     void EndTimingFrame(float totalMilliseconds);
 
     RendererTimingSnapshot mPendingTimingSnapshot;
+
+    // The command list Render() is recording, for the GPU event each PassTimer
+    // emits. Null outside Render().
+    ID3D12GraphicsCommandList* mMarkerCommandList = nullptr;
+    // Pass names in the order their GPU events were opened, for this frame and the
+    // last complete one. Printed by LogPassOrder() on device removal.
+    std::vector<std::pair<const char*, const char*>> mCurrentPassOrder;
+    std::vector<std::pair<const char*, const char*>> mLastPassOrder;
+
+    // GPU progress breadcrumbs that survive a hang without device removal. The GPU
+    // writes (frame << 16 | pass ordinal) into a readback buffer as each pass starts
+    // and ends: slot 0 = frame begun, 1 = last pass started, 2 = last pass finished,
+    // 3 = frame finished. A preemptible compute shader stuck in a loop never trips
+    // TDR, so DRED never reports; this does.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGpuProgressBuffer;
+    const UINT32* mGpuProgressMapped = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> mMarkerCommandList2;
+    UINT mGpuProgressFrame = 0;
+    void WriteGpuProgress(UINT slot, UINT ordinal, D3D12_WRITEBUFFERIMMEDIATE_MODE mode);
+public:
+    // Logs which pass the GPU is inside, read from the progress buffer. For a frame
+    // that never retires.
+    void LogGpuProgress() const;
+private:
 
     // Jitter state for sub-pixel Halton offset (TAA projection jitter).
     UINT mJitterIndex = 0;

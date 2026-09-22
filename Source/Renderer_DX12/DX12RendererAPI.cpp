@@ -37,8 +37,10 @@
 #include <utility>
 #include <vector>
 #include <wincodec.h>
+#include <dbghelp.h>
 #pragma comment(lib, "pdh.lib")
 #pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "dbghelp.lib")
 
 
 extern "C"
@@ -57,6 +59,9 @@ extern "C"
     void __stdcall DX12Context_AbortFrame();
     bool __stdcall DX12Context_Resize(UINT width, UINT height);
     bool __stdcall DX12Context_SetPresentationWindow(HWND windowHandle);
+    IDXGISwapChain* __stdcall DX12Context_GetSwapChain();
+    bool __stdcall DX12Context_IsFrameGenerationSwapChain();
+    bool __stdcall DX12Context_SetFrameGenerationSwapChain(bool enable);
     HWND __stdcall DX12Context_GetWindowHandle();
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
@@ -417,6 +422,95 @@ namespace
     constexpr std::chrono::seconds kWatchdogStallThreshold{ 5 };
     constexpr std::chrono::seconds kWatchdogRepeatInterval{ 15 };
 
+    // How long one frame may spend reading meshes while a level streams in, and the
+    // paths that failed during it (so they count as done instead of retrying).
+    constexpr std::chrono::milliseconds kSceneMeshStreamingBudget{ 30 };
+    std::set<std::string> gStreamingFailedMeshPaths;
+
+    // Stamped by the render loop so the watchdog knows whose stack to read.
+    std::atomic<DWORD> gRenderThreadId{ 0 };
+
+    // "Everything above this line" only helps when the stuck code logs something
+    // first, and a long synchronous load usually does not. So the watchdog also
+    // reads the render thread's call stack. The thread is only suspended while
+    // the raw return addresses are unwound - nothing in that window allocates or
+    // takes a lock the stuck thread could hold - and symbols are resolved after
+    // it has been resumed.
+    void LogRenderThreadStack()
+    {
+        const DWORD threadId = gRenderThreadId.load(std::memory_order_relaxed);
+        if (threadId == 0) return;
+
+        HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, threadId);
+        if (thread == nullptr) return;
+
+        constexpr int kMaxFrames = 48;
+        DWORD64 frames[kMaxFrames] = {};
+        int frameCount = 0;
+
+        if (SuspendThread(thread) != static_cast<DWORD>(-1))
+        {
+            CONTEXT context{};
+            context.ContextFlags = CONTEXT_FULL;
+            if (GetThreadContext(thread, &context))
+            {
+                while (frameCount < kMaxFrames && context.Rip != 0)
+                {
+                    frames[frameCount++] = context.Rip;
+                    DWORD64 imageBase = 0;
+                    PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+                    if (function == nullptr)
+                    {
+                        // Leaf function: the return address is on top of the stack.
+                        context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                        context.Rsp += sizeof(DWORD64);
+                        continue;
+                    }
+                    PVOID handlerData = nullptr;
+                    DWORD64 establisherFrame = 0;
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function,
+                                     &context, &handlerData, &establisherFrame, nullptr);
+                }
+            }
+            ResumeThread(thread);
+        }
+        CloseHandle(thread);
+        if (frameCount == 0) return;
+
+        static bool symbolsReady = false;
+        if (!symbolsReady)
+        {
+            SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+            symbolsReady = SymInitialize(GetCurrentProcess(), nullptr, TRUE) != FALSE;
+        }
+
+        std::ostringstream stack;
+        stack << "Render thread call stack:";
+        for (int i = 0; i < frameCount; ++i)
+        {
+            stack << "\n    #" << i << "  ";
+            alignas(SYMBOL_INFO) char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+            SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolBuffer);
+            symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+            symbol->MaxNameLen = MAX_SYM_NAME;
+            DWORD64 displacement = 0;
+            if (symbolsReady && SymFromAddr(GetCurrentProcess(), frames[i], &displacement, symbol))
+            {
+                stack << symbol->Name;
+                IMAGEHLP_LINE64 line{};
+                line.SizeOfStruct = sizeof(line);
+                DWORD lineDisplacement = 0;
+                if (SymGetLineFromAddr64(GetCurrentProcess(), frames[i], &lineDisplacement, &line))
+                    stack << "  (" << std::filesystem::path(line.FileName).filename().string() << ":" << line.LineNumber << ")";
+            }
+            else
+            {
+                stack << "0x" << std::hex << frames[i] << std::dec;
+            }
+        }
+        PTERO_LOG_ERROR("Watchdog", "%s", stack.str().c_str());
+    }
+
     void WatchdogLoop()
     {
         std::uint64_t lastSeen = gFrameHeartbeat.load(std::memory_order_relaxed);
@@ -460,6 +554,7 @@ namespace
                             "Everything above this line is what it did last.",
                             static_cast<unsigned long long>(current),
                             std::chrono::duration<double>(now - lastChange).count());
+            LogRenderThreadStack();
             PteroLog::Flush();
         }
     }
@@ -1461,7 +1556,7 @@ extern "C"
                 // Straight after the page-fault address, so the two can be read
                 // together: whose memory that address was is not something DRED
                 // will say, but it is obvious against a list of what is resident.
-                if (gSceneRenderer) gSceneRenderer->LogLiveGpuBufferRanges();
+                if (gSceneRenderer) { gSceneRenderer->LogGpuProgress(); gSceneRenderer->LogPassOrder(); gSceneRenderer->LogLiveGpuBufferRanges(); }
                 PTERO_LOG_FATAL("Renderer",
                     "Rendering has stopped. Restart the editor; the log above names the last GPU work that ran.");
                 PteroLog::Flush();
@@ -1481,12 +1576,16 @@ extern "C"
         }
 
         gFrameHeartbeat.fetch_add(1, std::memory_order_relaxed);
+        gRenderThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
         const FrameProfiler frameProfiler;
         // Play requests and scene restoration happen before command recording begins.
         gEditor.UpdatePlaySession();
         QtUi::NewFrame();
         if (QtUi::ViewportHandle() != DX12Context_GetWindowHandle())
         {
+            // Frame generation is bound to the chain it was configured with, which
+            // is about to be parked; it is recreated for the new one below.
+            gSceneRenderer->GetFrameGeneration().Release();
             if (!DX12Context_SetPresentationWindow(QtUi::ViewportHandle()))
             {
                 const char* error=DX12Context_GetLastError();
@@ -1503,6 +1602,9 @@ extern "C"
         DX12Context_GetRenderSize(&renderWidth, &renderHeight);
         if (viewportRect.right > 0 && viewportRect.bottom > 0 && (renderWidth != viewportRect.right || renderHeight != viewportRect.bottom))
         {
+            // Released before the proxy chain resizes its buffers, and recreated at
+            // the new display size below.
+            gSceneRenderer->GetFrameGeneration().Release();
             if (!DX12Context_Resize(viewportRect.right, viewportRect.bottom)) return false;
             gBackBufferHasBeenPresented.fill(false);
             // A swap-chain resize flushes the GPU. If this keeps climbing while the window
@@ -1512,6 +1614,38 @@ extern "C"
         }
         gRendererStatisticsText.SetViewportInfo(
             static_cast<UINT>(viewportRect.right), static_cast<UINT>(viewportRect.bottom), gSwapChainResizeCount);
+
+        // FSR frame generation presents through a proxy swap chain of its own, so
+        // turning it on or off replaces the chain. That can only happen here,
+        // between frames, and it drops every back buffer back to COMMON state.
+        {
+            FsrSettings& fsrSettings = gSceneRenderer->GetFsrSettings();
+            const bool wantProxy = gSceneRenderer->WantsFrameGenerationSwapChain();
+            if (wantProxy != DX12Context_IsFrameGenerationSwapChain())
+            {
+                gSceneRenderer->GetFrameGeneration().Release();
+                if (!DX12Context_SetFrameGenerationSwapChain(wantProxy) && wantProxy)
+                {
+                    // Left with the plain chain. Switch the setting off rather than
+                    // retrying a full GPU flush and chain rebuild every frame.
+                    fsrSettings.FrameGeneration = false;
+                    const char* contextError = DX12Context_GetLastError();
+                    PTERO_LOG_ERROR("FSR", "Frame generation switched off: %s",
+                        contextError ? contextError : "the proxy swap chain could not be created.");
+                }
+                gBackBufferHasBeenPresented.fill(false);
+            }
+
+            UINT displayWidth = 0, displayHeight = 0;
+            DX12Context_GetRenderSize(&displayWidth, &displayHeight);
+            gSceneRenderer->GetFrameGeneration().Update(
+                DX12Context_IsFrameGenerationSwapChain() ? DX12Context_GetSwapChain() : nullptr,
+                displayWidth,
+                displayHeight,
+                gSceneRenderer->GetSceneWidth(),
+                gSceneRenderer->GetSceneHeight(),
+                fsrSettings);
+        }
         if (!gSceneRenderer->ApplyPendingMsaaSettings())
         {
             const char* sceneError = gSceneRenderer->GetLastErrorMessage();
@@ -1535,6 +1669,16 @@ extern "C"
             SetRendererError(contextError != nullptr
                 ? std::string("RendererDX12_Render could not begin a frame: ") + contextError
                 : "RendererDX12_Render could not begin a frame.");
+            // A GPU that stops retiring frames without being removed leaves DRED
+            // with nothing to say; the progress breadcrumbs name the pass instead.
+            // Once per stall is enough - the answer does not change while it lasts.
+            static bool gpuProgressLogged = false;
+            if (!gpuProgressLogged && gSceneRenderer)
+            {
+                gSceneRenderer->LogGpuProgress();
+                gSceneRenderer->LogPassOrder();
+                gpuProgressLogged = true;
+            }
             return false;
         }
 
@@ -1569,6 +1713,7 @@ extern "C"
             {
                 gEditor.SetSceneRenderer(gSceneRenderer.get());
                 gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
+                gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
                 gEditor.SetSceneSettings(
                     &gSceneRenderer->GetTimeOfDaySettings(),
                     &gSceneRenderer->GetTaaSettings(),
@@ -1611,6 +1756,16 @@ extern "C"
 
             // For each entity that has a MeshPath but no loaded MeshAsset, ask the
             // AssetManager to load it now so it becomes visible in the next frame.
+            // While the editor is bringing in a freshly opened level, only a
+            // time-boxed slice of them loads per frame: the whole level in one frame
+            // stalls the message pump long enough for Windows to call the editor
+            // "Not Responding", and the loading overlay could never update.
+            const bool streamingSceneAssets = gEditor.IsStreamingSceneAssets();
+            if (!streamingSceneAssets)
+                gStreamingFailedMeshPaths.clear();
+            const auto meshBudgetStart = std::chrono::steady_clock::now();
+            std::size_t sceneMeshTotal = 0;
+            std::size_t sceneMeshResolved = 0;
             for (Entity& entity : gEditor.GetEntities())
             {
                 if (!entity.HasMeshComponent())
@@ -1619,6 +1774,20 @@ extern "C"
                 }
 
                 MeshComponent& mc = *entity.Mesh;
+                if (streamingSceneAssets && !mc.MeshPath.empty())
+                {
+                    ++sceneMeshTotal;
+                    // A mesh that failed once this load counts as done; it would
+                    // otherwise hold the overlay up forever.
+                    if (mc.MeshAsset || gStreamingFailedMeshPaths.count(mc.MeshPath) != 0)
+                    {
+                        ++sceneMeshResolved;
+                        continue;
+                    }
+                    if (std::chrono::steady_clock::now() - meshBudgetStart > kSceneMeshStreamingBudget)
+                        continue;
+                }
+
                 if (!mc.MeshPath.empty() && !mc.MeshAsset)
                 {
                     {
@@ -1646,9 +1815,15 @@ extern "C"
                                   << "', meshPath='" << mc.MeshPath
                                   << "', error='" << gAssetManager.GetLastErrorMessage() << "'";
                         LogRendererMeshDiagnostic(logStream.str());
+                        if (streamingSceneAssets)
+                            gStreamingFailedMeshPaths.insert(mc.MeshPath);
                     }
+                    if (streamingSceneAssets)
+                        ++sceneMeshResolved;
                 }
             }
+            if (streamingSceneAssets)
+                gEditor.SetSceneAssetStreamingProgress(sceneMeshResolved, sceneMeshTotal);
 
             if (gAudioManagerPtr != nullptr && gAudioManagerPtr->IsInitialized())
             {
@@ -1761,6 +1936,7 @@ extern "C"
         commandList->ResourceBarrier(1, &toRenderTarget);
 
         commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+        bool frameGenerationFinished = false;
 
         // Match the editor background so the app chrome stays neutral while the actual
         // scene is shown inside the in-app viewport window.
@@ -1781,6 +1957,7 @@ extern "C"
             gbufferIds.Depth    = gSceneRenderer->GetGBufferDepthTextureId();
             gbufferIds.GiAccum  = gSceneRenderer->GetGiAccumTextureId();
             gbufferIds.PointShadowArray = gSceneRenderer->GetPointShadowDebugTextureId();
+            const FsrRuntimeStatus fsrStatus = gSceneRenderer->GetFsrRuntimeStatus();
             gUiBuildStart = std::chrono::steady_clock::now();
             if (!QtUi::IsGameWindowOpen()) RenderEditorMainMenu(
                 QtUi::HostHandle(),
@@ -1802,6 +1979,8 @@ extern "C"
                 &gSceneRenderer->GetMsaaSettings(),
                 &gSceneRenderer->GetSharpenSettings(),
                 &gSceneRenderer->GetDlssSettings(),
+                &gSceneRenderer->GetFsrSettings(),
+                &fsrStatus,
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetWindSettings(),
                 &gSceneRenderer->GetGlobalIlluminationMode(),
@@ -1823,6 +2002,7 @@ extern "C"
                 gSceneRenderer->GetMsaaResolveTimeMs());
             gSceneRenderer->SetViewDistanceMeters(viewDistanceMeters);
             gEditor.SetShowViewportGrid(gridEnabled);
+            gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
             gEditor.SetSceneSettings(
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetTaaSettings(),
@@ -1853,6 +2033,8 @@ extern "C"
             int viewportContentWidth = 0;
             int viewportContentHeight = 0;
             if (!gSceneRenderer->GetDlssSettings().Enabled
+                && !gSceneRenderer->IsFsrUpscalerActive()
+                && !gEditor.IsViewportResolutionFixed()
                 && gEditor.GetLastViewportContentResolution(viewportContentWidth, viewportContentHeight))
             {
                 const UINT requestedWidth = static_cast<UINT>(viewportContentWidth);
@@ -1958,6 +2140,12 @@ extern "C"
             GetClientRect(DX12Context_GetWindowHandle(), &viewportRect);
             QtViewportRenderer::Draw(commandList, gSceneRenderer->GetSceneTextureId(), viewportRect.right, viewportRect.bottom);
 
+            // The back buffer now holds the scene and nothing else. Frame generation
+            // keeps a copy of it, so it can tell the game UI drawn next apart from
+            // the scene and keep the UI from being dragged along with scene motion.
+            gSceneRenderer->GetFrameGeneration().FinishFrame(commandList, backBuffer, gSceneRenderer->GetFsrSettings());
+            frameGenerationFinished = true;
+
             // The game UI composites over the scene here rather than through the Qt UI
             // layer: the viewport is a native surface presented by this blit, and the Qt
             // draw list can only paint file-backed pixmaps, not live GPU textures.
@@ -1974,6 +2162,11 @@ extern "C"
             // Restore depth to DEPTH_WRITE for the next frame's geometry pass.
             gSceneRenderer->TransitionDepthAfterRead(commandList);
         }
+
+        // A frame that never reached the viewport blit presents without interpolation,
+        // but still advances frame generation's frame counter.
+        if (!frameGenerationFinished)
+            gSceneRenderer->GetFrameGeneration().FinishFrame(nullptr, nullptr, gSceneRenderer->GetFsrSettings());
 
         // Transition back to present state so swap chain can display the frame.
         auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -2037,6 +2230,15 @@ extern "C"
         if (QtUi::IsGameWindowOpen()) return true;
         RECT viewportRect{};
         GetClientRect(QtUi::ViewportHandle(), &viewportRect);
+        UINT currentWidth = 0, currentHeight = 0;
+        DX12Context_GetRenderSize(&currentWidth, &currentHeight);
+        if (gSceneRenderer && viewportRect.right > 0 && viewportRect.bottom > 0
+            && (currentWidth != static_cast<UINT>(viewportRect.right) || currentHeight != static_cast<UINT>(viewportRect.bottom)))
+        {
+            // As in the frame loop: never resize the proxy chain under a live
+            // frame generation context. The next frame recreates it.
+            gSceneRenderer->GetFrameGeneration().Release();
+        }
         if (!DX12Context_Resize(viewportRect.right, viewportRect.bottom))
         {
             const char* contextError = DX12Context_GetLastError();

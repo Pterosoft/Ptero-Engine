@@ -1,0 +1,214 @@
+Ptero Engine session log
+Started 2026-09-22 13:29:45
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-22_13-29-45.txt
+----------------------------------------------------------------------
+[13:29:45.507] [INFO ] [Log         ] Logging to disk started.
+[13:29:45.507] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-22_13-29-45.txt
+[13:29:45.507] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[13:29:51.004] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[13:29:51.018] [INFO ] [CVar        ] 333 cvars registered. Type 'list' in the console to see them.
+[13:29:51.019] [INFO ] [Renderer    ] Renderer initialized.
+[13:31:03.396] [DEBUG] [Renderer    ] Attempting mesh load for entity='Table', meshPath='Geometry/MET_Table/Meshes/SM_MET_Table_c0_LOD0.fbx.ptero', materialPath='Geometry/MET_Table/M_MET_Table.json'
+[13:31:03.416] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Table', vertices=54401, indices=312513, subMeshes=1
+[13:31:03.416] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[13:31:03.419] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[13:31:03.419] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_4', meshPath='Geometry/CS1_Cup/Meshes/SM_CS1_Cup_01_c0_LOD0.fbx.ptero', materialPath='Geometry/CS1_Cup/M_CS1_Cup.json'
+[13:31:03.419] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_4', vertices=2522, indices=10590, subMeshes=1
+[13:31:03.419] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[13:31:03.420] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[13:31:03.420] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_5', meshPath='Geometry/Modular/sm_Wall_1_1.fbx.ptero', materialPath='Materials/M_rock_wall_17.json'
+[13:31:03.420] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_5', vertices=148, indices=456, subMeshes=2
+[13:31:03.421] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[13:31:03.514] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[13:31:03.514] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[13:31:03.569] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[13:31:03.569] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_26', meshPath='Geometry/MVV_TavernFurniture_Bench02/Meshes/SM_MVV_BenchTavern02_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json'
+[13:31:03.569] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_26', vertices=158980, indices=923100, subMeshes=1
+[13:31:03.569] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[13:31:03.678] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[13:31:03.678] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[13:31:03.678] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[13:31:03.678] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice1', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.681] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice1', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.681] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice2', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.681] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice2', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.681] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice3', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.681] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice3', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.681] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice5', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.681] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice5', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.681] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice4', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.681] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice4', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.681] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_38', meshPath='Geometry/MVV_WoodenShelves_Shelves_01/Meshes/SM_MVV_WoodenShelve01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_WoodenShelves_Shelves_01/M_MVV_WoodenShelves_Shelves_01.json'
+[13:31:03.705] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_38', vertices=64221, indices=366270, subMeshes=1
+[13:31:03.706] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[13:31:03.707] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[13:31:03.707] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[13:31:03.707] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[13:31:03.707] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[13:31:03.707] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[13:31:03.707] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_39', meshPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/Meshes/SM_MVV_EarthenwarePlate02_c0_LOD1.fbx.ptero', materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json'
+[13:31:03.708] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_39', vertices=1437, indices=7416, subMeshes=1
+[13:31:03.708] [DEBUG] [Renderer    ] Attempting mesh load for entity='Dice6', meshPath='Geometry/dice/source/dice_low.fbx.ptero', materialPath='Geometry/dice/M_Dice.json'
+[13:31:03.708] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Dice6', vertices=5620, indices=15540, subMeshes=1
+[13:31:03.708] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_22', meshPath='Geometry/MVV_LogPile/Meshes/SM_MVV_LogPile_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json'
+[13:31:03.708] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_22', vertices=255793, indices=1504374, subMeshes=1
+[13:31:03.708] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.711] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.711] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.711] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.711] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.711] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.711] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.711] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.711] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_40', meshPath='Geometry/Modular/SM_Tavern_HearthFrame.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_HearthFrame.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_40', vertices=2418, indices=6576, subMeshes=3
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_42', meshPath='Geometry/Modular/SM_Tavern_TrimmedWallBay.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay2.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_42', vertices=6517, indices=20520, subMeshes=3
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_27', meshPath='Geometry/MVV_GarlicStringsSet_GarlicString01/Meshes/SM_MVV_GarlicStrings01_c0_LOD0.fbx.ptero', materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json'
+[13:31:03.713] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_27', vertices=317569, indices=1799199, subMeshes=1
+[13:31:03.713] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.718] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_45', meshPath='Geometry/Modular/SM_Tavern_CeilingModule.fbx.ptero', materialPath='Geometry/Modular/M_Tavern_CeilingModule.json'
+[13:31:03.718] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_45', vertices=6156, indices=12060, subMeshes=2
+[13:31:03.829] [INFO ] [Meshes      ] Entity constant buffer grown to 56 slots x 3 frames (43008 bytes).
+[13:31:03.830] [INFO ] [Meshes      ] Material constant buffer grown to 130 draws x 3 frames.
+[13:31:03.830] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x17a10000..0x17b59af0 (1350384 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.831] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1ff50000..0x1ffe897c (625020 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.832] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=1, vertexCount=28133, indexCount=156255, vbBytes=1350384, ibBytes=625020
+[13:31:03.832] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Table', lodIndex=1, vertexCount=28133, indexCount=156255, materialPath='Geometry/MET_Table/M_MET_Table.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=156255}, summedSubMeshIndices=156255, validSubMeshRanges=true
+[13:31:03.901] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1a940000..0x1a95d8e0 (121056 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.902] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xeef0000..0xeefa578 (42360 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.903] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=0, vertexCount=2522, indexCount=10590, vbBytes=121056, ibBytes=42360
+[13:31:03.903] [DEBUG] [Meshes      ] First draw for entityIndex=1, entity='Geometry_4', lodIndex=0, vertexCount=2522, indexCount=10590, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=10590}, summedSubMeshIndices=10590, validSubMeshRanges=true
+[13:31:03.934] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xb5e0000..0xb5f22d0 (74448 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.935] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x8bb0000..0x8bb52bc (21180 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.935] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=1, vertexCount=1551, indexCount=5295, vbBytes=74448, ibBytes=21180
+[13:31:03.935] [DEBUG] [Meshes      ] First draw for entityIndex=2, entity='Geometry_4', lodIndex=1, vertexCount=1551, indexCount=5295, materialPath='Geometry/CS1_Cup/M_CS1_Cup.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=5295}, summedSubMeshIndices=5295, validSubMeshRanges=true
+[13:31:03.935] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1b75e000..0x1b75fbc0 (7104 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.936] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1fffb000..0x1fffb720 (1824 bytes), releasing in 4 frames (frame 22007).
+[13:31:03.936] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=3, lodIndex=0, vertexCount=148, indexCount=456, vbBytes=7104, ibBytes=1824
+[13:31:03.936] [DEBUG] [Meshes      ] First draw for entityIndex=3, entity='Geometry_5', lodIndex=0, vertexCount=148, indexCount=456, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=228}, draw[1]={materialId=1,indexStart=228,indexCount=228}, summedSubMeshIndices=456, validSubMeshRanges=true
+[13:31:04.035] [DEBUG] [Meshes      ] First draw for entityIndex=4, entity='Geometry_5', lodIndex=0, vertexCount=148, indexCount=456, materialPath='Materials/M_rock_wall_17.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=228}, draw[1]={materialId=1,indexStart=228,indexCount=228}, summedSubMeshIndices=456, validSubMeshRanges=true
+[13:31:04.037] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf069f0000..0xf06fd37a0 (6174624 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.038] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1dc00000..0x1dede8e0 (3008736 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.038] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=6, lodIndex=1, vertexCount=128638, indexCount=752184, vbBytes=6174624, ibBytes=3008736
+[13:31:04.038] [DEBUG] [Meshes      ] First draw for entityIndex=6, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[13:31:04.065] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf08000000..0xf083b2230 (3875376 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.066] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf083c0000..0xf08582bac (1846188 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.066] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=1, vertexCount=80737, indexCount=461547, vbBytes=3875376, ibBytes=1846188
+[13:31:04.066] [DEBUG] [Meshes      ] First draw for entityIndex=7, entity='Geometry_26', lodIndex=1, vertexCount=80737, indexCount=461547, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=461547}, summedSubMeshIndices=461547, validSubMeshRanges=true
+[13:31:04.093] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf09d00000..0xf0a4470c0 (7631040 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.095] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf0a7e0000..0xf0ab65770 (3692400 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.095] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=8, lodIndex=0, vertexCount=158980, indexCount=923100, vbBytes=7631040, ibBytes=3692400
+[13:31:04.095] [DEBUG] [Meshes      ] First draw for entityIndex=8, entity='Geometry_26', lodIndex=0, vertexCount=158980, indexCount=923100, materialPath='Geometry/MVV_TavernFurniture_Bench02/M_MVV_TavernFurniture_Bench02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=923100}, summedSubMeshIndices=923100, validSubMeshRanges=true
+[13:31:04.100] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf0b300000..0xf0ba87050 (7893072 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.102] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xf0be00000..0xf0c16e838 (3598392 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.102] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=9, lodIndex=1, vertexCount=164439, indexCount=899598, vbBytes=7893072, ibBytes=3598392
+[13:31:04.102] [DEBUG] [Meshes      ] First draw for entityIndex=9, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[13:31:04.129] [DEBUG] [Meshes      ] First draw for entityIndex=10, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[13:31:04.131] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1cf80000..0x1cfc1dc0 (269760 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.131] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e3cd0000..0x2e3cdf2d0 (62160 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.131] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=11, lodIndex=0, vertexCount=5620, indexCount=15540, vbBytes=269760, ibBytes=62160
+[13:31:04.131] [DEBUG] [Meshes      ] First draw for entityIndex=11, entity='Dice1', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.207] [DEBUG] [Meshes      ] First draw for entityIndex=12, entity='Dice2', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.207] [DEBUG] [Meshes      ] First draw for entityIndex=13, entity='Dice3', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.207] [DEBUG] [Meshes      ] First draw for entityIndex=14, entity='Dice5', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.207] [DEBUG] [Meshes      ] First draw for entityIndex=15, entity='Dice4', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.209] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf11580000..0xf116ffca0 (1572000 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.210] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x18000000..0x180b2d7c (732540 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.210] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=17, lodIndex=1, vertexCount=32750, indexCount=183135, vbBytes=1572000, ibBytes=732540
+[13:31:04.210] [DEBUG] [Meshes      ] First draw for entityIndex=17, entity='Geometry_38', lodIndex=1, vertexCount=32750, indexCount=183135, materialPath='Geometry/MVV_WoodenShelves_Shelves_01/M_MVV_WoodenShelves_Shelves_01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=183135}, summedSubMeshIndices=183135, validSubMeshRanges=true
+[13:31:04.234] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x17d30000..0x17d383a0 (33696 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.235] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xeecb000..0xeece9f0 (14832 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.235] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=18, lodIndex=1, vertexCount=702, indexCount=3708, vbBytes=33696, ibBytes=14832
+[13:31:04.235] [DEBUG] [Meshes      ] First draw for entityIndex=18, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] First draw for entityIndex=19, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] First draw for entityIndex=20, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] First draw for entityIndex=21, entity='Geometry_39', lodIndex=1, vertexCount=702, indexCount=3708, materialPath='Geometry/MVV_EarthenwareCrockerySet_EarthenwarePlate02/M_MVV_EarthenwareCrockerySet_EarthenwarePlate02.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3708}, summedSubMeshIndices=3708, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] First draw for entityIndex=22, entity='Dice6', lodIndex=0, vertexCount=5620, indexCount=15540, materialPath='Geometry/dice/M_Dice.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=15540}, summedSubMeshIndices=15540, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] First draw for entityIndex=25, entity='Geometry_22', lodIndex=1, vertexCount=128638, indexCount=752184, materialPath='Geometry/MVV_LogPile/M_MVV_LogPile.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=752184}, summedSubMeshIndices=752184, validSubMeshRanges=true
+[13:31:04.246] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xad70000..0xadbc5f0 (312816 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.247] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x17d40000..0x17d540a0 (82080 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.247] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=26, lodIndex=0, vertexCount=6517, indexCount=20520, vbBytes=312816, ibBytes=82080
+[13:31:04.247] [DEBUG] [Meshes      ] First draw for entityIndex=26, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.488] [DEBUG] [Meshes      ] First draw for entityIndex=27, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.489] [DEBUG] [Meshes      ] First draw for entityIndex=28, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.489] [DEBUG] [Meshes      ] First draw for entityIndex=29, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.490] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1cfd0000..0x1cfec560 (116064 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.490] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1cff0000..0x1cff66c0 (26304 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.490] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=30, lodIndex=0, vertexCount=2418, indexCount=6576, vbBytes=116064, ibBytes=26304
+[13:31:04.490] [DEBUG] [Meshes      ] First draw for entityIndex=30, entity='Geometry_40', lodIndex=0, vertexCount=2418, indexCount=6576, materialPath='Geometry/Modular/M_Tavern_HearthFrame.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=1644}, draw[1]={materialId=1,indexStart=1644,indexCount=4800}, draw[2]={materialId=3,indexStart=6444,indexCount=132}, summedSubMeshIndices=6576, validSubMeshRanges=true
+[13:31:04.714] [DEBUG] [Meshes      ] First draw for entityIndex=31, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.715] [DEBUG] [Meshes      ] First draw for entityIndex=32, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.715] [DEBUG] [Meshes      ] First draw for entityIndex=33, entity='Geometry_42', lodIndex=0, vertexCount=6517, indexCount=20520, materialPath='Geometry/Modular/M_Tavern_TrimmedWallBay2.json', subMeshCount=3, draw[0]={materialId=0,indexStart=0,indexCount=6336}, draw[1]={materialId=1,indexStart=6336,indexCount=10320}, draw[2]={materialId=2,indexStart=16656,indexCount=3864}, summedSubMeshIndices=20520, validSubMeshRanges=true
+[13:31:04.718] [DEBUG] [Meshes      ] First draw for entityIndex=34, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[13:31:04.718] [DEBUG] [Meshes      ] First draw for entityIndex=35, entity='Geometry_27', lodIndex=1, vertexCount=164439, indexCount=899598, materialPath='Geometry/MVV_GarlicStringsSet_GarlicString01/M_MVV_GarlicStringsSet_GarlicString01.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=899598}, summedSubMeshIndices=899598, validSubMeshRanges=true
+[13:31:04.719] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xadc0000..0xadfddd0 (253392 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.720] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xae0a000..0xae13048 (36936 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.720] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=36, lodIndex=1, vertexCount=5279, indexCount=9234, vbBytes=253392, ibBytes=36936
+[13:31:04.720] [DEBUG] [Meshes      ] First draw for entityIndex=36, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:04.873] [DEBUG] [Meshes      ] First draw for entityIndex=37, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:04.874] [DEBUG] [Meshes      ] First draw for entityIndex=38, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:04.874] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x197a0000..0x197e8240 (295488 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.875] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xae20000..0xae2bc70 (48240 bytes), releasing in 4 frames (frame 22007).
+[13:31:04.875] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=39, lodIndex=0, vertexCount=6156, indexCount=12060, vbBytes=295488, ibBytes=48240
+[13:31:04.875] [DEBUG] [Meshes      ] First draw for entityIndex=39, entity='Geometry_45', lodIndex=0, vertexCount=6156, indexCount=12060, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=6108}, draw[1]={materialId=1,indexStart=6108,indexCount=5952}, summedSubMeshIndices=12060, validSubMeshRanges=true
+[13:31:04.875] [DEBUG] [Meshes      ] First draw for entityIndex=40, entity='Geometry_45', lodIndex=0, vertexCount=6156, indexCount=12060, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=6108}, draw[1]={materialId=1,indexStart=6108,indexCount=5952}, summedSubMeshIndices=12060, validSubMeshRanges=true
+[13:31:04.875] [DEBUG] [Meshes      ] First draw for entityIndex=41, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:04.875] [DEBUG] [Meshes      ] First draw for entityIndex=42, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:04.875] [DEBUG] [Meshes      ] First draw for entityIndex=43, entity='Geometry_45', lodIndex=1, vertexCount=5279, indexCount=9234, materialPath='Geometry/Modular/M_Tavern_CeilingModule.json', subMeshCount=2, draw[0]={materialId=0,indexStart=0,indexCount=3354}, draw[1]={materialId=1,indexStart=3354,indexCount=5880}, summedSubMeshIndices=9234, validSubMeshRanges=true
+[13:31:08.719] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 5.1 s. Everything above this line is what it did last.
+[13:31:23.955] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 20.3 s. Everything above this line is what it did last.
+[13:31:39.192] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 35.6 s. Everything above this line is what it did last.
+[13:31:54.412] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 50.8 s. Everything above this line is what it did last.
+[13:32:09.644] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 66.0 s. Everything above this line is what it did last.
+[13:32:24.875] [ERROR] [Watchdog    ] Render thread has not completed frame 22007 for 81.2 s. Everything above this line is what it did last.
+[13:32:27.727] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x17a10000..0x17b59af0 (frame 22011).
+[13:32:27.728] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1ff50000..0x1ffe897c (frame 22011).
+[13:32:27.728] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1a940000..0x1a95d8e0 (frame 22011).
+[13:32:27.728] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xeef0000..0xeefa578 (frame 22011).
+[13:32:27.728] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xb5e0000..0xb5f22d0 (frame 22011).
+[13:32:27.728] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x8bb0000..0x8bb52bc (frame 22011).
+[13:32:27.729] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1b75e000..0x1b75fbc0 (frame 22011).
+[13:32:27.729] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1fffb000..0x1fffb720 (frame 22011).
+[13:32:27.729] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf069f0000..0xf06fd37a0 (frame 22011).
+[13:32:27.729] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1dc00000..0x1dede8e0 (frame 22011).
+[13:32:27.729] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf08000000..0xf083b2230 (frame 22011).
+[13:32:27.730] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf083c0000..0xf08582bac (frame 22011).
+[13:32:27.730] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf09d00000..0xf0a4470c0 (frame 22011).
+[13:32:27.730] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf0a7e0000..0xf0ab65770 (frame 22011).
+[13:32:27.731] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf0b300000..0xf0ba87050 (frame 22011).
+[13:32:27.731] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xf0be00000..0xf0c16e838 (frame 22011).
+[13:32:27.731] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1cf80000..0x1cfc1dc0 (frame 22011).
+[13:32:27.731] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e3cd0000..0x2e3cdf2d0 (frame 22011).
+[13:32:27.732] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf11580000..0xf116ffca0 (frame 22011).
+[13:32:27.732] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x18000000..0x180b2d7c (frame 22011).
+[13:32:27.732] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x17d30000..0x17d383a0 (frame 22011).
+[13:32:27.732] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xeecb000..0xeece9f0 (frame 22011).
+[13:32:27.732] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xad70000..0xadbc5f0 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x17d40000..0x17d540a0 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1cfd0000..0x1cfec560 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1cff0000..0x1cff66c0 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xadc0000..0xadfddd0 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xae0a000..0xae13048 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x197a0000..0x197e8240 (frame 22011).
+[13:32:27.733] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xae20000..0xae2bc70 (frame 22011).
+[13:32:27.921] [WARN ] [Watchdog    ] Render thread recovered after 84.3 s; resumed at frame 22024.

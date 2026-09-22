@@ -1,0 +1,36 @@
+Ptero Engine session log
+Started 2026-09-22 14:56:46
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-22_14-56-46.txt
+----------------------------------------------------------------------
+[14:56:46.559] [INFO ] [Log         ] Logging to disk started.
+[14:56:46.559] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-22_14-56-46.txt
+[14:56:46.559] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[14:56:51.184] [ERROR] [Renderer    ] Startup shader cache warmup found 4 failed shader entries. First failure: RtAO_NrdComposite.hlsl :: CSMain [cs_5_0]: DirectX 12 call failed. HRESULT: -2147467259
+[14:56:51.192] [INFO ] [CVar        ] 342 cvars registered. Type 'list' in the console to see them.
+[14:56:51.192] [INFO ] [Renderer    ] Renderer initialized.
+[14:56:51.415] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[14:56:51.632] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[14:56:51.634] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 1', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[14:56:51.634] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', materialPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\forest_european_broadlef.json'
+[14:56:51.634] [DEBUG] [Renderer    ] Mesh load failed for entity='Geometry 15', meshPath='K:\Ptero-Engine\Data\Geometry\forest_european_broadlea_extracted\Forest_European_Broadleaf_Cliff_L_02_xlspddc_High.fbx.ptero', error='The .ptero file was created by an older version of the compiler and cannot be re-cooked without a source FBX.'
+[14:56:51.638] [ERROR] [Renderer    ] Frame aborted after an exception: Farkle could not start. Open Farkle.json and ensure Table and Dice1 through Dice6 (or Dice 1 through Dice 6) exist.
+[14:56:51.638] [ERROR] [Renderer    ] RendererDX12_Render aborted the frame after an exception: Farkle could not start. Open Farkle.json and ensure Table and Dice1 through Dice6 (or Dice 1 through Dice 6) exist.
+[14:56:56.696] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 5.0 s. Everything above this line is what it did last.
+[14:56:56.728] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserWaitMessage
+    #1  DialogBoxIndirectParamAorW
+    #2  DialogBoxIndirectParamAorW
+    #3  SoftModalMessageBox
+    #4  DrawStateW
+    #5  MessageBoxTimeoutW
+    #6  MessageBoxTimeoutA
+    #7  MessageBoxA
+    #8  ReportRendererFailure  (EditorMain.cpp:145)
+    #9  PrepareInitialMainWindowFrame  (EditorMain.cpp:108)
+    #10  InitInstance  (EditorMain.cpp:465)
+    #11  wWinMain  (EditorMain.cpp:223)
+    #12  __scrt_common_main_seh  (exe_common.inl:288)
+    #13  BaseThreadInitThunk
+    #14  RtlUserThreadStart
+[14:57:02.732] [INFO ] [Log         ] Session ended (editor closed). 15 lines written.
+----------------------------------------------------------------------

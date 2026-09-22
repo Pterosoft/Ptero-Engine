@@ -195,6 +195,18 @@
     <ClInclude Include="DlssRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FfxLoader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FsrFrameGeneration.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FsrRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FsrSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MotionVectorRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -423,6 +435,15 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="DlssRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FfxLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FsrFrameGeneration.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FsrRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="MotionVectorRenderer.cpp">

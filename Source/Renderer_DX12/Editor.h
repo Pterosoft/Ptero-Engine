@@ -7,6 +7,7 @@
 #include "SMAASettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
+#include "FsrSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RadianceCascadesSettings.h"
@@ -221,6 +222,15 @@ public:
     bool IsSceneLoading() const;
     float GetSceneLoadProgress() const;
     std::string GetSceneLoadStatusMessage() const;
+    // Parsing the level file is only the start of a load: the render loop then has to
+    // read every entity's mesh. It does that a time-boxed slice per frame, so the
+    // window keeps pumping messages, and reports back here so the loading overlay
+    // stays up and counts the meshes instead of closing at 100% on the parse alone.
+    bool IsStreamingSceneAssets() const { return mSceneAssetsStreaming; }
+    void SetSceneAssetStreamingProgress(size_t resolvedMeshes, size_t totalMeshes);
+    // Separate from SetSceneSettings so the long list there does not have to grow
+    // at every call site; saved and restored with the level all the same.
+    void SetFsrSettings(FsrSettings* fsrSettings) { mFsrSettings = fsrSettings; }
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
@@ -347,6 +357,10 @@ public:
         SetViewportResolution(width, height);
         mRequestViewportResolutionChange = true;
     }
+    // True while a resolution chosen in the Resolution dialog is in effect.
+    // The viewport auto-fit must leave the scene target alone, otherwise it
+    // resizes it straight back to the panel size on the next frame.
+    bool IsViewportResolutionFixed() const { return mViewportResolutionFixed; }
     bool GetLastViewportContentResolution(int& width, int& height) const
     {
         if (mLastViewportContentSize.x <= 1.0f || mLastViewportContentSize.y <= 1.0f)
@@ -416,6 +430,7 @@ private:
         SMAASettings Smaa{};
         SharpenSettings Sharpen{};
         DlssSettings Dlss{};
+        FsrSettings Fsr{};
         GlobalIlluminationMode GlobalIlluminationMode = GlobalIlluminationMode::Rtgi;
         RtGISettings Rtgi{};
         RadianceCascadesSettings RadianceCascades{};
@@ -682,6 +697,7 @@ private:
     SMAASettings* mSmaaSettings = nullptr;
     SharpenSettings* mSharpenSettings = nullptr;
     DlssSettings* mDlssSettings = nullptr;
+    FsrSettings* mFsrSettings = nullptr;
     GlobalIlluminationMode* mGlobalIlluminationMode = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
     RadianceCascadesSettings* mRadianceCascadesSettings = nullptr;
@@ -716,6 +732,7 @@ private:
     int mViewportResolutionHeight = 1080;
     bool mShowViewportResolutionDialog = false;
     bool mRequestViewportResolutionChange = false;
+    bool mViewportResolutionFixed = false;
     bool mRequestCameraRestore = false;
 
     EngineResourceUsageSnapshot mResourceUsageSnapshot;
@@ -731,4 +748,10 @@ private:
 
     SceneLoadState mSceneLoadState;
     std::thread mSceneLoadWorker;
+    bool mSceneAssetsStreaming = false;
+    // Set on the frame every mesh is resolved; the overlay stays one frame longer so
+    // the textures those meshes pull in on their first draw also load under it.
+    bool mSceneAssetsFinishing = false;
+    size_t mSceneAssetsResolved = 0;
+    size_t mSceneAssetsTotal = 0;
 };

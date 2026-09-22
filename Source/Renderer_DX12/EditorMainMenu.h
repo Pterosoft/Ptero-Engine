@@ -10,6 +10,7 @@
 #include "MsaaSettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
+#include "FsrSettings.h"
 #include "TimeOfDaySettings.h"
 #include "WindSettings.h"
 #include "RadianceCascadesSettings.h"
@@ -59,6 +60,8 @@ void RenderEditorMainMenu(
     MsaaSettings* msaaSettings,
     SharpenSettings* sharpenSettings,
     DlssSettings* dlssSettings,
+    FsrSettings* fsrSettings,
+    const FsrRuntimeStatus* fsrStatus,
     TimeOfDaySettings* timeOfDaySettings,
     WindSettings* windSettings,
     GlobalIlluminationMode* globalIlluminationMode,

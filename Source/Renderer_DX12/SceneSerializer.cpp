@@ -4,6 +4,7 @@
 
 #include "..\SDKs\nlohmann\json.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -254,6 +255,28 @@ namespace
     {
         settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
         settings.Mode = settingsJson.value("Mode", settings.Mode);
+        settings.ResetHistory = true;
+    }
+
+    // Debug overlays are left out on purpose: they are for a session, not a level.
+    json SerializeFsrSettings(const FsrSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "Mode", settings.Mode },
+            { "Sharpening", settings.Sharpening },
+            { "Sharpness", settings.Sharpness },
+            { "FrameGeneration", settings.FrameGeneration }
+        };
+    }
+
+    void DeserializeFsrSettings(const json& settingsJson, FsrSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.Mode = std::clamp(settingsJson.value("Mode", settings.Mode), 0, 4);
+        settings.Sharpening = settingsJson.value("Sharpening", settings.Sharpening);
+        settings.Sharpness = std::clamp(settingsJson.value("Sharpness", settings.Sharpness), 0.0f, 1.0f);
+        settings.FrameGeneration = settingsJson.value("FrameGeneration", settings.FrameGeneration);
         settings.ResetHistory = true;
     }
 
@@ -715,6 +738,8 @@ void SceneSerializer::Serialize(const std::string& filepath)
         sceneJson["SharpenSettings"] = SerializeSharpenSettings(*mScene->Sharpen);
     if (mScene->Dlss != nullptr)
         sceneJson["DlssSettings"] = SerializeDlssSettings(*mScene->Dlss);
+    if (mScene->Fsr != nullptr)
+        sceneJson["FsrSettings"] = SerializeFsrSettings(*mScene->Fsr);
     if (mScene->GlobalIllumination != nullptr)
         sceneJson["GlobalIlluminationMode"] = SerializeGlobalIlluminationMode(*mScene->GlobalIllumination);
     if (mScene->Rtgi != nullptr)
@@ -897,6 +922,8 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
     }
     if (mScene->Dlss != nullptr && sceneJson.contains("DlssSettings"))
         DeserializeDlssSettings(sceneJson["DlssSettings"], *mScene->Dlss);
+    if (mScene->Fsr != nullptr && sceneJson.contains("FsrSettings"))
+        DeserializeFsrSettings(sceneJson["FsrSettings"], *mScene->Fsr);
     if (mScene->GlobalIllumination != nullptr && sceneJson.contains("GlobalIlluminationMode"))
         DeserializeGlobalIlluminationMode(sceneJson["GlobalIlluminationMode"], *mScene->GlobalIllumination);
     if (mScene->Rtgi != nullptr && sceneJson.contains("RtGISettings"))

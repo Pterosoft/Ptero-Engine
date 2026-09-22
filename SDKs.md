@@ -1,83 +1,80 @@
 ## SDKs
-In order to build the source code successfully you'll need the following SDKs
+To build the source code you need the following SDKs, each in its own folder under
+`Ptero-Engine\Source\SDKs`. That folder does not exist in the repository and has to be created.
+The folder names below are the ones the projects reference, so keep them exactly as written.
 
- - DirectXTex
- - DXC
- - Fmod (2.03.12)
- - Hosek-Wilkie
- - ImGui
- - ImGuizmo
- - nlohmann json
- - nodeeditor (QtNodes)
- - NRD
- - XeGTAO
+| SDK | Version | Folder | Used for |
+| --- | --- | --- | --- |
+| AMD FidelityFX / FSR SDK | 2.3.0 | `FidelityFX-SDK-2.3.0` | FSR upscaling and frame generation |
+| CoACD | — | `CoACD` | Convex decomposition for generated collision |
+| DirectXTex | 211 | `DirectXTex` | Texture import, BC compression, DDS loading |
+| DXC (DirectX Shader Compiler) | — | `dxc` | Runtime HLSL compilation |
+| FBX SDK | 2020.3.9 | `fbx` | FBX import (asset cooking) |
+| FMOD Studio API | 2.03.13 | `fmod` | Audio, including the Resonance Audio spatialiser plugin |
+| Hosek-Wilkie sky model | — | `HosekWilkie` | Analytic sky |
+| meshoptimizer | 1.1 | `meshoptimizer` | LOD generation and mesh optimisation |
+| nlohmann json | — | `nlohmann` | Level and asset serialisation |
+| nodeeditor (QtNodes) | — | `nodeeditor` | Node Graph visual scripting editor |
+| NVIDIA NRD / NRI | NRD 4.17.3, NRI 179 | `NRD` | RTGI and RTAO denoising |
+| NVIDIA Streamline | 2.11.1 | `Streamline` | DLSS Super Resolution |
+| Qt | 6.11.2 | `qt` (built into `qt\install`) | Editor UI |
+| RmlUi | — | `RmlUI` | In-game UI |
 
-Once you have all of them place them in Ptero-Engine\Source\SDKs folder. The folder does not exists and has to be created.
+The folder name `FidelityFX-SDK-2.3.0` is hardcoded in the includes and in the DLL search, so
+it must not be renamed. The same goes for the Streamline plugin path
+(`Streamline\bin\x64`), which DLSS looks for at runtime.
 
-`nodeeditor` backs the Node Graph visual scripting editor. It needs no separate build step:
-`Source/QtUi/QtNodes.props` compiles its sources into the renderer and runs Qt's `moc` and
-`rcc` itself, so only the Qt SDK has to be built first. See `Documentation/NodeGraph.md`.
+### Vendored into the engine
+These do not need an SDK folder. Their code is already copied into the repository:
 
-## SDKs Files in the Projects
-Some SDKs require direct code file injection into the projects. Simply import the following files into designated projects.
+- **SMAA**: `Source/Renderer_DX12/SMAA.h`, `AreaTex.h`, `SearchTex.h`
+- **XeGTAO**: `Data/Shaders/XeGTAO*`
+- **RTXDI**: `Data/Shaders/Rtxdi/`
 
-**Editor**
+### No longer required
+- **ImGui** and **ImGuizmo**: the editor UI moved to Qt (`Source/QtUi`).
+- `ISPCTextureCompressor`, `RTXGI`, `UnrealClouds`, `crest` and `resonance-audio` may still
+  sit in `Source/SDKs` on older checkouts, but nothing in the build references them. Resonance
+  Audio ships with FMOD instead (`fmod\plugins\resonance_audio`).
 
- - imgui.cpp
- - imgui_draw.cpp
- - imgui_tables.cpp
- - imgui_widgets.cpp
+### Notes on individual SDKs
+`nodeeditor` needs no separate build step: `Source/QtUi/QtNodes.props` compiles its sources into
+the renderer and runs Qt's `moc` and `rcc` itself, so only the Qt SDK has to be built first.
+See `Documentation/NodeGraph.md`.
 
-*SDKs: ImGui*
+The FidelityFX SDK is used only through its prebuilt, signed DLLs in
+`Kits\FidelityFX\signedbin`. Nothing from it is compiled or linked. The DLLs are loaded at
+runtime, so a machine without them still runs, with FSR reported as unavailable in the
+Graphics Settings window.
+
+## SDK files compiled into the projects
+Some SDKs are not libraries: their source files are compiled directly as part of a project.
+They are already listed in the project files, so this is only for reference when setting up a
+new project or updating an SDK.
 
 **Renderer_DX12**
 
- - ImGuizmo.cpp
- - ArHosekSkyModel.c
- - imgui.cpp
- - imgui_demo.cpp
- - imgui_draw.cpp
- - imgui_impl_dx12.cpp
- - imgui_impl_win32.cpp
- - imgui_tables.cpp
- - imgui_widgets.cpp
- - BC.cpp
- - BC4BC5.cpp
- - BC6HBC7.cpp
- - DDSTextureLoader12.cpp
- - DirectXTexCompress.cpp
- - DirectXTexConvert.cpp
- - DirectXTexDDS.cpp
- - DirectXTexFlipRotate.cpp
- - DirectXTexHDR.cpp
- - DirectXTexImage.cpp
- - DirectXTexMipmaps.cpp
- - DirectXTexMisc.cpp
- - DirectXTexPMAlpha.cpp
- - DirectXTexResize.cpp
- - DirectXTexTGA.cpp
- - DirectXTexUtil.cpp
- - DirectXTexWIC.cpp
+- CoACD: `public\coacd.cpp` and `src\*.cpp` (including `btConvexHull` and `quickhull`)
+- DirectXTex: `DirectXTex\BC*.cpp`, `DirectXTex\DirectXTex*.cpp`, `DDSTextureLoader\DDSTextureLoader12.cpp`
+- Hosek-Wilkie: `ArHosekSkyModel.c`
 
-*SDKs: ImGui, DirectXTex, Hosek-Wilkie*
+**System**
 
-**System:**
- - BC.cpp
- - BC4BC5.cpp
- - BC6HBC7.cpp
- - DDSTextureLoader12.cpp
- - DirectXTexCompress.cpp
- - DirectXTexConvert.cpp
- - DirectXTexDDS.cpp
- - DirectXTexFlipRotate.cpp
- - DirectXTexHDR.cpp
- - DirectXTexImage.cpp
- - DirectXTexMipmaps.cpp
- - DirectXTexMisc.cpp
- - DirectXTexPMAlpha.cpp
- - DirectXTexResize.cpp
- - DirectXTexTGA.cpp
- - DirectXTexUtil.cpp
- - DirectXTexWIC.cpp
+- CoACD: `public\coacd.cpp` and `src\*.cpp`
+- DirectXTex: `DirectXTex\BC*.cpp`, `DirectXTex\DirectXTex*.cpp`
+- meshoptimizer: `src\*.cpp`
 
-*SDKs: DirectXTex*
+## Runtime DLLs
+The post-build steps copy these next to `Editor.exe` in `Binaries\`:
+
+| DLL | From | Copied by |
+| --- | --- | --- |
+| `dxcompiler.dll`, `dxil.dll` | `dxc\bin\x64` | Renderer_DX12 |
+| `NRD.dll` | `NRD\_NRD_SDK\Lib\Debug` | Renderer_DX12 |
+| `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll`, `amd_fidelityfx_framegeneration_dx12.dll` | `FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin` | Renderer_DX12 |
+| `fmod.dll`, `fmodstudio.dll`, `resonanceaudio.dll` | `fmod\api\...`, `fmod\plugins\resonance_audio` | Audio |
+| `libfbxsdk.dll` | `fbx\lib\x64\...` | Ptero-Engine / System |
+| `Qt6Core`, `Qt6Gui`, `Qt6Widgets` | `qt\install\bin` | QtUi |
+
+The Streamline DLLs (`sl.interposer.dll`, `sl.common.dll`, `sl.dlss.dll`) and `nvngx_dlss.dll`
+are not copied by any project; they are placed in `Binaries\` by hand.

@@ -272,29 +272,77 @@ namespace
         if (FAILED(hr))
             return ToRgbArray(1.0f, 1.0f, 1.0f);
 
-        if (DirectX::IsCompressed(meta.format))
+        // An average needs a few thousand texels, not sixteen million. Decompressing
+        // and sRGB-converting the full top mip of every material texture cost over a
+        // minute on the first frame of the Farkle level, with the editor frozen, so
+        // work from a small mip, and when there is none, from a sparse sample.
+        constexpr size_t kAverageSourceSize = 64;
+
+        // The smallest mip that still has kAverageSourceSize texels on a side is
+        // already a box-filtered average of the whole texture.
+        size_t mip = 0;
+        while (mip + 1 < meta.mipLevels
+            && (std::max)(meta.width >> (mip + 1), meta.height >> (mip + 1)) >= kAverageSourceSize)
         {
-            DirectX::ScratchImage decompressed;
-            hr = DirectX::Decompress(image.GetImages(), image.GetImageCount(), meta, DXGI_FORMAT_UNKNOWN, decompressed);
+            ++mip;
+        }
+        const DirectX::Image* source = image.GetImage(mip, 0, 0);
+        if (!source || !source->pixels || source->width == 0 || source->height == 0)
+            return ToRgbArray(1.0f, 1.0f, 1.0f);
+
+        DirectX::ScratchImage working;
+        if (DirectX::IsCompressed(source->format))
+        {
+            // Without mips, decode only every Nth row of 4x4 blocks. Decompress walks
+            // block rows by rowPitch, so a longer pitch over fewer rows is a valid
+            // image that skips the rows in between.
+            DirectX::Image strided = *source;
+            const size_t blockRows = (source->height + 3) / 4;
+            const size_t rowStep = (std::max)(size_t{ 1 }, blockRows / (kAverageSourceSize / 4));
+            if (rowStep > 1)
+            {
+                strided.height = (blockRows / rowStep) * 4;
+                strided.rowPitch = source->rowPitch * rowStep;
+                strided.slicePitch = strided.rowPitch * (blockRows / rowStep);
+            }
+            hr = DirectX::Decompress(strided, DXGI_FORMAT_UNKNOWN, working);
             if (FAILED(hr))
                 return ToRgbArray(1.0f, 1.0f, 1.0f);
-            image = std::move(decompressed);
-            meta = image.GetMetadata();
+        }
+        else
+        {
+            hr = working.InitializeFromImage(*source);
+            if (FAILED(hr))
+                return ToRgbArray(1.0f, 1.0f, 1.0f);
         }
 
-        if (meta.format != DXGI_FORMAT_R8G8B8A8_UNORM && meta.format != DXGI_FORMAT_B8G8R8A8_UNORM)
+        // Point-sample what is left down to a small grid before the per-texel
+        // format conversion, which is by far the slowest step (an sRGB pow per texel).
+        const DirectX::Image* decoded = working.GetImage(0, 0, 0);
+        if (decoded->width > kAverageSourceSize || decoded->height > kAverageSourceSize)
+        {
+            DirectX::ScratchImage resized;
+            hr = DirectX::Resize(*decoded,
+                (std::min)(decoded->width, kAverageSourceSize), (std::min)(decoded->height, kAverageSourceSize),
+                DirectX::TEX_FILTER_POINT | DirectX::TEX_FILTER_FORCE_NON_WIC, resized);
+            if (FAILED(hr))
+                return ToRgbArray(1.0f, 1.0f, 1.0f);
+            working = std::move(resized);
+            decoded = working.GetImage(0, 0, 0);
+        }
+
+        if (decoded->format != DXGI_FORMAT_R8G8B8A8_UNORM && decoded->format != DXGI_FORMAT_B8G8R8A8_UNORM)
         {
             DirectX::ScratchImage converted;
-            hr = DirectX::Convert(image.GetImages(), image.GetImageCount(), meta,
+            hr = DirectX::Convert(*decoded,
                 DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT,
                 DirectX::TEX_THRESHOLD_DEFAULT, converted);
             if (FAILED(hr))
                 return ToRgbArray(1.0f, 1.0f, 1.0f);
-            image = std::move(converted);
-            meta = image.GetMetadata();
+            working = std::move(converted);
         }
 
-        const DirectX::Image* topMip = image.GetImage(0, 0, 0);
+        const DirectX::Image* topMip = working.GetImage(0, 0, 0);
         if (!topMip || topMip->width == 0 || topMip->height == 0)
             return ToRgbArray(1.0f, 1.0f, 1.0f);
 
@@ -312,6 +360,9 @@ namespace
                 sumB += texel[2];
             }
         }
+
+        if (topMip->format == DXGI_FORMAT_B8G8R8A8_UNORM)
+            std::swap(sumR, sumB);
 
         const double invCount = 1.0 / static_cast<double>(topMip->width * topMip->height * 255.0);
         return ToRgbArray(

@@ -1401,6 +1401,8 @@ void RenderEditorMainMenu(
     MsaaSettings* msaaSettings,
     SharpenSettings* sharpenSettings,
     DlssSettings* dlssSettings,
+    FsrSettings* fsrSettings,
+    const FsrRuntimeStatus* fsrStatus,
     TimeOfDaySettings* timeOfDaySettings,
     WindSettings* windSettings,
     GlobalIlluminationMode* globalIlluminationMode,
@@ -2005,7 +2007,12 @@ void RenderEditorMainMenu(
                     *dlssSettings = defaultDlssSettings;
                 }
 
-                QtUi::Checkbox("Enable DLSS Super Resolution", &dlssSettings->Enabled);
+                // One upscaler at a time: turning DLSS on here turns FSR upscaling off.
+                if (QtUi::Checkbox("Enable DLSS Super Resolution", &dlssSettings->Enabled)
+                    && dlssSettings->Enabled && fsrSettings != nullptr)
+                {
+                    fsrSettings->Enabled = false;
+                }
                 if (dlssSettings->Enabled)
                 {
                     const char* modes[] =
@@ -2019,6 +2026,114 @@ void RenderEditorMainMenu(
                         "DLAA"
                     };
                     QtUi::Combo("Mode##dlss", &dlssSettings->Mode, modes, std::size(modes));
+                }
+            }
+        }
+
+        if (fsrSettings != nullptr)
+        {
+            if (QtUi::CollapsingHeader("AMD FSR (Upscaling & Frame Generation)", QtUiTreeNodeFlags_DefaultOpen))
+            {
+                if (QtUi::Button("Revert All##fsr"))
+                {
+                    *fsrSettings = FsrSettings{};
+                    fsrSettings->ResetHistory = true;
+                }
+
+                const bool apiAvailable = fsrStatus == nullptr || fsrStatus->ApiAvailable;
+                if (!apiAvailable)
+                {
+                    QtUi::PushStyleColor(QtUiCol_Text, UiVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                    QtUi::TextWrapped("AMD FSR is unavailable: %s",
+                        (fsrStatus != nullptr && !fsrStatus->LastError.empty())
+                            ? fsrStatus->LastError.c_str()
+                            : "the FidelityFX DLLs were not found.");
+                    QtUi::PopStyleColor();
+                }
+
+                QtUi::BeginDisabled(!apiAvailable);
+
+                // ---- Upscaling ----
+                QtUi::TextDisabled("Upscaling");
+                if (QtUi::Checkbox("Enable FSR Upscaling##fsr", &fsrSettings->Enabled))
+                {
+                    fsrSettings->ResetHistory = true;
+                    if (fsrSettings->Enabled && dlssSettings != nullptr)
+                        dlssSettings->Enabled = false;
+                }
+                QtUi::SetItemTooltip("Renders at a lower resolution and reconstructs the full-resolution image.\n"
+                                     "Replaces TAA and SMAA while it is on. Uses FSR 4 on RDNA 4 GPUs, FSR 3.1 elsewhere.");
+
+                if (fsrSettings->Enabled)
+                {
+                    const char* fsrModes[] =
+                    {
+                        "Native AA (1.0x)",
+                        "Quality (1.5x)",
+                        "Balanced (1.7x)",
+                        "Performance (2.0x)",
+                        "Ultra Performance (3.0x)"
+                    };
+                    if (QtUi::Combo("Quality Mode##fsr", &fsrSettings->Mode, fsrModes, static_cast<int>(std::size(fsrModes))))
+                        fsrSettings->ResetHistory = true;
+                    QtUi::SetItemTooltip("Per-axis ratio between the output and the resolution the scene is rendered at.");
+
+                    QtUi::Checkbox("Sharpening (RCAS)##fsr", &fsrSettings->Sharpening);
+                    if (fsrSettings->Sharpening)
+                        SliderFloatWithInput("Sharpness##fsr", &fsrSettings->Sharpness, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
+
+                    if (fsrStatus != nullptr)
+                    {
+                        if (fsrStatus->OverriddenByDlss)
+                        {
+                            QtUi::PushStyleColor(QtUiCol_Text, UiVec4(1.0f, 0.8f, 0.2f, 1.0f));
+                            QtUi::TextWrapped("DLSS is enabled and takes precedence; FSR upscaling is not running.");
+                            QtUi::PopStyleColor();
+                        }
+                        else if (fsrStatus->UpscalerActive)
+                        {
+                            QtUi::Text("Render %u x %u  ->  Output %u x %u",
+                                fsrStatus->RenderWidth, fsrStatus->RenderHeight,
+                                fsrStatus->OutputWidth, fsrStatus->OutputHeight);
+                            if (!fsrStatus->UpscalerVersion.empty())
+                                QtUi::TextDisabled("Provider: %s", fsrStatus->UpscalerVersion.c_str());
+                        }
+                    }
+                }
+
+                // ---- Frame generation ----
+                QtUi::Separator();
+                QtUi::TextDisabled("Frame Generation");
+                QtUi::Checkbox("Enable Frame Generation##fsr", &fsrSettings->FrameGeneration);
+                QtUi::SetItemTooltip("Presents an interpolated frame between every two rendered frames.\n"
+                                     "Works with or without upscaling. Best above ~60 rendered fps; adds some latency.\n"
+                                     "Switching it replaces the viewport's swap chain, which takes a moment.");
+
+                if (fsrSettings->FrameGeneration)
+                {
+                    if (fsrStatus != nullptr && fsrStatus->FrameGenerationActive)
+                    {
+                        if (!fsrStatus->FrameGenerationVersion.empty())
+                            QtUi::TextDisabled("Provider: %s", fsrStatus->FrameGenerationVersion.c_str());
+                    }
+                    else
+                    {
+                        QtUi::TextDisabled("Starting...");
+                    }
+
+                    QtUi::Checkbox("Debug: Tear Lines##fsr", &fsrSettings->FrameGenerationDebugTearLines);
+                    QtUi::SetItemTooltip("Draws a bar that moves every presented frame, to confirm generated frames are shown.");
+                    QtUi::Checkbox("Debug: Reset Indicators##fsr", &fsrSettings->FrameGenerationDebugResetIndicators);
+                    QtUi::Checkbox("Debug: View##fsr", &fsrSettings->FrameGenerationDebugView);
+                }
+
+                QtUi::EndDisabled();
+
+                if (apiAvailable && fsrStatus != nullptr && !fsrStatus->LastError.empty())
+                {
+                    QtUi::PushStyleColor(QtUiCol_Text, UiVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                    QtUi::TextWrapped("%s", fsrStatus->LastError.c_str());
+                    QtUi::PopStyleColor();
                 }
             }
         }

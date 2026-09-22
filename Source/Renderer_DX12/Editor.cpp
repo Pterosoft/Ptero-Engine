@@ -655,6 +655,7 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.Smaa              = mSmaaSettings;
     scene.Sharpen           = mSharpenSettings;
     scene.Dlss              = mDlssSettings;
+    scene.Fsr               = mFsrSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi              = mRtgiSettings;
     scene.RadianceCascades  = mRadianceCascadesSettings;
@@ -760,7 +761,7 @@ void Editor::UpdatePlaySession()
             if (setting) mRestorePlaySettings.emplace_back([setting, value=*setting] { *setting=value; });
         };
         remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings);
-        remember(mSharpenSettings); remember(mDlssSettings); remember(mGlobalIlluminationMode);
+        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mGlobalIlluminationMode);
         remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRtaoSettings);
         remember(mGtaoSettings); remember(mSsrSettings); remember(mChromaticAberrationSettings);
         remember(mAgxSettings); remember(mVolumetricFogSettings); remember(mVolumetricCloudSettings);
@@ -786,7 +787,7 @@ void Editor::UpdatePlaySession()
             Scene scene;
             scene.Entities=&mEntities; scene.NodeGraph=&mPlayNodeGraph;
             scene.TimeOfDay=mTimeOfDaySettings; scene.Taa=mTaaSettings; scene.Smaa=mSmaaSettings;
-            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings;
+            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings; scene.Fsr=mFsrSettings;
             scene.GlobalIllumination=mGlobalIlluminationMode; scene.Rtgi=mRtgiSettings;
             scene.RadianceCascades=mRadianceCascadesSettings; scene.Rtao=mRtaoSettings;
             scene.Gtao=mGtaoSettings; scene.Ssr=mSsrSettings;
@@ -821,6 +822,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.Smaa          = mSmaaSettings;
     scene.Sharpen       = mSharpenSettings;
     scene.Dlss          = mDlssSettings;
+    scene.Fsr           = mFsrSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi          = mRtgiSettings;
     scene.RadianceCascades = mRadianceCascadesSettings;
@@ -877,7 +879,10 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
     }
 
     mSceneLoadState.Progress = 0.0f;
-    mSceneLoadState.StatusMessage = "Loading...";
+    {
+        std::lock_guard<std::mutex> lock(mSceneLoadState.Mutex);
+        mSceneLoadState.StatusMessage = "Loading...";
+    }
     mSceneLoadState.InProgress = true;
     mSceneLoadState.Completed = false;
     mSceneLoadState.CancelRequested = false;
@@ -898,6 +903,7 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.Smaa          = &data.Smaa;
         scene.Sharpen       = &data.Sharpen;
         scene.Dlss          = &data.Dlss;
+        scene.Fsr           = &data.Fsr;
         scene.GlobalIllumination = &data.GlobalIlluminationMode;
         scene.Rtgi          = &data.Rtgi;
         scene.RadianceCascades = &data.RadianceCascades;
@@ -1033,8 +1039,10 @@ bool Editor::NewScene(HWND ownerWindowHandle)
 
 void Editor::UpdateSceneLoading()
 {
-    if (!mSceneLoadState.Result.has_value()) return;
+    // InProgress first: the worker fills Result and only then clears it, so the
+    // optional must not be looked at while the worker may still be writing it.
     if (mSceneLoadState.InProgress.load()) return;
+    if (!mSceneLoadState.Result.has_value()) return;
     if (mSceneLoadWorker.joinable()) mSceneLoadWorker.join();
 
     if (mSceneLoadState.Completed.load())
@@ -1056,6 +1064,7 @@ void Editor::UpdateSceneLoading()
         if (mSmaaSettings)            *mSmaaSettings            = data.Smaa;
         if (mSharpenSettings)         *mSharpenSettings         = data.Sharpen;
         if (mDlssSettings)            *mDlssSettings            = data.Dlss;
+        if (mFsrSettings)             *mFsrSettings             = data.Fsr;
         if (mGlobalIlluminationMode)  *mGlobalIlluminationMode  = data.GlobalIlluminationMode;
         if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
         if (mRadianceCascadesSettings) *mRadianceCascadesSettings = data.RadianceCascades;
@@ -1074,6 +1083,12 @@ void Editor::UpdateSceneLoading()
         mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
         mSceneDirty = false;
         ResetUndoHistory();
+
+        // The render loop resolves the meshes from here on and reports back.
+        mSceneAssetsStreaming = true;
+        mSceneAssetsFinishing = false;
+        mSceneAssetsResolved = 0;
+        mSceneAssetsTotal = 0;
     }
     else
     {
@@ -1083,18 +1098,56 @@ void Editor::UpdateSceneLoading()
     mSceneLoadState.Result.reset();
 }
 
+void Editor::SetSceneAssetStreamingProgress(size_t resolvedMeshes, size_t totalMeshes)
+{
+    if (!mSceneAssetsStreaming) return;
+    mSceneAssetsResolved = resolvedMeshes;
+    mSceneAssetsTotal = totalMeshes;
+    if (resolvedMeshes < totalMeshes)
+    {
+        mSceneAssetsFinishing = false;
+        return;
+    }
+    if (mSceneAssetsFinishing)
+        mSceneAssetsStreaming = false;
+    else
+        mSceneAssetsFinishing = true;
+}
+
+namespace
+{
+    // Parsing the file is quick next to reading the meshes, so it gets a small
+    // slice of the bar and the meshes get the rest.
+    constexpr float kSceneFileProgressShare = 0.1f;
+}
+
 bool Editor::IsSceneLoading() const
 {
-    return mSceneLoadState.InProgress.load();
+    return mSceneLoadState.InProgress.load() || mSceneAssetsStreaming;
 }
 
 float Editor::GetSceneLoadProgress() const
 {
-    return mSceneLoadState.Progress.load();
+    if (mSceneLoadState.InProgress.load())
+        return kSceneFileProgressShare * mSceneLoadState.Progress.load();
+    if (mSceneAssetsStreaming && mSceneAssetsTotal > 0)
+        return kSceneFileProgressShare + (1.0f - kSceneFileProgressShare)
+            * (static_cast<float>(mSceneAssetsResolved) / static_cast<float>(mSceneAssetsTotal));
+    if (mSceneAssetsStreaming)
+        return kSceneFileProgressShare;
+    return 1.0f;
 }
 
 std::string Editor::GetSceneLoadStatusMessage() const
 {
+    if (!mSceneLoadState.InProgress.load() && mSceneAssetsStreaming)
+    {
+        if (mSceneAssetsFinishing)
+            return "Loading textures...";
+        return "Loading meshes (" + std::to_string(mSceneAssetsResolved) + "/"
+            + std::to_string(mSceneAssetsTotal) + ")...";
+    }
+    std::lock_guard<std::mutex> lock(mSceneLoadState.Mutex);
     return mSceneLoadState.StatusMessage;
 }
 
@@ -1102,7 +1155,10 @@ void Editor::SetSceneLoadProgress(float progress, const char* statusMessage)
 {
     mSceneLoadState.Progress.store(progress);
     if (statusMessage)
+    {
+        std::lock_guard<std::mutex> lock(mSceneLoadState.Mutex);
         mSceneLoadState.StatusMessage = statusMessage;
+    }
 }
 
 bool Editor::SceneLoadProgressCallback(float progress, const char* statusMessage, void* userData)
@@ -4909,10 +4965,24 @@ void Editor::DrawViewportResolutionWindow()
     }
 
     QtUi::Spacing();
+    if (mViewportResolutionFixed)
+        QtUi::TextDisabled("Fixed resolution in use; the viewport preview is scaled to fit.");
+    else
+        QtUi::TextDisabled("Following the viewport panel size.");
 
     if (QtUi::Button("Apply"))
     {
+        mViewportResolutionFixed = true;
         mRequestViewportResolutionChange = true;
+        mShowViewportResolutionDialog = false;
+    }
+
+    QtUi::SameLine();
+    if (QtUi::Button("Fit to Viewport"))
+    {
+        // Release the fixed size; the auto-fit in the frame loop picks the
+        // panel size up again on the next frame.
+        mViewportResolutionFixed = false;
         mShowViewportResolutionDialog = false;
     }
 
@@ -4937,28 +5007,31 @@ void Editor::DrawScreenshotWindow()
         return;
     }
 
-    static char folderBuffer[MAX_PATH] = {};
-    if (folderBuffer[0] == '\0')
+    // Screenshots always go to <project root>/Screenshots, never relative to the
+    // working directory (which is Binaries/ when launched from the IDE).
+    if (mScreenshotOutputFolder.empty())
     {
-        const std::string defaultFolder = mScreenshotOutputFolder.empty() ? std::string("Screenshots") : mScreenshotOutputFolder;
-        strcpy_s(folderBuffer, defaultFolder.c_str());
+        const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+        const std::filesystem::path folder = dataDirectory.empty()
+            ? std::filesystem::path(L"K:\\Ptero-Engine\\Screenshots")
+            : dataDirectory.parent_path() / "Screenshots";
+        mScreenshotOutputFolder = folder.lexically_normal().make_preferred().string();
     }
 
-    QtUi::InputText("Output Folder", folderBuffer, std::size(folderBuffer));
+    QtUi::Text("Output Folder: %s", mScreenshotOutputFolder.c_str());
+    if (mSceneRenderer != nullptr)
+        QtUi::TextDisabled("Resolution: %u x %u", mSceneRenderer->GetSceneWidth(), mSceneRenderer->GetSceneHeight());
 
     if (QtUi::Button("Capture"))
     {
-        mScreenshotOutputFolder = folderBuffer;
-        mRequestScreenshot = !mScreenshotOutputFolder.empty();
+        mRequestScreenshot = true;
         mShowScreenshotDialog = false;
-        folderBuffer[0] = '\0';
     }
 
     QtUi::SameLine();
     if (QtUi::Button("Cancel"))
     {
         mShowScreenshotDialog = false;
-        folderBuffer[0] = '\0';
     }
 
     QtUi::End();

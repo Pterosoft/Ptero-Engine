@@ -51,7 +51,20 @@ struct Node
     // Last known cell, so reconciling a widget costs no layout search.
     QPointer<QGridLayout> cell;
     int row = -1, col = -1;
+    // Takes the whole row of its grid rather than one column (section bodies).
+    bool span = false;
 };
+// What a scope was opened for. Sections are the indented bodies that collapsing headers
+// and tree nodes put their content in; they exist only to indent and are otherwise
+// invisible to the caller: they share their parent's key and serial counter, so a
+// control keeps its identity whether or not it sits in one.
+enum class Section
+{
+    None,
+    Header,
+    Tree
+};
+constexpr int kSectionIndent = 16;
 struct Scope
 {
     QString key;
@@ -63,6 +76,10 @@ struct Scope
     int row = 0, col = 0, serial = 0, header = 0;
     bool same = false, table = false;
     Node *node = nullptr;
+    Section section = Section::None;
+    // Size of the ID stack when a header section opened. A header only runs until the
+    // next header at the same ID depth, or until the ID it was pushed under is popped.
+    std::size_t depth = 0;
 };
 // Wheel notches collected over the scene viewport since the renderer last drained them.
 // The renderer polls input with GetAsyncKeyState, which has nothing to report a wheel
@@ -330,7 +347,7 @@ void place(Node &n)
         if (n.cell != s.grid || n.row != row || n.col != s.col)
         {
             s.grid->removeWidget(n.widget);
-            s.grid->addWidget(n.widget, row, s.col);
+            s.grid->addWidget(n.widget, row, s.col, 1, n.span ? -1 : 1);
             n.cell = s.grid;
             n.row = row;
             n.col = s.col;
@@ -362,6 +379,63 @@ template <class T> T *control(Node &n)
     place(n);
     return w;
 }
+// The innermost scope that is not a section: the window, child, popup or tab the caller
+// actually opened, which is what window-level queries are about.
+Scope &owner()
+{
+    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it)
+        if (it->section == Section::None)
+            return *it;
+    return scopes.front();
+}
+void openSection(const QString &id, Section kind)
+{
+    Scope &parent = scopes.back();
+    if (!parent.grid || parent.menu || parent.table)
+        return;
+    // Placing the body would make it the "last item", but whoever called TreeNode or
+    // CollapsingHeader asks IsItemClicked and BeginPopupContextItem about the header.
+    Node *const header = last;
+    const bool headerChanged = lastChanged;
+    Node &n = node(id + "#section");
+    if (!n.widget)
+    {
+        n.widget = new QWidget;
+        grid(n.widget)->setContentsMargins(kSectionIndent, 0, 0, 0);
+        n.span = true;
+    }
+    place(n);
+    last = header;
+    lastChanged = headerChanged;
+    Scope s;
+    s.key = parent.key;
+    s.body = n.widget;
+    s.grid = grid(n.widget);
+    s.serial = parent.serial;
+    s.section = kind;
+    s.depth = ids.size();
+    scopes.push_back(s);
+}
+void closeSection()
+{
+    const int serial = scopes.back().serial;
+    scopes.pop_back();
+    if (!scopes.empty())
+        scopes.back().serial = serial;
+}
+// Header sections run until the next header at the same ID depth or shallower.
+void closeHeaders(std::size_t depth)
+{
+    while (!scopes.empty() && scopes.back().section == Section::Header && scopes.back().depth >= depth)
+        closeSection();
+}
+// One entry per open TreeNode: the scope count once its body (if any) was pushed.
+struct TreeLevel
+{
+    std::size_t scopeCount;
+    bool body;
+};
+std::vector<TreeLevel> trees;
 template <class T> T *labeledControl(Node &n, const char *name)
 {
     if (!n.widget)
@@ -1045,6 +1119,7 @@ void NewFrame()
     ++frame;
     scopes.clear();
     ids.clear();
+    trees.clear();
     skippedMenus.clear();
     textureViews.clear();
     overlay->commands.clear();
@@ -1336,6 +1411,9 @@ bool Begin(const char *name, bool *open, int flags)
 }
 void End()
 {
+    // A header's section has no end call of its own; the scope around it ends it.
+    while (!scopes.empty() && scopes.back().section != Section::None)
+        closeSection();
     if (scopes.empty())
         return;
     // The content was built between Begin and End, so this is the first point at which
@@ -1343,6 +1421,9 @@ void End()
     if (Node *n = scopes.back().node; n != nullptr && n->autoSize > 0)
         autoSizeWindow(*n);
     scopes.pop_back();
+    // Tree nodes left open inside the scope just closed.
+    while (!trees.empty() && trees.back().scopeCount > scopes.size())
+        trees.pop_back();
 }
 bool BeginChild(const char *name, UiVec2 size, bool, int)
 {
@@ -1537,7 +1618,7 @@ bool Selectable(const char *name, bool selected, int, UiVec2 size)
     applyStyleSheet(w, "text-align:left;");
     return changed;
 }
-bool CollapsingHeader(const char *name, int flags)
+bool headerButton(const char *name, int flags)
 {
     Node &n = node(key(name));
     bool fresh = !n.widget;
@@ -1557,17 +1638,34 @@ bool CollapsingHeader(const char *name, int flags)
     take(n);
     return n.expanded;
 }
+// Everything up to the next header at this ID depth goes in the header's indented section,
+// so a settings panel reads as groups rather than one flat column of controls.
+bool CollapsingHeader(const char *name, int flags)
+{
+    closeHeaders(ids.size());
+    const bool expanded = headerButton(name, flags);
+    if (expanded)
+        openSection(key(name), Section::Header);
+    return expanded;
+}
 bool TreeNodeEx(const char *name, int flags)
 {
     if (flags & QtUiTreeNodeFlags_Leaf)
     {
         Selectable(name, (flags & QtUiTreeNodeFlags_Selected) != 0);
         PushID(name);
+        trees.push_back({scopes.size(), false});
         return true;
     }
-    bool expanded = CollapsingHeader(name, flags);
+    const bool expanded = headerButton(name, flags);
     if (expanded)
+    {
+        const QString id = key(name);
         PushID(name);
+        const std::size_t before = scopes.size();
+        openSection(id, Section::Tree);
+        trees.push_back({scopes.size(), scopes.size() > before});
+    }
     return expanded;
 }
 bool TreeNode(const char *name)
@@ -1576,6 +1674,16 @@ bool TreeNode(const char *name)
 }
 void TreePop()
 {
+    if (!trees.empty())
+    {
+        const TreeLevel level = trees.back();
+        trees.pop_back();
+        // Header sections opened inside the tree body end with it.
+        while (scopes.size() > level.scopeCount && scopes.back().section == Section::Header)
+            closeSection();
+        if (level.body && scopes.size() == level.scopeCount && scopes.back().section == Section::Tree)
+            closeSection();
+    }
     PopID();
 }
 bool TreeNodeEx(const void *id, int flags, const char *f, ...)
@@ -2145,13 +2253,13 @@ bool BeginPopupContextItem(const char *name, int)
 }
 bool BeginPopupContextWindow(const char *name, int)
 {
-    return contextPopup(name, scopes.back().body);
+    return contextPopup(name, owner().body);
 }
 void CloseCurrentPopup()
 {
     if (scopes.empty())
         return;
-    auto &s = scopes.back();
+    auto &s = owner();
     if (s.menu)
         s.menu->close();
     if (s.node && s.node->widget)
@@ -2195,6 +2303,8 @@ void PopID()
 {
     if (!ids.empty())
         ids.pop_back();
+    // A header opened under the ID just popped has ended; what follows belongs outside it.
+    closeHeaders(ids.size() + 1);
 }
 void PushStyleColor(int c, UiVec4 v)
 {
@@ -2396,7 +2506,7 @@ bool IsWindowHovered(int)
 {
     return !scopes.empty() && scopes.back().key == "window/Viewport"
                ? CameraInputAllowed()
-               : !scopes.empty() && scopes.back().body && scopes.back().body->underMouse();
+               : !scopes.empty() && owner().body && owner().body->underMouse();
 }
 bool IsKeyPressed(int k, bool)
 {
@@ -2445,9 +2555,14 @@ double GetTime()
 UiVec2 GetContentRegionAvail()
 {
     const bool scene = scopes.back().key == "window/Viewport";
-    QWidget *w = scene ? ActiveSurface() : scopes.back().body;
+    // Measured on the owning window body: a section is only as tall as what is already in
+    // it, so sizing a child from its height would feed back on itself.
+    QWidget *w = scene ? ActiveSurface() : owner().body;
+    int indent = 0;
+    for (auto it = scopes.rbegin(); it != scopes.rend() && it->section != Section::None; ++it)
+        indent += kSectionIndent;
     const int margin = scene ? 0 : 16;
-    return w ? UiVec2(float(std::max(1, w->width() - margin)), float(std::max(1, w->height() - margin)))
+    return w ? UiVec2(float(std::max(1, w->width() - margin - indent)), float(std::max(1, w->height() - margin)))
              : UiVec2(640, 480);
 }
 UiVec2 GetCursorScreenPos()

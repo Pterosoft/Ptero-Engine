@@ -6,6 +6,7 @@
 #include "SMAASettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
+#include "FsrSettings.h"
 #include "RadianceCascadesSettings.h"
 #include "RtGISettings.h"
 #include "RtAOSettings.h"
@@ -34,6 +35,7 @@ struct Scene
     SMAASettings* Smaa = nullptr;
     SharpenSettings* Sharpen = nullptr;
     DlssSettings* Dlss = nullptr;
+    FsrSettings* Fsr = nullptr;
     GlobalIlluminationMode* GlobalIllumination = nullptr;
     RtGISettings* Rtgi = nullptr;
     RadianceCascadesSettings* RadianceCascades = nullptr;
