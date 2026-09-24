@@ -1,0 +1,80 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightReference": 1.0,
+    "heightScale": 0.05000000074505806,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "NewMaterial",
+    "normalFlipGreen": true,
+    "normalScale": 1.25,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "roughnessFactor": 1.0,
+    "specularFactor": 0.5,
+    "subsurfaceColor": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
+    ],
+    "subsurfaceFalloff": [
+        1.0,
+        0.3700000047683716,
+        0.30000001192092896
+    ],
+    "subsurfaceRadiusMm": 3.0,
+    "subsurfaceTranslucency": 0.800000011920929,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "Characters/SSS_Demo/Textures/Face/Face_Albedo.dds",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Characters/SSS_Demo/Textures/Face/Face_Normal.dds",
+        "opacity": "",
+        "roughness": "Characters/SSS_Demo/Textures/Face/Face_Roughness.dds"
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": false,
+    "useSubsurfaceScattering": true,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
+    ]
+}

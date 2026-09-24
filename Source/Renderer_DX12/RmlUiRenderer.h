@@ -16,6 +16,7 @@ namespace Rml {
 class Context;
 class ElementDocument;
 } // namespace Rml
+class FarkleMenuController;
 
 // Owns the engine's RmlUi integration: library lifetime, the UI context, the documents
 // loaded into it, and the off-screen target the UI is drawn to.
@@ -50,7 +51,14 @@ public:
     bool ReloadDocument();
     // Buffered IDs: game actions are consumed on Update, never during DOM dispatch.
     std::string PollGameAction();
+    // The same button activations, queued separately for the node graph's
+    // On UI Button Clicked. False when none are waiting.
+    bool PollGraphClick(std::string& elementId);
     void ApplyGameUiCommand(int operation, const char* id, const char* value);
+    int GetFarkleWinningScore() const;
+    // The player menus' controller, created on first use. The host assigns its Apply
+    // callback and option lists; it survives document loads.
+    FarkleMenuController& GetFarkleMenus();
 
     // Called when a button is clicked or first hovered, so the host can play UI audio.
     // Hover and click are the one part of the game's sound that the game module cannot
@@ -68,6 +76,10 @@ public:
     bool SetElementVisible(const std::string& elementId, bool visible);
 
     const std::string& GetLoadedDocumentName() const { return mLoadedDocumentName; }
+
+    // Frame-rate/latency readout drawn over the game UI. Plain text, one line per "\n".
+    // Never takes focus or the pointer, so menus underneath keep working.
+    void SetStatisticsOverlay(bool visible, const std::string& text);
 
     // Mouse state in UI pixels, relative to the top-left of the UI target. `hasFocus` is
     // false when the pointer is somewhere else in the editor, which sends RmlUi a mouse
@@ -150,6 +162,12 @@ private:
 
     Rml::Context* mContext = nullptr;
     Rml::ElementDocument* mDocument = nullptr;
+    // Data/UI/stats-overlay.rml: its own document in the same context, so it survives
+    // every page load and sits over whichever game screen is showing.
+    Rml::ElementDocument* mStatisticsDocument = nullptr;
+    bool mStatisticsDocumentFailed = false;
+    std::string mStatisticsText;
+    std::unique_ptr<FarkleMenuController> mFarkleMenus;
     std::string mLoadedDocumentName;
 
     // The UI target holds premultiplied alpha, which is what the viewport overlay blit
@@ -187,6 +205,7 @@ private:
     std::unique_ptr<SoundListener> mSoundListener;
     std::function<void(bool)> mUiSoundCallback;
     std::vector<std::string> mGameActions;
+    std::vector<std::string> mGraphClicks;
     std::unique_ptr<TraceListener> mTraceListener;
     std::vector<TracedEvent> mTracedEvents;
     bool mEventTracingEnabled = false;

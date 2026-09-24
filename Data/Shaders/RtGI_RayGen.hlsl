@@ -107,10 +107,15 @@ float3 EvaluateSecondaryPointLights(float3 hitPos, float3 hitNormal, float3 hitG
         const float lightDistance = rcp(invDist);
         const float3 lightDir = toLight * invDist;
 
-        float pointNdotL = abs(dot(hitNormal, lightDir));
-        float geoPointNdotL = abs(dot(hitGeoNormal, lightDir));
-        if (pointNdotL <= 0.0f || geoPointNdotL <= 0.0f)
+        // One-sided: hitNormal faces the ray that found this surface, so only light
+        // arriving on that side counts. This was abs(), which lit the far side of every
+        // closed mesh; with NEE its shadow ray then flipped between blocked and clear
+        // facet by facet along the terminator, which is the blocky pattern in the GI.
+        float pointNdotL = saturate(dot(hitNormal, lightDir));
+        if (pointNdotL <= 0.0f)
             continue;
+        // Only sizes the shadow-ray bias.
+        float geoPointNdotL = max(abs(dot(hitGeoNormal, lightDir)), 1e-3f);
 
         float visibility = 1.0f;
         if (g_NextEventEstimation != 0)
@@ -119,9 +124,11 @@ float3 EvaluateSecondaryPointLights(float3 hitPos, float3 hitNormal, float3 hitG
             const float maxShadowDistance = max(lightDistance - shadowBias * 2.0f, 0.0f);
             if (maxShadowDistance > 0.0f)
             {
-                const float3 shadowOrigin = hitPos + hitGeoNormal * shadowBias + lightDir * shadowBias;
+                // Offset along the geometric normal on the side the light is on. The
+                // unsigned normal pushed the origin *into* the surface for lights behind it.
+                const float3 lightSideNormal = hitGeoNormal * (dot(hitGeoNormal, lightDir) >= 0.0f ? 1.0f : -1.0f);
+                const float3 shadowOrigin = hitPos + lightSideNormal * shadowBias + lightDir * shadowBias;
                 visibility = TraceShadowRay(shadowOrigin, lightDir, maxShadowDistance) ? 1.0f : 0.0f;
-                visibility = lerp(0.35f, 1.0f, visibility);
             }
         }
 
@@ -136,22 +143,28 @@ float3 EvaluateSecondaryDirect(float3 hitPos, float3 hitNormal, float3 hitGeoNor
 {
     // Sun: lambertian diffuse. g_SunDir points FROM sun TO scene, so negate for dot.
     const float3 sunDir = -g_SunDir;
-    float sunNdotL = abs(dot(hitNormal, sunDir));
-    float geoSunNdotL = abs(dot(hitGeoNormal, sunDir));
+    // One-sided, as for the point lights above.
+    float sunNdotL = saturate(dot(hitNormal, sunDir));
+    float geoSunNdotL = max(abs(dot(hitGeoNormal, sunDir)), 1e-3f);
     float sunVisibility = 1.0f;
-    if (g_NextEventEstimation != 0 && sunNdotL > 0.0f && geoSunNdotL > 0.0f)
+    if (g_NextEventEstimation != 0 && sunNdotL > 0.0f)
     {
         // Use the geometric normal for the NEE visibility test to avoid the shadow
         // terminator problem from smooth shading normals falsely pushing the shadow
         // ray under the actual triangle surface.
         const float shadowBias = max(0.01f, 0.02f * rsqrt(max(geoSunNdotL, 0.05f)));
-        const float3 shadowOrigin = hitPos + sunDir * shadowBias;
+        // Offset along the geometric normal (on the sun's side) as well as toward the sun;
+        // stepping only along sunDir leaves the origin under the triangle at grazing angles
+        // on dense meshes, so the ray hits its own surface and visibility turns to noise.
+        const float3 sunSideNormal = hitGeoNormal * (dot(hitGeoNormal, sunDir) >= 0.0f ? 1.0f : -1.0f);
+        const float3 shadowOrigin = hitPos + sunSideNormal * shadowBias + sunDir * shadowBias;
         sunVisibility = TraceShadowRay(shadowOrigin, sunDir, max(1e4f - shadowBias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
 
-        // The existing RTGI secondary shading is a heuristic, not a full MIS path tracer.
-        // Hard binary NEE visibility removes too much energy relative to the legacy unshadowed
-        // bounce approximation, so keep some fill from the old model instead of going fully black.
-        sunVisibility = lerp(0.35f, 1.0f, sunVisibility);
+        // Binary: a blocked hit gets none of this light. There used to be a 0.35 floor here
+        // to keep "energy" the unshadowed model had - but most of that energy was the far
+        // side of every mesh being lit through abs(NdotL). With one-sided shading the floor
+        // only leaked light into places the light cannot reach, and it is why toggling NEE
+        // looked like it did nothing.
     }
     return hitAlbedo * g_SunColor * sunNdotL * sunVisibility
          + EvaluateSecondaryPointLights(hitPos, hitNormal, hitGeoNormal, hitAlbedo);
@@ -296,6 +309,32 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
         float3 shadingNormal = dot(worldNormal, -rayDir) >= 0.0f ? worldNormal : -worldNormal;
         float3 shadingGeoNormal = dot(geoNormal, -rayDir) >= 0.0f ? geoNormal : -geoNormal;
 
+        // Lift the hit onto the smooth surface its vertex normals describe (Hanika,
+        // "Hacking the Shadow Terminator"), so NEE shadow rays and the next bounce leave
+        // from the curved surface the shading assumes rather than the flat facet, whose
+        // neighbours would otherwise shadow it triangle by triangle.
+        float3 shadePos = hitPos;
+        {
+            const float3 vertexPos[3] = { worldPos0, worldPos1, worldPos2 };
+            const float3 vertexNrm[3] = {
+                mul(o2wRot, float3(v0.nx, v0.ny, v0.nz)),
+                mul(o2wRot, float3(v1.nx, v1.ny, v1.nz)),
+                mul(o2wRot, float3(v2.nx, v2.ny, v2.nz)) };
+            const float3 weights = float3(b0, bary.x, bary.y);
+            [unroll]
+            for (uint k = 0; k < 3; ++k)
+            {
+                float3 n = vertexNrm[k];
+                const float nLengthSq = dot(n, n);
+                if (nLengthSq < 1e-12f)
+                    continue;
+                n *= rsqrt(nLengthSq);
+                if (dot(n, shadingGeoNormal) < 0.0f)
+                    n = -n;
+                shadePos -= weights[k] * min(0.0f, dot(hitPos - vertexPos[k], n)) * n;
+            }
+        }
+
         if (!recordedPrimaryHit)
         {
             result.hitPos = hitPos;
@@ -306,7 +345,7 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
         }
 
         float3 hitAlbedo = ApplyColorLeakIntensity(ResolveHitAlbedo(info, primIdx));
-        result.radiance += throughput * EvaluateSecondaryDirect(hitPos, shadingNormal, shadingGeoNormal, hitAlbedo);
+        result.radiance += throughput * EvaluateSecondaryDirect(shadePos, shadingNormal, shadingGeoNormal, hitAlbedo);
 
         throughput *= hitAlbedo;
         if (max(throughput.r, max(throughput.g, throughput.b)) < 1e-3f)
@@ -318,7 +357,7 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
         float2 xi = float2(RandFloat(rngState), RandFloat(rngState));
         float3 bounceDir = CosineSampleHemisphere(xi, shadingNormal);
 
-        const float3 nextOrigin = hitPos + shadingGeoNormal * 0.01f + bounceDir * 0.01f;
+        const float3 nextOrigin = shadePos + shadingGeoNormal * 0.01f + bounceDir * 0.01f;
 
         // Last line of defence before spawning the next ray: a non-finite
         // origin or direction makes TraceRayInline undefined, and whatever it
@@ -339,6 +378,104 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
 // ─────────────────────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────────────────────
+// Where primary GI rays start, and the real plane they must stay above.
+//
+// The G-Buffer normal is the *shading* normal: interpolated vertex normals plus the normal
+// map. On a mesh whose facets are coarse relative to its curvature it tilts away from the
+// actual triangle, so rays leaving a flat facet near its edges run straight into the
+// neighbouring facet and come back occluded - per-triangle banding in the GI, the
+// "shadow terminator" problem applied to indirect light.
+//
+// Fix, after Hanika, "Hacking the Shadow Terminator" (Ray Tracing Gems II, ch. 4): find
+// the actual triangle under the pixel with one short ray from the camera, then lift the
+// point onto the smooth surface its vertex normals describe - project it onto each
+// vertex's tangent plane (only ever outward) and blend by barycentrics. From there the
+// neighbouring facets no longer stick up in front of the ray. The triangle's own normal
+// also gives an exact geometric plane to keep every ray direction above. Depth-derived
+// normals are not a substitute: device depth near 1.0 is far too coarse for them.
+//
+// Falls back to the old shading-normal offset when the camera ray does not land on the
+// G-Buffer surface (alpha-tested or otherwise mismatched geometry).
+void ComputePrimaryRayOrigin(float3 worldPos, float3 shadingNormal,
+                             out float3 origin, out float3 geoNormal)
+{
+    origin = worldPos + shadingNormal * 0.002f;
+    geoNormal = shadingNormal;
+
+    const float3 toSurface = worldPos - g_CameraPos;
+    const float  surfaceDistance = length(toSurface);
+    if (surfaceDistance < 1e-4f)
+        return;
+
+    // How far the G-Buffer point and the traced hit may disagree: depth precision and
+    // TAA jitter both grow with distance.
+    const float tolerance = max(0.01f, surfaceDistance * 0.01f);
+
+    RayDesc ray;
+    ray.Origin    = g_CameraPos;
+    ray.Direction = toSurface / surfaceDistance;
+    ray.TMin      = max(surfaceDistance - tolerance, 0.0f);
+    ray.TMax      = surfaceDistance + tolerance;
+
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
+    rq.TraceRayInline(t_TLAS, RAY_FLAG_NONE, 0xFF, ray);
+    while (rq.Proceed()) {}
+    if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        return;
+
+    const GpuInstanceInfo info = t_InstanceInfo[rq.CommittedInstanceIndex()];
+    const uint primIdx = rq.CommittedPrimitiveIndex();
+    const float2 bary = rq.CommittedTriangleBarycentrics();
+    const float3 b = float3(1.0f - bary.x - bary.y, bary.x, bary.y);
+
+    const float3x4 o2w = rq.CommittedObjectToWorld3x4();
+    const float3x3 o2wRot = float3x3(
+        float3(o2w[0][0], o2w[1][0], o2w[2][0]),
+        float3(o2w[0][1], o2w[1][1], o2w[2][1]),
+        float3(o2w[0][2], o2w[1][2], o2w[2][2]));
+
+    float3 vertexPos[3];
+    float3 vertexNormal[3];
+    [unroll]
+    for (uint k = 0; k < 3; ++k)
+    {
+        const GpuPackedVertex v = t_Vertices[info.vertexOffset + t_Indices[info.indexOffset + primIdx * 3 + k]];
+        const float4 local = float4(v.px, v.py, v.pz, 1.0f);
+        vertexPos[k] = float3(dot(o2w[0], local), dot(o2w[1], local), dot(o2w[2], local));
+        vertexNormal[k] = mul(o2wRot, float3(v.nx, v.ny, v.nz));
+    }
+
+    float3 faceNormal = cross(vertexPos[1] - vertexPos[0], vertexPos[2] - vertexPos[0]);
+    const float faceLengthSq = dot(faceNormal, faceNormal);
+    if (faceLengthSq < 1e-20f)
+        return;
+    faceNormal *= rsqrt(faceLengthSq);
+    // Face the camera side: that is the side the G-Buffer pixel shows.
+    if (dot(faceNormal, ray.Direction) > 0.0f)
+        faceNormal = -faceNormal;
+
+    const float3 hitPos = ray.Origin + ray.Direction * rq.CommittedRayT();
+
+    // Hanika's offset: P' = P - sum(b_i * min(0, dot(P - V_i, n_i)) * n_i).
+    float3 lifted = hitPos;
+    [unroll]
+    for (uint j = 0; j < 3; ++j)
+    {
+        float3 n = vertexNormal[j];
+        const float nLengthSq = dot(n, n);
+        if (nLengthSq < 1e-12f)
+            continue;
+        n *= rsqrt(nLengthSq);
+        if (dot(n, faceNormal) < 0.0f)
+            n = -n;
+        lifted -= b[j] * min(0.0f, dot(hitPos - vertexPos[j], n)) * n;
+    }
+
+    geoNormal = faceNormal;
+    // A small epsilon on top, scaled with distance for floating-point headroom.
+    origin = lifted + faceNormal * max(0.0005f, surfaceDistance * 1e-4f);
+}
+
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
@@ -411,6 +548,27 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
             // should be a smooth gradient.
             diagnostic = saturate(length(worldPos - g_CameraPos) / 30.0f).xxx;
         }
+        else if (g_DebugView == 15)
+        {
+            // NEE sun visibility, fired from the visible surface with exactly the shadow
+            // ray a bounce hit uses. Green: faces the sun and reaches it. Red: faces the
+            // sun but the ray is blocked. Black: faces away. Compare against the shadow-
+            // mapped sun in the lit view - red where the raster sun is lit means the RT
+            // scene holds a blocker the raster one does not.
+            float3 origin, primaryGeoNormal;
+            ComputePrimaryRayOrigin(worldPos, surfaceNormal, origin, primaryGeoNormal);
+            const float3 sunDir = -g_SunDir;
+            diagnostic = float3(0.0f, 0.0f, 0.0f);
+            if (dot(surfaceNormal, sunDir) > 0.0f)
+            {
+                const float geoSunNdotL = max(abs(dot(primaryGeoNormal, sunDir)), 1e-3f);
+                const float shadowBias = max(0.01f, 0.02f * rsqrt(max(geoSunNdotL, 0.05f)));
+                const float3 sunSideNormal = primaryGeoNormal * (dot(primaryGeoNormal, sunDir) >= 0.0f ? 1.0f : -1.0f);
+                const float3 shadowOrigin = origin + sunSideNormal * shadowBias + sunDir * shadowBias;
+                const bool visible = TraceShadowRay(shadowOrigin, sunDir, max(1e4f - shadowBias * 2.0f, 1.0f));
+                diagnostic = visible ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+            }
+        }
         else if (g_DebugView == 14)
         {
             // Constant seed, not pixel-derived: the whole point is that nothing
@@ -433,6 +591,11 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         return;
     }
 
+    // ── Primary ray origin ───────────────────────────────────────────────────
+    // Lifted onto the smooth surface; see ComputePrimaryRayOrigin for why.
+    float3 rayOrigin, geoNormal;
+    ComputePrimaryRayOrigin(worldPos, surfaceNormal, rayOrigin, geoNormal);
+
     // ── Fire GI rays ─────────────────────────────────────────────────────────
     uint rng = InitRng(pixel, g_FrameIndex);
     GIReservoir reservoir = EmptyReservoir();
@@ -447,8 +610,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         float2 xi     = float2(RandFloat(rng), RandFloat(rng));
         float3 rayDir = CosineSampleHemisphere(xi, surfaceNormal);
 
-        // Offset ray origin along the surface normal to avoid self-intersection.
-        RayResult hit = TraceGIRay(worldPos + surfaceNormal * 0.002f, rayDir, rng);
+        // A direction below the real surface would only ever hit this surface. Mirror
+        // it back above the geometric plane instead of discarding it, which keeps the
+        // sample count and roughly preserves the lobe around the shading normal.
+        const float belowSurface = dot(rayDir, geoNormal);
+        if (belowSurface < 0.0f)
+            rayDir = normalize(rayDir - 2.0f * belowSurface * geoNormal);
+
+        // Origin offset along the geometric normal (see above) to avoid self-intersection.
+        RayResult hit = TraceGIRay(rayOrigin, rayDir, rng);
 
         // Keep the RTGI / NRD signal demodulated from the primary-surface albedo.
         // This lets the denoiser smooth indirect lighting without blurring texture detail.

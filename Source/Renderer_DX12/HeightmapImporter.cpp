@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "System/DataFiles.h"
 
 #include "HeightmapImporter.h"
 
@@ -19,25 +20,9 @@ namespace
     // editor's CWD.
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(
-            nullptr, executablePath, MAX_PATH);
-        if (characterCount == 0 || characterCount == MAX_PATH)
-            return {};
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return dataDirectory;
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-            currentPath = parentPath;
-        }
-        return {};
+        // Walks up from the exe to Data/ - or, in a packaged game, the virtual Data
+        // root the .ppak archives serve (see System/DataFiles.h).
+        return DataFiles::FindDataDirectory();
     }
 }
 
@@ -80,7 +65,7 @@ namespace HeightmapImporter
         }
 
         const std::string absolutePath = ResolveDataRelativeToAbsolute(rawPath);
-        std::ifstream inputStream(absolutePath, std::ios::binary);
+        DataFiles::InputFile inputStream(absolutePath, std::ios::binary);
         if (!inputStream)
         {
             outError = "HeightmapImporter::LoadRaw16: could not open '" + rawPath

@@ -2,11 +2,11 @@
 /* This engine's 6.3 build resolves font src from CWD, not from this stylesheet.
    Absolute local paths make the document load from both Editor and Binaries.
    If relocating the project, run Tools/relocate-fonts.ps1 once. */
-@font-face { font-family: "Pirata One"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Pirata_One/PirataOne-Regular.ttf"; }
-@font-face { font-family: "Grenze Gotisch"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Grenze_Gotisch/static/GrenzeGotisch-Regular.ttf"; }
-@font-face { font-family: "IM FELL English SC"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/IM_Fell_English_SC/IMFellEnglishSC-Regular.ttf"; }
-@font-face { font-family: "EB Garamond"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/EB_Garamond/static/EBGaramond-Regular.ttf"; }
-@font-face { font-family: "Fondamento"; src: "K:/Ptero-Engine/Data/UI/Farkle/Fonts/Fondamento/Fondamento-Regular.ttf"; }
+@font-face { font-family: "Pirata One"; src: "UI/Farkle/Fonts/Pirata_One/PirataOne-Regular.ttf"; }
+@font-face { font-family: "Grenze Gotisch"; src: "UI/Farkle/Fonts/Grenze_Gotisch/static/GrenzeGotisch-Regular.ttf"; }
+@font-face { font-family: "IM FELL English SC"; src: "UI/Farkle/Fonts/IM_Fell_English_SC/IMFellEnglishSC-Regular.ttf"; }
+@font-face { font-family: "EB Garamond"; src: "UI/Farkle/Fonts/EB_Garamond/static/EBGaramond-Regular.ttf"; }
+@font-face { font-family: "Fondamento"; src: "UI/Farkle/Fonts/Fondamento/Fondamento-Regular.ttf"; }
 
 @spritesheet farkle {
     src: Textures/farkle-atlas.png;
@@ -17,6 +17,9 @@
     wood-inner: 590px 408px 870px 122px;
     button-paper: 534px 619px 482px 138px;
     button-dark: 1032px 619px 478px 138px;
+    /* Button middles, for ninepatches that keep the octagonal ends in shape (menus.rcss). */
+    button-paper-inner: 590px 643px 370px 90px;
+    button-dark-inner: 1088px 643px 366px 90px;
     slot: 663px 783px 205px 196px;
     fleur: 1198px 780px 180px 208px;
 }

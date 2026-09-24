@@ -1,0 +1,19 @@
+﻿  SceneSerializer.cpp
+  NodeGraphCatalog.cpp
+  NodeGraphDocument.cpp
+  EditorMain.cpp
+  GridGeometry.cpp
+  SplashScreen.cpp
+Ptero-Engine.rc(66): warning RC4203: SHIFT or CONTROL used without VIRTKEY
+  
+Ptero-Engine.rc(67): warning RC4203: SHIFT or CONTROL used without VIRTKEY
+  
+Ptero-Engine.rc(68): warning RC4203: SHIFT or CONTROL used without VIRTKEY
+  
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+K:\Ptero-Engine\Source\Ptero-Engine\EditorMain.cpp(307): warning C4715: 'wWinMain': not all control paths return a value
+  All 845 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  Ptero-Engine.vcxproj -> K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\Editor.exe
+          1 file(s) copied.

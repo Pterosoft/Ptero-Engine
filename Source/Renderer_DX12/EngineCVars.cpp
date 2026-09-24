@@ -52,9 +52,18 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
         [rendererPointer] { rendererPointer->SetViewDistanceMeters(rendererPointer->GetViewDistanceMeters()); });
     CVar::RegisterBool("r.grid", &renderer.GetGridEnabledRef(),
         "Draws the viewport ground grid.");
+    CVar::RegisterBool("shadows.enabled", &renderer.GetShadowsEnabledRef(),
+        "Master switch for sun and point-light shadows.");
+    CVar::RegisterBool("stats.overlay", &renderer.GetShowStatisticsOverlayRef(),
+        "FPS, frame time and render latency over the game UI.");
     CVar::RegisterBool("r.wireframe", &renderer.GetWireframeEnabledRef(),
         "Draws scene geometry as wireframe.",
         [rendererPointer] { rendererPointer->InvalidateEntityPipeline(); });
+
+    // ------------------------------------------------------------------ game
+    CVar::RegisterBool("game.skipintro", &renderer.GetSkipGameIntroRef(),
+        "Skip the Pterosoft/engine logo intro when a play session starts. Mainly for "
+        "editor Play-in-Editor iteration; a packaged build still plays it by default.");
 
     // ---------------------------------------------------------------------- GI
     CVar::RegisterEnum("gi.mode", reinterpret_cast<int*>(&renderer.GetGlobalIlluminationMode()),
@@ -164,6 +173,26 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("ssr.maxdistance", &ssr.MaxDistance, "Longest reflection ray, in metres.", 1.0f, 1000.0f);
     CVar::RegisterFloat("ssr.edgefadestart", &ssr.EdgeFadeStart, "Screen fraction at which reflections start fading at the border.", 0.0f, 1.0f);
     CVar::RegisterInt  ("ssr.debugview", &ssr.DebugView, "SSR debug visualisation.", 0, 4);
+    CVar::RegisterEnum ("ssr.technique", &ssr.Technique, "Reflection tracer.", { "raymarch", "fidelityfx" }, 0);
+    CVar::RegisterFloat("ssr.sssr.thickness", &ssr.SssrDepthThickness, "FidelityFX: how far below the depth buffer a hit may land, in metres.", 0.0f, 1.0f);
+    CVar::RegisterInt  ("ssr.sssr.maxtraversal", &ssr.SssrMaxTraversalIntersections, "FidelityFX: traversal steps per ray.", 1, 1024);
+    CVar::RegisterInt  ("ssr.sssr.minoccupancy", &ssr.SssrMinTraversalOccupancy, "FidelityFX: stop a wave once this few rays remain.", 0, 64);
+    CVar::RegisterInt  ("ssr.sssr.mostdetailedmip", &ssr.SssrMostDetailedMip, "FidelityFX: depth pyramid level glossy rays start on.", 0, 4);
+    CVar::RegisterInt  ("ssr.sssr.samplesperquad", &ssr.SssrSamplesPerQuad, "FidelityFX: glossy rays per 2x2 quad (1, 2 or 4).", 1, 4);
+    CVar::RegisterBool ("ssr.sssr.varianceguided", &ssr.SssrTemporalVarianceGuidedTracing, "FidelityFX: re-trace pixels whose history is unstable.");
+    CVar::RegisterFloat("ssr.sssr.variancethreshold", &ssr.SssrTemporalVarianceThreshold, "FidelityFX: variance above which a skipped pixel is re-traced.", 0.0f, 0.01f);
+    CVar::RegisterFloat("ssr.sssr.temporalstability", &ssr.SssrTemporalStability, "FidelityFX: history clipping; higher is steadier, lower ghosts less.", 0.0f, 1.0f);
+
+    // ---------------------------------------------------- subsurface scattering
+    SubsurfaceSettings& sss = renderer.GetSubsurfaceSettings();
+    CVar::RegisterBool ("sss.enabled", &sss.Enabled, "Subsurface scattering for materials that enable it.");
+    CVar::RegisterEnum ("sss.mode", &sss.Mode, "How scattering is evaluated.", { "screenspace", "raytraced" }, 0);
+    CVar::RegisterInt  ("sss.quality", &sss.Quality, "Screen-space kernel: 0 = 11, 1 = 17, 2 = 25 taps.", 0, 2);
+    CVar::RegisterBool ("sss.followsurface", &sss.FollowSurface, "Stop the screen-space blur at depth discontinuities.");
+    CVar::RegisterBool ("sss.transmission", &sss.Transmission, "Light transmitted through thin parts.");
+    CVar::RegisterFloat("sss.transmissionintensity", &sss.TransmissionIntensity, "Multiplier on transmitted light.", 0.0f, 10.0f);
+    CVar::RegisterInt  ("sss.rtsamples", &sss.RtSamples, "Ray-traced surface probes per pixel.", 1, 64);
+    CVar::RegisterInt  ("sss.debugview", &sss.DebugView, "0 = composite, 1 = scattered diffuse, 2 = profile mask.", 0, 2);
 
     // ----------------------------------------------------------- anti-aliasing
     TaaSettings& taa = renderer.GetTaaSettings();

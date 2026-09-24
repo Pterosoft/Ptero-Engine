@@ -111,6 +111,14 @@ public:
     bool PlayEmitter(EmitterHandle handle);
     bool StopEmitter(EmitterHandle handle);
 
+    // Player volume settings, each linear gain in [0, 1]. Overall scales the master bus;
+    // music scales the music channel; sound scales every other instance, live and
+    // future. Sound has to be per instance rather than a bus: the project routes every
+    // event straight to the master bus, and the spatialised events' Resonance Listeners
+    // each output the whole shared soundfield, so scaling all of them alike is what
+    // scales the spatialised mix (see the FMOD project notes).
+    void SetVolumes(float overall, float sound, float music);
+
     // Returns true when the system was successfully initialised.
     bool IsInitialized() const { return m_initialized; }
 
@@ -173,4 +181,7 @@ private:
     unsigned int m_resonanceSourcePluginHandle = 0;
     bool          m_resonanceAudioEnabled = true;
     bool          m_resonanceAudioAvailable = false;
+    float         m_overallVolume = 1.0f;
+    float         m_soundVolume = 1.0f;
+    float         m_musicVolume = 1.0f;
 };

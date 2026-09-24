@@ -8,6 +8,7 @@
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
 #include "FsrSettings.h"
+#include "SubsurfaceSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RadianceCascadesSettings.h"
@@ -183,6 +184,16 @@ public:
         return &mShowConsolePanel;
     }
 
+    // Draws the Console panel on its own, bypassing the rest of the editor chrome -
+    // used by the standalone game path (tilde key), which has no menu to route through
+    // Initialize(). DrawConsolePanel() itself stays private since every other caller
+    // reaches it through Initialize()'s panel pass.
+    void DrawStandaloneConsoleIfVisible()
+    {
+        if (mShowConsolePanel)
+            DrawConsolePanel();
+    }
+
     bool* GetShowUiEditorPanelPointer()
     {
         return &mShowUiEditorPanel;
@@ -231,6 +242,7 @@ public:
     // Separate from SetSceneSettings so the long list there does not have to grow
     // at every call site; saved and restored with the level all the same.
     void SetFsrSettings(FsrSettings* fsrSettings) { mFsrSettings = fsrSettings; }
+    void SetSubsurfaceSettings(SubsurfaceSettings* subsurfaceSettings) { mSubsurfaceSettings = subsurfaceSettings; }
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
@@ -431,6 +443,7 @@ private:
         SharpenSettings Sharpen{};
         DlssSettings Dlss{};
         FsrSettings Fsr{};
+        SubsurfaceSettings Subsurface{};
         GlobalIlluminationMode GlobalIlluminationMode = GlobalIlluminationMode::Rtgi;
         RtGISettings Rtgi{};
         RadianceCascadesSettings RadianceCascades{};
@@ -698,6 +711,7 @@ private:
     SharpenSettings* mSharpenSettings = nullptr;
     DlssSettings* mDlssSettings = nullptr;
     FsrSettings* mFsrSettings = nullptr;
+    SubsurfaceSettings* mSubsurfaceSettings = nullptr;
     GlobalIlluminationMode* mGlobalIlluminationMode = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
     RadianceCascadesSettings* mRadianceCascadesSettings = nullptr;

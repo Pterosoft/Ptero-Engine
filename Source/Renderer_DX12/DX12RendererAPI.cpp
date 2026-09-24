@@ -14,6 +14,11 @@
 
 #include "../QtUi/QtUi.h"
 #include "QtViewportRenderer.h"
+#include "System/DataFiles.h"
+#include "VideoPlayerWindow.h"
+#ifdef PTERO_GAME_RUNTIME
+#include "GameConsoleWindow.h"
+#endif
 
 
 
@@ -66,6 +71,9 @@ extern "C"
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
     ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
+    bool __stdcall DX12Context_AllocateSrvDescriptor(
+        D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
+        D3D12_GPU_DESCRIPTOR_HANDLE* gpuHandle);
     D3D12_CPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorCpuHandle();
     D3D12_GPU_DESCRIPTOR_HANDLE __stdcall DX12Context_GetSrvDescriptorGpuHandle();
     const char* __stdcall DX12Context_GetLastError();
@@ -88,6 +96,15 @@ namespace
     std::string gStandaloneLevel;
     bool gStandaloneLevelLoaded = false;
     bool gStandaloneStarted = false;
+    // A packaged game plays its intro only once the level renders smoothly: the first
+    // frames compile pipelines and upload meshes and textures, and a video started over
+    // them stutters and skips. Until then the screen stays black and nothing is audible.
+    constexpr float kWarmupSmoothFrameMilliseconds = 50.0f;
+    constexpr int kWarmupSmoothFramesNeeded = 10;
+    constexpr std::chrono::seconds kWarmupTimeout{ 20 };
+    std::chrono::steady_clock::time_point gStandaloneWarmupBegin{};
+    std::chrono::steady_clock::time_point gStandaloneLastWarmupFrame{};
+    int gStandaloneSmoothFrames = 0;
     RendererStatisticsText gRendererStatisticsText;
     AssetManager gAssetManager;
     std::string gRendererLastError;
@@ -643,6 +660,13 @@ namespace
     {
         namespace fs = std::filesystem;
 
+        // A packaged game's shaders live in Shaders.ppak, under the virtual Data root.
+        if (DataFiles::IsPackaged())
+        {
+            const fs::path packagedShaders = DataFiles::PackagedRoot() / L"Shaders";
+            return DataFiles::IsDirectory(packagedShaders) ? packagedShaders : fs::path();
+        }
+
         std::vector<fs::path> startDirectories;
         const fs::path executableDirectory = GetEditorExecutableDirectory();
         if (!executableDirectory.empty())
@@ -683,15 +707,9 @@ namespace
 
     std::string ReadTextFile(const std::filesystem::path& path)
     {
-        std::ifstream stream(path, std::ios::binary);
-        if (!stream)
-        {
-            return {};
-        }
-
-        std::ostringstream buffer;
-        buffer << stream.rdbuf();
-        return buffer.str();
+        std::string text;
+        DataFiles::ReadText(path, text);
+        return text;
     }
 
     std::wstring ToWideString(const std::string& value)
@@ -751,6 +769,13 @@ namespace
         if (ContainsText(sourceText, "XE_GTAO_"))
         {
             return L"cs_6_0";
+        }
+
+        // FidelityFX SSSR: SssrRenderer compiles every Sssr_* pass as cs_6_5, including the
+        // ones whose own text has no Wave intrinsics.
+        if (_wcsnicmp(filename.c_str(), L"Sssr_", 5) == 0)
+        {
+            return L"cs_6_5";
         }
 
         if (ContainsText(sourceText, "Wave") || ContainsText(sourceText, "SV_Barycentrics"))
@@ -852,9 +877,8 @@ namespace
     {
         namespace fs = std::filesystem;
 
-        std::error_code relativeError;
-        const fs::path relativePath = fs::relative(path, shadersDirectory, relativeError);
-        if (relativeError || relativePath.empty())
+        const fs::path relativePath = path.lexically_relative(shadersDirectory);
+        if (relativePath.empty())
         {
             return false;
         }
@@ -906,29 +930,16 @@ namespace
             (shadersDirectory / L"Rtxdi").wstring()
         };
 
-        std::error_code iteratorError;
-        for (fs::recursive_directory_iterator it(shadersDirectory, fs::directory_options::skip_permission_denied, iteratorError), end;
-             it != end && !iteratorError;
-             it.increment(iteratorError))
+        // Listed through DataFiles so a packaged game warms the same cache from its
+        // archive. NRD and Rtxdi are third-party shader trees included by others, never
+        // compiled on their own.
+        for (const fs::path& path : DataFiles::ListFiles(shadersDirectory, true))
         {
-            std::error_code statusError;
-            if (it->is_directory(statusError) && !statusError)
-            {
-                if (IsExternalShaderPackageDirectory(it->path(), shadersDirectory))
-                {
-                    it.disable_recursion_pending();
-                }
-
-                continue;
-            }
-
-            statusError.clear();
-            if (!it->is_regular_file(statusError) || statusError)
+            if (IsExternalShaderPackageDirectory(path, shadersDirectory))
             {
                 continue;
             }
 
-            const fs::path path = it->path();
             const std::wstring filename = path.filename().wstring();
             const std::wstring extension = path.extension().wstring();
             if (_wcsicmp(extension.c_str(), L".hlsl") != 0)
@@ -968,9 +979,8 @@ namespace
         for (const ShaderCompileRequest& request : requests)
         {
             const fs::path requestPath(request.FilePath);
-            std::error_code relativeError;
-            fs::path relativePath = fs::relative(requestPath, shadersDirectory, relativeError);
-            if (relativeError || relativePath.empty())
+            fs::path relativePath = requestPath.lexically_relative(shadersDirectory);
+            if (relativePath.empty())
             {
                 relativePath = requestPath.filename();
             }
@@ -1452,7 +1462,13 @@ extern "C"
     {
         gStandaloneLevel = level ? std::filesystem::path(level).string() : std::string();
         gStandaloneLevelLoaded = gStandaloneStarted = false;
+        gStandaloneWarmupBegin = gStandaloneLastWarmupFrame = {};
+        gStandaloneSmoothFrames = 0;
         QtUi::SetStandaloneGame(!gStandaloneLevel.empty());
+        // mShowConsolePanel defaults to true for the editor's own docking layout; a
+        // standalone game must start with the console closed and only open it on tilde.
+        if (bool* showConsole = gEditor.GetShowConsolePanelPointer())
+            *showConsole = false;
     }
 
     __declspec(dllexport) bool __stdcall RendererDX12_Initialize(HWND windowHandle)
@@ -1482,6 +1498,10 @@ extern "C"
 
         ReportProgress(L"Initializing Qt editor..." );
         if (!QtUi::Initialize(windowHandle)) return false;
+        // Before the swap chain exists, so it is created at the saved size: a packaged game
+        // opens straight into its fullscreen/borderless/windowed mode, never a plain window.
+        if (QtUi::IsStandaloneGame())
+            ApplySavedGameDisplayMode();
         if (!DX12Context_Initialize(QtUi::ViewportHandle()))
         {
             const char* contextError = DX12Context_GetLastError();
@@ -1516,6 +1536,24 @@ extern "C"
             QtViewportRenderer::Shutdown();
             QtUi::Shutdown();
             return false;
+        }
+
+        // The video layer's SRV slots come from the shared heap, which never frees, so they
+        // are taken once here for the life of the renderer. A failure only costs video.
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuHandles[VideoTexture::kDescriptorCount]{};
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandles[VideoTexture::kDescriptorCount]{};
+            bool allocated = true;
+            for (int i = 0; i < VideoTexture::kDescriptorCount && allocated; ++i)
+                allocated = DX12Context_AllocateSrvDescriptor(&cpuHandles[i], &gpuHandles[i]);
+
+            // Same target format as the viewport blit it is drawn after.
+            if (!allocated || !gSceneRenderer->GetVideoLayer().InitializeGpu(
+                    DX12Context_GetDevice(), cpuHandles, gpuHandles, DXGI_FORMAT_R8G8B8A8_UNORM))
+            {
+                PTERO_LOG_WARNING("Video", "Video layer unavailable: %s",
+                    allocated ? "pipeline creation failed" : "no free SRV descriptors");
+            }
         }
 
         RegisterEngineCVars(*gSceneRenderer);
@@ -1714,6 +1752,7 @@ extern "C"
                 gEditor.SetSceneRenderer(gSceneRenderer.get());
                 gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
                 gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
+                gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
                 gEditor.SetSceneSettings(
                     &gSceneRenderer->GetTimeOfDaySettings(),
                     &gSceneRenderer->GetTaaSettings(),
@@ -1736,6 +1775,10 @@ extern "C"
                 gEditor.SetShowViewportGrid(false);
                 gSceneRenderer->SetGridEnabled(false);
                 gStandaloneLevelLoaded = true;
+                // The player's saved graphics settings, now, so the warm-up frames below
+                // compile the pipelines the game will actually use. They also replace
+                // whatever upscaler/frame generation state the level was last saved with.
+                gSceneRenderer->PrepareStandaloneGameSettings();
             }
             // Vegetation layers reference meshes by path but have no entity to
             // hang a MeshComponent on, so they load through this callback
@@ -1869,7 +1912,10 @@ extern "C"
                         entity.Transform.Position.y,
                         entity.Transform.Position.z);
 
-                    if (audioEmitter.AutoPlay && !audioEmitter.EventPath.empty() && !audioEmitter.RuntimeAutoPlayStarted)
+                    // A packaged game stays silent through loading and the intro videos;
+                    // the level's ambience starts with the game itself.
+                    const bool ambienceAllowed = !QtUi::IsStandaloneGame() || gSceneRenderer->IsGameSessionRunning();
+                    if (audioEmitter.AutoPlay && ambienceAllowed && !audioEmitter.EventPath.empty() && !audioEmitter.RuntimeAutoPlayStarted)
                     {
                         audioEmitter.RuntimeAutoPlayStarted = gAudioManagerPtr->PlayEmitter(handle);
                     }
@@ -1890,11 +1936,29 @@ extern "C"
 
             if (QtUi::IsStandaloneGame() && !gStandaloneStarted)
             {
-                // A standalone build already owns the only window there is, so the mode
-                // is moot - OpenGameWindow takes the standalone path either way.
-                if (!gSceneRenderer->StartGame(true))
-                    throw std::runtime_error(gSceneRenderer->GetGameStartErrorMessage());
-                gStandaloneStarted = true;
+                const auto now = std::chrono::steady_clock::now();
+                if (gStandaloneWarmupBegin == std::chrono::steady_clock::time_point{})
+                    gStandaloneWarmupBegin = now;
+                const bool haveInterval = gStandaloneLastWarmupFrame != std::chrono::steady_clock::time_point{};
+                const float intervalMilliseconds = haveInterval
+                    ? std::chrono::duration<float, std::milli>(now - gStandaloneLastWarmupFrame).count()
+                    : 0.0f;
+                gStandaloneLastWarmupFrame = now;
+                gStandaloneSmoothFrames = (haveInterval && intervalMilliseconds < kWarmupSmoothFrameMilliseconds)
+                    ? gStandaloneSmoothFrames + 1 : 0;
+
+                const bool warmedUp = gStandaloneSmoothFrames >= kWarmupSmoothFramesNeeded;
+                if (warmedUp || now - gStandaloneWarmupBegin > kWarmupTimeout)
+                {
+                    PTERO_LOG_INFO("Game", "Level warmed up in %.1f s%s; starting the intro.",
+                        std::chrono::duration<float>(now - gStandaloneWarmupBegin).count(),
+                        warmedUp ? "" : " (timed out waiting for smooth frames)");
+                    // A standalone build already owns the only window there is, so the mode
+                    // is moot - OpenGameWindow takes the standalone path either way.
+                    if (!gSceneRenderer->StartGame(true))
+                        throw std::runtime_error(gSceneRenderer->GetGameStartErrorMessage());
+                    gStandaloneStarted = true;
+                }
             }
 
             ReportProgress(L"Rendering initial scene frame...");
@@ -1918,7 +1982,42 @@ extern "C"
             // tool can paint heightmaps and pick terrain height.
             gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
             gEditor.SetSceneRenderer(gSceneRenderer.get());
-            if (!QtUi::IsStandaloneGame()) gEditor.Initialize(commandList);
+            if (QtUi::IsStandaloneGame())
+            {
+                // No menu/toolbar to toggle it from in a packaged build, so the tilde key
+                // (Quake-style) does it - polled like the game's other hotkeys (see
+                // DX12SceneRenderer's PollAction) rather than through window messages,
+                // since Qt's own event loop - not RendererDX12_HandleWindowMessage -
+                // consumes native keyboard input once a Qt widget has focus.
+                static bool sConsoleToggleKeyWasDown = false;
+                // Only while the game (or its console) is the foreground app: the key
+                // state is global, and a tilde typed elsewhere is none of the game's business.
+#ifdef PTERO_GAME_RUNTIME
+                const bool gameHasKeyboard = QtUi::GameWindowHasFocus() || GameConsoleWindow::HasFocus();
+#else
+                const bool gameHasKeyboard = QtUi::GameWindowHasFocus();
+#endif
+                const bool consoleToggleKeyDown = gameHasKeyboard && (GetAsyncKeyState(VK_OEM_3) & 0x8000) != 0;
+                if (consoleToggleKeyDown && !sConsoleToggleKeyWasDown)
+                {
+                    if (bool* showConsole = gEditor.GetShowConsolePanelPointer())
+                        *showConsole = !*showConsole;
+                }
+                sConsoleToggleKeyWasDown = consoleToggleKeyDown;
+
+#ifdef PTERO_GAME_RUNTIME
+                // No Qt in a packaged game, so no Console panel: a native drop-down
+                // stands in for it (see GameConsoleWindow.h).
+                if (bool* showConsole = gEditor.GetShowConsolePanelPointer())
+                    *showConsole = GameConsoleWindow::Update(QtUi::HostHandle(), *showConsole);
+#else
+                gEditor.DrawStandaloneConsoleIfVisible();
+#endif
+            }
+            else
+            {
+                gEditor.Initialize(commandList);
+            }
         }
 
         // Swap-chain buffers begin life in COMMON state. After the first successful
@@ -1940,7 +2039,12 @@ extern "C"
 
         // Match the editor background so the app chrome stays neutral while the actual
         // scene is shown inside the in-app viewport window.
-        const float clearColor[] = { 0.08f, 0.10f, 0.14f, 1.0f };
+        // Black for a packaged game still warming up (see kWarmupSmoothFramesNeeded): the
+        // level is being rendered, but not shown until the intro has played.
+        const bool hideSceneUntilIntro = QtUi::IsStandaloneGame() && !gStandaloneStarted;
+        const float editorClearColor[] = { 0.08f, 0.10f, 0.14f, 1.0f };
+        const float blackClearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        const float* clearColor = QtUi::IsStandaloneGame() ? blackClearColor : editorClearColor;
         commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
         if (gQtUiReady)
@@ -1990,6 +2094,8 @@ extern "C"
                 &gSceneRenderer->GetRtaoSettings(),
                 &gSceneRenderer->GetGtaoSettings(),
                 &gSceneRenderer->GetSsrSettings(),
+                &gSceneRenderer->GetSubsurfaceSettings(),
+                gSceneRenderer->IsSubsurfaceRayTracingSupported(),
                 &gSceneRenderer->GetChromaticAberrationSettings(),
                 &gSceneRenderer->GetAgxSettings(),
                 &gSceneRenderer->GetVolumetricFogSettings(),
@@ -2003,6 +2109,7 @@ extern "C"
             gSceneRenderer->SetViewDistanceMeters(viewDistanceMeters);
             gEditor.SetShowViewportGrid(gridEnabled);
             gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
+            gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
             gEditor.SetSceneSettings(
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetTaaSettings(),
@@ -2138,13 +2245,20 @@ extern "C"
             // Stop may have hidden the game window during this frame. Finish the
             // command list against the chain acquired by BeginFrame; transfer next frame.
             GetClientRect(DX12Context_GetWindowHandle(), &viewportRect);
-            QtViewportRenderer::Draw(commandList, gSceneRenderer->GetSceneTextureId(), viewportRect.right, viewportRect.bottom);
+            if (!hideSceneUntilIntro)
+                QtViewportRenderer::Draw(commandList, gSceneRenderer->GetSceneTextureId(), viewportRect.right, viewportRect.bottom);
 
             // The back buffer now holds the scene and nothing else. Frame generation
             // keeps a copy of it, so it can tell the game UI drawn next apart from
             // the scene and keep the UI from being dragged along with scene motion.
             gSceneRenderer->GetFrameGeneration().FinishFrame(commandList, backBuffer, gSceneRenderer->GetFsrSettings());
             frameGenerationFinished = true;
+
+            // A playing video covers the scene but stays under the game UI, so menus and
+            // "skip" prompts can sit on top of it. After FinishFrame, so frame generation
+            // treats it like UI rather than warping it with the scene's motion vectors.
+            // Recorded every frame, visible or not: it also retires replaced GPU resources.
+            gSceneRenderer->GetVideoLayer().Record(commandList, viewportRect.right, viewportRect.bottom);
 
             // The game UI composites over the scene here rather than through the Qt UI
             // layer: the viewport is a native surface presented by this blit, and the Qt
@@ -2274,6 +2388,11 @@ extern "C"
     {
         ReportProgress(L"Waiting for renderer shutdown...");
         gSystemUsageSampler.Stop();
+        // The preview window runs on a thread of its own inside Video.dll.
+        VideoPlayerWindow::Shutdown();
+#ifdef PTERO_GAME_RUNTIME
+        GameConsoleWindow::Shutdown();
+#endif
         DX12Context_WaitForGPU();
         ReportProgress(L"Releasing editor resources...");
         gEditor.Shutdown();

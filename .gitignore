@@ -5,6 +5,7 @@
 *.raw
 *.pdb
 *.sdf
+*.ilk
 Data/Geometry
 Source/SDKs
 Source/System/x64

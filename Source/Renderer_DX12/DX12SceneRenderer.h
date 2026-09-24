@@ -40,6 +40,9 @@
 #include "GtaoSettings.h"
 #include "SsrRenderer.h"
 #include "SsrSettings.h"
+#include "SssrRenderer.h"
+#include "SubsurfaceScattering.h"
+#include "SubsurfaceSettings.h"
 #include "BloomRenderer.h"
 #include "BloomSettings.h"
 #include "ImageSharpenRenderer.h"
@@ -58,6 +61,7 @@
 #include "GameHost.h"
 #include "RmlUiRenderer.h"
 #include "System/NodeGraphRuntime.h"
+#include "VideoLayer.h"
 #include "..\Ptero-Engine\EditorCamera.h"
 #include "..\Ptero-Engine\RenderInterfaces.h"
 
@@ -65,6 +69,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -109,6 +114,11 @@ private:
 };
 
 class AudioManager;
+
+// Standalone game only (GameSettings.cpp): moves the host window to the display mode in
+// the player's settings.cfg. Called before the first frame, so nothing is ever shown in a
+// window that later jumps to fullscreen.
+void ApplySavedGameDisplayMode();
 
 class DX12SceneRenderer
 {
@@ -344,6 +354,14 @@ public:
 
     SsrSettings& GetSsrSettings() { return mSsrSettings; }
     const SsrSettings& GetSsrSettings() const { return mSsrSettings; }
+    SubsurfaceSettings& GetSubsurfaceSettings() { return mSubsurfaceSettings; }
+    const SubsurfaceSettings& GetSubsurfaceSettings() const { return mSubsurfaceSettings; }
+    // Whether the ray-traced subsurface path can run on this device (DXR 1.1), once the
+    // pass has initialised; before that it reports true so the option stays selectable.
+    bool IsSubsurfaceRayTracingSupported() const
+    {
+        return !mSubsurfaceRenderer.IsInitialized() || mSubsurfaceRenderer.SupportsRayTracing();
+    }
 
     ChromaticAberrationSettings& GetChromaticAberrationSettings() { return mChromaticAberrationSettings; }
     const ChromaticAberrationSettings& GetChromaticAberrationSettings() const { return mChromaticAberrationSettings; }
@@ -476,11 +494,36 @@ public:
     bool StartGame(bool separateWindow);
     void StopGame();
     void ToggleGame(bool separateWindow);
-    bool IsGameRunning() const { return mGameHost.IsRunning(); }
+    // True for a real running session AND for the logo intro that precedes it, so Play
+    // can't be double-pressed and Stop works during either.
+    bool IsGameRunning() const { return mGameHost.IsRunning() || IsGameIntroPlaying(); }
+    // Only the game proper: false while the intro is still playing.
+    bool IsGameSessionRunning() const { return mGameHost.IsRunning(); }
+    // Standalone only, right after the level has loaded: applies the player's saved
+    // graphics/audio settings before any warm-up frame or intro video, so nothing changes
+    // (upscaler, AA, quality) once the game is on screen. Idempotent.
+    void PrepareStandaloneGameSettings();
     // Which mode the running session was started in. Meaningless while stopped.
     bool IsGameInSeparateWindow() const { return mGameInSeparateWindow; }
     bool mGameStopRequested = false;
     std::array<bool, 256> mFarkleKeys{};
+
+    // ---- Game intro (Pterosoft logo -> engine logo) ----------------------
+    // Runs once before Game_Start, on the same VideoLayer the Node Graph's video nodes use
+    // (see GetVideoLayer()). StartGame() plays the first clip and returns immediately;
+    // UpdateGameIntro() (driven every frame from UpdateCamera(), since the game camera/host
+    // do not exist yet) advances it and calls BeginGameAfterIntro() once both clips have
+    // finished or been skipped. game.skipintro (see EngineCVars.cpp) bypasses it entirely,
+    // mainly so editor PIE iteration is not stuck replaying both clips every Play.
+    enum class GameIntroStage { None, Pterosoft, Engine };
+    bool IsGameIntroPlaying() const { return mGameIntroStage != GameIntroStage::None; }
+    void UpdateGameIntro(float deltaTime);
+    bool BeginGameAfterIntro(bool separateWindow);
+    bool& GetSkipGameIntroRef() { return mSkipGameIntro; }
+    GameIntroStage mGameIntroStage = GameIntroStage::None;
+    bool mGameIntroSeparateWindow = false;
+    bool mGameIntroSkipKeyWasDown = false;
+    bool mSkipGameIntro = false;
 
     // Registered by the host once FMOD is up. Null until then, and null for good when
     // audio failed to initialise, so every use is guarded: play sessions run silently
@@ -508,6 +551,10 @@ public:
     RmlUiRenderer& GetRmlUiRenderer() { return mRmlUiRenderer; }
     const RmlUiRenderer& GetRmlUiRenderer() const { return mRmlUiRenderer; }
 
+    // Full-screen video driven by the Node Graph's video nodes. Composited over the scene
+    // and under the game UI by the viewport blit.
+    VideoLayer& GetVideoLayer() { return mVideoLayer; }
+
     // The level's visual script, owned by the editor. The renderer only reads it, and
     // only at the moment a play session starts - the runtime works on its own copy from
     // then on, so the graph can keep being edited while it runs.
@@ -524,9 +571,9 @@ public:
 
     // Returns UiTextureID handles for each G-Buffer layer and the GI accumulation
     // buffer so the editor can display them in a debug visualizer window.
-    UiTextureID GetGBufferAlbedoTextureId()   const { return static_cast<UiTextureID>(mDeferredLightingPass.GetSrvs().Albedo.ptr); }
-    UiTextureID GetGBufferNormalTextureId()   const { return static_cast<UiTextureID>(mDeferredLightingPass.GetSrvs().Normal.ptr); }
-    UiTextureID GetGBufferMaterialTextureId() const { return static_cast<UiTextureID>(mDeferredLightingPass.GetSrvs().Material.ptr); }
+    UiTextureID GetGBufferAlbedoTextureId()   const { return static_cast<UiTextureID>(mDeferredLightingPass.GetDebugSrvs().Albedo.ptr); }
+    UiTextureID GetGBufferNormalTextureId()   const { return static_cast<UiTextureID>(mDeferredLightingPass.GetDebugSrvs().Normal.ptr); }
+    UiTextureID GetGBufferMaterialTextureId() const { return static_cast<UiTextureID>(mDeferredLightingPass.GetDebugSrvs().Material.ptr); }
     // Depth SRV lives on the scene renderer (R32_FLOAT view of the depth target).
     UiTextureID GetGBufferDepthTextureId()    const { return static_cast<UiTextureID>(mDepthDebugSrvGpuHandle.ptr != 0 ? mDepthDebugSrvGpuHandle.ptr : mDepthSrvGpuHandle.ptr); }
     UiTextureID GetGiAccumTextureId()         const { return static_cast<UiTextureID>(mRtgiRenderer.GetOutputSrv().ptr); }
@@ -617,13 +664,18 @@ private:
     // Game-facing UI. It renders to its own target and is composited over the scene
     // image, so it is deliberately not part of the post-processing chain.
     RmlUiRenderer mRmlUiRenderer;
+    VideoLayer mVideoLayer;
 
     // Visual scripting. The host adapter is the only thing the runtime can reach the
     // engine through, which keeps graph execution from growing renderer dependencies.
     class NodeGraphUiHost final : public NodeGraphHost
     {
     public:
+        // The renderer owns everything past UI and video - entities, camera, audio - and
+        // a nested class may reach its private members, so the host borrows it whole.
+        explicit NodeGraphUiHost(DX12SceneRenderer& owner) : mOwner(owner) {}
         void SetUiRenderer(RmlUiRenderer* uiRenderer) { mUiRenderer = uiRenderer; }
+        void SetVideoLayer(VideoLayer* videoLayer) { mVideoLayer = videoLayer; }
 
         bool ShowUiDocument(const std::string& fileName) override;
         void CloseUiDocument() override;
@@ -641,11 +693,48 @@ private:
             bool enabled) override;
         bool SetUiElementVisible(const std::string& elementId, bool visible) override;
 
+        bool PlayVideo(const std::string& fileName, bool loop, const std::string& fit) override;
+        void PauseVideo() override;
+        void ResumeVideo() override;
+        void StopVideo() override;
+        void SeekVideo(double seconds) override;
+        void SetVideoLooping(bool loop) override;
+        void SetVideoVolume(double volume) override;
+        bool IsVideoPlaying() override;
+        double GetVideoTime() override;
+        double GetVideoDuration() override;
+        bool ConsumeVideoFinished() override;
+
+        std::uint64_t FindEntityByName(const std::string& name) override;
+        bool GetEntityName(std::uint64_t entityId, std::string& name) override;
+        bool GetEntityTransform(std::uint64_t entityId, NodeGraphTransform& transform) override;
+        bool SetEntityTransform(std::uint64_t entityId, const NodeGraphTransform& transform) override;
+        bool GetEntityProperty(std::uint64_t entityId, const std::string& property, double& value) override;
+        bool SetEntityProperty(std::uint64_t entityId, const std::string& property, double value) override;
+        bool SetEntityAudioPlaying(std::uint64_t entityId, bool playing) override;
+
+        NodeGraphCameraPose GetCamera() override;
+        void SetCamera(const NodeGraphCameraPose& pose) override;
+
+        void PlayOneShot(const std::string& eventName) override;
+        bool PlayMusic(const std::string& eventName) override;
+        void StopMusic() override;
+        bool IsMusicPlaying() override;
+
+        bool IsKeyDown(int virtualKey) override;
+        bool PollUiClick(std::string& elementId) override;
+        void ToggleFullscreen() override;
+        bool IsStandalone() override;
+
     private:
+        Entity* FindEntity(std::uint64_t entityId);
+
+        DX12SceneRenderer& mOwner;
         RmlUiRenderer* mUiRenderer = nullptr;
+        VideoLayer* mVideoLayer = nullptr;
     };
 
-    NodeGraphUiHost mNodeGraphHost;
+    NodeGraphUiHost mNodeGraphHost{ *this };
     NodeGraphRuntime mNodeGraphRuntime;
     const NodeGraphDocument* mNodeGraphSource = nullptr;
 
@@ -656,6 +745,57 @@ private:
     bool mGameHasLastMousePosition = false;
     bool mGameInSeparateWindow = false;
     float mViewDistanceMeters = 8000.0f;
+
+    // ---- Player settings (GameSettings.cpp) ----------------------------------
+    // The game's Settings pages drive the renderer, window and audio through these.
+    // Quality presets are relative to what the level authored, captured when play
+    // starts; stopping play puts all of it back so the editor never inherits a preset.
+    using GameSettingValues = std::map<std::string, std::string>;
+    struct GameSettingsBaseline
+    {
+        TaaSettings Taa; SMAASettings Smaa; MsaaSettings Msaa;
+        DlssSettings Dlss; FsrSettings Fsr;
+        GlobalIlluminationMode GiMode = GlobalIlluminationMode::Disabled;
+        RtGISettings Rtgi; RadianceCascadesSettings Cascades;
+        VolumetricFogSettings Fog; PointShadowSettings PointShadows;
+        GtaoSettings Gtao; RtAOSettings Rtao; ChromaticAberrationSettings ChromaticAberration;
+    };
+    // Captures the baseline, fills the menus' hardware-dependent options and hooks
+    // Apply up. Standalone sessions also apply the settings saved on disk.
+    void BeginGameSettings(bool standalone);
+    void ApplySavedGameSettings();
+    void EndGameSettings();
+    // Applies every value; corrects in place any the hardware cannot honour and
+    // returns a player-facing status line. Persists on success when asked.
+    std::string ApplyGameSettings(GameSettingValues& values, bool persist);
+    GameSettingsBaseline mGameSettingsBaseline;
+    bool mGameSettingsActive = false;
+    // Whether anything was applied this session, so stopping a session that applied
+    // nothing leaves alone edits made in the editor's panels while it ran.
+    bool mGameSettingsApplied = false;
+    // Added to the sharpening mip bias: positive for the lower texture qualities.
+    float mTextureQualityMipBias = 0.0f;
+    // Player's upscaler sharpening, 0 (off) to 1. FSR applies it through its own RCAS;
+    // after DLSS it drives the engine's image sharpen pass. Negative: not set by the
+    // player, so the level's own sharpening stands (editor sessions).
+    float mUpscalerSharpness = -1.0f;
+
+public:
+    // Shadows master switch (settings menu, "shadows.enabled"). Off: no point light casts,
+    // and the sun's shadow map is cleared without casters, so everything is lit unshadowed.
+    bool& GetShadowsEnabledRef() { return mShadowsEnabled; }
+    // Frame-rate/latency overlay in the game UI ("stats.overlay", settings menu).
+    bool& GetShowStatisticsOverlayRef() { return mShowStatisticsOverlay; }
+private:
+    bool mShadowsEnabled = true;
+    bool mShowStatisticsOverlay = false;
+    // Smoothed for display: the overlay updates a few times a second, not every frame.
+    float mStatisticsFps = 0.0f;
+    float mStatisticsFrameMs = 0.0f;
+    float mStatisticsAccumulatedMs = 0.0f;
+    int mStatisticsAccumulatedFrames = 0;
+    std::string mStatisticsText;
+    void UpdateStatisticsOverlay();
 
     BufferResource mVertexBuffer;
     BufferResource mIndexBuffer;
@@ -786,7 +926,7 @@ private:
     // Handles GPU heightmap-driven terrain patches in the G-Buffer pass.
     TerrainRenderer mTerrainRenderer;
 
-    // Handles animated water surfaces (WaterComponent) in the G-Buffer pass.
+    // Draws water surfaces (WaterComponent) in a forward pass after lighting.
     WaterRenderer mWaterRenderer;
 
     // Procedurally scattered, GPU-culled vegetation (VegetationAreaComponent).
@@ -829,6 +969,8 @@ private:
     bool mFsrWasActive = false;
     // Counts frames for FSR's own jitter sequence, which is longer than TAA's.
     UINT mFsrJitterIndex = 0;
+    // DLSS jitter phase (Halton index), advanced once per frame while DLSS is on.
+    UINT mDlssJitterIndex = 0;
     MotionVectorRenderer mMotionVectorRenderer;
 
     // Sky rendering and time-of-day lighting.
@@ -861,6 +1003,12 @@ private:
     GtaoSettings         mGtaoSettings;
     SsrRenderer          mSsrRenderer;
     SsrSettings          mSsrSettings;
+    // FidelityFX SSSR (SsrSettings::Technique 1). Created on first use: its denoiser
+    // history runs to ~140 MB at 1080p, which the ray-march path should not pay for.
+    SssrRenderer         mSssrRenderer;
+    bool                 mSssrInitFailed = false;
+    SubsurfaceScatteringRenderer mSubsurfaceRenderer;
+    SubsurfaceSettings   mSubsurfaceSettings;
     ChromaticAberrationRenderer  mChromaticAberrationRenderer;
     ChromaticAberrationSettings  mChromaticAberrationSettings;
 

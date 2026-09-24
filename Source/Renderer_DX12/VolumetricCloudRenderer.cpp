@@ -1,4 +1,6 @@
 #include "pch.h"
+#include "System/DataFiles.h"
+#include <filesystem>
 #include "VolumetricCloudRenderer.h"
 
 #include "d3dx12.h"
@@ -31,30 +33,9 @@ namespace
 
     std::wstring GetShaderDirectory()
     {
-        wchar_t modulePath[MAX_PATH]{};
-        GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-
-        std::wstring directory(modulePath);
-        const size_t slash = directory.find_last_of(L"\\/");
-        directory = (slash != std::wstring::npos) ? directory.substr(0, slash + 1) : L"";
-
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            const std::wstring candidate = directory + L"Data\\Shaders\\";
-            if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
-                return candidate;
-
-            if (directory.size() < 2)
-                break;
-
-            const size_t up = directory.find_last_of(L"\\/", directory.size() - 2);
-            if (up == std::wstring::npos)
-                break;
-
-            directory = directory.substr(0, up + 1);
-        }
-
-        return L"Data\\Shaders\\";
+        // The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        return dataDirectory.empty() ? std::wstring(L"Data\\Shaders\\") : (dataDirectory / L"Shaders").wstring() + L"\\";
     }
 
     // Colour and depth targets are always used together, so they are tracked and

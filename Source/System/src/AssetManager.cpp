@@ -3,6 +3,7 @@
 #include "System/AssetManager.h"
 
 #include "System/CollisionGenerator.h"
+#include "System/DataFiles.h"
 #include "System/FbxCompiler.h"
 #include "System/PteroMeshFormat.h"
 #include "System/TextureImporter.h"
@@ -46,7 +47,7 @@ namespace
     {
         std::error_code errorCode;
         std::filesystem::path normalizedPath = path.lexically_normal();
-        if (std::filesystem::exists(normalizedPath, errorCode))
+        if (!DataFiles::IsPackaged() && std::filesystem::exists(normalizedPath, errorCode))
         {
             const std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(normalizedPath, errorCode);
             if (!errorCode)
@@ -78,33 +79,9 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-        {
-            return {};
-        }
-
-        // Walk upward from the editor executable until the repository Data folder is found.
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-            {
-                return dataDirectory;
-            }
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-            {
-                break;
-            }
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        // Walks upward from the executable to the repository Data folder, or - in a
+        // packaged game - returns the virtual Data root the .ppak archives serve.
+        return DataFiles::FindDataDirectory();
     }
 
     std::filesystem::path ResolveAssetPathFromDataDirectory(const std::string& assetPath)
@@ -121,7 +98,7 @@ namespace
         }
 
         std::error_code errorCode;
-        if (std::filesystem::exists(candidatePath, errorCode))
+        if (!DataFiles::IsPackaged() && std::filesystem::exists(candidatePath, errorCode))
         {
             return NormalizeExistingPath(candidatePath);
         }
@@ -133,7 +110,7 @@ namespace
         }
 
         const std::filesystem::path dataRelativeCandidate = (dataDirectory / candidatePath).lexically_normal();
-        if (std::filesystem::exists(dataRelativeCandidate, errorCode))
+        if (DataFiles::Exists(dataRelativeCandidate))
         {
             return NormalizeExistingPath(dataRelativeCandidate);
         }
@@ -142,7 +119,7 @@ namespace
         if (pathPart != candidatePath.end() && _stricmp(pathPart->string().c_str(), "Data") == 0)
         {
             const std::filesystem::path projectRelativeCandidate = (dataDirectory.parent_path() / candidatePath).lexically_normal();
-            if (std::filesystem::exists(projectRelativeCandidate, errorCode))
+            if (DataFiles::Exists(projectRelativeCandidate))
             {
                 return NormalizeExistingPath(projectRelativeCandidate);
             }
@@ -152,7 +129,7 @@ namespace
     }
 
     bool ReadMeshLodPayload(
-        std::ifstream& inputStream,
+        std::istream& inputStream,
         const std::uint32_t vertexCount,
         const std::uint32_t indexCount,
         const std::uint32_t subMeshCount,
@@ -211,7 +188,7 @@ namespace
     }
 
     bool ReadCollisionPayload(
-        std::ifstream& inputStream,
+        std::istream& inputStream,
         const std::uint32_t version,
         std::vector<CollisionHull>& outCollisionHulls,
         std::string& errorMessage)
@@ -272,7 +249,7 @@ namespace
     }
 
     bool ReadPteroFileData(
-        std::ifstream& inputStream,
+        std::istream& inputStream,
         const LegacyPteroMeshHeader& legacyHeader,
         const std::uint32_t lodCount,
         PteroCollisionFileData& outData,
@@ -570,7 +547,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         LogAssetManagerDiagnostic(logStream.str());
     }
 
-    if (!isNativePtero && !std::filesystem::exists(pteroPath))
+    if (!isNativePtero && !DataFiles::Exists(pteroPath))
     {
         // Bake the FBX on demand so runtime loads hit the compact cooked mesh format after the first import.
         if (!FbxCompiler::CompileFbxToPtero(resolvedMeshPath, pteroPath))
@@ -580,12 +557,14 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         }
     }
 
-    std::ifstream inputStream(pteroPath, std::ios::binary);
-    if (!inputStream)
+    std::unique_ptr<std::istream> inputStreamOwner = DataFiles::OpenStream(pteroPath);
+    if (!inputStreamOwner)
     {
         mLastErrorMessage = "Failed to open the cooked .ptero mesh from disk.";
         return nullptr;
     }
+    std::istream* stream = inputStreamOwner.get();
+    std::istream& inputStream = *stream;
 
     LegacyPteroMeshHeader legacyHeader{};
     inputStream.read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
@@ -627,22 +606,23 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
             return nullptr;
         }
 
-        inputStream.close();
+        inputStreamOwner.reset();
         if (!FbxCompiler::CompileFbxToPtero(resolvedMeshPath, pteroPath))
         {
             mLastErrorMessage = "The cooked mesh is outdated and re-compilation failed.";
             return nullptr;
         }
 
-        inputStream.open(pteroPath, std::ios::binary);
-        if (!inputStream)
+        inputStreamOwner = DataFiles::OpenStream(pteroPath);
+        if (!inputStreamOwner)
         {
             mLastErrorMessage = "Failed to re-open the re-cooked .ptero mesh from disk.";
             return nullptr;
         }
+        stream = inputStreamOwner.get();
 
-        inputStream.read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
-        if (!inputStream || std::memcmp(legacyHeader.magic, "PTRO", 4) != 0 || legacyHeader.version != kPteroMeshVersion)
+        stream->read(reinterpret_cast<char*>(&legacyHeader), sizeof(legacyHeader));
+        if (!*stream || std::memcmp(legacyHeader.magic, "PTRO", 4) != 0 || legacyHeader.version != kPteroMeshVersion)
         {
             mLastErrorMessage = "Re-cooked mesh header is still invalid.";
             return nullptr;
@@ -651,8 +631,8 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
         lodCount = 1;
         if (legacyHeader.version >= 3)
         {
-            inputStream.read(reinterpret_cast<char*>(&lodCount), sizeof(lodCount));
-            if (!inputStream)
+            stream->read(reinterpret_cast<char*>(&lodCount), sizeof(lodCount));
+            if (!*stream)
             {
                 mLastErrorMessage = "Re-cooked mesh LOD header is invalid.";
                 return nullptr;
@@ -661,7 +641,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
     }
 
     PteroCollisionFileData fileData;
-    if (!ReadPteroFileData(inputStream, legacyHeader, lodCount, fileData, mLastErrorMessage))
+    if (!ReadPteroFileData(*stream, legacyHeader, lodCount, fileData, mLastErrorMessage))
     {
         return nullptr;
     }

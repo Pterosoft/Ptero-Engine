@@ -9,6 +9,7 @@
 #include <sstream>
 #include <chrono>
 #include <shellapi.h>
+#include <objbase.h>
 #pragma comment(lib, "shell32.lib")
 
 static AudioManager gAudioManager;
@@ -192,6 +193,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
+
+    // Normally a no-op here: Qt's QApplication (constructed inside QtUi::Initialize)
+    // already initializes COM for the editor. But QtUi::Initialize() now returns before
+    // touching Qt at all when standalone (--game), so this covers that path explicitly -
+    // see the matching comment in GameLauncher's main.cpp for why it matters (the legacy
+    // D3DCompiler's default #include handler hangs without it). CoInitializeEx is safe to
+    // call even when COM is already initialized (returns S_FALSE).
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     int argumentCount=0;
     LPWSTR* arguments=CommandLineToArgvW(GetCommandLineW(), &argumentCount);

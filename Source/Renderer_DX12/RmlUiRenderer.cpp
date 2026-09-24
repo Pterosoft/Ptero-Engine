@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "RmlUiRenderer.h"
+#include "../../Data/UI/Farkle/FarkleMenuController.h"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -9,12 +10,18 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Debugger.h>
 
+#include "System/DataFiles.h"
+
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <cwctype>
 #include <chrono>
 #include <filesystem>
+#include <memory>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -37,26 +44,93 @@ namespace
 
     std::filesystem::path FindDataDirectory()
     {
-        wchar_t modulePath[MAX_PATH] = {};
-        if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0)
-            return L"Data";
+        // The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        return dataDirectory.empty() ? std::filesystem::path(L"Data") : dataDirectory;
+    }
 
-        std::filesystem::path directory = std::filesystem::path(modulePath).parent_path();
-        for (int attempt = 0; attempt < 6; ++attempt)
+    // The menus lay out in vh, but ninepatch edges are drawn in dp: they are tuned for 1080
+    // lines, and scaling the dp ratio with the target keeps them in proportion to the rest
+    // of the layout at any resolution (Data/UI/Farkle/menus.rcss).
+    float DensityRatioFor(UINT height)
+    {
+        return (std::max)(0.25f, static_cast<float>(height) / 1080.0f);
+    }
+
+    // RmlUi 6.3 hands @font-face src paths over verbatim, not relative to the stylesheet,
+    // so the Farkle stylesheet names its fonts relative to the Data root
+    // ("UI/Farkle/Fonts/...") and they are resolved here. Every other path RmlUi opens is
+    // already absolute.
+    std::filesystem::path Utf8ToPath(const Rml::String& text)
+    {
+        std::filesystem::path path = std::filesystem::u8path(text);
+        if (path.is_relative())
+            path = FindDataDirectory() / path;
+        return path;
+    }
+
+    // Every file RmlUi opens - documents, style sheets, fonts, templates - comes through
+    // here, so a packaged game reads them out of UI.ppak and Fonts.ppak. On disk it is the
+    // same as RmlUi's default fopen-based interface.
+    class DataFilesRmlFileInterface final : public Rml::FileInterface
+    {
+    public:
+        Rml::FileHandle Open(const Rml::String& path) override
         {
-            const std::filesystem::path candidate = directory / L"Data";
-            if (std::filesystem::exists(candidate))
-                return candidate;
-
-            const std::filesystem::path parent = directory.parent_path();
-            if (parent == directory)
-                break;
-
-            directory = parent;
+            auto file = std::make_unique<OpenFile>();
+            if (!DataFiles::ReadBytes(Utf8ToPath(path), file->Bytes))
+                return 0;
+            return reinterpret_cast<Rml::FileHandle>(file.release());
         }
 
-        return L"Data";
-    }
+        void Close(Rml::FileHandle file) override
+        {
+            delete reinterpret_cast<OpenFile*>(file);
+        }
+
+        size_t Read(void* buffer, size_t size, Rml::FileHandle handle) override
+        {
+            OpenFile* file = reinterpret_cast<OpenFile*>(handle);
+            const size_t available = file->Bytes.size() - file->Position;
+            const size_t count = (std::min)(size, available);
+            if (count > 0)
+                std::memcpy(buffer, file->Bytes.data() + file->Position, count);
+            file->Position += count;
+            return count;
+        }
+
+        bool Seek(Rml::FileHandle handle, long offset, int origin) override
+        {
+            OpenFile* file = reinterpret_cast<OpenFile*>(handle);
+            long long base = 0;
+            if (origin == SEEK_CUR) base = static_cast<long long>(file->Position);
+            else if (origin == SEEK_END) base = static_cast<long long>(file->Bytes.size());
+            const long long target = base + offset;
+            if (target < 0 || target > static_cast<long long>(file->Bytes.size()))
+                return false;
+            file->Position = static_cast<size_t>(target);
+            return true;
+        }
+
+        size_t Tell(Rml::FileHandle handle) override
+        {
+            return reinterpret_cast<OpenFile*>(handle)->Position;
+        }
+
+        size_t Length(Rml::FileHandle handle) override
+        {
+            return reinterpret_cast<OpenFile*>(handle)->Bytes.size();
+        }
+
+    private:
+        struct OpenFile
+        {
+            std::vector<std::uint8_t> Bytes;
+            size_t Position = 0;
+        };
+    };
+
+    DataFilesRmlFileInterface gRmlFileInterface;
 
     std::wstring FindShaderDirectory()
     {
@@ -162,6 +236,9 @@ public:
         while (element && element->GetTagName() != "button") element = element->GetParentNode();
         if (!element || element->HasAttribute("disabled") || element->GetId().empty()) return;
         if (mOwner.mGameActions.size() < 32) mOwner.mGameActions.push_back(element->GetId());
+        // The node graph gets its own copy: it and the game module both react to buttons,
+        // and a shared queue would hand each click to whichever polled first.
+        if (mOwner.mGraphClicks.size() < 32) mOwner.mGraphClicks.push_back(element->GetId());
         if (event.GetType() == "keydown") event.StopPropagation();
     }
 private:
@@ -215,6 +292,25 @@ std::string RmlUiRenderer::PollGameAction()
     std::string result = std::move(mGameActions.front());
     mGameActions.erase(mGameActions.begin());
     return result;
+}
+
+bool RmlUiRenderer::PollGraphClick(std::string& elementId)
+{
+    if (mGraphClicks.empty()) return false;
+    elementId = std::move(mGraphClicks.front());
+    mGraphClicks.erase(mGraphClicks.begin());
+    return true;
+}
+
+int RmlUiRenderer::GetFarkleWinningScore() const
+{
+    return mFarkleMenus ? std::stoi(mFarkleMenus->Saved().at("max-score")) : 3000;
+}
+
+FarkleMenuController& RmlUiRenderer::GetFarkleMenus()
+{
+    if (!mFarkleMenus) mFarkleMenus = std::make_unique<FarkleMenuController>();
+    return *mFarkleMenus;
 }
 
 void RmlUiRenderer::ApplyGameUiCommand(int operation, const char* id, const char* value)
@@ -271,6 +367,7 @@ bool RmlUiRenderer::Initialize(UINT width, UINT height, ID3D12GraphicsCommandLis
 
     Rml::SetSystemInterface(&mSystemInterface);
     Rml::SetRenderInterface(&mRenderInterface);
+    Rml::SetFileInterface(&gRmlFileInterface);
 
     if (!Rml::Initialise())
     {
@@ -290,6 +387,8 @@ bool RmlUiRenderer::Initialize(UINT width, UINT height, ID3D12GraphicsCommandLis
     }
 
     mContext = Rml::CreateContext("main", Rml::Vector2i(static_cast<int>(mWidth), static_cast<int>(mHeight)));
+    if (mContext != nullptr)
+        mContext->SetDensityIndependentPixelRatio(DensityRatioFor(mHeight));
     if (mContext == nullptr)
     {
         mLastError = "RmlUiRenderer: failed to create the RmlUi context.";
@@ -320,9 +419,65 @@ bool RmlUiRenderer::IsDebuggerVisible() const
     return mDebuggerAvailable && Rml::Debugger::IsVisible();
 }
 
+void RmlUiRenderer::SetStatisticsOverlay(bool visible, const std::string& text)
+{
+    if (!mIsInitialized || mContext == nullptr)
+        return;
+
+    if (!visible)
+    {
+        if (mStatisticsDocument != nullptr && mStatisticsDocument->IsVisible())
+            mStatisticsDocument->Hide();
+        return;
+    }
+
+    if (mStatisticsDocument == nullptr)
+    {
+        if (mStatisticsDocumentFailed)
+            return;
+        const std::filesystem::path path = FindDataDirectory() / L"UI" / L"stats-overlay.rml";
+        mStatisticsDocument = mContext->LoadDocument(WideToUtf8(path.wstring()));
+        if (mStatisticsDocument == nullptr)
+        {
+            // Not retried every frame: a missing file would otherwise be reloaded 60 times a second.
+            mStatisticsDocumentFailed = true;
+            mLastError = "RmlUiRenderer: could not load UI/stats-overlay.rml.";
+            return;
+        }
+        mStatisticsText.clear();
+    }
+
+    if (text != mStatisticsText)
+    {
+        mStatisticsText = text;
+        std::string rml;
+        for (const char c : text)
+        {
+            switch (c)
+            {
+            case '\n': rml += "<br/>"; break;
+            case '<': rml += "&lt;"; break;
+            case '>': rml += "&gt;"; break;
+            case '&': rml += "&amp;"; break;
+            default: rml += c; break;
+            }
+        }
+        if (Rml::Element* element = mStatisticsDocument->GetElementById("stats-text"))
+            element->SetInnerRML(rml);
+    }
+
+    if (!mStatisticsDocument->IsVisible())
+        mStatisticsDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+    // A page loaded after the overlay would otherwise cover it.
+    mStatisticsDocument->PullToFront();
+}
+
 void RmlUiRenderer::Shutdown()
 {
+    if (mFarkleMenus) mFarkleMenus->Detach();
     mDocument = nullptr;
+    mStatisticsDocument = nullptr;
+    mStatisticsDocumentFailed = false;
     mLoadedDocumentName.clear();
 
     if (mContext != nullptr)
@@ -348,8 +503,7 @@ void RmlUiRenderer::Shutdown()
 bool RmlUiRenderer::LoadFonts()
 {
     const std::filesystem::path fontDirectory = FindDataDirectory() / L"Fonts";
-    std::error_code errorCode;
-    if (!std::filesystem::exists(fontDirectory, errorCode))
+    if (!DataFiles::IsDirectory(fontDirectory))
     {
         mLastError = "RmlUiRenderer: font directory not found.";
         return false;
@@ -368,7 +522,7 @@ bool RmlUiRenderer::LoadFonts()
     for (const wchar_t* fontFile : fontFiles)
     {
         const std::filesystem::path path = fontDirectory / fontFile;
-        if (!std::filesystem::exists(path, errorCode))
+        if (!DataFiles::IsFile(path))
             continue;
 
         if (Rml::LoadFontFace(WideToUtf8(path.wstring())))
@@ -484,7 +638,10 @@ bool RmlUiRenderer::Resize(UINT width, UINT height)
         return false;
 
     if (mContext != nullptr)
+    {
         mContext->SetDimensions(Rml::Vector2i(static_cast<int>(mWidth), static_cast<int>(mHeight)));
+        mContext->SetDensityIndependentPixelRatio(DensityRatioFor(mHeight));
+    }
 
     return true;
 }
@@ -494,6 +651,11 @@ void RmlUiRenderer::Render(ID3D12GraphicsCommandList* commandList)
     if (!mIsInitialized || commandList == nullptr || !mOutputTexture)
         return;
 
+    // Navigation is deferred until DOM event dispatch has finished.
+    if (mFarkleMenus) {
+        const auto page = mFarkleMenus->TakePage();
+        if (!page.empty()) LoadDocument(page);
+    }
     if (mContext != nullptr)
         mContext->Update();
 
@@ -532,8 +694,7 @@ bool RmlUiRenderer::LoadDocument(const std::string& fileName)
 
     const std::filesystem::path relativePath = std::filesystem::u8path(fileName).lexically_normal();
     const std::filesystem::path documentPath = FindDataDirectory() / L"UI" / relativePath;
-    std::error_code errorCode;
-    if (!std::filesystem::exists(documentPath, errorCode))
+    if (!DataFiles::IsFile(documentPath))
     {
         mLastError = "RmlUiRenderer: document not found: " + fileName;
         return false;
@@ -547,6 +708,7 @@ bool RmlUiRenderer::LoadDocument(const std::string& fileName)
     }
 
     mDocument->Show();
+    GetFarkleMenus().Attach(mDocument);
     if (!mActionListener) mActionListener = std::make_unique<ActionListener>(*this);
     mDocument->AddEventListener("click", mActionListener.get());
     mDocument->AddEventListener("keydown", mActionListener.get());
@@ -613,29 +775,20 @@ std::vector<std::string> RmlUiRenderer::ListAvailableDocuments()
     std::vector<std::string> documents;
 
     const std::filesystem::path uiDirectory = FindDataDirectory() / L"UI";
-    std::error_code errorCode;
-    if (!std::filesystem::is_directory(uiDirectory, errorCode))
+    if (!DataFiles::IsDirectory(uiDirectory))
         return documents;
 
     // Preserve paths relative to Data/UI: separate folders may contain documents
-    // with the same filename. Use non-throwing traversal so an inaccessible folder
+    // with the same filename. The listing never throws, so an inaccessible folder
     // cannot take down the editor while it refreshes the picker.
-    const auto options = std::filesystem::directory_options::skip_permission_denied;
-    std::filesystem::recursive_directory_iterator entryIterator(uiDirectory, options, errorCode);
-    const std::filesystem::recursive_directory_iterator end;
-    for (; !errorCode && entryIterator != end; entryIterator.increment(errorCode))
+    for (const std::filesystem::path& file : DataFiles::ListFiles(uiDirectory, true))
     {
-        const auto& entry = *entryIterator;
-        std::error_code entryError;
-        if (!entry.is_regular_file(entryError))
-            continue;
-        std::filesystem::path extension = entry.path().extension();
-        std::wstring lowered = extension.wstring();
+        std::wstring lowered = file.extension().wstring();
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
         if (lowered != L".rml")
             continue;
-        documents.push_back(WideToUtf8(entry.path().lexically_relative(uiDirectory).generic_wstring()));
+        documents.push_back(WideToUtf8(file.lexically_relative(uiDirectory).generic_wstring()));
     }
 
     std::sort(documents.begin(), documents.end());
@@ -644,7 +797,9 @@ std::vector<std::string> RmlUiRenderer::ListAvailableDocuments()
 
 void RmlUiRenderer::CloseDocument()
 {
+    if (mFarkleMenus) mFarkleMenus->Detach();
     mGameActions.clear();
+    mGraphClicks.clear();
     if (mDocument != nullptr)
     {
         mDocument->Close();

@@ -27,12 +27,30 @@ float PteroEncodeSurfaceSpecular(float specular)
     return max(saturate(specular), kPteroMinStoredSpecular);
 }
 
+// The same channel also carries the pixel's subsurface-scattering profile slot
+// (Subsurface.hlsli), packed into the integer part above the specular value:
+//     W = specular + 2 * slot,   specular in [0.001, 1], slot in [0, 15]
+// Slot 0 means "no subsurface scattering", so every surface that never heard of
+// subsurface scattering writes exactly what it always did. A 32-bit float holds the
+// sum with ~2e-6 of precision left for the specular part, far below what matters.
+float PteroEncodeSurfaceSpecularAndSubsurface(float specular, uint subsurfaceSlot)
+{
+    return PteroEncodeSurfaceSpecular(specular) + 2.0f * (float)min(subsurfaceSlot, 15u);
+}
+
+uint PteroDecodeSubsurfaceSlot(float packedSpecular)
+{
+    return (packedSpecular >= 2.0f) ? min((uint)(packedSpecular * 0.5f), 15u) : 0u;
+}
+
 // The G-Buffer clears to zero, so a pixel produced by a pass that does not carry the
 // specular channel reads back exactly 0. That has to mean "use the default" rather than
 // "this surface reflects nothing", which would quietly flatten those pixels instead.
+// Any subsurface slot packed above the specular value is stripped first.
 float PteroDecodeSurfaceSpecular(float packedSpecular)
 {
-    return (packedSpecular > 0.0f) ? packedSpecular : kPteroDefaultSpecular;
+    packedSpecular -= 2.0f * (float)PteroDecodeSubsurfaceSlot(packedSpecular);
+    return (packedSpecular > 0.0f) ? saturate(packedSpecular) : kPteroDefaultSpecular;
 }
 
 // Normal-incidence reflectance.

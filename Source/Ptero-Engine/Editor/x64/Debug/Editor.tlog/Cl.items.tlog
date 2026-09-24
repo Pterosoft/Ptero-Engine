@@ -1,6 +1,7 @@
 K:\Ptero-Engine\Source\Renderer_DX12\SceneSerializer.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\SceneSerializer.obj
 K:\Ptero-Engine\Source\System\src\NodeGraphCatalog.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\NodeGraphCatalog.obj
 K:\Ptero-Engine\Source\System\src\NodeGraphDocument.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\NodeGraphDocument.obj
+K:\Ptero-Engine\Source\System\src\DataFiles.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\DataFiles.obj
 K:\Ptero-Engine\Source\Ptero-Engine\EditorMain.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\EditorMain.obj
 K:\Ptero-Engine\Source\Ptero-Engine\GridGeometry.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\GridGeometry.obj
 K:\Ptero-Engine\Source\Ptero-Engine\SplashScreen.cpp;K:\Ptero-Engine\Source\Ptero-Engine\Editor\x64\Debug\SplashScreen.obj

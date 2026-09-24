@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DeferredLightingPass.h"
+#include "System/PteroLog.h"
 
 #include "VolumetricFogSettings.h"
 
@@ -224,6 +225,10 @@ void DeferredLightingPass::SetSceneLighting(
     lc.SunColor     = sunColor;
     lc.SkyAmbient   = skyAmbient;
     std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+
+    mCpuSunDirection = sunDirection;
+    mCpuSunColor     = sunColor;
+    mCpuSkyAmbient   = skyAmbient;
 }
 
 void DeferredLightingPass::SetPointLights(const PointLightGpu* lights, int count)
@@ -238,6 +243,10 @@ void DeferredLightingPass::SetPointLights(const PointLightGpu* lights, int count
     for (int i = 0; i < n; ++i)
         lc.PointLights[i] = lights[i];
     std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+
+    for (int i = 0; i < n; ++i)
+        mCpuPointLights[i] = lights[i];
+    mCpuPointLightCount = n;
 }
 
 void DeferredLightingPass::SetCameraData(
@@ -311,6 +320,11 @@ void DeferredLightingPass::SetPointShadowSrv(
     mPointShadowMapSize = shadowMapSize;
     mPointShadowBias = shadowBias;
 
+    mCpuShadows.PointShadowSrv = pointShadowSrvHandle;
+    mCpuShadows.PointShadowLightCount = activeShadowLightCount;
+    mCpuShadows.PointShadowMapSize = shadowMapSize;
+    mCpuShadows.PointShadowBias = shadowBias;
+
     if (mMappedShadowCB)
     {
         ShadowConstants sc{};
@@ -334,7 +348,10 @@ void DeferredLightingPass::SetPointShadowMatrices(
     const int clampedLightCount = (std::max)(0, (std::min)(activeShadowLightCount, kMaxShadowCastingPointLights));
     const int matrixCount = clampedLightCount * kPointShadowFacesPerLight;
     for (int i = 0; i < matrixCount; ++i)
+    {
         sc.PointShadowFaceViewProj[i] = faceViewProjections[i];
+        mCpuShadows.PointFaceViewProj[i] = faceViewProjections[i];
+    }
 
     std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
 }
@@ -423,6 +440,11 @@ void DeferredLightingPass::SetShadowData(
 {
     mShadowSrvHandle = shadowSrvHandle;
 
+    mCpuShadows.LightViewProj = lightViewProjection;
+    mCpuShadows.ShadowMapSize = shadowMapSize;
+    mCpuShadows.ShadowBias = 0.003f; // matches sc.ShadowBias below
+    mCpuShadows.SunShadowSrv = shadowSrvHandle;
+
     if (!mMappedShadowCB) return;
 
     ShadowConstants sc{};
@@ -452,8 +474,21 @@ void DeferredLightingPass::ResolveLight(
     }
     if (!mPipelineReady) return;
 
-    // Bind the scene colour RT.
-    commandList->OMSetRenderTargets(1, &sceneRtvHandle, FALSE, nullptr);
+    // Subsurface scattering needs the variant with the diffuse output as a second target.
+    const bool subsurface = mSubsurfaceConstants != 0
+        && mSubsurfaceDiffuseRtv.ptr != 0
+        && mPipelineStateSubsurface != nullptr;
+
+    // Bind the scene colour RT (and the subsurface diffuse target).
+    if (subsurface)
+    {
+        const D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = { sceneRtvHandle, mSubsurfaceDiffuseRtv };
+        commandList->OMSetRenderTargets(2, targets, FALSE, nullptr);
+    }
+    else
+    {
+        commandList->OMSetRenderTargets(1, &sceneRtvHandle, FALSE, nullptr);
+    }
 
     const D3D12_VIEWPORT vp = { 0,0, static_cast<float>(width), static_cast<float>(height), 0,1 };
     const D3D12_RECT     sr = { 0,0, static_cast<LONG>(width),  static_cast<LONG>(height) };
@@ -461,7 +496,7 @@ void DeferredLightingPass::ResolveLight(
     commandList->RSSetScissorRects(1, &sr);
 
     commandList->SetGraphicsRootSignature(mRootSignature.Get());
-    commandList->SetPipelineState(mPipelineState.Get());
+    commandList->SetPipelineState(subsurface ? mPipelineStateSubsurface.Get() : mPipelineState.Get());
 
     // Root slots (see CreateLightingPipeline):
     //   0 – CBV camera constants                (b0)
@@ -519,6 +554,10 @@ void DeferredLightingPass::ResolveLight(
     if (mProbeSrvHandle.ptr != 0)
         commandList->SetGraphicsRootDescriptorTable(12, mProbeSrvHandle);
 
+    //  13 – CBV subsurface profiles + frame constants (b4), subsurface variant only
+    if (subsurface)
+        commandList->SetGraphicsRootConstantBufferView(13, mSubsurfaceConstants);
+
     // Draw a fullscreen triangle (3 vertices, no vertex buffer needed).
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 0, nullptr);
@@ -567,8 +606,11 @@ void DeferredLightingPass::Shutdown()
 
     mRootSignature.Reset();
     mPipelineState.Reset();
+    mPipelineStateSubsurface.Reset();
     mVertexShader = DX12Shader{};
     mPixelShader  = DX12Shader{};
+    mPixelShaderSubsurface = DX12Shader{};
+    mSubsurfaceConstants = 0;
     mIsInitialized = false;
     mPipelineReady = false;
 }
@@ -736,19 +778,50 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             if (i == 2) mSrvs.Material = gpuSrv;
         }
 
+        // The shaders' view carries every channel as stored. It used to force alpha to 1
+        // for the editor's texture viewer, which silently fed every shader a constant 1.0
+        // for the albedo opacity and for the normal target's W - the material Specular
+        // knob and the subsurface profile slot - so neither ever reached the lighting.
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        // Force alpha to 1 for debug display so float targets written with A=0
-        // do not appear black/transparent in the Ui texture viewer.
-        srvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
-            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
-            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
-            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_2,
-            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Format                  = kGBufferFormats[i];
         srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels     = 1;
         // Re-write the SRV to point at the (possibly new) resource.
         device->CreateShaderResourceView(mGBufferResources[i].Get(), &srvDesc, mSrvCpuHandles[i]);
+    }
+
+    // Views for the editor's texture viewer only: alpha forced to 1 so float targets
+    // written with A=0 do not show up black/transparent. Allocated after the three shader
+    // views, which the lighting pass binds as one contiguous table, and only once, since
+    // the shared heap never frees.
+    for (UINT i = 0; i < kGBufferCount; ++i)
+    {
+        if (mDebugSrvCpuHandles[i].ptr == 0)
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuSrv{};
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuSrv{};
+            if (!DX12Context_AllocateSrvDescriptor(&cpuSrv, &gpuSrv))
+            {
+                mLastError = "DeferredLightingPass: SRV heap full.";
+                return false;
+            }
+            mDebugSrvCpuHandles[i] = cpuSrv;
+            if (i == 0) mDebugSrvs.Albedo   = gpuSrv;
+            if (i == 1) mDebugSrvs.Normal   = gpuSrv;
+            if (i == 2) mDebugSrvs.Material = gpuSrv;
+        }
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC debugSrvDesc{};
+        debugSrvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_2,
+            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
+        debugSrvDesc.Format              = kGBufferFormats[i];
+        debugSrvDesc.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
+        debugSrvDesc.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(mGBufferResources[i].Get(), &debugSrvDesc, mDebugSrvCpuHandles[i]);
     }
 
     mWidth  = width;
@@ -835,7 +908,8 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     //  slot 10 – Descriptor table: specular SRV   t8  (null-safe: only bound when specular is active)
     //  slot 11 – Descriptor table: point shadow map array t9
     //  slot 12 – Descriptor table: radiance probes t10
-    D3D12_ROOT_PARAMETER rootParams[13]{};
+    //  slot 13 – CBV (b4) subsurface constants  (subsurface variant only)
+    D3D12_ROOT_PARAMETER rootParams[14]{};
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0
@@ -958,6 +1032,10 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     rootParams[12].DescriptorTable.pDescriptorRanges   = &probeRange;
     rootParams[12].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    rootParams[13].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[13].Descriptor.ShaderRegister = 4; // b4
+    rootParams[13].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
     // Static samplers.
     D3D12_STATIC_SAMPLER_DESC pointSampler{};
     pointSampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -1055,6 +1133,44 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     {
         mLastError = "DeferredLighting: CreateGraphicsPipelineState failed.";
         return false;
+    }
+
+    // Subsurface variant: the same resolve plus the diffuse lighting of subsurface pixels
+    // in a second, unblended target. Failing to build it only disables subsurface
+    // scattering, so it does not fail the lighting pipeline.
+    {
+        ShaderCompileRequest sssReq = psReq;
+        sssReq.Defines.push_back(L"PTERO_SSS_OUTPUT=1");
+        if (mPixelShaderSubsurface.Compile(sssReq))
+        {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC sssDesc = psoDesc;
+            sssDesc.PS = mPixelShaderSubsurface.GetBytecode();
+            sssDesc.NumRenderTargets = 2;
+            sssDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT; // SubsurfaceScattering.cpp kLightingFormat
+            sssDesc.BlendState.IndependentBlendEnable = TRUE;
+            D3D12_RENDER_TARGET_BLEND_DESC noBlend{};
+            noBlend.BlendEnable           = FALSE;
+            noBlend.LogicOpEnable         = FALSE;
+            noBlend.SrcBlend              = D3D12_BLEND_ONE;
+            noBlend.DestBlend             = D3D12_BLEND_ZERO;
+            noBlend.BlendOp               = D3D12_BLEND_OP_ADD;
+            noBlend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+            noBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
+            noBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+            noBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+            sssDesc.BlendState.RenderTarget[1] = noBlend;
+            if (FAILED(device->CreateGraphicsPipelineState(&sssDesc, IID_PPV_ARGS(&mPipelineStateSubsurface))))
+            {
+                mPipelineStateSubsurface.Reset();
+                PTERO_LOG_ERROR("Renderer", "DeferredLighting: subsurface pipeline creation failed; "
+                                "subsurface scattering is disabled.");
+            }
+        }
+        else
+        {
+            PTERO_LOG_ERROR("Renderer", "DeferredLighting subsurface PS failed to compile: %s",
+                mPixelShaderSubsurface.GetLastErrorMessage() ? mPixelShaderSubsurface.GetLastErrorMessage() : "unknown");
+        }
     }
 
     mPipelineReady = true;

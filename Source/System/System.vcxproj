@@ -84,7 +84,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\lz4-1.10.0\lib;$(ProjectDir)..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -103,7 +103,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\lz4-1.10.0\lib;$(ProjectDir)..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -115,14 +115,14 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_DEBUG;PTERO_FBX_SDK_AVAILABLE;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;PTERO_FBX_SDK_AVAILABLE;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;SODIUM_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\lz4-1.10.0\lib;$(ProjectDir)..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -130,8 +130,8 @@
       <EnableUAC>false</EnableUAC>
       <!-- Release FBX: the x64\debug libs are MDd builds, and this configuration now
            compiles against the release CRT so it can share a runtime with release Qt. -->
-      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;$(ProjectDir)..\SDKs\libsodium-1.0.22\bin\x64\Debug\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)..\SDKs\fbx\lib\x64\debug\libfbxsdk.dll" copy /Y "$(ProjectDir)..\SDKs\fbx\lib\x64\debug\libfbxsdk.dll" "$(OutDir)" &amp; if exist "$(TargetPath)" copy /Y "$(TargetPath)" "$(ProjectDir)..\Ptero-Engine\x64\Debug\" &amp; if exist "$(ProjectDir)..\SDKs\fbx\lib\x64\debug\libfbxsdk.dll" copy /Y "$(ProjectDir)..\SDKs\fbx\lib\x64\debug\libfbxsdk.dll" "$(ProjectDir)..\Ptero-Engine\x64\Debug\"</Command>
@@ -143,19 +143,19 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;NDEBUG;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_FBX_SDK_AVAILABLE;NDEBUG;SYSTEM_EXPORTS;_WINDOWS;_USRDLL;SODIUM_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)..\SDKs;$(ProjectDir)..\SDKs\fbx\include;$(ProjectDir)..\SDKs\CoACD\public;$(ProjectDir)..\SDKs\lz4-1.10.0\lib;$(ProjectDir)..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\SDKs\fbx\lib\x64\release;$(ProjectDir)..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libfbxsdk-md.lib;libxml2-md.lib;zlib-md.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)..\SDKs\fbx\lib\x64\release\libfbxsdk.dll" copy /Y "$(ProjectDir)..\SDKs\fbx\lib\x64\release\libfbxsdk.dll" "$(OutDir)" &amp; if exist "$(TargetPath)" copy /Y "$(TargetPath)" "$(ProjectDir)..\Ptero-Engine\x64\Release\" &amp; if exist "$(ProjectDir)..\SDKs\fbx\lib\x64\release\libfbxsdk.dll" copy /Y "$(ProjectDir)..\SDKs\fbx\lib\x64\release\libfbxsdk.dll" "$(ProjectDir)..\Ptero-Engine\x64\Release\"</Command>
@@ -163,8 +163,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
+    <ClInclude Include="include\System\AssetFilter.h" />
     <ClInclude Include="include\System\AssetManager.h" />
     <ClInclude Include="include\System\CVar.h" />
+    <ClInclude Include="include\System\PackageFormat.h" />
+    <ClInclude Include="include\System\DataFiles.h" />
+    <ClInclude Include="include\System\PackagedDataApi.h" />
+    <ClInclude Include="include\System\PackagingKeyObfuscation.h" />
+    <ClInclude Include="include\System\ProjectKey.h" />
     <ClInclude Include="include\System\CollisionGenerator.h" />
     <ClInclude Include="include\System\FbxCompiler.h" />
     <ClInclude Include="include\System\Mesh.h" />
@@ -190,6 +196,16 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\AssetManager.cpp" />
+    <!-- Game packaging (.ppak build/extract): lz4 + libsodium glue. Compiled here and also
+         directly into Renderer_DX12.vcxproj / GameLauncher.vcxproj, the same way this
+         project's other sources (AssetManager.cpp, CVar.cpp, ...) are compiled into more
+         than one project rather than shared through a DLL boundary. -->
+    <ClCompile Include="src\PackageFormat.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\DataFiles.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\ProjectKey.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\AssetFilter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\SDKs\lz4-1.10.0\lib\lz4.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\SDKs\lz4-1.10.0\lib\lz4hc.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\CollisionGenerator.cpp">

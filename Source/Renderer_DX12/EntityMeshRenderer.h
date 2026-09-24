@@ -141,6 +141,11 @@ public:
     bool& GetWireframeEnabledRef() { return mWireframeEnabled; }
     void InvalidatePipeline() { mPipelineReady = false; }
 
+    // Player model-quality setting: multiplies every entity's LOD distance, so above 1
+    // coarser LODs take over nearer the camera. The per-mesh LodUsageScale still applies.
+    void SetLodDistanceScale(float scale) { mLodDistanceScale = (std::max)(scale, 0.1f); }
+    float GetLodDistanceScale() const { return mLodDistanceScale; }
+
     void SetTextureMipLODBias(float bias)
     {
         if ((std::fabs)(mTextureMipLODBias - bias) > 0.001f)
@@ -259,13 +264,17 @@ private:
         // Reflectivity; 0.5 is neutral. Occupies the first half of what used to be two
         // words of padding, so the row layout the shader expects is unchanged.
         float  SpecularFactor   = 0.5f;
-        float  _Pad1            = 0.f;
+        // Subsurface-scattering profile slot (SubsurfaceProfiles), 0 = none. Took over the
+        // second padding word, so the layout is unchanged.
+        int    SubsurfaceSlot   = 0;
         float  OpacityFactor    = 1.f;
         float  AlphaCutoff      = 0.5f;
         int    HasOpacityMap    = 0;
         int    UseAlphaCutout   = 0;
         int    UseTransparentBlend = 0;
-        float  _Pad2[3]         = {};
+        // 1 = negate the normal map's green channel (OpenGL-convention map).
+        int    FlipNormalGreen  = 0;
+        float  _Pad2[2]         = {};
         // UV transform: rotate about (0.5, 0.5), then scale by tiling, then offset.
         // The rotation is pre-resolved to sin/cos so the shader does no trigonometry.
         DirectX::XMFLOAT2 UvTiling = { 1.f, 1.f };
@@ -318,6 +327,7 @@ private:
         float roughnessFactor = 1.f;
         float specularFactor  = 0.5f; // neutral reflectivity (0.04 dielectric F0)
         float normalScale     = 1.f;
+        bool  flipNormalGreen = false;
         float aoStrength      = 1.f;
         float opacityFactor   = 1.f;
         float alphaCutoff     = 0.5f;
@@ -335,6 +345,16 @@ private:
         int   parallaxMaxSteps     = 32;
         float parallaxFadeDistance = 30.f;
         float parallaxReferenceHeight = 1.f;
+        // Subsurface scattering (MaterialDefinition::UseSubsurfaceScattering and friends).
+        bool  useSubsurfaceScattering = false;
+        float subsurfaceColorR   = 0.48f;
+        float subsurfaceColorG   = 0.41f;
+        float subsurfaceColorB   = 0.28f;
+        float subsurfaceFalloffR = 1.0f;
+        float subsurfaceFalloffG = 0.37f;
+        float subsurfaceFalloffB = 0.3f;
+        float subsurfaceRadiusMm = 3.0f;
+        float subsurfaceTranslucency = 0.8f;
     };
 
     bool CreatePipeline(DXGI_FORMAT albedoFormat, DXGI_FORMAT normalFormat,
@@ -521,6 +541,7 @@ private:
     // a boundary from flipping LOD every frame the camera moves.
     static constexpr float kLodDistanceStep = 25.0f;
     static constexpr float kLodHysteresis   = 0.15f;
+    float mLodDistanceScale = 1.0f;
 
     std::size_t SelectLodIndex(
         std::size_t entityIndex,

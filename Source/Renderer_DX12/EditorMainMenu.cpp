@@ -7,8 +7,13 @@
 #include "..\System\include\System\SystemAssetApi.h"
 
 #include "../QtUi/QtUi.h"
+#include "VideoImport.h"
+#include "VideoPlayerWindow.h"
+#include "ReleaseGame.h"
 
 #include <commdlg.h>
+#include <shobjidl.h>
+#include <objbase.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -61,6 +66,8 @@ namespace
     bool gShowSceneSettingsWindow = false;
     bool gShowGraphicsSettingsWindow = false;
     bool gShowAssetBrowserWindow = false;
+    bool gShowBuildGameWindow = false;
+    bool gShowExtractPackageWindow = false;
     bool gShowMaterialEditorWindow = false;
     bool gShowTimeOfDayWindow = false;
     bool gShowGBufferDebugWindow = false;
@@ -71,7 +78,7 @@ namespace
     bool gOpenNewFolderPopup = false;
     bool gClipboardHasValue = false;
     std::string gClipboardRelativePath;
-    std::string gAssetStatusMessage = "Use the Asset Browser toolbar to import FBX files and manage Data content.";
+    std::string gAssetStatusMessage = "Use Import to bring geometry (FBX), textures and videos into Data.";
     std::string gDataDirectoryDisplay = "Data folder not found yet.";
     std::string gSelectedFolderRelativePath;
     std::string gSelectedAssetRelativePath;
@@ -94,20 +101,22 @@ namespace
     int gSelectedSubMaterialIndex = -1;
 
     // -----------------------------------------------------------------------
-    // Texture batch import progress state.
+    // Asset batch import progress state (geometry, textures and videos).
     // Import runs on a background thread so the UI stays responsive.
     // -----------------------------------------------------------------------
-    struct TextureImportProgress
+    struct AssetImportProgress
     {
         std::atomic<int>  Total{ 0 };      // total files queued
         std::atomic<int>  Done{ 0 };       // files completed (success or fail)
         std::atomic<bool> Running{ false };// background thread is active
+        std::atomic<bool> Cancel{ false }; // stops a video conversion and skips the rest
+        std::atomic<float> CurrentFraction{ 0.0f }; // progress within the current file, when known
+        std::atomic<bool> CacheDirty{ false };      // an import added files; the UI thread refreshes
         std::mutex        LogMutex;
         std::vector<std::string> Log;      // per-file result messages (guarded by LogMutex)
         std::string CurrentFile;           // file currently being imported (guarded by LogMutex)
-        std::string TargetFolder;          // destination folder (set before thread launch)
     };
-    TextureImportProgress gTextureImport;
+    AssetImportProgress gAssetImport;
 
     struct ShaderCompileMenuState
     {
@@ -118,6 +127,352 @@ namespace
         bool LastSucceeded = true;
     };
     ShaderCompileMenuState gShaderCompileMenu;
+
+    // Defined further down; forward-declared so the Release menu helpers below (which
+    // resolve the project root from it) don't have to move to after that definition.
+    const std::filesystem::path& GetProjectDataDirectoryCached();
+
+    // -----------------------------------------------------------------------
+    // Release menu: Build Game and Extract Package. Both run on a background
+    // thread (packaging and copying DLLs can take a while) behind a simple
+    // status + scrolling log, the same shape as gShaderCompileMenu above.
+    // -----------------------------------------------------------------------
+    struct BuildGameMenuState
+    {
+        std::atomic<bool> Running{ false };
+        std::mutex Mutex;
+        std::vector<std::string> Log;
+        bool HasResult = false;
+        bool LastSucceeded = true;
+    };
+    BuildGameMenuState gBuildGameState;
+
+    char gBuildGameNameBuffer[128] = "My Game";
+    std::string gBuildGameIconPath;
+    std::string gBuildGameOutputFolder;
+    bool gBuildGameAutoBuildRelease = true;
+
+    struct BuildGameFolderOption
+    {
+        std::wstring Name;
+        bool Included;
+    };
+    std::vector<BuildGameFolderOption> gBuildGameFolderOptions;
+
+    struct ExtractPackageMenuState
+    {
+        std::atomic<bool> Running{ false };
+        std::mutex Mutex;
+        std::string Status;
+    };
+    ExtractPackageMenuState gExtractPackageState;
+    std::string gExtractPackagePath;
+    std::string gExtractPackageOutputFolder;
+
+    void EnsureBuildGameFolderOptionsInitialized()
+    {
+        if (!gBuildGameFolderOptions.empty())
+            return;
+        for (const std::wstring& folder : ReleaseGame::DefaultIncludedFolders())
+            gBuildGameFolderOptions.push_back({ folder, true });
+    }
+
+    // A narrow-string OPENFILENAMEA prompt for a single existing file, the same underlying
+    // dialog PromptForAndImportAssets uses below, minus multi-select.
+    bool PromptForOpenFile(HWND owner, const char* title, const char* filter, std::string& outPath)
+    {
+        char buffer[MAX_PATH] = {};
+        OPENFILENAMEA openFileName{};
+        openFileName.lStructSize = sizeof(openFileName);
+        openFileName.hwndOwner = owner;
+        openFileName.lpstrFilter = filter;
+        openFileName.lpstrFile = buffer;
+        openFileName.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        openFileName.lpstrTitle = title;
+        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        if (!QtUi::OpenFileName(&openFileName))
+            return false;
+        outPath = buffer;
+        return true;
+    }
+
+    // No existing folder-picker wrapper exists in QtUi (only file open/save), so this talks
+    // to the modern IFileOpenDialog directly - the same COM API a folder picker anywhere
+    // else in Windows uses.
+    bool PromptForFolder(HWND owner, const wchar_t* title, std::wstring& outFolder)
+    {
+        const HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool ownsComInit = SUCCEEDED(comInit);
+
+        bool result = false;
+        IFileOpenDialog* dialog = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+        {
+            DWORD options = 0;
+            dialog->GetOptions(&options);
+            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+            dialog->SetTitle(title);
+
+            if (SUCCEEDED(dialog->Show(owner)))
+            {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(dialog->GetResult(&item)))
+                {
+                    PWSTR path = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+                    {
+                        outFolder = path;
+                        CoTaskMemFree(path);
+                        result = true;
+                    }
+                    item->Release();
+                }
+            }
+            dialog->Release();
+        }
+
+        if (ownsComInit)
+            CoUninitialize();
+        return result;
+    }
+
+    void StartBuildGameCommand(ReleaseGame::BuildOptions options)
+    {
+        bool expectedRunning = false;
+        if (!gBuildGameState.Running.compare_exchange_strong(expectedRunning, true))
+            return;
+
+        {
+            std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+            gBuildGameState.Log.clear();
+            gBuildGameState.HasResult = false;
+        }
+
+        std::thread([options = std::move(options)]() mutable
+        {
+            bool succeeded;
+            try
+            {
+                succeeded = ReleaseGame::Build(options, [](const std::string& line)
+                {
+                    std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+                    gBuildGameState.Log.push_back(line);
+                });
+            }
+            catch (const std::exception& exception)
+            {
+                std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+                gBuildGameState.Log.push_back(std::string("Error: ") + exception.what());
+                succeeded = false;
+            }
+            catch (...)
+            {
+                std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+                gBuildGameState.Log.push_back("Error: unknown exception.");
+                succeeded = false;
+            }
+
+            std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+            gBuildGameState.HasResult = true;
+            gBuildGameState.LastSucceeded = succeeded;
+            gBuildGameState.Running.store(false);
+        }).detach();
+    }
+
+    void DrawBuildGameWindow()
+    {
+        if (!gShowBuildGameWindow)
+            return;
+
+        EnsureBuildGameFolderOptionsInitialized();
+
+        QtUi::SetNextWindowSize(UiVec2(520.0f, 620.0f), QtUiCond_FirstUseEver);
+        if (!QtUi::Begin("Build Game", &gShowBuildGameWindow))
+        {
+            QtUi::End();
+            return;
+        }
+
+        const bool running = gBuildGameState.Running.load();
+        QtUi::BeginDisabled(running);
+
+        QtUi::InputText("Game Name", gBuildGameNameBuffer, sizeof(gBuildGameNameBuffer));
+        QtUi::TextWrapped("Sets both the shipped .exe's file name and its window title.");
+
+        QtUi::Separator();
+        QtUi::TextWrapped("Icon: %s", gBuildGameIconPath.empty() ? "(default)" : gBuildGameIconPath.c_str());
+        if (QtUi::Button("Choose Icon Image..."))
+        {
+            std::string path;
+            if (PromptForOpenFile(GetActiveWindow(), "Select Icon Image",
+                "Images\0*.png;*.jpg;*.jpeg;*.bmp\0All Files\0*.*\0", path))
+            {
+                gBuildGameIconPath = path;
+            }
+        }
+
+        QtUi::Separator();
+        QtUi::TextWrapped("Output Folder: %s", gBuildGameOutputFolder.empty() ? "(not set)" : gBuildGameOutputFolder.c_str());
+        if (QtUi::Button("Choose Output Folder..."))
+        {
+            std::wstring folder;
+            if (PromptForFolder(GetActiveWindow(), L"Select Output Folder", folder))
+            {
+                gBuildGameOutputFolder = std::filesystem::path(folder).string();
+            }
+        }
+
+        QtUi::Separator();
+        QtUi::TextUnformatted("Data Folders to Package:");
+        for (BuildGameFolderOption& option : gBuildGameFolderOptions)
+        {
+            const std::string label = std::filesystem::path(option.Name).string();
+            QtUi::Checkbox(label.c_str(), &option.Included);
+        }
+
+        QtUi::Separator();
+        const std::filesystem::path projectRoot = GetProjectDataDirectoryCached().parent_path();
+        QtUi::Checkbox("Compile Release DLLs automatically if missing or out of date", &gBuildGameAutoBuildRelease);
+        QtUi::TextWrapped(
+            "Invokes MSBuild for Video/Audio/Game/Renderer_DX12/GameLauncher's Release|x64 "
+            "configuration before packaging, whenever their Release build is missing or older "
+            "than the Debug one. This can take several minutes the first time.");
+
+        const std::filesystem::path releaseRendererDll = projectRoot / "Source" / "Renderer_DX12" / "x64" / "Release" / "Renderer_DX12.dll";
+        if (!gBuildGameAutoBuildRelease && !std::filesystem::exists(releaseRendererDll))
+        {
+            QtUi::TextColored(UiVec4(0.90f, 0.45f, 0.35f, 1.0f),
+                "Warning: Release|x64 has not been built yet, and automatic building is off. "
+                "Build it in Visual Studio first, or turn the checkbox above back on.");
+        }
+
+        QtUi::Separator();
+        const bool canBuild = gBuildGameNameBuffer[0] != '\0' && !gBuildGameOutputFolder.empty();
+        QtUi::BeginDisabled(!canBuild);
+
+        const auto makeOptions = [&](bool buildExe, bool buildPackages)
+        {
+            ReleaseGame::BuildOptions options;
+            options.ProjectRoot = projectRoot.wstring();
+            options.GameName = std::filesystem::path(gBuildGameNameBuffer).wstring();
+            if (!gBuildGameIconPath.empty())
+                options.IconSourcePath = std::filesystem::path(gBuildGameIconPath).wstring();
+            options.OutputDirectory = std::filesystem::path(gBuildGameOutputFolder).wstring();
+            for (const BuildGameFolderOption& folderOption : gBuildGameFolderOptions)
+                if (folderOption.Included)
+                    options.IncludedFolders.push_back(folderOption.Name);
+            options.BuildExe = buildExe;
+            options.BuildPackages = buildPackages;
+            options.AutoBuildRelease = gBuildGameAutoBuildRelease;
+            return options;
+        };
+
+        if (QtUi::Button("Full Build"))
+            StartBuildGameCommand(makeOptions(true, true));
+        QtUi::SameLine();
+        if (QtUi::Button("EXE Only"))
+            StartBuildGameCommand(makeOptions(true, false));
+        QtUi::SameLine();
+        if (QtUi::Button("Package Only"))
+            StartBuildGameCommand(makeOptions(false, true));
+
+        QtUi::EndDisabled(); // canBuild
+        QtUi::EndDisabled(); // running
+
+        QtUi::Separator();
+        {
+            std::lock_guard<std::mutex> lock(gBuildGameState.Mutex);
+            if (running)
+            {
+                QtUi::TextUnformatted("Building...");
+            }
+            else if (gBuildGameState.HasResult)
+            {
+                QtUi::TextColored(
+                    gBuildGameState.LastSucceeded ? UiVec4(0.35f, 0.85f, 0.45f, 1.0f) : UiVec4(0.90f, 0.45f, 0.35f, 1.0f),
+                    "%s", gBuildGameState.LastSucceeded ? "Build succeeded." : "Build failed.");
+            }
+
+            if (QtUi::BeginChild("BuildGameLog", UiVec2(0.0f, 200.0f), true))
+            {
+                for (const std::string& line : gBuildGameState.Log)
+                    QtUi::TextWrapped("%s", line.c_str());
+                if (QtUi::GetScrollY() >= QtUi::GetScrollMaxY())
+                    QtUi::SetScrollHereY(1.0f);
+            }
+            QtUi::EndChild();
+        }
+
+        QtUi::End();
+    }
+
+    void DrawExtractPackageWindow()
+    {
+        if (!gShowExtractPackageWindow)
+            return;
+
+        QtUi::SetNextWindowSize(UiVec2(520.0f, 280.0f), QtUiCond_FirstUseEver);
+        if (!QtUi::Begin("Extract Package", &gShowExtractPackageWindow))
+        {
+            QtUi::End();
+            return;
+        }
+
+        QtUi::TextWrapped("Package: %s", gExtractPackagePath.empty() ? "(not set)" : gExtractPackagePath.c_str());
+        if (QtUi::Button("Choose .ppak File..."))
+        {
+            std::string path;
+            if (PromptForOpenFile(GetActiveWindow(), "Select Package",
+                "Ptero Package\0*.ppak\0All Files\0*.*\0", path))
+            {
+                gExtractPackagePath = path;
+            }
+        }
+
+        QtUi::TextWrapped("Destination Folder: %s", gExtractPackageOutputFolder.empty() ? "(not set)" : gExtractPackageOutputFolder.c_str());
+        if (QtUi::Button("Choose Destination Folder..."))
+        {
+            std::wstring folder;
+            if (PromptForFolder(GetActiveWindow(), L"Select Destination Folder", folder))
+            {
+                gExtractPackageOutputFolder = std::filesystem::path(folder).string();
+            }
+        }
+
+        QtUi::Separator();
+        const bool running = gExtractPackageState.Running.load();
+        const bool canExtract = !running && !gExtractPackagePath.empty() && !gExtractPackageOutputFolder.empty();
+        QtUi::BeginDisabled(!canExtract);
+        if (QtUi::Button("Extract"))
+        {
+            gExtractPackageState.Running.store(true);
+            {
+                std::lock_guard<std::mutex> lock(gExtractPackageState.Mutex);
+                gExtractPackageState.Status = "Extracting...";
+            }
+
+            const std::wstring projectRoot = GetProjectDataDirectoryCached().parent_path().wstring();
+            const std::wstring pakPath = std::filesystem::path(gExtractPackagePath).wstring();
+            const std::wstring destination = std::filesystem::path(gExtractPackageOutputFolder).wstring();
+            std::thread([projectRoot, pakPath, destination]()
+            {
+                std::string error;
+                const bool ok = ReleaseGame::ExtractOnePackage(projectRoot, pakPath, destination, error);
+                std::lock_guard<std::mutex> lock(gExtractPackageState.Mutex);
+                gExtractPackageState.Status = ok ? "Extraction complete." : ("Error: " + error);
+                gExtractPackageState.Running.store(false);
+            }).detach();
+        }
+        QtUi::EndDisabled();
+
+        {
+            std::lock_guard<std::mutex> lock(gExtractPackageState.Mutex);
+            if (!gExtractPackageState.Status.empty())
+                QtUi::TextWrapped("%s", gExtractPackageState.Status.c_str());
+        }
+
+        QtUi::End();
+    }
 
     void StartShaderCompileCommand(const CompileShadersCommandFn compileShadersCommand)
     {
@@ -301,6 +656,73 @@ namespace
         if (materialDefinition.ParticleFlipbookRows < 1)    materialDefinition.ParticleFlipbookRows = 1;
 
         QtUi::EndDisabled();
+    }
+
+    // Subsurface scattering controls. Shared by the single-material tab and by each
+    // sub-material of the multi-material tab. How the profile is evaluated (screen-space
+    // blur or ray traced) is a scene setting, not a material one; the material only
+    // describes the medium.
+    void DrawMaterialSubsurfaceControls(MaterialDefinition& materialDefinition)
+    {
+        QtUi::SeparatorText("Subsurface Scattering");
+
+        QtUi::Checkbox("Subsurface Scattering", &materialDefinition.UseSubsurfaceScattering);
+        QtUi::SetItemTooltip("Light entering the surface scatters inside it and leaves somewhere else, "
+                             "softening the lighting and bleeding colour into shadow edges. For skin, "
+                             "wax, marble, jade and leaves. Opaque materials only.");
+
+        QtUi::BeginDisabled(!materialDefinition.UseSubsurfaceScattering);
+
+        // Starting points, not ground truth: each is the SDK's skin profile re-weighted
+        // toward how the medium tints and how far light travels in it.
+        struct SubsurfacePreset
+        {
+            const char* Name;
+            std::array<float, 3> Color;
+            std::array<float, 3> Falloff;
+            float RadiusMm;
+            float Translucency;
+        };
+        static const SubsurfacePreset kPresets[] = {
+            { "Skin",    { 0.48f, 0.41f, 0.28f }, { 1.0f, 0.37f, 0.30f },  3.0f, 0.80f },
+            { "Wax",     { 0.85f, 0.75f, 0.55f }, { 1.0f, 0.75f, 0.45f }, 12.0f, 0.85f },
+            { "Marble",  { 0.60f, 0.60f, 0.58f }, { 1.0f, 0.95f, 0.90f },  8.0f, 0.60f },
+            { "Jade",    { 0.45f, 0.75f, 0.50f }, { 0.55f, 1.0f, 0.60f }, 10.0f, 0.75f },
+            { "Foliage", { 0.35f, 0.70f, 0.20f }, { 0.60f, 1.0f, 0.35f },  4.0f, 0.95f },
+        };
+        QtUi::TextUnformatted("Preset");
+        for (const SubsurfacePreset& preset : kPresets)
+        {
+            QtUi::SameLine();
+            if (QtUi::Button(preset.Name))
+            {
+                materialDefinition.SubsurfaceColor = preset.Color;
+                materialDefinition.SubsurfaceFalloff = preset.Falloff;
+                materialDefinition.SubsurfaceRadiusMm = preset.RadiusMm;
+                materialDefinition.SubsurfaceTranslucency = preset.Translucency;
+            }
+        }
+
+        QtUi::ColorEdit3("Scatter Strength", materialDefinition.SubsurfaceColor.data());
+        QtUi::SetItemTooltip("How much of each colour channel's diffuse light is scattered. "
+                             "Black keeps the surface looking opaque; white scatters everything.");
+
+        QtUi::ColorEdit3("Scatter Falloff", materialDefinition.SubsurfaceFalloff.data());
+        QtUi::SetItemTooltip("How far each channel travels, relative to Scatter Radius. Skin carries red "
+                             "furthest, which is what gives it its warm shadow edges.");
+
+        QtUi::SliderFloat("Scatter Radius", &materialDefinition.SubsurfaceRadiusMm, 0.1f, 100.0f, "%.1f mm");
+        QtUi::SetItemTooltip("World-space reach of the scattering. About 3 mm is human skin at real scale; "
+                             "wax and marble want 8-15 mm. Scales with the object, not the screen.");
+
+        QtUi::SliderFloat("Translucency", &materialDefinition.SubsurfaceTranslucency, 0.0f, 1.0f, "%.2f");
+        QtUi::SetItemTooltip("How easily light passes all the way through thin parts - ears, fingers, "
+                             "leaves, candle rims - and glows on the far side. 0 disables transmission.");
+
+        QtUi::EndDisabled();
+
+        if (materialDefinition.SubsurfaceRadiusMm < 0.01f)
+            materialDefinition.SubsurfaceRadiusMm = 0.01f;
     }
 
     bool PromptForSceneOpenPath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
@@ -615,6 +1037,12 @@ namespace
         }
 
         gDataDirectoryDisplay = dataDirectory.string();
+
+        // Files added by the background importer since the last frame.
+        if (gAssetImport.CacheDirty.exchange(false))
+        {
+            InvalidateAssetBrowserDirectoryCache();
+        }
 
         const std::filesystem::path selectedFolderPath = GetAbsoluteDataPath(gSelectedFolderRelativePath);
         if (!gSelectedFolderRelativePath.empty() && !std::filesystem::exists(selectedFolderPath))
@@ -986,50 +1414,101 @@ namespace
         }
     }
 
-    bool PromptForAndImportFbx(HWND windowHandle, const std::string& targetFolderRelativePath)
+    enum class ImportKind
     {
-        char selectedFilePath[MAX_PATH] = {};
-        OPENFILENAMEA openFileName{};
-        openFileName.lStructSize = sizeof(openFileName);
-        openFileName.hwndOwner = windowHandle;
-        openFileName.lpstrFilter = "FBX Files\0*.fbx\0All Files\0*.*\0";
-        openFileName.lpstrFile = selectedFilePath;
-        openFileName.nMaxFile = static_cast<DWORD>(std::size(selectedFilePath));
-        openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        Geometry,
+        Texture,
+        Video,
+        Unsupported
+    };
 
-        if (!QtUi::OpenFileName(&openFileName))
+    constexpr const char* kTextureImportExtensions[] = { ".png", ".jpg", ".jpeg", ".tga", ".dds", ".bmp", ".hdr" };
+
+    ImportKind ClassifyImportPath(const std::string& sourcePath)
+    {
+        const std::string extension = std::filesystem::path(sourcePath).extension().string();
+        if (_stricmp(extension.c_str(), ".fbx") == 0)
         {
+            return ImportKind::Geometry;
+        }
+
+        for (const char* textureExtension : kTextureImportExtensions)
+        {
+            if (_stricmp(extension.c_str(), textureExtension) == 0)
+            {
+                return ImportKind::Texture;
+            }
+        }
+
+        if (VideoImport::IsVideoFile(std::filesystem::path(sourcePath).wstring()))
+        {
+            return ImportKind::Video;
+        }
+
+        return ImportKind::Unsupported;
+    }
+
+    bool IsVideoAssetPath(const std::string& relativePath)
+    {
+        return _stricmp(std::filesystem::path(relativePath).extension().string().c_str(), ".webm") == 0;
+    }
+
+    void OpenVideoInPlayer(const std::string& relativePath)
+    {
+        const std::filesystem::path videoPath = GetAbsoluteDataPath(relativePath);
+        const bool opened = VideoPlayerWindow::Open(videoPath.wstring());
+        SetAssetBrowserStatus(
+            opened,
+            opened ? "Opened " + videoPath.filename().string() + " in the Video Player."
+                   : std::string("The Video Player window could not be started."));
+    }
+
+    // The one Import command: geometry (FBX), textures and videos in a single multi-select,
+    // each routed to its importer by extension. Everything runs on a background thread
+    // behind the progress modal, since both texture compression and video conversion can
+    // take a while.
+    bool PromptForAndImportAssets(HWND windowHandle, const std::string& targetFolderRelativePath)
+    {
+        if (gAssetImport.Running.load())
+        {
+            SetAssetBrowserStatus(false, "An import is already in progress.");
             return false;
         }
 
-        char importStatusMessage[512] = {};
-        SetAssetBrowserStatus(
-            ImportFbxIntoDataFromSystem(
-                selectedFilePath,
-                targetFolderRelativePath.c_str(),
-                importStatusMessage,
-                static_cast<int>(std::size(importStatusMessage))),
-            importStatusMessage);
-        if (gLastAssetActionSucceeded)
+        std::string texturePattern;
+        for (const char* textureExtension : kTextureImportExtensions)
         {
-            InvalidateAssetBrowserDirectoryCache();
+            texturePattern += (texturePattern.empty() ? "*" : ";*") + std::string(textureExtension);
         }
-        return true;
-    }
 
-    bool PromptForAndImportTexture(HWND windowHandle, const std::string& targetFolderRelativePath)
-    {
+        const std::string videoPattern = VideoImport::GetFileDialogPattern();
+        std::string filter;
+        const auto addFilter = [&filter](const std::string& label, const std::string& pattern)
+        {
+            filter += label;
+            filter.push_back('\0');
+            filter += pattern;
+            filter.push_back('\0');
+        };
+        addFilter("All Supported Assets", "*.fbx;" + texturePattern + ";" + videoPattern);
+        addFilter("Geometry (*.fbx)", "*.fbx");
+        addFilter("Textures", texturePattern);
+        addFilter("Videos (converted to WebM)", videoPattern);
+        addFilter("All Files", "*.*");
+        filter.push_back('\0');
+
         // Use a large buffer so Windows can pack multiple selected paths.
         // Format: "dir\0file1\0file2\0...\0\0"  (or just "full\path\0\0" for single selection)
-        constexpr DWORD kMultiSelectBufferSize = 32768;
+        constexpr DWORD kMultiSelectBufferSize = 65536;
         std::vector<char> fileBuffer(kMultiSelectBufferSize, '\0');
 
         OPENFILENAMEA openFileName{};
         openFileName.lStructSize  = sizeof(openFileName);
         openFileName.hwndOwner    = windowHandle;
-        openFileName.lpstrFilter  = "Texture Files\0*.png;*.jpg;*.jpeg;*.tga;*.dds;*.bmp;*.hdr\0All Files\0*.*\0";
+        openFileName.lpstrFilter  = filter.c_str();
         openFileName.lpstrFile    = fileBuffer.data();
         openFileName.nMaxFile     = kMultiSelectBufferSize;
+        openFileName.lpstrTitle   = "Import Assets";
         openFileName.Flags        = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
 
         if (!QtUi::OpenFileName(&openFileName))
@@ -1066,62 +1545,95 @@ namespace
             return false;
         }
 
-        // If another import is still running, ignore this request.
-        if (gTextureImport.Running.load())
-        {
-            SetAssetBrowserStatus(false, "A texture import is already in progress.");
-            return false;
-        }
+        // Videos are written by path rather than through System.dll, so they need the
+        // absolute target, resolved here on the UI thread where the Data cache lives.
+        const std::filesystem::path targetDirectory = GetAbsoluteDataPath(targetFolderRelativePath);
 
         // Reset progress state and launch the background import thread.
         {
-            std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-            gTextureImport.Log.clear();
-            gTextureImport.CurrentFile.clear();
+            std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+            gAssetImport.Log.clear();
+            gAssetImport.CurrentFile.clear();
         }
-        gTextureImport.Total.store(static_cast<int>(sourcePaths.size()));
-        gTextureImport.Done.store(0);
-        gTextureImport.TargetFolder = targetFolderRelativePath;
-        gTextureImport.Running.store(true);
+        gAssetImport.Total.store(static_cast<int>(sourcePaths.size()));
+        gAssetImport.Done.store(0);
+        gAssetImport.CurrentFraction.store(0.0f);
+        gAssetImport.Cancel.store(false);
+        gAssetImport.Running.store(true);
 
-        std::thread([paths = std::move(sourcePaths), targetFolder = targetFolderRelativePath]()
+        std::thread([paths = std::move(sourcePaths), targetFolder = targetFolderRelativePath, targetDirectory]()
         {
             for (const std::string& sourcePath : paths)
             {
                 const std::string fileName = std::filesystem::path(sourcePath).filename().string();
                 {
-                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                    gTextureImport.CurrentFile = fileName;
+                    std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                    gAssetImport.CurrentFile = fileName;
+                }
+                gAssetImport.CurrentFraction.store(0.0f);
+
+                bool ok = false;
+                std::string statusText;
+                if (gAssetImport.Cancel.load())
+                {
+                    statusText = "skipped (import cancelled)";
+                }
+                else
+                {
+                    char statusMsg[512] = {};
+                    switch (ClassifyImportPath(sourcePath))
+                    {
+                    case ImportKind::Geometry:
+                        ok = ImportFbxIntoDataFromSystem(
+                            sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
+                        statusText = statusMsg;
+                        break;
+                    case ImportKind::Texture:
+                        ok = ImportTextureIntoDataFromSystem(
+                            sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
+                        statusText = statusMsg;
+                        break;
+                    case ImportKind::Video:
+                    {
+                        std::wstring outputPath;
+                        ok = VideoImport::ImportIntoDirectory(
+                            std::filesystem::path(sourcePath).wstring(),
+                            targetDirectory.wstring(),
+                            outputPath,
+                            statusText,
+                            [](float fraction) { gAssetImport.CurrentFraction.store(fraction); },
+                            &gAssetImport.Cancel);
+                        break;
+                    }
+                    case ImportKind::Unsupported:
+                        statusText = "unsupported file type";
+                        break;
+                    }
                 }
 
-                char statusMsg[512] = {};
-                const bool ok = ImportTextureIntoDataFromSystem(
-                    sourcePath.c_str(),
-                    targetFolder.c_str(),
-                    statusMsg,
-                    static_cast<int>(std::size(statusMsg)));
-
                 std::string logLine = ok
-                    ? (std::string("OK  ") + fileName)
-                    : (std::string("ERR ") + fileName + ": " + statusMsg);
+                    ? (std::string("OK  ") + fileName + (statusText.empty() ? "" : ": " + statusText))
+                    : (std::string("ERR ") + fileName + ": " + statusText);
 
                 if (ok)
                 {
-                    InvalidateAssetBrowserDirectoryCache();
+                    // Only flagged here: the cache belongs to the UI thread, which may be
+                    // iterating it right now. RefreshAssetBrowserState picks the flag up.
+                    gAssetImport.CacheDirty.store(true);
                 }
 
                 {
-                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                    gTextureImport.Log.push_back(std::move(logLine));
+                    std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                    gAssetImport.Log.push_back(std::move(logLine));
                 }
-                gTextureImport.Done.fetch_add(1);
+                gAssetImport.Done.fetch_add(1);
             }
 
             {
-                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                gTextureImport.CurrentFile.clear();
+                std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                gAssetImport.CurrentFile.clear();
             }
-            gTextureImport.Running.store(false);
+            gAssetImport.Running.store(false);
         }).detach();
 
         return true;
@@ -1348,15 +1860,9 @@ namespace
 
         if (QtUi::BeginPopupContextItem())
         {
-            if (QtUi::MenuItem("Import FBX Here..."))
+            if (QtUi::MenuItem("Import Here..."))
             {
-                PromptForAndImportFbx(GetActiveWindow(), folderRelativePath);
-                RefreshAssetBrowserState();
-            }
-
-            if (QtUi::MenuItem("Import Texture Here..."))
-            {
-                PromptForAndImportTexture(GetActiveWindow(), folderRelativePath);
+                PromptForAndImportAssets(GetActiveWindow(), folderRelativePath);
                 RefreshAssetBrowserState();
             }
 
@@ -1412,6 +1918,8 @@ void RenderEditorMainMenu(
     RtAOSettings* rtaoSettings,
     GtaoSettings* gtaoSettings,
     SsrSettings* ssrSettings,
+    SubsurfaceSettings* subsurfaceSettings,
+    bool subsurfaceRayTracingSupported,
     ChromaticAberrationSettings* chromaticAberrationSettings,
     AgxTonemapSettings* agxSettings,
     VolumetricFogSettings* volumetricFogSettings,
@@ -1603,6 +2111,12 @@ void RenderEditorMainMenu(
                 RefreshAssetBrowserState();
             }
 
+            // A separate native window (Video.dll); with no file it offers Open....
+            if (QtUi::MenuItem("Video Player..."))
+            {
+                VideoPlayerWindow::Open(std::wstring());
+            }
+
             QtUi::Separator();
 
             if (QtUi::MenuItem("Time of Day..."))
@@ -1615,6 +2129,19 @@ void RenderEditorMainMenu(
                 gShowGraphicsSettingsWindow = true;
             }
 
+            QtUi::EndMenu();
+        }
+
+        if (QtUi::BeginMenu("Release"))
+        {
+            if (QtUi::MenuItem("Build Game..."))
+            {
+                gShowBuildGameWindow = true;
+            }
+            if (QtUi::MenuItem("Extract Package..."))
+            {
+                gShowExtractPackageWindow = true;
+            }
             QtUi::EndMenu();
         }
 
@@ -2257,8 +2784,9 @@ void RenderEditorMainMenu(
                         "Diag: G-Buffer Depth",
                         "Diag: Flat White",
                         "Diag: Deterministic Probe",
+                        "Diag: NEE Sun Visibility",
                     };
-                    const int debugModeValues[] = { 0, 1, 2, 3, 10, 11, 12, 13, 14 };
+                    const int debugModeValues[] = { 0, 1, 2, 3, 10, 11, 12, 13, 14, 15 };
 
                     int debugModeIndex = 0;
                     for (int i = 0; i < static_cast<int>(std::size(debugModeValues)); ++i)
@@ -2287,7 +2815,12 @@ void RenderEditorMainMenu(
                         "never on the camera or the frame. It will look flat and wrong as an\n"
                         "image; that is fine. What matters is whether it is STABLE. Any\n"
                         "flicker there is real instability in traversal or shading, not the\n"
-                        "sampling variance that normal GI legitimately has under motion.");
+                        "sampling variance that normal GI legitimately has under motion.\n\n"
+                        "NEE Sun Visibility compares the NEE sun shadow ray with the sun\n"
+                        "shadow map at each visible surface: green both lit, RED shadow\n"
+                        "map lit but the ray is blocked (a ray-tracing-only blocker), blue\n"
+                        "ray reaches the sun but the shadow map is dark, grey both\n"
+                        "shadowed, black faces away from the sun.");
                 }
             }
         }
@@ -2550,14 +3083,72 @@ void RenderEditorMainMenu(
 
                 if (ssrSettings->Enabled)
                 {
+                    const char* ssrTechniques[] = { "Ray March", "AMD FidelityFX SSSR" };
+                    QtUi::Combo("Technique##ssr", &ssrSettings->Technique, ssrTechniques, std::size(ssrTechniques));
+                    QtUi::SetItemTooltip("Ray March: one sharp ray per pixel, marched in world space.\n"
+                                         "AMD FidelityFX SSSR: stochastic GGX rays traced through a depth "
+                                         "pyramid and denoised over time, so glossy surfaces get properly "
+                                         "blurred reflections.");
+                    const bool fidelityFx = ssrSettings->Technique == 1;
+
                     QtUi::Separator();
                     SliderFloatWithInput("Intensity##ssr", &ssrSettings->Intensity, 0.0f, 2.0f, "%.2f", 0.01f, 0.1f);
                     QtUi::SetItemTooltip("Scales the reflection before it is added. 1.0 is physical strength.");
 
                     SliderFloatWithInput("Max Roughness##ssr", &ssrSettings->MaxRoughness, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
-                    QtUi::SetItemTooltip("Surfaces rougher than this get no reflection - a single sharp ray "
-                                         "cannot stand in for the blurred lobe they need.");
+                    QtUi::SetItemTooltip(fidelityFx
+                        ? "Surfaces rougher than this are not traced. Reflections fade out over the "
+                          "last quarter below it."
+                        : "Surfaces rougher than this get no reflection - a single sharp ray "
+                          "cannot stand in for the blurred lobe they need.");
 
+                    if (fidelityFx)
+                    {
+                        QtUi::SeparatorText("Tracing");
+                        SliderIntWithInput("Max Traversal Steps##sssr", &ssrSettings->SssrMaxTraversalIntersections, 8, 512);
+                        QtUi::SetItemTooltip("Depth-pyramid steps per ray before it gives up. The main cost control.");
+
+                        SliderFloatWithInput("Depth Thickness##sssr", &ssrSettings->SssrDepthThickness, 0.0f, 0.5f, "%.3f m", 0.001f, 0.01f);
+                        QtUi::SetItemTooltip("How far behind the depth buffer a hit may land and still be trusted.");
+
+                        const char* samplesPerQuadModes[] = { "1", "2", "4" };
+                        int samplesPerQuadIndex = ssrSettings->SssrSamplesPerQuad >= 4 ? 2 : (ssrSettings->SssrSamplesPerQuad >= 2 ? 1 : 0);
+                        if (QtUi::Combo("Rays per Quad##sssr", &samplesPerQuadIndex, samplesPerQuadModes, std::size(samplesPerQuadModes)))
+                            ssrSettings->SssrSamplesPerQuad = 1 << samplesPerQuadIndex;
+                        QtUi::SetItemTooltip("Glossy rays traced per 2x2 pixel quad; the denoiser fills in the rest. "
+                                             "Mirror-smooth surfaces always get one ray per pixel.");
+
+                        SliderIntWithInput("Most Detailed Mip##sssr", &ssrSettings->SssrMostDetailedMip, 0, 4);
+                        QtUi::SetItemTooltip("Depth-pyramid level glossy rays start on. Higher is cheaper and coarser.");
+
+                        SliderIntWithInput("Min Occupancy##sssr", &ssrSettings->SssrMinTraversalOccupancy, 0, 32);
+                        QtUi::SetItemTooltip("A wave stops tracing once this few rays are still running, so one "
+                                             "long ray cannot stall the rest.");
+
+                        QtUi::SeparatorText("Denoiser");
+                        SliderFloatWithInput("Temporal Stability##sssr", &ssrSettings->SssrTemporalStability, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
+                        QtUi::SetItemTooltip("How loosely history is clipped to the current frame. Higher is steadier; "
+                                             "lower reacts faster and ghosts less.");
+
+                        QtUi::Checkbox("Variance-Guided Tracing##sssr", &ssrSettings->SssrTemporalVarianceGuidedTracing);
+                        QtUi::SetItemTooltip("Also trace pixels skipped by Rays per Quad wherever last frame's result "
+                                             "was still unstable.");
+
+                        if (ssrSettings->SssrTemporalVarianceGuidedTracing)
+                        {
+                            SliderFloatWithInput("Variance Threshold##sssr", &ssrSettings->SssrTemporalVarianceThreshold, 0.0f, 0.01f, "%.4f", 0.0001f, 0.001f);
+                            QtUi::SetItemTooltip("Temporal variance above which a skipped pixel is traced anyway.");
+                        }
+
+                        QtUi::Separator();
+                        const char* sssrDebugModes[] = { "Composite", "Reflection Only", "Raw Trace (Denoiser Off)" };
+                        QtUi::Combo("Debug View##sssr", &ssrSettings->DebugView, sssrDebugModes, std::size(sssrDebugModes));
+                        QtUi::SetItemTooltip("Isolates the denoised reflection, or the traced result before the denoiser.");
+                    }
+                }
+
+                if (ssrSettings->Enabled && ssrSettings->Technique != 1)
+                {
                     SliderFloatWithInput("Max Distance##ssr", &ssrSettings->MaxDistance, 1.0f, 400.0f, "%.1f m", 1.0f, 10.0f);
                     QtUi::SetItemTooltip("Longest ray, and the distance over which reflections fade out.");
 
@@ -2586,6 +3177,76 @@ void RenderEditorMainMenu(
                     const char* ssrDebugModes[] = { "Composite", "Reflection Only", "Confidence Mask" };
                     QtUi::Combo("Debug View##ssr", &ssrSettings->DebugView, ssrDebugModes, std::size(ssrDebugModes));
                     QtUi::SetItemTooltip("Isolates the reflection term, or shows where SSR found a hit and how much it trusts it.");
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Subsurface Scattering
+        // -------------------------------------------------------------------
+        if (subsurfaceSettings != nullptr)
+        {
+            const SubsurfaceSettings defaultSubsurfaceSettings{};
+            if (QtUi::CollapsingHeader("Subsurface Scattering", QtUiTreeNodeFlags_DefaultOpen))
+            {
+                if (QtUi::Button("Revert All##sss"))
+                    *subsurfaceSettings = defaultSubsurfaceSettings;
+
+                QtUi::Checkbox("Enable Subsurface Scattering##sss", &subsurfaceSettings->Enabled);
+                QtUi::SetItemTooltip("Scatters the diffuse light of materials with Subsurface Scattering "
+                                     "enabled in the Material Editor. Costs nothing while none are on screen.");
+
+                if (subsurfaceSettings->Enabled)
+                {
+                    QtUi::Separator();
+                    const char* sssModes[] = { "Screen Space (Separable SSS)", "Ray Traced (World Space)" };
+                    QtUi::Combo("Mode##sss", &subsurfaceSettings->Mode, sssModes, std::size(sssModes));
+                    QtUi::SetItemTooltip("Screen Space: Jimenez's separable blur of the diffuse lighting. Cheap and "
+                                         "stable, but it only sees the depth buffer and measures transmission "
+                                         "from shadow maps.\n"
+                                         "Ray Traced (World Space): scatter samples are found on the real mesh with "
+                                         "probe rays and lit there by every light with ray-traced shadows - nothing "
+                                         "is read from the screen, so light wraps around ears, noses and fingers "
+                                         "and behind silhouettes. Transmission thickness is measured through the "
+                                         "mesh. Needs DXR 1.1.");
+                    if (subsurfaceSettings->Mode == 1 && !subsurfaceRayTracingSupported)
+                    {
+                        QtUi::TextDisabled("This GPU has no DXR 1.1 - rendering in screen space.");
+                    }
+
+                    if (subsurfaceSettings->Mode == 0)
+                    {
+                        const char* sssQualities[] = { "Low (11 taps)", "Medium (17 taps)", "High (25 taps)" };
+                        QtUi::Combo("Quality##sss", &subsurfaceSettings->Quality, sssQualities, std::size(sssQualities));
+                        QtUi::SetItemTooltip("Taps per blur direction. High also widens the kernel to the full "
+                                             "profile range.");
+
+                        QtUi::Checkbox("Follow Surface##sss", &subsurfaceSettings->FollowSurface);
+                        QtUi::SetItemTooltip("Stops the blur at depth discontinuities so light does not bleed "
+                                             "off a silhouette onto whatever is behind it.");
+                    }
+                    else
+                    {
+                        SliderIntWithInput("Samples##sss", &subsurfaceSettings->RtSamples, 1, 64);
+                        QtUi::SetItemTooltip("Surface probes per pixel. The pattern rotates every frame, so "
+                                             "temporal anti-aliasing integrates it; 8-16 is plenty with TAA, "
+                                             "DLSS or FSR.");
+                    }
+
+                    QtUi::SeparatorText("Transmission");
+                    QtUi::Checkbox("Transmission##sss", &subsurfaceSettings->Transmission);
+                    QtUi::SetItemTooltip("Light passing through thin parts - ears, fingers, leaves, candle rims - "
+                                         "and lighting the far side. Each material's Translucency sets how much.");
+                    QtUi::BeginDisabled(!subsurfaceSettings->Transmission);
+                    SliderFloatWithInput("Transmission Intensity##sss", &subsurfaceSettings->TransmissionIntensity,
+                                         0.0f, 4.0f, "%.2f", 0.01f, 0.1f);
+                    QtUi::EndDisabled();
+
+                    QtUi::Separator();
+                    const char* sssDebugModes[] = { "Composite", "Scattered Diffuse Only", "Profile Mask" };
+                    QtUi::Combo("Debug View##sss", &subsurfaceSettings->DebugView, sssDebugModes, std::size(sssDebugModes));
+                    QtUi::SetItemTooltip("Shows the scattered diffuse light on its own, or which pixels "
+                                         "scatter and with which material profile.");
                 }
             }
         }
@@ -3120,6 +3781,10 @@ void RenderEditorMainMenu(
                     // gets a visible reflection in a scene with nothing to mirror.
                     QtUi::SliderFloat("Specular", &materialDefinition.SpecularFactor, 0.0f, 1.0f);
                     QtUi::SliderFloat("Normal Scale", &materialDefinition.NormalScale, 0.0f, 4.0f);
+                    QtUi::Checkbox("Flip Normal Green (OpenGL)", &materialDefinition.FlipNormalGreen);
+                    QtUi::SetItemTooltip("Tick for OpenGL-style normal maps (green points up). The engine expects "
+                                         "DirectX-style maps; an unflipped OpenGL map lights its relief from the "
+                                         "wrong vertical direction.");
                     QtUi::SliderFloat("Ambient Occlusion Strength", &materialDefinition.AmbientOcclusionStrength, 0.0f, 4.0f);
                     QtUi::SliderFloat("Opacity", &materialDefinition.Opacity, 0.0f, 1.0f);
                     QtUi::SliderFloat("Alpha Cutoff", &materialDefinition.AlphaCutoff, 0.0f, 1.0f);
@@ -3136,6 +3801,8 @@ void RenderEditorMainMenu(
                     QtUi::SliderFloat("Glass Dispersion", &materialDefinition.GlassDispersion, 0.0f, 2.0f, "%.2f");
                     QtUi::SliderFloat("Fake Caustics", &materialDefinition.GlassCausticStrength, 0.0f, 1.0f, "%.2f");
                     QtUi::EndDisabled();
+
+                    DrawMaterialSubsurfaceControls(materialDefinition);
 
                     DrawMaterialParticleControls(materialDefinition);
 
@@ -3351,6 +4018,10 @@ void RenderEditorMainMenu(
                         QtUi::SliderFloat("Roughness Factor", &subMat.RoughnessFactor, 0.0f, 1.0f);
                         QtUi::SliderFloat("Specular", &subMat.SpecularFactor, 0.0f, 1.0f);
                         QtUi::SliderFloat("Normal Scale", &subMat.NormalScale, 0.0f, 4.0f);
+                        QtUi::Checkbox("Flip Normal Green (OpenGL)", &subMat.FlipNormalGreen);
+                        QtUi::SetItemTooltip("Tick for OpenGL-style normal maps (green points up). The engine expects "
+                                             "DirectX-style maps; an unflipped OpenGL map lights its relief from the "
+                                             "wrong vertical direction.");
                         QtUi::SliderFloat("AO Strength", &subMat.AmbientOcclusionStrength, 0.0f, 4.0f);
                         QtUi::SliderFloat("Opacity", &subMat.Opacity, 0.0f, 1.0f);
                         QtUi::SliderFloat("Alpha Cutoff", &subMat.AlphaCutoff, 0.0f, 1.0f);
@@ -3367,6 +4038,8 @@ void RenderEditorMainMenu(
                         QtUi::SliderFloat("Glass Dispersion", &subMat.GlassDispersion, 0.0f, 2.0f, "%.2f");
                         QtUi::SliderFloat("Fake Caustics", &subMat.GlassCausticStrength, 0.0f, 1.0f, "%.2f");
                         QtUi::EndDisabled();
+
+                        DrawMaterialSubsurfaceControls(subMat);
 
                         DrawMaterialParticleControls(subMat);
 
@@ -3485,22 +4158,15 @@ void RenderEditorMainMenu(
         const bool canPaste = gClipboardHasValue;
 
         // The toolbar keeps common content-browser actions visible, similar to the asset views used by large game editors.
-        if (QtUi::Button("Import FBX"))
+        QtUi::BeginDisabled(gAssetImport.Running.load());
+        if (QtUi::Button("Import..."))
         {
-            if (PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath))
+            if (PromptForAndImportAssets(windowHandle, gSelectedFolderRelativePath))
             {
                 RefreshAssetBrowserState();
             }
         }
-
-        QtUi::SameLine();
-        if (QtUi::Button("Import Texture"))
-        {
-            if (PromptForAndImportTexture(windowHandle, gSelectedFolderRelativePath))
-            {
-                RefreshAssetBrowserState();
-            }
-        }
+        QtUi::EndDisabled();
 
         QtUi::SameLine();
         if (QtUi::Button("New Folder"))
@@ -3630,25 +4296,30 @@ void RenderEditorMainMenu(
         }
 
         // Open the import progress modal whenever a batch import starts.
-        if (gTextureImport.Running.load() || gTextureImport.Done.load() > 0)
+        if (gAssetImport.Running.load() || gAssetImport.Done.load() > 0)
         {
-            QtUi::OpenPopup("Importing Textures...");
+            QtUi::OpenPopup("Importing Assets...");
         }
 
         QtUi::SetNextWindowSize(UiVec2(760.0f, 420.0f), QtUiCond_Appearing);
         QtUi::SetNextWindowSizeConstraints(UiVec2(560.0f, 260.0f), UiVec2(FLT_MAX, FLT_MAX));
-        if (QtUi::BeginPopupModal("Importing Textures...", nullptr, QtUiWindowFlags_None))
+        if (QtUi::BeginPopupModal("Importing Assets...", nullptr, QtUiWindowFlags_None))
         {
-            const int total = gTextureImport.Total.load();
-            const int done  = gTextureImport.Done.load();
-            const bool running = gTextureImport.Running.load();
+            const int total = gAssetImport.Total.load();
+            const int done  = gAssetImport.Done.load();
+            const bool running = gAssetImport.Running.load();
+            const float currentFraction = running ? gAssetImport.CurrentFraction.load() : 0.0f;
             std::string currentFile;
             {
-                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                currentFile = gTextureImport.CurrentFile;
+                std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                currentFile = gAssetImport.CurrentFile;
             }
 
-            float fraction = (total > 0) ? (static_cast<float>(done) / static_cast<float>(total)) : 0.0f;
+            // Whole files done, plus how far the current one has got when its importer
+            // reports it (video conversion does; texture and FBX imports do not).
+            float fraction = (total > 0)
+                ? ((static_cast<float>(done) + (std::min)(currentFraction, 1.0f)) / static_cast<float>(total))
+                : 0.0f;
             if (running && total > 0)
             {
                 fraction = (std::max)(fraction, 0.02f);
@@ -3659,9 +4330,20 @@ void RenderEditorMainMenu(
 
             if (running)
             {
-                if (!currentFile.empty())
+                if (gAssetImport.Cancel.load())
                 {
-                    QtUi::TextWrapped("Processing: %s", currentFile.c_str());
+                    QtUi::TextUnformatted("Cancelling...");
+                }
+                else if (!currentFile.empty())
+                {
+                    if (currentFraction > 0.0f)
+                    {
+                        QtUi::TextWrapped("Processing: %s (%d%%)", currentFile.c_str(), static_cast<int>(currentFraction * 100.0f));
+                    }
+                    else
+                    {
+                        QtUi::TextWrapped("Processing: %s", currentFile.c_str());
+                    }
                 }
                 else
                 {
@@ -3670,7 +4352,7 @@ void RenderEditorMainMenu(
 
                 if (done == 0)
                 {
-                    QtUi::TextWrapped("The first texture is still being compressed. Large 4K imports can take a bit before the first file completes.");
+                    QtUi::TextWrapped("Large 4K textures and long videos can take a while before the first file completes. Videos are converted to WebM (VP9).");
                 }
             }
             else
@@ -3683,8 +4365,8 @@ void RenderEditorMainMenu(
             const float footerHeight = QtUi::GetFrameHeightWithSpacing() + QtUi::GetStyle().ItemSpacing.y;
             QtUi::BeginChild("ImportLog", UiVec2(0.0f, -footerHeight), true);
             {
-                std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                for (const std::string& line : gTextureImport.Log)
+                std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                for (const std::string& line : gAssetImport.Log)
                 {
                     const bool isError = line.size() >= 3 && line.substr(0, 3) == "ERR";
                     if (isError)
@@ -3704,17 +4386,28 @@ void RenderEditorMainMenu(
             }
             QtUi::EndChild();
 
+            // Cancel stops a video conversion mid-way and skips whatever is still queued;
+            // a texture or FBX already being processed finishes first.
+            QtUi::BeginDisabled(!running || gAssetImport.Cancel.load());
+            if (QtUi::Button("Cancel"))
+            {
+                gAssetImport.Cancel.store(true);
+            }
+            QtUi::EndDisabled();
+
+            QtUi::SameLine();
+
             // Only allow closing once the thread is done.
             QtUi::BeginDisabled(running);
             if (QtUi::Button("Close"))
             {
                 // Reset so the modal won't reopen next frame.
-                gTextureImport.Total.store(0);
-                gTextureImport.Done.store(0);
+                gAssetImport.Total.store(0);
+                gAssetImport.Done.store(0);
                 {
-                    std::lock_guard<std::mutex> lock(gTextureImport.LogMutex);
-                    gTextureImport.Log.clear();
-                    gTextureImport.CurrentFile.clear();
+                    std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                    gAssetImport.Log.clear();
+                    gAssetImport.CurrentFile.clear();
                 }
                 RefreshAssetBrowserState();
                 QtUi::CloseCurrentPopup();
@@ -3746,15 +4439,24 @@ void RenderEditorMainMenu(
             {
                 for (const AssetBrowserItem& item : items)
                 {
-                    const std::string itemLabel = std::string(item.IsDirectory ? "[Folder] " : "[File] ") + item.Name;
+                    const bool itemIsVideo = !item.IsDirectory && IsVideoAssetPath(item.RelativePath);
+                    const char* itemTag = item.IsDirectory ? "[Folder] " : (itemIsVideo ? "[Video] " : "[File] ");
+                    const std::string itemLabel = std::string(itemTag) + item.Name;
                     if (QtUi::Selectable(itemLabel.c_str(), gSelectedAssetRelativePath == item.RelativePath))
                     {
                         gSelectedAssetRelativePath = item.RelativePath;
                     }
 
-                    if (QtUi::IsItemHovered() && QtUi::IsMouseDoubleClicked(QtUiMouseButton_Left) && item.IsDirectory)
+                    if (QtUi::IsItemHovered() && QtUi::IsMouseDoubleClicked(QtUiMouseButton_Left))
                     {
-                        SelectFolder(item.RelativePath);
+                        if (item.IsDirectory)
+                        {
+                            SelectFolder(item.RelativePath);
+                        }
+                        else if (itemIsVideo)
+                        {
+                            OpenVideoInPlayer(item.RelativePath);
+                        }
                     }
 
                     if (QtUi::BeginPopupContextItem(item.RelativePath.c_str()))
@@ -3766,17 +4468,15 @@ void RenderEditorMainMenu(
                             SelectFolder(item.RelativePath);
                         }
 
-                        if (item.IsDirectory && QtUi::MenuItem("Import FBX Here..."))
+                        if (itemIsVideo && QtUi::MenuItem("Play Video"))
                         {
-                            SelectFolder(item.RelativePath);
-                            PromptForAndImportFbx(windowHandle, item.RelativePath);
-                            RefreshAssetBrowserState();
+                            OpenVideoInPlayer(item.RelativePath);
                         }
 
-                        if (item.IsDirectory && QtUi::MenuItem("Import Texture Here..."))
+                        if (item.IsDirectory && QtUi::MenuItem("Import Here..."))
                         {
                             SelectFolder(item.RelativePath);
-                            PromptForAndImportTexture(windowHandle, item.RelativePath);
+                            PromptForAndImportAssets(windowHandle, item.RelativePath);
                             RefreshAssetBrowserState();
                         }
 
@@ -3814,15 +4514,9 @@ void RenderEditorMainMenu(
 
             if (QtUi::BeginPopupContextWindow("AssetBrowserBackgroundContext", QtUiPopupFlags_NoOpenOverItems | QtUiPopupFlags_MouseButtonRight))
             {
-                if (QtUi::MenuItem("Import FBX Here..."))
+                if (QtUi::MenuItem("Import Here..."))
                 {
-                    PromptForAndImportFbx(windowHandle, gSelectedFolderRelativePath);
-                    RefreshAssetBrowserState();
-                }
-
-                if (QtUi::MenuItem("Import Texture Here..."))
-                {
-                    PromptForAndImportTexture(windowHandle, gSelectedFolderRelativePath);
+                    PromptForAndImportAssets(windowHandle, gSelectedFolderRelativePath);
                     RefreshAssetBrowserState();
                 }
 
@@ -3908,4 +4602,7 @@ void RenderEditorMainMenu(
         }
         QtUi::End();
     }
+
+    DrawBuildGameWindow();
+    DrawExtractPackageWindow();
 }

@@ -1,4 +1,6 @@
 #include "pch.h"
+#include "System/DataFiles.h"
+#include <filesystem>
 #include "ParticleRenderer.h"
 
 #include "LightStyles.h"
@@ -38,24 +40,9 @@ namespace
 
     std::wstring GetShaderDirectory()
     {
-        wchar_t modulePath[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-        std::wstring executablePath(modulePath);
-        const auto slash = executablePath.find_last_of(L"\\/");
-        std::wstring directory = (slash != std::wstring::npos) ? executablePath.substr(0, slash + 1) : L"";
-
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            const std::wstring candidate = directory + L"Data\\Shaders\\";
-            if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
-                return candidate;
-            const auto up = directory.find_last_of(L"\\/", directory.size() - 2);
-            if (up == std::wstring::npos)
-                break;
-            directory = directory.substr(0, up + 1);
-        }
-
-        return L"Data\\Shaders\\";
+        // The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        return dataDirectory.empty() ? std::wstring(L"Data\\Shaders\\") : (dataDirectory / L"Shaders").wstring() + L"\\";
     }
 
     // Resolves a Data-relative asset path ("Materials/Fire.json") to an absolute
@@ -66,27 +53,15 @@ namespace
             return {};
 
         std::filesystem::path candidate(relativePath);
-        if (candidate.is_absolute() && std::filesystem::exists(candidate))
+        if (candidate.is_absolute() && DataFiles::Exists(candidate))
             return candidate;
 
-        wchar_t modulePath[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-        std::filesystem::path directory = std::filesystem::path(modulePath).parent_path();
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        if (dataDirectory.empty())
+            return {};
 
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            const std::filesystem::path dataCandidate = directory / L"Data" / relativePath;
-            std::error_code error;
-            if (std::filesystem::exists(dataCandidate, error))
-                return dataCandidate;
-
-            const std::filesystem::path parent = directory.parent_path();
-            if (parent == directory)
-                break;
-            directory = parent;
-        }
-
-        return {};
+        const std::filesystem::path dataCandidate = dataDirectory / relativePath;
+        return DataFiles::Exists(dataCandidate) ? dataCandidate : std::filesystem::path();
     }
 
     ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, UINT64 size)
@@ -783,7 +758,7 @@ const ParticleRenderer::ResolvedMaterial& ParticleRenderer::ResolveMaterial(cons
     const std::filesystem::path absolutePath = ResolveDataRelativePath(dataRelativePath);
 
     std::error_code error;
-    const bool exists = !absolutePath.empty() && std::filesystem::exists(absolutePath, error);
+    const bool exists = !absolutePath.empty() && DataFiles::Exists(absolutePath);
     std::filesystem::file_time_type writeTime{};
     if (exists)
     {

@@ -1,0 +1,55 @@
+Ptero Engine session log
+Started 2026-09-24 18:58:35
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-24_18-58-35.txt
+----------------------------------------------------------------------
+[18:58:35.637] [INFO ] [Log         ] Logging to disk started.
+[18:58:35.637] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-24_18-58-35.txt
+[18:58:35.638] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[18:58:40.870] [INFO ] [CVar        ] 362 cvars registered. Type 'list' in the console to see them.
+[18:58:40.870] [INFO ] [Renderer    ] Renderer initialized.
+[18:58:41.111] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[18:59:50.685] [ERROR] [Watchdog    ] Render thread has not completed frame 11112 for 5.1 s. Everything above this line is what it did last.
+[18:59:50.894] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserMsgWaitForMultipleObjectsEx
+    #1  QEventDispatcherWin32::processEvents
+    #2  QWindowsGuiEventDispatcher::processEvents
+    #3  QEventLoop::exec
+    #4  QDialog::exec
+    #5  QtUi::fileDialog  (QtUi.cpp:1113)
+    #6  QtUi::OpenFileName  (QtUi.cpp:1141)
+    #7  `anonymous namespace'::PromptForSceneOpenPath  (Editor.cpp:84)
+    #8  Editor::OpenScene  (Editor.cpp:1021)
+    #9  RenderEditorMainMenu  (EditorMainMenu.cpp:1956)
+    #10  RendererDX12_Render  (DX12RendererAPI.cpp:2066)
+    #11  wWinMain  (EditorMain.cpp:293)
+    #12  __scrt_common_main_seh  (exe_common.inl:288)
+    #13  BaseThreadInitThunk
+    #14  RtlUserThreadStart
+[18:59:52.410] [WARN ] [Watchdog    ] Render thread recovered after 6.8 s; resumed at frame 11113.
+[19:03:58.426] [ERROR] [Watchdog    ] Render thread has not completed frame 45610 for 5.1 s. Everything above this line is what it did last.
+[19:03:58.435] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserMsgWaitForMultipleObjectsEx
+    #1  0x7fff286c8dae
+    #2  MapVirtualKeyW
+    #3  KiUserCallbackDispatcher
+    #4  NtUserWaitMessage
+    #5  DialogBoxIndirectParamAorW
+    #6  DialogBoxIndirectParamAorW
+    #7  DialogBoxIndirectParamAorW
+    #8  DialogBoxIndirectParamW
+    #9  PrintDlgW
+    #10  DllCanUnloadNow
+    #11  PrintDlgW
+    #12  PrintDlgW
+    #13  PrintDlgW
+    #14  Ssync_ANSI_UNICODE_Struct_For_WOW
+    #15  Ssync_ANSI_UNICODE_Struct_For_WOW
+    #16  `anonymous namespace'::ShowOpenFileDialog  (MaterialEditor.cpp:320)
+    #17  MaterialEditor::OpenMaterialWithDialog  (MaterialEditor.cpp:569)
+    #18  RenderEditorMainMenu  (EditorMainMenu.cpp:3740)
+    #19  RendererDX12_Render  (DX12RendererAPI.cpp:2066)
+    #20  wWinMain  (EditorMain.cpp:293)
+    #21  __scrt_common_main_seh  (exe_common.inl:288)
+    #22  BaseThreadInitThunk
+    #23  RtlUserThreadStart
+[19:04:00.988] [WARN ] [Watchdog    ] Render thread recovered after 7.6 s; resumed at frame 45629.

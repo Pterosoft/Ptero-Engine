@@ -1,0 +1,27 @@
+Ptero Engine session log
+Started 2026-09-24 17:16:23
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-24_17-16-23.txt
+----------------------------------------------------------------------
+[17:16:23.281] [INFO ] [Log         ] Logging to disk started.
+[17:16:23.281] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-24_17-16-23.txt
+[17:16:23.281] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[17:16:28.453] [INFO ] [CVar        ] 362 cvars registered. Type 'list' in the console to see them.
+[17:16:28.453] [INFO ] [Renderer    ] Renderer initialized.
+[17:16:28.677] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[17:16:28.959] [INFO ] [Game        ] Saved player settings: Settings applied.
+[17:16:28.960] [DEBUG] [Renderer    ] Attempting mesh load for entity='Sponza', meshPath='Geometry/Sponza_Simple/Sponza.fbx.ptero', materialPath='Geometry/Sponza_Simple/Sponza.json'
+[17:16:29.106] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Sponza', vertices=786615, indices=786615, subMeshes=25
+[17:16:29.114] [INFO ] [Meshes      ] Shadow-pass constant buffer grown to 17 slots x 3 frames.
+[17:16:29.121] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2f1c00000..0x2f4002250 (37757520 bytes), releasing in 4 frames (frame 1).
+[17:16:29.122] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f4510000..0x2f48102dc (3146460 bytes), releasing in 4 frames (frame 1).
+[17:16:29.122] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=786615, indexCount=786615, vbBytes=37757520, ibBytes=3146460
+[17:16:29.128] [INFO ] [Meshes      ] Entity constant buffer grown to 17 slots x 3 frames (13056 bytes).
+[17:16:29.129] [INFO ] [Meshes      ] Material constant buffer grown to 89 draws x 3 frames.
+[17:16:29.129] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Sponza', lodIndex=0, vertexCount=786615, indexCount=786615, materialPath='Geometry/Sponza_Simple/Sponza.json', subMeshCount=25, draw[0]={materialId=0,indexStart=0,indexCount=17628}, draw[1]={materialId=1,indexStart=17628,indexCount=21264}, draw[2]={materialId=2,indexStart=38892,indexCount=63}, draw[3]={materialId=3,indexStart=38955,indexCount=8448}, draw[4]={materialId=4,indexStart=47403,indexCount=69624}, draw[5]={materialId=5,indexStart=117027,indexCount=54}, draw[6]={materialId=6,indexStart=117081,indexCount=94308}, draw[7]={materialId=7,indexStart=211389,indexCount=49500}, additionalSubMeshes=17, summedSubMeshIndices=786615, validSubMeshRanges=true
+[17:16:30.016] [INFO ] [FSR         ] Frame generation swap chain installed.
+[17:16:30.066] [INFO ] [FSR         ] Frame generation context created (3.1.6) for 1920x1080.
+[17:16:30.128] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2f1c00000..0x2f4002250 (frame 5).
+[17:16:30.129] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f4510000..0x2f48102dc (frame 5).
+[17:16:30.216] [INFO ] [Game        ] Level warmed up in 1.1 s; starting the intro.
+[17:16:30.239] [INFO ] [Game        ] Intro: playing Videos/logo_pterosoft.
+[17:16:37.380] [INFO ] [Game        ] Intro: playing Videos/logo_engine.

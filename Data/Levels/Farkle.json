@@ -174,13 +174,13 @@
         "Threshold": 0.8999999761581421
     },
     "CameraPosition": {
-        "X": 12.429234504699707,
-        "Y": -22.114471435546875,
-        "Z": 12.933667182922363
+        "X": 13.308566093444824,
+        "Y": -23.652101516723633,
+        "Z": 12.47501277923584
     },
     "CameraRotation": {
-        "X": -0.2807946801185608,
-        "Y": 18.14004135131836,
+        "X": -0.22579464316368103,
+        "Y": 18.170000076293945,
         "Z": 0.0
     },
     "ChromaticAberrationSettings": {
@@ -197,6 +197,7 @@
     },
     "Entities": [
         {
+            "Id": 370593817923063,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -225,6 +226,7 @@
             }
         },
         {
+            "Id": 7815887288445492,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -253,6 +255,7 @@
             }
         },
         {
+            "Id": 7743935554753513,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -281,6 +284,7 @@
             }
         },
         {
+            "Id": 7300266388386119,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -309,6 +313,7 @@
             }
         },
         {
+            "Id": 4807682905266293,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -337,6 +342,7 @@
             }
         },
         {
+            "Id": 1145722455733238,
             "NameComponent": {
                 "Name": "ParticleSystem_22"
             },
@@ -447,6 +453,7 @@
             }
         },
         {
+            "Id": 2438860807210395,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -475,6 +482,7 @@
             }
         },
         {
+            "Id": 525437895474264,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -503,6 +511,7 @@
             }
         },
         {
+            "Id": 416729030533617,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -531,6 +540,7 @@
             }
         },
         {
+            "Id": 1765946022898312,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -559,6 +569,7 @@
             }
         },
         {
+            "Id": 4030415212739476,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -587,6 +598,7 @@
             }
         },
         {
+            "Id": 5841550090741386,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -615,6 +627,7 @@
             }
         },
         {
+            "Id": 6615750525131110,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -643,6 +656,7 @@
             }
         },
         {
+            "Id": 4192021119821491,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -671,6 +685,7 @@
             }
         },
         {
+            "Id": 495575499991351,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -699,6 +714,7 @@
             }
         },
         {
+            "Id": 5605037238486023,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -727,6 +743,7 @@
             }
         },
         {
+            "Id": 3188119437294368,
             "NameComponent": {
                 "Name": "RectLight_35"
             },
@@ -775,6 +792,7 @@
             }
         },
         {
+            "Id": 6336327831780386,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -803,6 +821,7 @@
             }
         },
         {
+            "Id": 646409433586632,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -831,6 +850,7 @@
             }
         },
         {
+            "Id": 7803057373789259,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -859,6 +879,7 @@
             }
         },
         {
+            "Id": 1092616832890673,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -887,6 +908,7 @@
             }
         },
         {
+            "Id": 7360474962432381,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -915,6 +937,7 @@
             }
         },
         {
+            "Id": 5006815505204254,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -947,6 +970,7 @@
                 "AutoPlay": true,
                 "EventPath": "event:/Ambient/Fireplace"
             },
+            "Id": 151607953334120,
             "NameComponent": {
                 "Name": "AudioEmitter_43"
             },
@@ -973,6 +997,7 @@
                 "AutoPlay": true,
                 "EventPath": "event:/Ambient/PubAmbient"
             },
+            "Id": 2974434939536136,
             "NameComponent": {
                 "Name": "AudioEmitter_44"
             },
@@ -995,6 +1020,7 @@
             }
         },
         {
+            "Id": 73565497162253,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1023,6 +1049,7 @@
             }
         },
         {
+            "Id": 501097327896611,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1051,6 +1078,7 @@
             }
         },
         {
+            "Id": 3028351319756266,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1079,6 +1107,7 @@
             }
         },
         {
+            "Id": 3564456762352143,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1107,6 +1136,7 @@
             }
         },
         {
+            "Id": 6498196904479070,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1135,6 +1165,7 @@
             }
         },
         {
+            "Id": 1420456903396062,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1163,6 +1194,7 @@
             }
         },
         {
+            "Id": 3866746315272766,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1191,6 +1223,7 @@
             }
         },
         {
+            "Id": 5025535047256441,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1219,6 +1252,7 @@
             }
         },
         {
+            "Id": 4226122394355922,
             "MeshComponent": {
                 "DebugForcedLod": 0,
                 "LodUsageScale": 1.0,
@@ -1247,6 +1281,7 @@
             }
         },
         {
+            "Id": 8150144637625040,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1275,6 +1310,7 @@
             }
         },
         {
+            "Id": 6637574186438542,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1303,6 +1339,7 @@
             }
         },
         {
+            "Id": 896213760108602,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1331,6 +1368,7 @@
             }
         },
         {
+            "Id": 8730251788680713,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1359,6 +1397,7 @@
             }
         },
         {
+            "Id": 5057898500716774,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1387,6 +1426,7 @@
             }
         },
         {
+            "Id": 3752600710970391,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1415,6 +1455,7 @@
             }
         },
         {
+            "Id": 4239137124299052,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1443,6 +1484,7 @@
             }
         },
         {
+            "Id": 7962050737324293,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1471,6 +1513,7 @@
             }
         },
         {
+            "Id": 6804232411400092,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1499,6 +1542,7 @@
             }
         },
         {
+            "Id": 2763754992933374,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -1588,20 +1632,20 @@
         "DepthThreshold": 0.10000000149011612,
         "Enabled": true,
         "GiIntensity": 1.0,
-        "MaxBounces": 1,
+        "MaxBounces": 2,
         "MaxHistoryLength": 10,
         "NextEventEstimation": true,
         "NormalThreshold": 0.5,
         "NrdAtrousIterations": 5,
         "NrdDisocclusionThreshold": 0.20000000298023224,
-        "NrdMaxAccumulationTime": 0.20000000298023224,
+        "NrdMaxAccumulationTime": 0.6686800122261047,
         "NrdSharpenAmount": 0.3499999940395355,
         "RadianceClamp": 10.199999809265137,
         "RaysPerPixel": 1,
         "SpatialRadius": 20.0,
         "SpatialReuseEnabled": false,
         "SpatialSamples": 4,
-        "SpecularEnabled": true,
+        "SpecularEnabled": false,
         "SpecularIntensity": 0.10000000149011612,
         "SpecularRoughnessThreshold": 0.6000000238418579,
         "TemporalReuseEnabled": false,
@@ -1624,15 +1668,33 @@
     "SsrSettings": {
         "DebugView": 0,
         "EdgeFadeStart": 0.8500000238418579,
-        "Enabled": false,
+        "Enabled": true,
         "Intensity": 1.0,
         "MaxDistance": 60.0,
         "MaxRoughness": 0.6000000238418579,
         "MaxSteps": 48,
         "RefineSteps": 6,
+        "SssrDepthThickness": 0.014999999664723873,
+        "SssrMaxTraversalIntersections": 128,
+        "SssrMinTraversalOccupancy": 4,
+        "SssrMostDetailedMip": 0,
+        "SssrSamplesPerQuad": 1,
+        "SssrTemporalStability": 0.699999988079071,
+        "SssrTemporalVarianceGuidedTracing": true,
+        "SssrTemporalVarianceThreshold": 0.0,
         "StepGrowth": 1.0499999523162842,
         "StepSize": 0.25,
+        "Technique": 0,
         "Thickness": 0.5
+    },
+    "SubsurfaceSettings": {
+        "Enabled": false,
+        "FollowSurface": true,
+        "Mode": 0,
+        "Quality": 1,
+        "RtSamples": 12,
+        "Transmission": true,
+        "TransmissionIntensity": 1.0
     },
     "TaaSettings": {
         "BlendFactor": 0.20000000298023224,
@@ -1713,14 +1775,14 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.03999999910593033,
-        "DepthSlices": 64,
+        "Density": 0.009999999776482582,
+        "DepthSlices": 128,
         "EmissiveColorB": 1.0,
         "EmissiveColorG": 1.0,
         "EmissiveColorR": 1.0,
         "EmissiveIntensity": 0.0,
         "Enabled": true,
-        "FroxelTileSize": 8,
+        "FroxelTileSize": 16,
         "GiIntensity": 1.0,
         "HeightFalloff": 0.0,
         "MaxDistance": 100.0,

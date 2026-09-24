@@ -44,6 +44,9 @@ public:
 
     // GPU handle of the shadow depth SRV — bind this at t1 in the main pass.
     D3D12_GPU_DESCRIPTOR_HANDLE GetShadowSrvGpuHandle() const { return mShadowSrvGpu; }
+    // The depth texture itself, for passes that read it outside the pixel stage and have
+    // to transition it (it rests in PIXEL_SHADER_RESOURCE between frames).
+    ID3D12Resource* GetShadowTexture() const { return mShadowDepthTexture.Get(); }
 
     // Light-space view-projection computed during the last BeginShadowPass().
     // Pre-transposed (row-major) so the shader receives it in column-major order.

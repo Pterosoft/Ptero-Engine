@@ -1,0 +1,10 @@
+﻿  main.cpp
+  PackageFormat.cpp
+  lz4.c
+  lz4hc.c
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+K:\Ptero-Engine\Source\Ptero-Engine\GameLauncher\main.cpp(412): warning C4715: 'wWinMain': not all control paths return a value
+  All 962 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  GameLauncher.vcxproj -> K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\GameLauncherTemplate.exe

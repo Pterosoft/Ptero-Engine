@@ -61,6 +61,11 @@ constexpr const char* kVariableMime = "application/x-ptero-variable";
 // palette and the node menu alongside real types, so they need an id to be dragged under.
 constexpr const char* kCommentTypeId = "__comment";
 
+// The open level's entities and the editor's selection, supplied through
+// NodeGraphEditor::SetEntitySource. Either may be empty before the editor has set them.
+std::function<std::vector<NodeGraphEntityInfo>()> gListEntities;
+std::function<std::uint64_t()> gSelectedEntity;
+
 // Everything the delegate models need but do not own. One instance lives in the window.
 struct GraphContext
 {
@@ -85,6 +90,16 @@ QColor CategoryColor(const char* category)
         return QColor(0x40, 0x2a, 0x5a);
     if (name == "Game")
         return QColor(0x4a, 0x37, 0x14);
+    if (name == "Video")
+        return QColor(0x14, 0x45, 0x4a);
+    if (name == "Entity")
+        return QColor(0x1a, 0x33, 0x55);
+    if (name == "Camera")
+        return QColor(0x2e, 0x2a, 0x52);
+    if (name == "Audio")
+        return QColor(0x4a, 0x1f, 0x3d);
+    if (name == "Input")
+        return QColor(0x3a, 0x3f, 0x1c);
     if (name == "Math" || name == "Logic")
         return QColor(0x1d, 0x3f, 0x35);
     return QColor(0x2b, 0x2d, 0x31);
@@ -142,6 +157,131 @@ std::string NormalisedDefault(const std::string& text, NodeGraphVariableType typ
 {
     return NodeGraphValue::Parse(text, type).AsString();
 }
+
+// ---------------------------------------------------------------------------------------
+// Entity picker
+// ---------------------------------------------------------------------------------------
+
+// Picks a level entity for an Entity parameter. The value is the entity's id in decimal;
+// the list shows names. It is rebuilt every time it drops down, so it always reflects the
+// level as it is now, and the button next to it takes whatever is selected in the
+// Outliner or the viewport - the quickest way to point at one entity among hundreds.
+class EntityPicker : public QWidget
+{
+public:
+    explicit EntityPicker(QWidget* parent, std::function<void(const QString&)> onChosen)
+        : QWidget(parent)
+        , mOnChosen(std::move(onChosen))
+    {
+        auto* row = new QHBoxLayout(this);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(2);
+
+        mCombo = new Combo(this);
+        mCombo->setMinimumWidth(130);
+        mCombo->setMaxVisibleItems(24);
+        mCombo->BeforePopup = [this] { Rebuild(); };
+        row->addWidget(mCombo, 1);
+
+        auto* useSelection = new QToolButton(this);
+        useSelection->setText(QStringLiteral("◎"));
+        useSelection->setToolTip(QStringLiteral("Use the entity selected in the level"));
+        row->addWidget(useSelection);
+
+        QObject::connect(mCombo, &QComboBox::activated, this, [this](int index) {
+            // No rebuild here: the list is current (it was rebuilt as it opened), and
+            // clearing a combo from inside its own activated signal is asking for trouble.
+            Choose(mCombo->itemData(index).toString());
+            mCombo->setToolTip(mValue.isEmpty() ? QString() : QStringLiteral("Entity id %1").arg(mValue));
+        });
+        QObject::connect(useSelection, &QToolButton::clicked, this, [this] {
+            const std::uint64_t selected = gSelectedEntity ? gSelectedEntity() : 0;
+            if (selected == 0)
+            {
+                QToolTip::showText(QCursor::pos(), QStringLiteral("Select an entity in the level first."));
+                return;
+            }
+
+            Choose(QString::number(selected));
+            Rebuild();
+        });
+    }
+
+    // Shows a stored value without reporting it as an edit.
+    void SetValue(const QString& value)
+    {
+        mValue = value;
+        Rebuild();
+    }
+
+    void Rebuild()
+    {
+        const QSignalBlocker blocker(mCombo);
+        mCombo->clear();
+        mCombo->addItem(QStringLiteral("(none)"), QString());
+
+        std::vector<NodeGraphEntityInfo> entities;
+        if (gListEntities)
+        {
+            entities = gListEntities();
+        }
+
+        std::stable_sort(entities.begin(), entities.end(), [](const auto& a, const auto& b) {
+            return QString::fromStdString(a.Name).compare(QString::fromStdString(b.Name), Qt::CaseInsensitive) < 0;
+        });
+
+        int current = mValue.isEmpty() ? 0 : -1;
+        for (const NodeGraphEntityInfo& entity : entities)
+        {
+            const QString id = QString::number(entity.Id);
+            mCombo->addItem(QString::fromStdString(entity.Name), id);
+            mCombo->setItemData(mCombo->count() - 1, QStringLiteral("Entity id %1").arg(id), Qt::ToolTipRole);
+            if (id == mValue)
+            {
+                current = mCombo->count() - 1;
+            }
+        }
+
+        if (current < 0)
+        {
+            // Keep a reference to a deleted entity visible rather than silently clearing
+            // it: the graph still points there, and the log will say so at runtime.
+            mCombo->addItem(QStringLiteral("<missing %1>").arg(mValue), mValue);
+            current = mCombo->count() - 1;
+        }
+
+        mCombo->setCurrentIndex(current);
+        mCombo->setToolTip(mValue.isEmpty() ? QString() : QStringLiteral("Entity id %1").arg(mValue));
+    }
+
+private:
+    // showPopup is virtual, so overriding it needs no Q_OBJECT.
+    class Combo : public QComboBox
+    {
+    public:
+        using QComboBox::QComboBox;
+        std::function<void()> BeforePopup;
+
+        void showPopup() override
+        {
+            if (BeforePopup)
+            {
+                BeforePopup();
+            }
+            QComboBox::showPopup();
+        }
+    };
+
+    void Choose(const QString& value)
+    {
+        mValue = value;
+        mOnChosen(value);
+    }
+
+    Combo* mCombo = nullptr;
+    QString mValue;
+    std::function<void(const QString&)> mOnChosen;
+};
 
 // ---------------------------------------------------------------------------------------
 // Delegate model
@@ -309,6 +449,18 @@ public:
         }
     }
 
+    // Re-reads entity names, so a rename in the level shows on nodes already placed.
+    void RefreshEntityPickers()
+    {
+        for (const auto& [key, editor] : mEditors)
+        {
+            if (auto* picker = dynamic_cast<EntityPicker*>(editor))
+            {
+                picker->Rebuild();
+            }
+        }
+    }
+
 private:
     const NodeGraphPin* PinAt(PortType portType, PortIndex portIndex) const
     {
@@ -427,6 +579,15 @@ private:
                 editor = combo;
                 break;
             }
+            case NodeParamKind::Entity:
+            {
+                auto* picker = new EntityPicker(mWidget, [this, key](const QString& value) {
+                    RecordEdit(key, value);
+                });
+                picker->SetValue(mParams.value(key));
+                editor = picker;
+                break;
+            }
             case NodeParamKind::String:
             default:
             {
@@ -453,7 +614,12 @@ private:
             const QString value = mParams.value(key);
             const QSignalBlocker blocker(editor);
 
-            if (auto* check = qobject_cast<QCheckBox*>(editor))
+            // dynamic_cast: EntityPicker has no Q_OBJECT, so qobject_cast cannot see it.
+            if (auto* picker = dynamic_cast<EntityPicker*>(editor))
+            {
+                picker->SetValue(value);
+            }
+            else if (auto* check = qobject_cast<QCheckBox*>(editor))
             {
                 check->setChecked(value == "true");
             }
@@ -1306,6 +1472,17 @@ public:
     }
 
     // ---- document ----------------------------------------------------------------
+
+    void RefreshEntityPickers()
+    {
+        for (const NodeId nodeId : mModel->allNodeIds())
+        {
+            if (auto* delegate = mModel->delegateModel<PteroNodeDelegate>(nodeId))
+            {
+                delegate->RefreshEntityPickers();
+            }
+        }
+    }
 
     void SetDocument(const NodeGraphDocument& document)
     {
@@ -2247,6 +2424,8 @@ void Show()
         return;
     }
 
+    // Entities may have been renamed while the window was closed.
+    window->RefreshEntityPickers();
     window->show();
     window->raise();
     window->activateWindow();
@@ -2299,5 +2478,18 @@ unsigned Revision()
 const std::string& ExportPath()
 {
     return gExportPath;
+}
+
+void SetEntitySource(
+    std::function<std::vector<NodeGraphEntityInfo>()> listEntities,
+    std::function<std::uint64_t()> selectedEntity)
+{
+    gListEntities = std::move(listEntities);
+    gSelectedEntity = std::move(selectedEntity);
+
+    if (gWindow != nullptr)
+    {
+        gWindow->RefreshEntityPickers();
+    }
 }
 } // namespace NodeGraphEditor

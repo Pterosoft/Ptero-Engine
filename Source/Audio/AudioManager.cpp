@@ -5,6 +5,8 @@
 #include "fmod.hpp"
 #include "fmod_errors.h"
 
+#include "System/DataFiles.h"
+
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -192,6 +194,7 @@ bool AudioManager::PlayEventByPath(const std::string& eventPath)
         inst->set3DAttributes(&attributes);
     }
 
+    inst->setVolume(m_soundVolume);
     result = inst->start();
     inst->release();
     return result == FMOD_OK;
@@ -264,6 +267,7 @@ bool AudioManager::PlayOneShotByName(const std::string& nameOrPath)
 
     PlaceAtListener(inst);
 
+    inst->setVolume(m_soundVolume);
     const FMOD_RESULT result = inst->start();
     inst->release();
     return result == FMOD_OK;
@@ -290,6 +294,7 @@ bool AudioManager::PlayMusicByName(const std::string& nameOrPath)
 
     // Only swap the channel once the replacement is actually running, so a failed
     // start leaves the current track playing instead of silence.
+    inst->setVolume(m_musicVolume);
     if (inst->start() != FMOD_OK)
     {
         inst->release();
@@ -326,6 +331,29 @@ void AudioManager::StopMusic()
     m_musicInstance = nullptr;
 }
 
+void AudioManager::SetVolumes(float overall, float sound, float music)
+{
+    m_overallVolume = std::clamp(overall, 0.0f, 1.0f);
+    m_soundVolume = std::clamp(sound, 0.0f, 1.0f);
+    m_musicVolume = std::clamp(music, 0.0f, 1.0f);
+    if (!m_initialized)
+        return;
+
+    FMOD::Studio::Bus* masterBus = nullptr;
+    if (m_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
+        masterBus->setVolume(m_overallVolume);
+    if (m_musicInstance)
+        m_musicInstance->setVolume(m_musicVolume);
+    // Instances started from here on pick the level up as they start; these are the
+    // long-lived ones already playing. Fire-and-forget one-shots are too short to matter.
+    for (FMOD::Studio::EventInstance* instance : m_instances)
+        if (instance && instance->isValid())
+            instance->setVolume(m_soundVolume);
+    for (const EmitterState& emitter : m_emitters)
+        if (auto* instance = static_cast<FMOD::Studio::EventInstance*>(emitter.Instance); instance && instance->isValid())
+            instance->setVolume(m_soundVolume);
+}
+
 // ---------------------------------------------------------------------------
 AudioManager::AudioManager() = default;
 AudioManager::~AudioManager()
@@ -336,24 +364,20 @@ AudioManager::~AudioManager()
 // ---------------------------------------------------------------------------
 std::filesystem::path AudioManager::ResolveAudioDataPath()
 {
-    wchar_t exePath[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(std::size(exePath))) == 0)
+    // The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+    const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+    if (dataDirectory.empty())
         return {};
 
-    std::filesystem::path current = std::filesystem::path(exePath).parent_path();
-    while (!current.empty())
-    {
-        const std::filesystem::path candidate = current / L"Data" / L"Audio";
-        std::error_code ec;
-        if (std::filesystem::is_directory(candidate, ec))
-            return std::filesystem::weakly_canonical(candidate);
+    const std::filesystem::path audioDirectory = dataDirectory / L"Audio";
+    if (!DataFiles::IsDirectory(audioDirectory))
+        return {};
+    if (DataFiles::IsPackaged())
+        return audioDirectory;
 
-        const std::filesystem::path parent = current.parent_path();
-        if (parent == current)
-            break;
-        current = parent;
-    }
-    return {};
+    std::error_code ec;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(audioDirectory, ec);
+    return ec ? audioDirectory : canonical;
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +435,7 @@ bool AudioManager::Initialize(std::string& outError)
     {
         masterBus->setMute(false);
         masterBus->setPaused(false);
-        masterBus->setVolume(1.0f);
+        masterBus->setVolume(m_overallVolume);
     }
 
     const FMOD_3D_ATTRIBUTES defaultListenerAttributes = Make3DAttributes(
@@ -430,13 +454,9 @@ bool AudioManager::Initialize(std::string& outError)
     m_audioDataPath = ResolveAudioDataPath();
     if (!m_audioDataPath.empty())
     {
-        std::error_code ec;
         std::vector<std::filesystem::path> bankPaths;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(m_audioDataPath, ec))
+        for (const std::filesystem::path& p : DataFiles::ListFiles(m_audioDataPath, true))
         {
-            if (ec) break;
-            if (!entry.is_regular_file()) continue;
-            const auto& p = entry.path();
             if (_wcsicmp(p.extension().c_str(), L".bank") != 0) continue;
 
             bankPaths.push_back(p);
@@ -455,16 +475,31 @@ bool AudioManager::Initialize(std::string& outError)
 
         for (const auto& p : bankPaths)
         {
-            std::error_code relativeError;
-            const std::filesystem::path relativePath = std::filesystem::relative(p, m_audioDataPath, relativeError);
-            const std::string displayPath = relativeError ? p.string() : relativePath.string();
+            const std::filesystem::path relativePath = p.lexically_relative(m_audioDataPath);
+            const std::string displayPath = relativePath.empty() ? p.string() : relativePath.string();
             const std::wstring fileName = p.filename().wstring();
             const bool isStringsBank = fileName.find(L".strings.bank") != std::wstring::npos;
 
             FMOD::Studio::Bank* bank = nullptr;
-            const std::string pathUtf8 = p.string();
-            FMOD_RESULT loadResult = m_studioSystem->loadBankFile(
-                pathUtf8.c_str(), FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+            FMOD_RESULT loadResult = FMOD_ERR_FILE_NOTFOUND;
+            if (DataFiles::IsPackaged())
+            {
+                // Packaged banks exist only inside Audio.ppak. LOAD_MEMORY makes FMOD
+                // take its own copy, so the decrypted bytes can go as soon as it returns.
+                std::vector<std::uint8_t> bankBytes;
+                if (DataFiles::ReadBytes(p, bankBytes) && !bankBytes.empty())
+                {
+                    loadResult = m_studioSystem->loadBankMemory(
+                        reinterpret_cast<const char*>(bankBytes.data()), static_cast<int>(bankBytes.size()),
+                        FMOD_STUDIO_LOAD_MEMORY, FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+                }
+            }
+            else
+            {
+                const std::string pathUtf8 = p.string();
+                loadResult = m_studioSystem->loadBankFile(
+                    pathUtf8.c_str(), FMOD_STUDIO_LOAD_BANK_NORMAL, &bank);
+            }
             if (loadResult == FMOD_OK && bank != nullptr)
             {
                 m_banks.push_back(bank);
@@ -646,6 +681,7 @@ bool AudioManager::PlayEvent(int index)
         inst->set3DAttributes(&attributes);
     }
 
+    inst->setVolume(m_soundVolume);
     result = inst->start();
     if (result != FMOD_OK)
     {
@@ -840,6 +876,7 @@ bool AudioManager::PlayEmitter(EmitterHandle handle)
         1.0f);
     instance->set3DAttributes(&attributes);
 
+    instance->setVolume(m_soundVolume);
     const FMOD_RESULT result = instance->start();
     emitter.Instance = instance;
     emitter.Playing = (result == FMOD_OK);

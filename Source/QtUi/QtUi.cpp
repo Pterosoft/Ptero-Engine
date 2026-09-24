@@ -199,6 +199,10 @@ bool standaloneGame = false;
 bool gameFullscreen = false;
 WINDOWPLACEMENT gamePlacement{sizeof(WINDOWPLACEMENT)};
 LONG_PTR gameWindowStyle = 0;
+// Set while the standalone game has switched the monitor's display mode, so it can be
+// put back. CDS_FULLSCREEN also makes Windows restore it if the process dies first.
+bool gameDisplayChanged = false;
+wchar_t gameDisplayDevice[CCHDEVICENAME]{};
 bool gameCloseRequested = false;
 bool gameFullscreenRequested = false;
 bool playWindowActive = false;
@@ -710,6 +714,8 @@ namespace QtUi
 bool Initialize(HWND owner, bool persistLayout)
 {
     host = owner;
+    // A packaged game never reaches this file: its renderer is built with QtUiHeadless.cpp
+    // instead (PteroGameRuntime). Standalone here means Editor.exe --game, which has Qt.
     saveLayout = persistLayout && !standaloneGame;
     frame = 0;
     if (!qApp)
@@ -812,8 +818,42 @@ bool Initialize(HWND owner, bool persistLayout)
     lastTime = 0;
     return true;
 }
+void RestoreGameDisplay()
+{
+    if (!gameDisplayChanged) return;
+    ChangeDisplaySettingsExW(gameDisplayDevice, nullptr, nullptr, 0, nullptr);
+    gameDisplayChanged = false;
+}
+// Standalone host window only: borderless over its whole monitor, remembering the
+// windowed style and placement to come back to.
+bool CoverGameMonitor()
+{
+    MONITORINFO monitor{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(MonitorFromWindow(host, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+    if (!gameFullscreen) {
+        gameWindowStyle = GetWindowLongPtrW(host, GWL_STYLE);
+        GetWindowPlacement(host, &gamePlacement);
+    }
+    SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle & ~WS_OVERLAPPEDWINDOW);
+    SetWindowPos(host, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+        monitor.rcMonitor.right-monitor.rcMonitor.left, monitor.rcMonitor.bottom-monitor.rcMonitor.top,
+        SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+    gameFullscreen = true;
+    return true;
+}
+void UncoverGameMonitor()
+{
+    RestoreGameDisplay();
+    if (!gameFullscreen) return;
+    SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle);
+    SetWindowPlacement(host, &gamePlacement);
+    SetWindowPos(host, nullptr, 0, 0, 0, 0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    gameFullscreen = false;
+}
 void Shutdown()
 {
+    RestoreGameDisplay();
     delete playWindow; playWindow=nullptr; playSurface=nullptr; playWindowActive=false;
     viewportGame=false;
     if (shell && saveLayout)
@@ -950,7 +990,7 @@ void OpenGameWindow(bool separateWindow, const char *title)
 }
 void CloseGameWindow()
 {
-    if (standaloneGame) { if (host) PostMessageW(host, WM_CLOSE, 0, 0); return; }
+    if (standaloneGame) { RestoreGameDisplay(); if (host) PostMessageW(host, WM_CLOSE, 0, 0); return; }
     viewportGame=false; gameFullscreenRequested=false;
     if (!playWindowActive) return;
     playWindowActive=false; gameCloseRequested=false;
@@ -968,22 +1008,64 @@ void ToggleGameFullscreen()
         return;
     }
     if (!standaloneGame || !host) return;
-    if (!gameFullscreen) {
-        gameWindowStyle = GetWindowLongPtrW(host, GWL_STYLE);
-        GetWindowPlacement(host, &gamePlacement);
-        MONITORINFO monitor{sizeof(MONITORINFO)};
-        if (!GetMonitorInfoW(MonitorFromWindow(host, MONITOR_DEFAULTTONEAREST), &monitor)) return;
-        SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle & ~WS_OVERLAPPEDWINDOW);
-        SetWindowPos(host, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
-            monitor.rcMonitor.right-monitor.rcMonitor.left, monitor.rcMonitor.bottom-monitor.rcMonitor.top,
-            SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
-    } else {
-        SetWindowLongPtrW(host, GWL_STYLE, gameWindowStyle);
-        SetWindowPlacement(host, &gamePlacement);
-        SetWindowPos(host, nullptr, 0, 0, 0, 0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    // F11 is a quick toggle, not a setting: out of fullscreen (also undoing a display
+    // mode switch) to the window, or from the window to borderless.
+    if (gameFullscreen) UncoverGameMonitor();
+    else CoverGameMonitor();
+}
+bool SetGameDisplayMode(int mode, unsigned width, unsigned height)
+{
+    if (viewportGame) return mode == 1; // the editor owns the viewport's window
+    if (playWindowActive) {
+        // The editor's Play window stands in for the game window; it never changes the
+        // monitor's mode, so fullscreen here is borderless.
+        if (mode == 0) {
+            playWindow->showNormal();
+            const qreal scale = playWindow->devicePixelRatioF();
+            playWindow->resize(int(width / scale), int(height / scale));
+        } else {
+            playWindow->showFullScreen();
+        }
+        return mode != 2;
     }
-    gameFullscreen = !gameFullscreen;
+    if (!standaloneGame || !host) return false;
+    if (mode == 1) { RestoreGameDisplay(); return CoverGameMonitor(); }
+    if (mode == 2) {
+        MONITORINFOEXW monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromWindow(host, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+        DEVMODEW display{};
+        display.dmSize = sizeof(display);
+        display.dmPelsWidth = width;
+        display.dmPelsHeight = height;
+        display.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        if (ChangeDisplaySettingsExW(monitor.szDevice, &display, nullptr, CDS_FULLSCREEN, nullptr) != DISP_CHANGE_SUCCESSFUL) {
+            // Leave the player with a usable screen rather than whatever was there.
+            RestoreGameDisplay();
+            CoverGameMonitor();
+            return false;
+        }
+        wcscpy_s(gameDisplayDevice, monitor.szDevice);
+        gameDisplayChanged = true;
+        // The monitor's rectangle has changed with its mode, so cover it afresh.
+        return CoverGameMonitor();
+    }
+    UncoverGameMonitor();
+    ShowWindow(host, SW_RESTORE);
+    MONITORINFO monitor{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(MonitorFromWindow(host, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(host, GWL_STYLE));
+    const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(host, GWL_EXSTYLE));
+    RECT frame{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    AdjustWindowRectEx(&frame, style, GetMenu(host) != nullptr, exStyle);
+    const RECT& work = monitor.rcWork;
+    // A window larger than the desktop cannot show its client area, so shrink to fit.
+    const int frameWidth = (std::min)(int(frame.right - frame.left), int(work.right - work.left));
+    const int frameHeight = (std::min)(int(frame.bottom - frame.top), int(work.bottom - work.top));
+    SetWindowPos(host, nullptr, work.left + (work.right - work.left - frameWidth) / 2,
+        work.top + (work.bottom - work.top - frameHeight) / 2, frameWidth, frameHeight,
+        SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    return true;
 }
 void SetStandaloneGame(bool enabled) { standaloneGame = enabled; }
 bool IsStandaloneGame() { return standaloneGame; }

@@ -1,3 +1,4 @@
+#include "System/DataFiles.h"
 #include "System/NodeGraphDocument.h"
 
 #include <nlohmann/json.hpp>
@@ -391,7 +392,7 @@ bool NodeGraphDocument::SaveToFile(const std::string& filePath, std::string* err
 
 bool NodeGraphDocument::LoadFromFile(const std::string& filePath, std::string* errorMessage)
 {
-    std::ifstream inputStream(filePath, std::ios::binary);
+    DataFiles::InputFile inputStream(filePath, std::ios::binary);
     if (!inputStream)
     {
         if (errorMessage != nullptr)

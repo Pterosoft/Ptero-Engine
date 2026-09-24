@@ -1,91 +1,173 @@
 {
-  "name": "Ocean",
-  "description": "Deep open ocean: long wind-driven swell with wide directional spread, strong blue-green subsurface scattering through the crests, sparse whitecaps on breaking waves. Colours are linear (the engine tonemaps with AgX).",
-  "baseColorTint": [
-    0.02,
-    0.09,
-    0.14,
-    1.0
-  ],
-  "metallicFactor": 0.0,
-  "roughnessFactor": 0.055,
-  "ambientOcclusionStrength": 1.0,
-  "emissiveColor": [
-    0.0,
-    0.0,
-    0.0
-  ],
-  "water": {
-    "shallowTint": [
-      1.0,
-      1.0,
-      1.0
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        0.03529411926865578,
+        0.16078431904315948,
+        0.24313725531101227,
+        1.0
     ],
-    "extinction": [
-      0.45,
-      0.09,
-      0.045
+    "description": "Tropical sea: the water shader's showcase settings (tuxalin/water-shader). Colours are linear (the engine tonemaps with AgX).",
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
     ],
-    "foamColor": [
-      0.92,
-      0.95,
-      0.97,
-      0.9
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightReference": 1.0,
+    "heightScale": 0.05000000074505806,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "Ocean",
+    "normalFlipGreen": false,
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "roughnessFactor": 0.054999999701976776,
+    "specularFactor": 0.5,
+    "subsurfaceColor": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
     ],
-    "scatterColor": [
-      0.005,
-      0.018,
-      0.028,
-      1.0
+    "subsurfaceFalloff": [
+        1.0,
+        0.3700000047683716,
+        0.30000001192092896
     ],
-    "roughness": 0.055,
-    "metallic": 0.0,
-    "waveAmplitude": 0.85,
-    "waveLength": 52.0,
-    "waveSpeed": 1.0,
-    "steepness": 0.55,
-    "choppiness": 1.0,
-    "waveCount": 12,
-    "directionalSpread": 1.3,
-    "detailStrength": 0.04,
-    "detailFadeDistance": 350.0,
-    "foamThreshold": 0.55,
-    "shorelineFoam": 1.2,
-    "fresnelPower": 5.0,
-    "fresnelF0": 0.0204,
-    "refractionStrength": 0.05,
-    "absorptionDistance": 1.0,
-    "scatterPower": 4.0,
-    "scatterDistortion": 0.55,
-    "sunSpecularIntensity": 1.0,
-    "reflectionStrength": 1.0,
-    "reflectionSteps": 16,
-    "reflectionStride": 0.75,
-    "reflectionThickness": 1.5,
-    "windDirection": [
-      1.0,
-      0.3
+    "subsurfaceRadiusMm": 3.0,
+    "subsurfaceTranslucency": 0.800000011920929,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "",
+        "opacity": "",
+        "roughness": ""
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": false,
+    "useSubsurfaceScattering": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
     ],
-    "sssColor": [
-      0.04,
-      0.34,
-      0.3,
-      0.5
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
     ],
-    "distantFlatten": 0.55,
-    "distantRoughness": 0.1,
-    "volumeDesaturate": 0.15,
-    "fetch": 100.0,
-    "waterDepth": 200.0,
-    "fftDisplacementScale": 1.0,
-    "swell": 0.35,
-    "windSpeed": 9.0,
-    "fftNormalStrength": 1.0,
-    "useFFT": true,
-    "oceanPatchSizes": [
-      512.0,
-      96.0,
-      18.0
-    ]
-  }
+    "water": {
+        "ambientDensity": 0.15,
+        "blinnPhong": false,
+        "depthColor": [
+            0.0003,
+            0.00015,
+            0.0185
+        ],
+        "diffuseDensity": 0.1,
+        "distortion": 0.0345,
+        "foamIntensity": 0.4,
+        "foamNoise": [
+            0.37,
+            0.5,
+            -0.3,
+            0.05
+        ],
+        "foamRanges": [
+            2.25,
+            3.3,
+            0.4
+        ],
+        "foamSpeed": 10,
+        "foamTexture": "Textures/Water/foam.png",
+        "foamTiling": [
+            2,
+            0.5
+        ],
+        "heightIntensity": 0.3,
+        "heightTexture": "Textures/Water/water_height.png",
+        "horizontalExtinction": [
+            3,
+            11.6,
+            16.7
+        ],
+        "normalIntensity": 0.52,
+        "normalTexture": "Textures/Water/water_normal.png",
+        "refractionScale": 0.0048,
+        "refractionValues": [
+            0.17,
+            0.11
+        ],
+        "shininess": 0.25,
+        "shoreColor": [
+            0.0331,
+            0.4793,
+            0.0508
+        ],
+        "shoreFade": 0.2,
+        "shoreTexture": "Textures/Water/foam_shore.png",
+        "specularValues": [
+            30,
+            768,
+            0.8
+        ],
+        "surfaceColor": [
+            0.0006,
+            0.2307,
+            0.448
+        ],
+        "textureTiling": 3.5,
+        "useDisplacement": true,
+        "useFiltering": true,
+        "useFoam": true,
+        "waterClarity": 0.25,
+        "waterTransparency": 10,
+        "waveAmplitude": [
+            0.13,
+            0.3,
+            0.1,
+            0.05
+        ],
+        "waveAmplitudeFactor": 0.25,
+        "waveSteepness": 0.72,
+        "waveTiling": 1,
+        "wavesIntensity": [
+            5,
+            3,
+            2,
+            1.3
+        ],
+        "wavesNoise": [
+            0.15,
+            0.32,
+            0.15,
+            0.15
+        ],
+        "windDirection": [
+            -4.5,
+            -6
+        ]
+    }
 }

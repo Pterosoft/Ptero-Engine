@@ -1,12 +1,14 @@
 #include "pch.h"
 #include "Editor.h"
 
+#include "System/DataFiles.h"
 #include "System/PteroLog.h"
 
 
 #include "SceneSerializer.h"
 #include "HeightmapImporter.h"
 #include "DX12SceneRenderer.h"
+#include "EntityIds.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -109,26 +111,7 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-            return {};
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return dataDirectory;
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        return DataFiles::FindDataDirectory();
     }
 
     bool PromptForDataFile(HWND ownerWindowHandle, const char* title, const char* filter, std::string& inOutRelativePath)
@@ -175,8 +158,7 @@ namespace
         if (dataDirectory.empty())
             return false;
 
-        std::error_code errorCode;
-        return std::filesystem::exists((dataDirectory / std::filesystem::path(relativePath)).lexically_normal(), errorCode);
+        return DataFiles::Exists((dataDirectory / std::filesystem::path(relativePath)).lexically_normal());
     }
 
     std::string FindDefaultMaterialPathForMesh(const std::string& meshRelativePath)
@@ -201,17 +183,14 @@ namespace
         if (DataRelativeFileExists(folderNamedCandidate.generic_string()))
             return NormalizeRelativeDataPath(folderNamedCandidate);
 
-        std::error_code iteratorError;
         const std::filesystem::path dataDirectory = FindProjectDataDirectory();
         const std::filesystem::path absoluteMeshDirectory = (dataDirectory / meshDirectory).lexically_normal();
-        for (std::filesystem::directory_iterator it(absoluteMeshDirectory, iteratorError), end;
-             it != end && !iteratorError;
-             it.increment(iteratorError))
+        for (const std::filesystem::path& file : DataFiles::ListFiles(absoluteMeshDirectory, false))
         {
-            if (it->is_regular_file(iteratorError) && it->path().extension() == ".json")
+            if (file.extension() == ".json")
             {
-                const std::filesystem::path relativePath = std::filesystem::relative(it->path(), dataDirectory, iteratorError);
-                if (!iteratorError)
+                const std::filesystem::path relativePath = file.lexically_relative(dataDirectory);
+                if (!relativePath.empty())
                     return NormalizeRelativeDataPath(relativePath);
             }
         }
@@ -306,6 +285,24 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
     // first edit records that state rather than the default-constructed empty
     // one an undo would then restore.
     ResetUndoHistory();
+
+    // The Node Graph's entity pickers list the level through these. Ids are assigned
+    // here too, so an entity added since the last save can be picked straight away; the
+    // next save writes it.
+    NodeGraphEditor::SetEntitySource(
+        [this] {
+            EnsureEntityIds(mEntities);
+            std::vector<NodeGraphEntityInfo> entities;
+            entities.reserve(mEntities.size());
+            for (const Entity& entity : mEntities)
+                entities.push_back({ entity.Id, entity.Name });
+            return entities;
+        },
+        [this]() -> std::uint64_t {
+            EnsureEntityIds(mEntities);
+            const Entity* selected = GetSelectedEntity();
+            return selected != nullptr ? selected->Id : 0;
+        });
 
     ReportProgress(L"Loading editor geometry icon...");
     LoadGeometryIcon(commandList);
@@ -656,6 +653,7 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.Sharpen           = mSharpenSettings;
     scene.Dlss              = mDlssSettings;
     scene.Fsr               = mFsrSettings;
+    scene.Subsurface        = mSubsurfaceSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi              = mRtgiSettings;
     scene.RadianceCascades  = mRadianceCascadesSettings;
@@ -761,7 +759,7 @@ void Editor::UpdatePlaySession()
             if (setting) mRestorePlaySettings.emplace_back([setting, value=*setting] { *setting=value; });
         };
         remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings);
-        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mGlobalIlluminationMode);
+        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mSubsurfaceSettings); remember(mGlobalIlluminationMode);
         remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRtaoSettings);
         remember(mGtaoSettings); remember(mSsrSettings); remember(mChromaticAberrationSettings);
         remember(mAgxSettings); remember(mVolumetricFogSettings); remember(mVolumetricCloudSettings);
@@ -787,7 +785,7 @@ void Editor::UpdatePlaySession()
             Scene scene;
             scene.Entities=&mEntities; scene.NodeGraph=&mPlayNodeGraph;
             scene.TimeOfDay=mTimeOfDaySettings; scene.Taa=mTaaSettings; scene.Smaa=mSmaaSettings;
-            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings; scene.Fsr=mFsrSettings;
+            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings; scene.Fsr=mFsrSettings; scene.Subsurface=mSubsurfaceSettings;
             scene.GlobalIllumination=mGlobalIlluminationMode; scene.Rtgi=mRtgiSettings;
             scene.RadianceCascades=mRadianceCascadesSettings; scene.Rtao=mRtaoSettings;
             scene.Gtao=mGtaoSettings; scene.Ssr=mSsrSettings;
@@ -823,6 +821,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.Sharpen       = mSharpenSettings;
     scene.Dlss          = mDlssSettings;
     scene.Fsr           = mFsrSettings;
+    scene.Subsurface    = mSubsurfaceSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi          = mRtgiSettings;
     scene.RadianceCascades = mRadianceCascadesSettings;
@@ -904,6 +903,7 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.Sharpen       = &data.Sharpen;
         scene.Dlss          = &data.Dlss;
         scene.Fsr           = &data.Fsr;
+        scene.Subsurface    = &data.Subsurface;
         scene.GlobalIllumination = &data.GlobalIlluminationMode;
         scene.Rtgi          = &data.Rtgi;
         scene.RadianceCascades = &data.RadianceCascades;
@@ -1065,6 +1065,7 @@ void Editor::UpdateSceneLoading()
         if (mSharpenSettings)         *mSharpenSettings         = data.Sharpen;
         if (mDlssSettings)            *mDlssSettings            = data.Dlss;
         if (mFsrSettings)             *mFsrSettings             = data.Fsr;
+        if (mSubsurfaceSettings)      *mSubsurfaceSettings      = data.Subsurface;
         if (mGlobalIlluminationMode)  *mGlobalIlluminationMode  = data.GlobalIlluminationMode;
         if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
         if (mRadianceCascadesSettings) *mRadianceCascadesSettings = data.RadianceCascades;
@@ -4692,20 +4693,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             QtUi::SeparatorText("Waves");
             if (QtUi::DragFloat("Wave Scale##water", &wc.WaveScale, 0.01f, 0.0f, 5.0f))
                 MarkSceneChanged();
-            if (QtUi::DragFloat("Detail Tiling##water", &wc.DetailTiling, 0.25f, 0.0f, 200.0f))
-                MarkSceneChanged();
 
-            QtUi::TextDisabled("Wave model is material-driven: set \"useFFT\": true");
-            QtUi::TextDisabled("in the material's water block for the cascaded FFT ocean.");
+            QtUi::TextDisabled("Waves, colours, foam and textures are set in the");
+            QtUi::TextDisabled("material's \"water\" block.");
 
             QtUi::SeparatorText("Diagnostics");
-            // Isolating one shading term at a time separates an optics bug from
-            // a wave bug: if flat water already blows out in the Fresnel view,
-            // the fault is exposure/reflection, not the wave simulation.
+            // Must match WATER_DEBUG_* in Water.hlsl.
             const char* debugModes[] = {
-                "Off", "Fresnel", "N dot V", "Normals",
-                "Thickness", "Reflection (environment)", "Transmission (volume)", "Foam",
-                "Neutral 0.18 (exposure test)", "Sun specular" };
+                "Off", "Normals", "Fresnel", "Water depth",
+                "Refraction", "Reflection", "Specular", "Foam" };
             if (QtUi::Combo("Debug View##water", &wc.DebugMode, debugModes, std::size(debugModes)))
                 MarkSceneChanged();
             if (wc.DebugMode != 0)

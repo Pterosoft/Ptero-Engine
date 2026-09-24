@@ -61,7 +61,7 @@ struct RtGISettings
 
     // --- NVIDIA NRD RELAX diffuse denoiser ---
     // The time-based accumulation is converted to frame counts using the current FPS.
-    float NrdMaxAccumulationTime = 0.35f;
+    float NrdMaxAccumulationTime = 0.5f;   // NRD's RELAX_DEFAULT_ACCUMULATION_TIME
     float NrdDisocclusionThreshold = 0.2f;
     int   NrdAtrousIterations = 5;
     float NrdSharpenAmount = 0.35f;

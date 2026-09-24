@@ -143,6 +143,12 @@ bool IsStandaloneGame();
 void OpenGameWindow(bool separateWindow, const char *title);
 void CloseGameWindow();
 void ToggleGameFullscreen();
+// Player display setting: 0 windowed with a width x height client area, 1 borderless
+// over the monitor, 2 fullscreen with the monitor switched to width x height. Only the
+// standalone game changes the monitor's mode; the editor's Play window treats 2 as
+// borderless and in-viewport play keeps the editor's window. False when the request
+// was not honoured as asked (a failed mode switch falls back to borderless).
+bool SetGameDisplayMode(int mode, unsigned width, unsigned height);
 // True when the game owns the keyboard: the window hosting it is in the foreground and
 // no text field is taking input. In-viewport play answers for the editor window.
 bool GameWindowHasFocus();
