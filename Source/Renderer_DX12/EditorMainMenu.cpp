@@ -12,6 +12,8 @@
 #include "ReleaseGame.h"
 
 #include <commdlg.h>
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 #include <shobjidl.h>
 #include <objbase.h>
 #include <algorithm>
@@ -63,6 +65,8 @@ namespace
 
     // Keep the menu-specific UI state in this file so the renderer API stays focused on frame orchestration.
     bool gShowAboutWindow = false;
+    bool gShowEditorSettingsWindow = false;
+    char gNewStyleName[64] = "";
     bool gShowSceneSettingsWindow = false;
     bool gShowGraphicsSettingsWindow = false;
     bool gShowAssetBrowserWindow = false;
@@ -1942,11 +1946,13 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("File"))
         {
+            QtUi::SetNextItemIcon("new");
             if (editorInstance != nullptr && QtUi::MenuItem("New", "Ctrl+N", false, !sceneLoading))
             {
                 editorInstance->NewScene(windowHandle);
             }
 
+            QtUi::SetNextItemIcon("open");
             if (editorInstance != nullptr && QtUi::MenuItem("Open...", "Ctrl+O", false, !sceneLoading))
             {
                 // Through OpenScene, not straight to the loader: that is what
@@ -1956,6 +1962,7 @@ void RenderEditorMainMenu(
                 editorInstance->OpenScene(windowHandle);
             }
 
+            QtUi::SetNextItemIcon("save");
             if (editorInstance != nullptr && QtUi::MenuItem("Save", "Ctrl+S", false, !sceneLoading))
             {
                 editorInstance->SaveScene(windowHandle);
@@ -1964,6 +1971,7 @@ void RenderEditorMainMenu(
             // All four File commands now go through the Editor rather than
             // duplicating its logic here, so the menu and the shortcuts cannot
             // drift apart the way Open had.
+            QtUi::SetNextItemIcon("save-as");
             if (editorInstance != nullptr && QtUi::MenuItem("Save As...", nullptr, false, !sceneLoading))
             {
                 editorInstance->SaveSceneAs(windowHandle);
@@ -1971,12 +1979,14 @@ void RenderEditorMainMenu(
 
             QtUi::Separator();
             const bool shaderCompileRunning = gShaderCompileMenu.Running.load();
+            QtUi::SetNextItemIcon("compile-shaders");
             if (QtUi::MenuItem("Compile Shaders", nullptr, false, compileShadersCommand != nullptr && !shaderCompileRunning))
             {
                 StartShaderCompileCommand(compileShadersCommand);
             }
 
             QtUi::Separator();
+            QtUi::SetNextItemIcon("exit");
             if (QtUi::MenuItem("Exit"))
             {
                 PostMessage(windowHandle, WM_CLOSE, 0, 0);
@@ -1987,11 +1997,13 @@ void RenderEditorMainMenu(
 
         if (editorInstance != nullptr && QtUi::BeginMenu("Edit"))
         {
+            QtUi::SetNextItemIcon("undo");
             if (QtUi::MenuItem("Undo", "Ctrl+Z", false, editorInstance->CanUndo()))
             {
                 editorInstance->Undo();
             }
 
+            QtUi::SetNextItemIcon("redo");
             if (QtUi::MenuItem("Redo", "Ctrl+Y", false, editorInstance->CanRedo()))
             {
                 editorInstance->Redo();
@@ -2003,19 +2015,30 @@ void RenderEditorMainMenu(
             const bool canPaste = editorInstance->CanPasteEntity();
             const bool canDelete = editorInstance->CanDeleteSelectedEntity();
 
+            QtUi::SetNextItemIcon("copy");
             if (QtUi::MenuItem("Copy", "Ctrl+C", false, canCopy))
             {
                 editorInstance->CopySelectedEntity();
             }
 
+            QtUi::SetNextItemIcon("paste");
             if (QtUi::MenuItem("Paste", "Ctrl+V", false, canPaste))
             {
                 editorInstance->PasteCopiedEntity();
             }
 
+            QtUi::SetNextItemIcon("delete");
             if (QtUi::MenuItem("Delete", "Delete", false, canDelete))
             {
                 editorInstance->DeleteSelectedEntity();
+            }
+
+            QtUi::Separator();
+            QtUi::SetNextItemIcon("editor-settings");
+            if (QtUi::MenuItem("Editor Settings..."))
+            {
+                gShowEditorSettingsWindow = true;
+                QtUi::AvailableStyles(true);
             }
 
             QtUi::EndMenu();
@@ -2023,6 +2046,7 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("View"))
         {
+            QtUi::SetNextItemIcon("gbuffer");
             if (QtUi::MenuItem("G-Buffer / RT Debug..."))
                 gShowGBufferDebugWindow = true;
 
@@ -2036,8 +2060,10 @@ void RenderEditorMainMenu(
             // that changed would add its action at the end of the menu - below the mode
             // entries - the first time the state flipped.
             const bool playing = editorInstance->IsPlaySessionActive();
+            QtUi::SetNextItemIcon("play-start");
             if (QtUi::MenuItem("Play", nullptr, false, !playing && !sceneLoading))
                 editorInstance->RequestPlaySession();
+            QtUi::SetNextItemIcon("stop");
             if (QtUi::MenuItem("Stop", nullptr, false, playing))
                 editorInstance->StopPlaySession();
             QtUi::Separator();
@@ -2047,8 +2073,10 @@ void RenderEditorMainMenu(
 
         if (audioManager != nullptr && audioManager->IsInitialized() && QtUi::BeginMenu("Audio"))
         {
+            QtUi::SetNextItemIcon("audio-manager");
             if (QtUi::MenuItem("Audio Manager..."))
                 if (editorInstance) *editorInstance->GetShowAudioManagerPanelPointer() = true;
+            QtUi::SetNextItemIcon("stop-audio");
             if (QtUi::MenuItem("Stop All"))
                 audioManager->StopAll();
             QtUi::EndMenu();
@@ -2056,17 +2084,20 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("Windows"))
         {
+            QtUi::SetNextItemIcon("settings");
             if (QtUi::MenuItem("Scene Settings..."))
             {
                 gShowSceneSettingsWindow = true;
             }
 
+            QtUi::SetNextItemIcon("material-editor");
             if (QtUi::MenuItem("Material Editor..."))
             {
                 gShowMaterialEditorWindow = true;
                 RefreshMaterialNameBuffer();
             }
 
+            QtUi::SetNextItemIcon("node-graph");
             if (QtUi::MenuItem("Node Graph..."))
             {
                 NodeGraphEditor::Show();
@@ -2104,6 +2135,7 @@ void RenderEditorMainMenu(
                 QtUi::MenuItem("Terrain Tool", nullptr, showTerrainToolWindow);
             }
 
+            QtUi::SetNextItemIcon("asset-browser");
             if (QtUi::MenuItem("Asset Browser..."))
             {
                 gShowAssetBrowserWindow = true;
@@ -2112,6 +2144,7 @@ void RenderEditorMainMenu(
             }
 
             // A separate native window (Video.dll); with no file it offers Open....
+            QtUi::SetNextItemIcon("video-player");
             if (QtUi::MenuItem("Video Player..."))
             {
                 VideoPlayerWindow::Open(std::wstring());
@@ -2119,11 +2152,13 @@ void RenderEditorMainMenu(
 
             QtUi::Separator();
 
+            QtUi::SetNextItemIcon("time-of-day");
             if (QtUi::MenuItem("Time of Day..."))
             {
                 gShowTimeOfDayWindow = true;
             }
 
+            QtUi::SetNextItemIcon("graphics-settings");
             if (QtUi::MenuItem("Graphics Settings..."))
             {
                 gShowGraphicsSettingsWindow = true;
@@ -2134,10 +2169,12 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("Release"))
         {
+            QtUi::SetNextItemIcon("build-game");
             if (QtUi::MenuItem("Build Game..."))
             {
                 gShowBuildGameWindow = true;
             }
+            QtUi::SetNextItemIcon("extract-package");
             if (QtUi::MenuItem("Extract Package..."))
             {
                 gShowExtractPackageWindow = true;
@@ -2147,6 +2184,7 @@ void RenderEditorMainMenu(
 
         if (QtUi::BeginMenu("Help"))
         {
+            QtUi::SetNextItemIcon("about");
             if (QtUi::MenuItem("About Ptero Editor"))
             {
                 gShowAboutWindow = true;
@@ -4546,6 +4584,80 @@ void RenderEditorMainMenu(
         QtUi::TextUnformatted("Ptero Editor");
         QtUi::Separator();
         QtUi::TextUnformatted("Interface: Qt Widgets | Rendering: DirectX 12");
+        QtUi::End();
+    }
+
+    // -----------------------------------------------------------------------
+    // Editor Settings: picks the editor style, one of the .style files in
+    // Data/Styles. QtUi applies it and remembers the choice for next time.
+    // -----------------------------------------------------------------------
+    if (gShowEditorSettingsWindow)
+    {
+        if (QtUi::Begin("Editor Settings", &gShowEditorSettingsWindow, QtUiWindowFlags_AlwaysAutoResize))
+        {
+            const std::vector<QtUi::StyleEntry>& styles = QtUi::AvailableStyles();
+            const std::string currentFile = QtUi::CurrentStyleFile();
+
+            std::vector<const char*> names;
+            names.reserve(styles.size());
+            int currentIndex = -1;
+            for (std::size_t i = 0; i < styles.size(); ++i)
+            {
+                names.push_back(styles[i].Name.c_str());
+                if (_stricmp(styles[i].File.c_str(), currentFile.c_str()) == 0)
+                    currentIndex = static_cast<int>(i);
+            }
+
+            QtUi::SeparatorText("Style");
+            if (styles.empty())
+            {
+                QtUi::TextWrapped("No .style files found in %s. The editor is using its built-in style.",
+                    QtUi::StylesDirectory());
+            }
+            else
+            {
+                int selected = currentIndex;
+                if (QtUi::Combo("Editor style", &selected, names.data(), static_cast<int>(names.size()))
+                    && selected >= 0 && selected < static_cast<int>(styles.size()))
+                {
+                    QtUi::LoadStyle(styles[selected].File.c_str());
+                }
+                if (currentIndex >= 0 && !styles[currentIndex].Description.empty())
+                    QtUi::TextDisabled("%s", styles[currentIndex].Description.c_str());
+            }
+
+            if (QtUi::Button("Reload"))
+                QtUi::ReloadStyle();
+            QtUi::SetItemTooltip("Read the style file again. Saving the file does this on its own.");
+            QtUi::SameLine();
+            if (QtUi::Button("Rescan Folder"))
+                QtUi::AvailableStyles(true);
+            QtUi::SetItemTooltip("Look for .style files added since the list was read.");
+            QtUi::SameLine();
+            if (QtUi::Button("Open Styles Folder"))
+            {
+                // QtUi hands out UTF-8; widen it as such rather than through the ANSI page.
+                const char* folderUtf8 = QtUi::StylesDirectory();
+                std::wstring folder(MultiByteToWideChar(CP_UTF8, 0, folderUtf8, -1, nullptr, 0), L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, folderUtf8, -1, folder.data(), static_cast<int>(folder.size()));
+                ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+
+            QtUi::SeparatorText("New style");
+            QtUi::TextWrapped("Copies the current style to a new .style file and switches to it. "
+                "Edit it in any text editor; the editor reapplies it each time you save. "
+                "Data/Styles/README.md lists every setting.");
+            QtUi::InputText("Name", gNewStyleName, sizeof(gNewStyleName));
+            QtUi::SameLine();
+            QtUi::BeginDisabled(gNewStyleName[0] == '\0');
+            if (QtUi::Button("Duplicate") && QtUi::DuplicateStyle(gNewStyleName))
+                gNewStyleName[0] = '\0';
+            QtUi::EndDisabled();
+
+            const char* styleError = QtUi::StyleError();
+            if (styleError != nullptr && styleError[0] != '\0')
+                QtUi::TextColored(UiVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", styleError);
+        }
         QtUi::End();
     }
 

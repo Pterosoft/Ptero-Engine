@@ -314,14 +314,6 @@ bool Editor::Initialize(ID3D12GraphicsCommandList* commandList)
     LoadIconTexture(L"Decal.png", mDecalIcon, &iconStatus, commandList);
     LoadIconTexture(L"Rain.png", mRainIcon, &iconStatus, commandList);
     LoadIconTexture(L"ParticleSystem.png", mParticleSystemIcon, &iconStatus, commandList);
-    ReportProgress(L"Loading editor toolbar icons...");
-    LoadIconTexture(L"Select.png", mSelectIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Move.png", mMoveIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Rotate.png", mRotateIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Scale.png", mScaleIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Wireframe.png", mWireframeIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Proxy.png", mProxyIcon, &iconStatus, commandList);
-    LoadIconTexture(L"Game.png", mGameIcon, &iconStatus, commandList);
     ReportProgress(L"Editor UI assets ready.");
     mIsInitialized = true;
     return true;
@@ -343,13 +335,6 @@ void Editor::Shutdown()
     ReleaseIconTexture(mDecalIcon);
     ReleaseIconTexture(mRainIcon);
     ReleaseIconTexture(mParticleSystemIcon);
-    ReleaseIconTexture(mSelectIcon);
-    ReleaseIconTexture(mMoveIcon);
-    ReleaseIconTexture(mRotateIcon);
-    ReleaseIconTexture(mScaleIcon);
-    ReleaseIconTexture(mWireframeIcon);
-    ReleaseIconTexture(mProxyIcon);
-    ReleaseIconTexture(mGameIcon);
 
     // Before QtUi tears Qt down: the node graph window is a child of the editor shell and
     // must not outlive the QApplication.
@@ -2732,14 +2717,7 @@ void Editor::DrawGameUiOverlay(const UiVec2& viewportOrigin, const UiVec2& viewp
 // DrawToolbar
 // ---------------------------------------------------------------------------
 
-void Editor::DrawToolbar(
-    D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon,
-    D3D12_GPU_DESCRIPTOR_HANDLE gameIcon)
+void Editor::DrawToolbar()
 {
     QtUi::SetNextWindowSize(UiVec2(320.0f, 56.0f), QtUiCond_FirstUseEver);
     QtUi::PushStyleVar(QtUiStyleVar_WindowPadding, UiVec2(4, 4));
@@ -2752,42 +2730,37 @@ void Editor::DrawToolbar(
         return;
     }
 
-    const float iconSize = 24.0f;
-    const UiVec2 btnSize(iconSize + 8.0f, iconSize + 8.0f);
-    const float separatorWidth = 8.0f;
+    // Icons come from the editor style's icon folder (Data/Icons/Editor by default), so a
+    // style can recolor or replace them; the button size is the style's too.
+    const float buttonSize = QtUi::StyleMetric("toolButtonSize", 36.0f);
+    const float separatorWidth = 12.0f;
 
-    auto ToolButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, GizmoType type, const char* tooltip) {
+    auto ToolButton = [&](const char* icon, GizmoType type, const char* tooltip) {
         bool active = (mActiveGizmo == type);
         if (active) QtUi::PushStyleColor(QtUiCol_Button, QtUi::GetStyleColorVec4(QtUiCol_ButtonActive));
-        bool clicked;
-        if (icon.ptr != 0)
-            clicked = QtUi::ImageButton(tooltip, TextureIdFromHandle(icon), UiVec2(iconSize, iconSize));
-        else
-            clicked = QtUi::Button(tooltip, btnSize);
+        const bool clicked = QtUi::IconButton(tooltip, icon);
         if (active) QtUi::PopStyleColor();
         if (clicked) mActiveGizmo = active ? GizmoType::None : type;
         if (QtUi::IsItemHovered()) QtUi::SetTooltip("%s", tooltip);
     };
 
-    auto ToggleButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon, bool& value, const char* tooltip)
+    auto ToggleButton = [&](const char* icon, bool& value, const char* tooltip)
     {
         if (value) QtUi::PushStyleColor(QtUiCol_Button, QtUi::GetStyleColorVec4(QtUiCol_ButtonActive));
-        const bool clicked = (icon.ptr != 0)
-            ? QtUi::ImageButton(tooltip, TextureIdFromHandle(icon), UiVec2(iconSize, iconSize))
-            : QtUi::Button(tooltip, btnSize);
+        const bool clicked = QtUi::IconButton(tooltip, icon);
         if (value) QtUi::PopStyleColor();
         if (clicked) value = !value;
         if (QtUi::IsItemHovered()) QtUi::SetTooltip("%s", tooltip);
     };
 
     // Play transfers the live renderer at the next frame boundary.
-    auto PlayButton = [&](D3D12_GPU_DESCRIPTOR_HANDLE icon)
+    auto PlayButton = [&]()
     {
         const bool playing = IsPlaySessionActive();
         if (playing) QtUi::PushStyleColor(QtUiCol_Button, QtUi::GetStyleColorVec4(QtUiCol_ButtonActive));
-        const bool clicked = (icon.ptr != 0)
-            ? QtUi::ImageButton("Play", TextureIdFromHandle(icon), UiVec2(iconSize, iconSize))
-            : QtUi::Button(playing ? "Stop" : "Play", btnSize);
+        // One button whose icon follows the state. It keeps a single label, because
+        // QtUi keys widgets by label and a changing one would make a second button.
+        const bool clicked = QtUi::IconButton("Play", playing ? "stop" : "play");
         if (playing) QtUi::PopStyleColor();
 
         if (clicked && mSceneRenderer != nullptr)
@@ -2823,8 +2796,8 @@ void Editor::DrawToolbar(
     };
 
     const float totalButtonsWidth =
-        btnSize.x * 7.0f +
-        QtUi::GetStyle().ItemSpacing.x * 6.0f +
+        buttonSize * 7.0f +
+        QtUi::GetStyle().ItemSpacing.x * 8.0f +
         separatorWidth * 2.0f;
     const float availableWidth = QtUi::GetContentRegionAvail().x;
     if (availableWidth > totalButtonsWidth)
@@ -2832,23 +2805,23 @@ void Editor::DrawToolbar(
         QtUi::SetCursorPosX(QtUi::GetCursorPosX() + (availableWidth - totalButtonsWidth) * 0.5f);
     }
 
-    ToolButton(selectIcon, GizmoType::None,      "Select  (Q)");
+    ToolButton("select", GizmoType::None,      "Select  (Q)");
     QtUi::SameLine();
-    ToolButton(moveIcon,   GizmoType::Translate,  "Move    (W)");
+    ToolButton("move",   GizmoType::Translate, "Move    (W)");
     QtUi::SameLine();
-    ToolButton(rotateIcon, GizmoType::Rotate,     "Rotate  (E)");
+    ToolButton("rotate", GizmoType::Rotate,    "Rotate  (E)");
     QtUi::SameLine();
-    ToolButton(scaleIcon,  GizmoType::Scale,      "Scale   (R)");
-    QtUi::SameLine();
-    QtUi::Dummy(UiVec2(separatorWidth, 0.0f));
-    QtUi::SameLine();
-    ToggleButton(wireframeIcon, mWireframeEnabled, "Wireframe");
-    QtUi::SameLine();
-    ToggleButton(proxyIcon, mProxyEnabled, "Proxy");
+    ToolButton("scale",  GizmoType::Scale,     "Scale   (R)");
     QtUi::SameLine();
     QtUi::Dummy(UiVec2(separatorWidth, 0.0f));
     QtUi::SameLine();
-    PlayButton(gameIcon);
+    ToggleButton("wireframe", mWireframeEnabled, "Wireframe");
+    QtUi::SameLine();
+    ToggleButton("proxy", mProxyEnabled, "Proxy");
+    QtUi::SameLine();
+    QtUi::Dummy(UiVec2(separatorWidth, 0.0f));
+    QtUi::SameLine();
+    PlayButton();
 
     QtUi::End();
     QtUi::PopStyleVar(2);
@@ -3595,6 +3568,7 @@ void Editor::DrawComponentsPanel()
         mVegetationPrototypeSelected = false;
     };
 
+    QtUi::SetNextItemIcon("geometry");
     if (QtUi::Selectable("Geometry", mGeometryPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mGeometryPrototypeSelected;
@@ -3602,6 +3576,7 @@ void Editor::DrawComponentsPanel()
         mGeometryPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("point-light");
     if (QtUi::Selectable("Point Light", mPointLightPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mPointLightPrototypeSelected;
@@ -3609,6 +3584,7 @@ void Editor::DrawComponentsPanel()
         mPointLightPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("spot-light");
     if (QtUi::Selectable("Spot Light", mSpotLightPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mSpotLightPrototypeSelected;
@@ -3616,6 +3592,7 @@ void Editor::DrawComponentsPanel()
         mSpotLightPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("rect-light");
     if (QtUi::Selectable("Rect Light", mRectLightPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mRectLightPrototypeSelected;
@@ -3623,6 +3600,7 @@ void Editor::DrawComponentsPanel()
         mRectLightPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("audio-emitter");
     if (QtUi::Selectable("Audio Emitter", mAudioEmitterPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mAudioEmitterPrototypeSelected;
@@ -3630,6 +3608,7 @@ void Editor::DrawComponentsPanel()
         mAudioEmitterPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("decal");
     if (QtUi::Selectable("Decal", mDecalPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mDecalPrototypeSelected;
@@ -3637,6 +3616,7 @@ void Editor::DrawComponentsPanel()
         mDecalPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("rain");
     if (QtUi::Selectable("Rain", mRainPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mRainPrototypeSelected;
@@ -3644,6 +3624,7 @@ void Editor::DrawComponentsPanel()
         mRainPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("particles");
     if (QtUi::Selectable("Particle System", mParticleSystemPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mParticleSystemPrototypeSelected;
@@ -3651,6 +3632,7 @@ void Editor::DrawComponentsPanel()
         mParticleSystemPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("vegetation");
     if (QtUi::Selectable("Vegetation Area", mVegetationPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mVegetationPrototypeSelected;
@@ -3658,6 +3640,7 @@ void Editor::DrawComponentsPanel()
         mVegetationPrototypeSelected = shouldSelect;
     }
 
+    QtUi::SetNextItemIcon("terrain");
     if (QtUi::Selectable("Terrain", mTerrainPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mTerrainPrototypeSelected;
@@ -3670,6 +3653,7 @@ void Editor::DrawComponentsPanel()
         }
     }
 
+    QtUi::SetNextItemIcon("water");
     if (QtUi::Selectable("Water", mWaterPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
     {
         const bool shouldSelect = !mWaterPrototypeSelected;
@@ -5181,14 +5165,7 @@ void Editor::Draw(
 
     DrawViewport(sceneTextureHandle, camera, selectedEntity);
     selectedEntity = GetSelectedEntity();
-    DrawToolbar(
-        mSelectIcon.GpuHandle,
-        mMoveIcon.GpuHandle,
-        mRotateIcon.GpuHandle,
-        mScaleIcon.GpuHandle,
-        mWireframeIcon.GpuHandle,
-        mProxyIcon.GpuHandle,
-        mGameIcon.GpuHandle);
+    DrawToolbar();
 
     // The RmlUi pass only runs while something needs its output. Set every
     // frame rather than from inside the panel, which would never turn it off

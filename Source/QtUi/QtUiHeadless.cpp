@@ -253,6 +253,21 @@ bool CameraInputAllowed() { return GameWindowHasFocus(); }
 bool KeyboardCameraInputAllowed() { return GameWindowHasFocus(); }
 float ConsumeViewportWheelDelta() { return 0.0f; }
 void RegisterIcon(UiTextureID, const wchar_t *) {}
+// No editor chrome in a packaged game, so no styles either.
+const std::vector<StyleEntry> &AvailableStyles(bool)
+{
+    static const std::vector<StyleEntry> none;
+    return none;
+}
+bool LoadStyle(const char *) { return false; }
+bool ReloadStyle() { return false; }
+const char *CurrentStyleFile() { return ""; }
+const char *StyleError() { return ""; }
+const char *StylesDirectory() { return ""; }
+bool DuplicateStyle(const char *) { return false; }
+float StyleMetric(const char *, float fallback) { return fallback; }
+void SetNextItemIcon(const char *) {}
+bool IconButton(const char *, const char *) { return false; }
 const TextureView *TextureViews(std::size_t &count)
 {
     count = 0;

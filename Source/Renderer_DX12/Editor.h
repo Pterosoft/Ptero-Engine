@@ -328,14 +328,7 @@ public:
         bool showStatistics,
         AudioManager* audioManager);
 
-    void DrawToolbar(
-        D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE gameIcon);
+    void DrawToolbar();
 
     void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
     void DrawAudioManagerWindow(AudioManager* audioManager);
@@ -638,13 +631,6 @@ private:
     IconTexture mDecalIcon;
     IconTexture mRainIcon;
     IconTexture mParticleSystemIcon;
-    IconTexture mSelectIcon;
-    IconTexture mMoveIcon;
-    IconTexture mRotateIcon;
-    IconTexture mScaleIcon;
-    IconTexture mWireframeIcon;
-    IconTexture mProxyIcon;
-    IconTexture mGameIcon;
 
     // Sticky message from the last failed play attempt, shown on the Play button tooltip.
     std::string mGameStartErrorMessage;

@@ -530,9 +530,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\QtUi\QtUi.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\QtUi\QtUiTheme.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\QtUi\QtUiHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="QtViewportRenderer.cpp" />
     <ClInclude Include="..\QtUi\QtUi.h" />
+    <ClInclude Include="..\QtUi\QtUiTheme.h" />
     <ClInclude Include="..\QtUi\UiTypes.h" />
     <ClInclude Include="QtViewportRenderer.h" />
   </ItemGroup>

@@ -2,6 +2,7 @@
 #include "UiTypes.h"
 #include <cstddef>
 #include <string>
+#include <vector>
 #include <windows.h>
 #include <commdlg.h>
 
@@ -186,6 +187,36 @@ bool KeyboardCameraInputAllowed();
 // scrolled away from the user. Reading drains the accumulator.
 float ConsumeViewportWheelDelta();
 void RegisterIcon(UiTextureID, const wchar_t *);
+// Editor styles: JSON documents with the .style extension in Data/Styles, described in
+// Data/Styles/README.md. The choice is remembered across sessions.
+struct StyleEntry
+{
+    std::string Name;        // "name" from the file, or the file name when it has none
+    std::string File;        // file name inside the styles folder
+    std::string Description;
+};
+// Every .style file in the styles folder; `rescan` reads the folder again.
+const std::vector<StyleEntry> &AvailableStyles(bool rescan = false);
+// Applies a style by file name inside the styles folder, or by absolute path. On failure
+// the current style stays and StyleError() says why.
+bool LoadStyle(const char *file);
+// Reads the active style's file again. The file is also watched, so saving it in a text
+// editor reapplies it on its own.
+bool ReloadStyle();
+const char *CurrentStyleFile();
+const char *StyleError();
+const char *StylesDirectory();
+// Copies the active style to "<name>.style", renames it inside, and switches to it.
+bool DuplicateStyle(const char *name);
+// A numeric metric of the active style, such as "toolButtonSize" or "iconSize".
+float StyleMetric(const char *token, float fallback);
+// Gives the next menu item, menu, button or selectable an icon: a file name without its
+// extension in the style's icon folder (Data/Icons/Editor unless the style says otherwise).
+void SetNextItemIcon(const char *icon);
+// Square icon-only button whose label becomes its tooltip. Like Button, it shows as
+// checked while a QtUiCol_Button color is pushed. Falls back to the label when the icon
+// file is missing.
+bool IconButton(const char *name, const char *icon);
 struct TextureView
 {
     HWND Window;
