@@ -1,0 +1,42 @@
+{
+    "name": "Ptero Light",
+    "description": "Light grey panels with the orange accent, for bright rooms.",
+    "author": "Pterosoft",
+    "dark": false,
+
+    "icons": {
+        "color": "#3a3a40",
+        "active": "#ffffff",
+        "checked": "#d9560e",
+        "selected": "#ffffff",
+        "disabled": "#b4b4ba"
+    },
+
+    "colors": {
+        "window": "#e9e9ec",
+        "panel": "#f3f3f5",
+        "header": "#e2e2e6",
+        "base": "#ffffff",
+        "alternateBase": "#f6f6f8",
+        "button": "#fbfbfc",
+        "buttonHover": "#ededf0",
+        "buttonPressed": "#dcdce0",
+        "border": "#cfcfd5",
+        "borderStrong": "#b3b3bb",
+        "separator": "#d9d9de",
+        "text": "#1e1e22",
+        "textDim": "#66666e",
+        "textDisabled": "#a4a4ab",
+        "accent": "#e8620f",
+        "accentHover": "#f57a2a",
+        "accentPressed": "#c9520a",
+        "accentSoft": "rgba(232, 98, 15, 0.14)",
+        "accentText": "#ffffff",
+        "checkedText": "#1e1e22",
+        "menu": "#ffffff",
+        "menuBorder": "#c9c9cf",
+        "tooltip": "#ffffff",
+        "scrollbar": "#c4c4cb",
+        "scrollbarHover": "#a6a6ae"
+    }
+}

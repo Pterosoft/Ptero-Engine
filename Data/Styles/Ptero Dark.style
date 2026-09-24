@@ -1,0 +1,62 @@
+{
+    "name": "Ptero Dark",
+    "description": "Charcoal panels with an orange accent. The default editor style.",
+    "author": "Pterosoft",
+    "dark": true,
+
+    "font": {
+        "family": "",
+        "pointSize": 0
+    },
+
+    "icons": {
+        "folder": "Icons/Editor",
+        "color": "#d9d9dc",
+        "active": "#ffffff",
+        "checked": "#f26b1d",
+        "selected": "#ffffff",
+        "disabled": "#5a5a5f"
+    },
+
+    "colors": {
+        "window": "#1a1a1c",
+        "panel": "#1f1f22",
+        "header": "#252528",
+        "base": "#131315",
+        "alternateBase": "#1c1c1f",
+        "button": "#27272a",
+        "buttonHover": "#303034",
+        "buttonPressed": "#1d1d20",
+        "border": "#333337",
+        "borderStrong": "#48484d",
+        "separator": "#2a2a2e",
+        "text": "#e8e6e3",
+        "textDim": "#9a9a9f",
+        "textDisabled": "#626267",
+        "accent": "#f26b1d",
+        "accentHover": "#ff8638",
+        "accentPressed": "#d45810",
+        "accentSoft": "rgba(242, 107, 29, 0.18)",
+        "accentText": "#ffffff",
+        "checkedText": "#ffffff",
+        "menu": "#222225",
+        "menuBorder": "#3a3a3e",
+        "tooltip": "#2b2b2f",
+        "scrollbar": "#3a3a3f",
+        "scrollbarHover": "#56565c"
+    },
+
+    "metrics": {
+        "radius": 4,
+        "radiusSmall": 3,
+        "iconSize": 18,
+        "toolButtonSize": 36,
+        "toolIconSize": 22,
+        "listButtonHeight": 24,
+        "indicatorSize": 16,
+        "scrollbarWidth": 10,
+        "splitterWidth": 4
+    },
+
+    "stylesheet": []
+}
