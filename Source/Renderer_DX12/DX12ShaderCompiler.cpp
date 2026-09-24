@@ -1,7 +1,10 @@
 #include "pch.h"
 #include "DX12ShaderCompiler.h"
 
+#include "System/DataFiles.h"
+
 #include <d3dcompiler.h>
+#include <dxcapi.h>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -35,6 +38,25 @@ namespace
         return {};
     }
 
+    // True for a path inside a packaged game's archives rather than on disk.
+    bool IsPackagedPath(const std::filesystem::path& path)
+    {
+        return DataFiles::IsPackaged() && !DataFiles::PackagedRelativePath(path).empty();
+    }
+
+    // weakly_canonical for files on disk; an archive path has nothing on disk to resolve.
+    std::filesystem::path CanonicalOrNormal(const std::filesystem::path& path)
+    {
+        if (IsPackagedPath(path))
+        {
+            return path.lexically_normal();
+        }
+
+        std::error_code error;
+        const std::filesystem::path canonical = std::filesystem::weakly_canonical(path, error);
+        return error ? path.lexically_normal() : canonical;
+    }
+
     std::filesystem::path FindAssetFromDirectory(
         const std::filesystem::path& startDirectory,
         const std::vector<std::filesystem::path>& relativeCandidates)
@@ -47,9 +69,9 @@ namespace
             for (const fs::path& relativeCandidate : relativeCandidates)
             {
                 const fs::path candidatePath = currentDirectory / relativeCandidate;
-                if (fs::exists(candidatePath))
+                if (DataFiles::Exists(candidatePath))
                 {
-                    return fs::weakly_canonical(candidatePath);
+                    return CanonicalOrNormal(candidatePath);
                 }
             }
 
@@ -104,6 +126,9 @@ namespace
                     fs::path(L"Source") / L"SDKs" / L"dxc" / L"bin" / L"x86" / L"dxc.exe",
                     fs::path(L"SDKs") / L"dxc" / L"bin" / L"x86" / L"dxc.exe",
 #endif
+                    // A packaged build ships a flat folder (see ReleaseGame.cpp) with no
+                    // Source/SDKs structure at all - dxc.exe sits right next to the exe.
+                    fs::path(L"dxc.exe"),
                 });
             if (!discoveredDxcPath.empty())
             {
@@ -241,15 +266,9 @@ namespace
 
     std::string ReadTextFile(const std::filesystem::path& filePath)
     {
-        std::ifstream file(filePath, std::ios::binary);
-        if (!file.is_open())
-        {
-            return {};
-        }
-
-        std::ostringstream stream;
-        stream << file.rdbuf();
-        return stream.str();
+        std::string text;
+        DataFiles::ReadText(filePath, text);
+        return text;
     }
 
     std::wstring ResolveShaderPath(const std::wstring& shaderPath)
@@ -258,7 +277,7 @@ namespace
 
         const fs::path requestedPath(shaderPath);
         const fs::path requestedFileName = requestedPath.filename();
-        if (requestedPath.is_absolute() && fs::exists(requestedPath))
+        if (requestedPath.is_absolute() && DataFiles::Exists(requestedPath))
         {
             return requestedPath.wstring();
         }
@@ -267,9 +286,9 @@ namespace
         if (!moduleDirectory.empty())
         {
             const fs::path candidateInOutput = moduleDirectory / requestedPath;
-            if (fs::exists(candidateInOutput))
+            if (DataFiles::Exists(candidateInOutput))
             {
-                return candidateInOutput.wstring();
+                return candidateInOutput.lexically_normal().wstring();
             }
 
             const fs::path discoveredShaderPath = FindAssetFromDirectory(
@@ -287,14 +306,14 @@ namespace
         }
 
         const fs::path candidateFromWorkingDirectory = fs::current_path() / L"Data" / L"Shaders" / requestedFileName;
-        if (fs::exists(candidateFromWorkingDirectory))
+        if (DataFiles::Exists(candidateFromWorkingDirectory))
         {
-            return fs::weakly_canonical(candidateFromWorkingDirectory).wstring();
+            return CanonicalOrNormal(candidateFromWorkingDirectory).wstring();
         }
 
-        if (fs::exists(requestedPath))
+        if (DataFiles::Exists(requestedPath))
         {
-            return fs::weakly_canonical(requestedPath).wstring();
+            return CanonicalOrNormal(requestedPath).wstring();
         }
 
         throw std::runtime_error("Failed to locate the requested HLSL shader source file.");
@@ -420,7 +439,7 @@ namespace
             }
 
             const fs::path candidateDataShaders = currentDirectory / L"Data" / L"Shaders";
-            if (fs::exists(candidateDataShaders) && fs::is_directory(candidateDataShaders))
+            if (DataFiles::IsDirectory(candidateDataShaders))
             {
                 return currentDirectory;
             }
@@ -472,17 +491,21 @@ namespace
         long long WriteTime = 0;
     };
 
-    ShaderDependencyStamp MakeDependencyStamp(const std::filesystem::path& path)
+    ShaderDependencyStamp MakeDependencyStamp(const std::filesystem::path& path, const std::string& sourceText)
     {
-        std::error_code error;
         ShaderDependencyStamp stamp{};
-        stamp.Path = std::filesystem::weakly_canonical(path, error);
-        if (error)
+        stamp.Path = CanonicalOrNormal(path);
+
+        // An archived source has no size or timestamp on disk. Its content hash stands in
+        // for the timestamp, so a rebuilt game with changed shaders still misses the cache.
+        if (IsPackagedPath(stamp.Path))
         {
-            stamp.Path = path.lexically_normal();
+            stamp.Size = sourceText.size();
+            stamp.WriteTime = static_cast<long long>(Fnv1aAppend(14695981039346656037ull, sourceText.data(), sourceText.size()));
+            return stamp;
         }
 
-        error.clear();
+        std::error_code error;
         stamp.Size = std::filesystem::file_size(stamp.Path, error);
         if (error)
         {
@@ -519,12 +542,9 @@ namespace
 
         for (const fs::path& candidate : candidates)
         {
-            std::error_code statusError;
-            if (fs::exists(candidate, statusError) && !statusError)
+            if (DataFiles::IsFile(candidate))
             {
-                std::error_code canonicalError;
-                fs::path canonicalPath = fs::weakly_canonical(candidate, canonicalError);
-                return canonicalError ? candidate.lexically_normal() : canonicalPath;
+                return CanonicalOrNormal(candidate);
             }
         }
 
@@ -571,12 +591,7 @@ namespace
     {
         namespace fs = std::filesystem;
 
-        std::error_code canonicalError;
-        fs::path canonicalPath = fs::weakly_canonical(sourcePath, canonicalError);
-        if (canonicalError)
-        {
-            canonicalPath = sourcePath.lexically_normal();
-        }
+        const fs::path canonicalPath = CanonicalOrNormal(sourcePath);
 
         const std::wstring canonicalKey = canonicalPath.wstring();
         if (!visitedPaths.insert(canonicalKey).second)
@@ -584,9 +599,8 @@ namespace
             return;
         }
 
-        dependencies.push_back(MakeDependencyStamp(canonicalPath));
-
         const std::string sourceText = ReadTextFile(canonicalPath);
+        dependencies.push_back(MakeDependencyStamp(canonicalPath, sourceText));
         if (sourceText.empty())
         {
             return;
@@ -724,7 +738,13 @@ namespace
             L"-T", request.TargetProfile,
             L"-Fo", outputPath,
             L"-I", resolvedShaderPath.parent_path().wstring(),
-            L"-WX",
+            // Not -WX: SM5 shaders now route through dxc too (see CompileShaderBytecode),
+            // and dxc is stricter than the legacy D3DCompiler they used to compile under -
+            // e.g. it flags AgxTonemap.hlsl's implicit vector truncation as a warning that
+            // -WX would promote to a hard compile failure, even though that shader has
+            // always compiled (and worked) fine under the old compiler. Warnings still
+            // print via compilerOutput below; just not fatal, matching the leniency this
+            // codebase already had for every SM5 shader before this change.
             L"-all_resources_bound",
 #if defined(PTERO_DEBUG)
             L"-Zi",
@@ -790,53 +810,271 @@ namespace
         return bytecode;
     }
 
-    std::vector<std::uint8_t> CompileShaderBlobWithD3DCompile(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
-    {
-        UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(PTERO_DEBUG)
-        compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-        compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-
-        ComPtr<ID3DBlob> shaderBlob;
-        ComPtr<ID3DBlob> errorBlob;
-        const HRESULT compileResult = D3DCompileFromFile(
-            resolvedPath.c_str(),
-            nullptr,
-            D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            NarrowString(request.EntryPoint).c_str(),
-            NarrowString(request.TargetProfile).c_str(),
-            compileFlags,
-            0,
-            &shaderBlob,
-            &errorBlob);
-
-        if (errorBlob && errorBlob->GetBufferSize() > 0)
-        {
-            OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-        }
-
-        DX12_THROW_IF_FAILED(compileResult);
-        return CopyBlobBytes(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
-    }
-
-    bool UsesShaderModel5Profile(const std::wstring& targetProfile)
-    {
-        return targetProfile.find(L"_5_") != std::wstring::npos;
-    }
-
+    // Every shader (SM5 and SM6 profiles alike) compiles through the bundled dxc.exe.
+    // SM5 targets used to go through the legacy system D3DCompiler (d3dcompiler_47.dll)
+    // instead, on the theory that it widened compatibility to machines without the full
+    // DXC + DXIL runtime pair - but a packaged build already ships dxcompiler.dll/dxil.dll
+    // (and now dxc.exe itself, see ReleaseGame.cpp) for the SM6 shaders regardless, making
+    // that reasoning moot, and D3DCompileFromFile's legacy compiler turned out to have a
+    // latent bug: it hangs for 20-35s then crashes with an access violation on at least one
+    // real shader (DeferredLighting.hlsl) the very first time it has to compile it from
+    // source rather than hit a warm Cache/Shaders/ entry - invisible in normal dev use
+    // (the cache is always warm there) but fatal on a fresh install with an empty cache.
+    // dxc compiles SM5.0/5.1 targets fine, so there is no remaining reason to keep both
+    // compiler backends.
     std::vector<std::uint8_t> CompileShaderBytecode(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
     {
-        // The editor's test cube does not need Shader Model 6 features. Prefer the
-        // system compiler for Shader Model 5 targets so the scene renderer works on
-        // machines that do not ship the full DXC + DXIL runtime pair.
-        if (UsesShaderModel5Profile(request.TargetProfile))
+        return CompileShaderBlobWithDxc(request, resolvedPath);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Packaged games: in-process DXC over the archives
+    //
+    // dxc.exe can only read sources from disk, and a packaged game's shaders exist only
+    // inside Shaders.ppak. So for those, the same compile runs through dxcompiler.dll
+    // (shipped next to the game already) with the source handed over as a buffer and an
+    // include handler that reads #includes through DataFiles - nothing is written out.
+    // -----------------------------------------------------------------------------------
+
+    using DxcCreateInstanceFn = HRESULT(__stdcall*)(REFCLSID, REFIID, LPVOID*);
+
+    DxcCreateInstanceFn GetDxcCreateInstance()
+    {
+        static const DxcCreateInstanceFn createInstance = []() -> DxcCreateInstanceFn
         {
-            return CompileShaderBlobWithD3DCompile(request, resolvedPath);
+            HMODULE module = LoadLibraryW(L"dxcompiler.dll");
+            return module != nullptr
+                ? reinterpret_cast<DxcCreateInstanceFn>(GetProcAddress(module, "DxcCreateInstance"))
+                : nullptr;
+        }();
+        return createInstance;
+    }
+
+    // Lives on the stack for the duration of one Compile call, so reference counting is
+    // only for DXC's benefit and never frees anything.
+    class DataFilesIncludeHandler final : public IDxcIncludeHandler
+    {
+    public:
+        DataFilesIncludeHandler(IDxcUtils* utils, std::vector<std::filesystem::path> searchDirectories)
+            : mUtils(utils), mSearchDirectories(std::move(searchDirectories))
+        {
         }
 
-        return CompileShaderBlobWithDxc(request, resolvedPath);
+        HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR fileName, IDxcBlob** includeSource) override
+        {
+            namespace fs = std::filesystem;
+            if (includeSource == nullptr)
+            {
+                return E_POINTER;
+            }
+            *includeSource = nullptr;
+            if (fileName == nullptr)
+            {
+                return E_INVALIDARG;
+            }
+
+            // DXC usually hands over a path already joined with one of the search
+            // directories; the search directories are retried in case it did not.
+            const fs::path requested(fileName);
+            std::vector<fs::path> candidates{ requested };
+            if (!requested.is_absolute())
+            {
+                for (const fs::path& directory : mSearchDirectories)
+                {
+                    candidates.push_back(directory / requested);
+                }
+            }
+
+            for (const fs::path& candidate : candidates)
+            {
+                std::string text;
+                if (!DataFiles::ReadText(candidate.lexically_normal(), text))
+                {
+                    continue;
+                }
+
+                ComPtr<IDxcBlobEncoding> blob;
+                const HRESULT hr = mUtils->CreateBlob(text.data(), static_cast<UINT32>(text.size()), DXC_CP_UTF8, &blob);
+                if (FAILED(hr))
+                {
+                    return hr;
+                }
+                *includeSource = blob.Detach();
+                return S_OK;
+            }
+
+            return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        }
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override
+        {
+            if (object == nullptr)
+            {
+                return E_POINTER;
+            }
+            if (riid == __uuidof(IUnknown) || riid == __uuidof(IDxcIncludeHandler))
+            {
+                *object = static_cast<IDxcIncludeHandler*>(this);
+                AddRef();
+                return S_OK;
+            }
+            *object = nullptr;
+            return E_NOINTERFACE;
+        }
+
+        ULONG STDMETHODCALLTYPE AddRef() override { return ++mReferences; }
+        ULONG STDMETHODCALLTYPE Release() override { return --mReferences; }
+
+    private:
+        IDxcUtils* mUtils = nullptr;
+        std::vector<std::filesystem::path> mSearchDirectories;
+        ULONG mReferences = 1;
+    };
+
+    std::vector<std::uint8_t> CompileShaderBlobInProcess(const ShaderCompileRequest& request, const std::wstring& resolvedPath)
+    {
+        namespace fs = std::filesystem;
+
+        const DxcCreateInstanceFn createInstance = GetDxcCreateInstance();
+        if (createInstance == nullptr)
+        {
+            throw std::runtime_error("dxcompiler.dll could not be loaded to compile a packaged shader.");
+        }
+
+        ComPtr<IDxcUtils> utils;
+        ComPtr<IDxcCompiler3> compiler;
+        if (FAILED(createInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)))
+            || FAILED(createInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler))))
+        {
+            throw std::runtime_error("dxcompiler.dll could not create a compiler instance.");
+        }
+
+        std::string sourceText;
+        if (!DataFiles::ReadText(resolvedPath, sourceText))
+        {
+            throw std::runtime_error("Failed to read the packaged HLSL source: " + NarrowString(resolvedPath));
+        }
+
+        // Relative include directories (the renderers fall back to "Data\\Shaders\\" when
+        // no Data folder exists on disk) are relative to the game's own folder.
+        const fs::path moduleDirectory = GetCurrentModuleDirectory();
+        const auto absoluteDirectory = [&](const std::wstring& directory)
+        {
+            const fs::path path(directory);
+            return (path.is_absolute() ? path : moduleDirectory / path).lexically_normal();
+        };
+
+        // dxc.exe quietly promotes pre-6.0 profiles ("Promoting older shader model profile
+        // to 6.0 version"); the library interface rejects them outright as invalid. Many of
+        // the engine's shaders still ask for vs/ps/cs_5_0, so promote them the same way.
+        std::wstring targetProfile = request.TargetProfile;
+        if (targetProfile.size() >= 4)
+        {
+            const size_t majorPosition = targetProfile.find(L'_');
+            if (majorPosition != std::wstring::npos && majorPosition + 1 < targetProfile.size()
+                && targetProfile[majorPosition + 1] >= L'0' && targetProfile[majorPosition + 1] < L'6')
+            {
+                targetProfile = targetProfile.substr(0, majorPosition) + L"_6_0";
+            }
+        }
+
+        const fs::path sourceDirectory = fs::path(resolvedPath).parent_path();
+        std::vector<fs::path> searchDirectories{ sourceDirectory };
+        std::vector<std::wstring> arguments
+        {
+            resolvedPath,
+            L"-T", targetProfile,
+            L"-I", sourceDirectory.wstring(),
+            // Same options as the dxc.exe path above, for the same reasons.
+            L"-all_resources_bound",
+#if defined(PTERO_DEBUG)
+            L"-Zi",
+            L"-Qembed_debug",
+            L"-Od",
+#else
+            L"-O3",
+#endif
+        };
+
+        for (const std::wstring& includeDirectory : request.IncludeDirectories)
+        {
+            if (!includeDirectory.empty())
+            {
+                const fs::path directory = absoluteDirectory(includeDirectory);
+                searchDirectories.push_back(directory);
+                arguments.push_back(L"-I");
+                arguments.push_back(directory.wstring());
+            }
+        }
+
+        for (const std::wstring& define : request.Defines)
+        {
+            if (!define.empty())
+            {
+                arguments.push_back(L"-D");
+                arguments.push_back(define);
+            }
+        }
+
+        if (!request.EntryPoint.empty())
+        {
+            arguments.push_back(L"-E");
+            arguments.push_back(request.EntryPoint);
+        }
+
+        std::vector<LPCWSTR> argumentPointers;
+        argumentPointers.reserve(arguments.size());
+        for (const std::wstring& argument : arguments)
+        {
+            argumentPointers.push_back(argument.c_str());
+        }
+
+        DxcBuffer source{};
+        source.Ptr = sourceText.data();
+        source.Size = sourceText.size();
+        source.Encoding = DXC_CP_UTF8;
+
+        DataFilesIncludeHandler includeHandler(utils.Get(), std::move(searchDirectories));
+        ComPtr<IDxcResult> result;
+        HRESULT hr = compiler->Compile(
+            &source,
+            argumentPointers.data(),
+            static_cast<UINT32>(argumentPointers.size()),
+            &includeHandler,
+            IID_PPV_ARGS(&result));
+
+        HRESULT status = hr;
+        if (SUCCEEDED(hr) && result)
+        {
+            result->GetStatus(&status);
+        }
+
+        std::string diagnostics;
+        if (result)
+        {
+            ComPtr<IDxcBlobUtf8> errors;
+            if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr))
+                && errors && errors->GetStringLength() > 0)
+            {
+                diagnostics.assign(errors->GetStringPointer(), errors->GetStringLength());
+                OutputDebugStringA(diagnostics.c_str());
+            }
+        }
+
+        if (FAILED(status))
+        {
+            throw std::runtime_error(diagnostics.empty()
+                ? "dxcompiler.dll failed to compile " + NarrowString(resolvedPath) + " without diagnostic output."
+                : diagnostics);
+        }
+
+        ComPtr<IDxcBlob> bytecode;
+        if (FAILED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&bytecode), nullptr)) || !bytecode)
+        {
+            throw std::runtime_error("dxcompiler.dll produced no bytecode for " + NarrowString(resolvedPath) + ".");
+        }
+
+        return CopyBlobBytes(bytecode->GetBufferPointer(), bytecode->GetBufferSize());
     }
 }
 
@@ -862,7 +1100,9 @@ bool DX12Shader::Compile(const ShaderCompileRequest& request)
             return true;
         }
 
-        mBytecode = CompileShaderBytecode(request, mSourcePath);
+        mBytecode = IsPackagedPath(mSourcePath)
+            ? CompileShaderBlobInProcess(request, mSourcePath)
+            : CompileShaderBytecode(request, mSourcePath);
         mLoadedFromCache = false;
         StoreShaderInCache(bytecodeCachePath, metadataCachePath, expectedMetadata, mBytecode);
         return true;

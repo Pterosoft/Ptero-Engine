@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "TextureManager.h"
+#include "System/DataFiles.h"
 
 // DDSTextureLoader12 – lightweight DDS loader for DX12, part of the DirectXTex SDK.
 #include "../SDKs/DirectXTex/DDSTextureLoader/DDSTextureLoader12.h"
@@ -161,7 +162,9 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     if (auto it = mCache.find(ddsPath); it != mCache.end())
     {
         const auto now = std::chrono::steady_clock::now();
-        if (now - it->second.LastCheckTime < kRevalidateInterval)
+        // Packaged content cannot change under a running game, so there is nothing to
+        // revalidate - and no file on disk to stat.
+        if (now - it->second.LastCheckTime < kRevalidateInterval || DataFiles::IsPackaged())
         {
             if (it->second.Texture)
             {
@@ -186,7 +189,7 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     std::error_code lastWriteError;
     const auto lastWriteTime = std::filesystem::last_write_time(texturePath, lastWriteError);
 
-    if (!std::filesystem::exists(texturePath))
+    if (!DataFiles::IsFile(texturePath))
     {
         mLastError = "DDS file not found: " + ddsPath;
         return nullptr;
@@ -223,20 +226,26 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     // ----------------------------------------------------------------
     // 2. Load the DDS file and create the committed GPU resource.
     // ----------------------------------------------------------------
-    std::wstring widePath(ddsPath.begin(), ddsPath.end());
+    // Read through DataFiles (a packaged game decrypts it from Textures.ppak). The bytes
+    // must outlive UpdateSubresources below: the subresource table points into them.
+    std::vector<std::uint8_t> ddsData;
+    if (!DataFiles::ReadBytes(texturePath, ddsData))
+    {
+        mLastError = "Could not read DDS file: " + ddsPath;
+        return nullptr;
+    }
 
     ComPtr<ID3D12Resource> textureResource;
-    std::unique_ptr<uint8_t[]> ddsData;
     std::vector<D3D12_SUBRESOURCE_DATA> subresources;
 
-    HRESULT hr = DirectX::LoadDDSTextureFromFileEx(
+    HRESULT hr = DirectX::LoadDDSTextureFromMemoryEx(
         device,
-        widePath.c_str(),
+        ddsData.data(),
+        ddsData.size(),
         0,
         D3D12_RESOURCE_FLAG_NONE,
         GetLoaderFlags(ddsPath, semantic),
         textureResource.GetAddressOf(),
-        ddsData,
         subresources);
 
     if (FAILED(hr))

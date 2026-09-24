@@ -141,7 +141,6 @@ float3 ShadeSpecHit(float3 hitPos, float3 hitNormal, float3 geoNormal, float3 al
         float bias = max(0.01f, 0.02f * rsqrt(max(geoNdotL, 0.05f)));
         float3 org = hitPos + geoNormal * bias + sunDir * bias;
         sunVis     = TraceShadowRay(org, sunDir, max(1e4f - bias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
-        sunVis     = lerp(0.35f, 1.0f, sunVis);
     }
 
     float3 direct = albedo * g_SunColor * sunNdotL * sunVis;

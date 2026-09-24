@@ -7,7 +7,13 @@
     <Platform Project="x64" />
   </Project>
   <Project Path="../Game/Game.vcxproj" Id="337b2864-a8c5-4ef8-a446-899d1e7cac8b" />
-  <Project Path="../Renderer_DX12/Renderer_DX12.vcxproj" Id="17da5c78-328f-4fa3-8082-9b429693168b" />
+  <Project Path="../Renderer_DX12/Renderer_DX12.vcxproj" Id="17da5c78-328f-4fa3-8082-9b429693168b">
+    <BuildDependency Project="../Video/Video.vcxproj" />
+  </Project>
   <Project Path="../System/System.vcxproj" Id="c392bd3f-864e-4324-b584-a978d6a36308" />
+  <Project Path="../Video/Video.vcxproj" Id="9460924c-78a8-46c6-bbef-1916e1a2a2ee" />
   <Project Path="Ptero-Engine.vcxproj" Id="11e5ffc0-782f-4b55-ab77-7ebd87354f9b" />
+  <Project Path="GameLauncher/GameLauncher.vcxproj" Id="1d1118a9-5fb8-457c-9e20-72bc366f3884">
+    <Platform Project="x64" />
+  </Project>
 </Solution>

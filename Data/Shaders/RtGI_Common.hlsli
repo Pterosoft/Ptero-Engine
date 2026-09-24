@@ -202,9 +202,22 @@ void FinalizeReservoir(inout GIReservoir r, float targetPdf)
 }
 
 // ─── Simple PCG-based RNG ─────────────────────────────────────────────────────
+// PCG hash (Jarzynski & Olano, "Hash Functions for GPU Rendering").
+uint RtgiPcgHash(uint v)
+{
+    const uint state = v * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// The seed has to be hashed. It used to be a linear function of the pixel, which an LCG
+// maps to a regular lattice: neighbouring pixels drew correlated numbers instead of
+// independent ones. Smooth cosine-sampled bounce light hid that, but NEE's binary shadow
+// visibility turned the lattice into high-contrast structure that the denoiser smeared
+// into visible blocks.
 uint InitRng(uint2 pixel, uint frameIndex)
 {
-    return (pixel.x * 1973u + pixel.y * 9277u + frameIndex * 26699u) | 1u;
+    return RtgiPcgHash(pixel.x ^ RtgiPcgHash(pixel.y ^ RtgiPcgHash(frameIndex))) | 1u;
 }
 
 float RandFloat(inout uint state)

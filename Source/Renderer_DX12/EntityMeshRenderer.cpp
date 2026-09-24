@@ -1,5 +1,8 @@
 #include "pch.h"
 #include "EntityMeshRenderer.h"
+#include "SubsurfaceScattering.h"
+
+#include "System/DataFiles.h"
 
 #include "System/PteroLog.h"
 
@@ -86,26 +89,20 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-            return {};
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        if (dataDirectory.empty() || DataFiles::IsPackaged())
+            return dataDirectory;
+        std::error_code errorCode;
+        return std::filesystem::weakly_canonical(dataDirectory, errorCode);
+    }
 
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return std::filesystem::weakly_canonical(dataDirectory);
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-
-            currentPath = parentPath;
-        }
-
-        return {};
+    // Canonical on disk; a packaged (virtual) path has nothing on disk to canonicalize.
+    std::filesystem::path CanonicalDataPath(const std::filesystem::path& path)
+    {
+        if (DataFiles::IsPackaged())
+            return path.lexically_normal();
+        std::error_code errorCode;
+        return std::filesystem::weakly_canonical(path, errorCode);
     }
 
     std::filesystem::path ResolveMaterialFilePath(const std::string& materialPath)
@@ -114,16 +111,15 @@ namespace
             return {};
 
         std::filesystem::path path(materialPath);
-        std::error_code errorCode;
-        if (path.is_absolute() && std::filesystem::exists(path, errorCode))
-            return std::filesystem::weakly_canonical(path, errorCode);
+        if (path.is_absolute() && DataFiles::IsFile(path))
+            return CanonicalDataPath(path);
 
         const std::filesystem::path dataDirectory = FindProjectDataDirectory();
         if (!dataDirectory.empty())
         {
             path = (dataDirectory / path).lexically_normal();
-            if (std::filesystem::exists(path, errorCode))
-                return std::filesystem::weakly_canonical(path, errorCode);
+            if (DataFiles::IsFile(path))
+                return CanonicalDataPath(path);
         }
 
         return {};
@@ -372,6 +368,7 @@ void EntityMeshRenderer::Render(
             matOut.RoughnessFactor = texPaths.roughnessFactor;
             matOut.SpecularFactor  = texPaths.specularFactor;
             matOut.NormalScale     = texPaths.normalScale;
+            matOut.FlipNormalGreen = texPaths.flipNormalGreen ? 1 : 0;
             matOut.AoStrength      = texPaths.aoStrength;
             matOut.OpacityFactor   = texPaths.opacityFactor;
             matOut.AlphaCutoff     = texPaths.alphaCutoff;
@@ -391,6 +388,19 @@ void EntityMeshRenderer::Render(
             matOut.ParallaxFadeDistance = texPaths.parallaxFadeDistance;
             matOut.ParallaxReferenceHeight = texPaths.parallaxReferenceHeight;
             matOut.CameraPositionWS     = cameraPosition;
+
+            // Only opaque surfaces can be scattered: a blended one's diffuse is already
+            // mixed with what is behind it by the time the subsurface pass could swap it.
+            matOut.SubsurfaceSlot = 0;
+            if (texPaths.useSubsurfaceScattering && !texPaths.useTransparentBlend)
+            {
+                SubsurfaceProfileDesc profile;
+                profile.Color   = { texPaths.subsurfaceColorR, texPaths.subsurfaceColorG, texPaths.subsurfaceColorB };
+                profile.Falloff = { texPaths.subsurfaceFalloffR, texPaths.subsurfaceFalloffG, texPaths.subsurfaceFalloffB };
+                profile.RadiusMeters = (std::max)(texPaths.subsurfaceRadiusMm, 0.01f) * 0.001f;
+                profile.Translucency = texPaths.subsurfaceTranslucency;
+                matOut.SubsurfaceSlot = SubsurfaceProfiles::Acquire(profile);
+            }
 
             std::string metallicPath = texPaths.metallic;
             std::string roughnessPath = texPaths.roughness;
@@ -1262,7 +1272,7 @@ std::size_t EntityMeshRenderer::SelectLodIndex(
     const float dy = position.y - cameraPosition.y;
     const float dz = position.z - cameraPosition.z;
     const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-    const float scaledDistance = distance * (std::max)(meshComponent.LodUsageScale, 0.1f);
+    const float scaledDistance = distance * (std::max)(meshComponent.LodUsageScale, 0.1f) * mLodDistanceScale;
 
     const std::size_t desiredLod =
         (std::min)(static_cast<std::size_t>(scaledDistance / kLodDistanceStep), lodCount - 1);
@@ -1615,13 +1625,11 @@ std::string EntityMeshRenderer::ResolveBaseColorDdsPath(const std::string& mater
     // Try the path as-is first (already absolute), then try relative to Data/.
     auto tryLoad = [](const std::filesystem::path& p) -> std::string
     {
-        if (!std::filesystem::exists(p)) return {};
         try
         {
-            std::ifstream f(p);
-            if (!f.is_open()) return {};
-            nlohmann::json j;
-            f >> j;
+            std::string text;
+            if (!DataFiles::ReadText(p, text)) return {};
+            const nlohmann::json j = nlohmann::json::parse(text);
             auto textures = j.find("textures");
             if (textures == j.end()) return {};
             auto bc = textures->find("baseColor");
@@ -1643,12 +1651,12 @@ std::string EntityMeshRenderer::ResolveBaseColorDdsPath(const std::string& mater
     {
         // Check if this directory contains a "Data" sibling that holds our relPath.
         std::filesystem::path candidate = current.parent_path() / "Data" / relPath;
-        if (std::filesystem::exists(candidate))
+        if (DataFiles::Exists(candidate))
             return candidate.string();
 
         // Also check if current itself is Data/.
         candidate = current / relPath;
-        if (current.filename() == "Data" && std::filesystem::exists(candidate))
+        if (current.filename() == "Data" && DataFiles::Exists(candidate))
             return candidate.string();
 
         const auto parent = current.parent_path();
@@ -1814,9 +1822,9 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         while (!current.empty())
         {
             std::filesystem::path candidate = current.parent_path() / "Data" / relPath;
-            if (std::filesystem::exists(candidate)) return candidate.string();
+            if (DataFiles::Exists(candidate)) return candidate.string();
             candidate = current / relPath;
-            if (current.filename() == "Data" && std::filesystem::exists(candidate))
+            if (current.filename() == "Data" && DataFiles::Exists(candidate))
                 return candidate.string();
             const auto parent = current.parent_path();
             if (parent == current) break;
@@ -1860,6 +1868,7 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         // value that reproduces exactly how they used to shade.
         t.specularFactor  = node.value("specularFactor",           0.5f);
         t.normalScale     = node.value("normalScale",             1.f);
+        t.flipNormalGreen = node.value("normalFlipGreen",         false);
         // JSON uses "ambientOcclusionStrength" for the AO multiplier.
         t.aoStrength      = node.value("ambientOcclusionStrength", 1.f);
         t.opacityFactor   = node.value("opacity",                  1.f);
@@ -1875,6 +1884,10 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         t.parallaxFadeDistance  = node.value("parallaxFadeDistance", 30.f);
         t.parallaxReferenceHeight = node.value("heightReference",     1.f);
 
+        t.useSubsurfaceScattering = node.value("useSubsurfaceScattering", false);
+        t.subsurfaceRadiusMm      = node.value("subsurfaceRadiusMm",      3.f);
+        t.subsurfaceTranslucency  = node.value("subsurfaceTranslucency",  0.8f);
+
         // UV tiling and offset are stored as two-element arrays [u, v].
         auto readFloat2 = [&node](const char* key, float& outU, float& outV)
         {
@@ -1887,6 +1900,19 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         };
         readFloat2("uvTiling", t.uvTilingU, t.uvTilingV);
         readFloat2("uvOffset", t.uvOffsetU, t.uvOffsetV);
+
+        auto readFloat3 = [&node](const char* key, float& outR, float& outG, float& outB)
+        {
+            auto it = node.find(key);
+            if (it != node.end() && it->is_array() && it->size() >= 3)
+            {
+                outR = (*it)[0].get<float>();
+                outG = (*it)[1].get<float>();
+                outB = (*it)[2].get<float>();
+            }
+        };
+        readFloat3("subsurfaceColor", t.subsurfaceColorR, t.subsurfaceColorG, t.subsurfaceColorB);
+        readFloat3("subsurfaceFalloff", t.subsurfaceFalloffR, t.subsurfaceFalloffG, t.subsurfaceFalloffB);
 
         // Base color tint is stored as an RGBA array [r,g,b,a] in 0–1 range.
         auto tintIt = node.find("baseColorTint");
@@ -1906,10 +1932,9 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         if (matFilePath.empty())
             return result;
 
-        std::ifstream matFile{ matFilePath };
-        if (!matFile.is_open()) return result;
-        nlohmann::json j;
-        matFile >> j;
+        std::string matText;
+        if (!DataFiles::ReadText(matFilePath, matText)) return result;
+        const nlohmann::json j = nlohmann::json::parse(matText);
 
         const std::string type = j.value("type", std::string{});
         if (type == "MultiMaterial")

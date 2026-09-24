@@ -144,6 +144,12 @@
     <ClInclude Include="RtAmbientOcclusion.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SubsurfaceScattering.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SubsurfaceSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="AgxTonemapSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -169,6 +175,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="XeGtaoRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SssrRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="BloomSettings.h">
@@ -247,9 +256,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TerrainRenderer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="OceanSimulation.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WaterRenderer.h">
@@ -398,6 +404,9 @@
     <ClCompile Include="RtAmbientOcclusion.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SubsurfaceScattering.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="AgxTonemapper.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -411,6 +420,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="XeGtaoRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SssrRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="BloomRenderer.cpp">
@@ -521,41 +533,9 @@
     <ClCompile Include="TerrainRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="OceanSimulation.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="WaterRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\MeshEntity.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\TAAResolve.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\SkyPass.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\ShadowDepth.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\PointLight.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\DeferredLighting.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\GBuffer.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\Terrain.hlsl">
-      <Filter>Source Files\Shaders</Filter>
-    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\Data\Shaders\RtGI_Common.hlsli">

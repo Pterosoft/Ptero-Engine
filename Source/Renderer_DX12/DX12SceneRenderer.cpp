@@ -5,6 +5,7 @@
 #include "..\System\include\System\AssetManager.h"
 #include "System/PteroLog.h"
 #include "AudioManager.h"
+#include "EntityIds.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,7 @@ extern "C"
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
     bool __stdcall DX12Context_GetRenderSize(UINT* width, UINT* height);
+    double __stdcall DX12Context_GetRenderLatencyMilliseconds();
     HWND __stdcall DX12Context_GetWindowHandle();
     bool __stdcall DX12Context_AllocateSrvDescriptor(
         D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandle,
@@ -181,6 +183,7 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             return false;
         }
 
+
         ReportProgress(L"Preparing depth debug resources...");
         if (!CreateDepthDebugResources())
         {
@@ -253,7 +256,8 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
         }
 
         // Non-fatal: without the FidelityFX DLLs FSR reports itself unavailable and
-        // the settings panel says why.
+        // the settings panel says why. (It was once skipped for standalone on the belief
+        // that it crashed there; that crash was QtUi touching a nonexistent Qt window.)
         ReportProgress(L"Initializing AMD FSR...");
         if (!mFsrRenderer.Initialize() && mFsrRenderer.GetLastErrorMessage())
         {
@@ -591,7 +595,20 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     UpdateSceneConstants();
 
     mSharpenSettings.Validate();
-    const float textureMipLODBias = mSharpenSettings.GetEffectiveTextureMipLODBias();
+    // Under DLSS/FSR the texture mip bias is the upscalers' own recommendation,
+    // log2(render / display), not the level's texture sharpening: a level authored for
+    // native TAA can carry a bias like -3, which at a reduced render resolution samples
+    // textures far too fine - sparkle the upscaler reads as detail and cannot resolve,
+    // worse the lower the quality mode.
+    float textureMipLODBias = mSharpenSettings.GetEffectiveTextureMipLODBias() + mTextureQualityMipBias;
+    if (UpscalerOwnsPostAaOutput() && mSceneWidth > 0)
+    {
+        UINT displayWidth = mSceneWidth;
+        UINT displayHeight = mSceneHeight;
+        DX12Context_GetRenderSize(&displayWidth, &displayHeight);
+        const float renderScale = static_cast<float>(mSceneWidth) / static_cast<float>((std::max)(displayWidth, 1u));
+        textureMipLODBias = std::log2((std::min)(renderScale, 1.0f)) + mTextureQualityMipBias;
+    }
     mEntityMeshRenderer.SetTextureMipLODBias(textureMipLODBias);
     mTerrainRenderer.SetTextureMipLODBias(textureMipLODBias);
 
@@ -917,19 +934,24 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         const float kSceneBoundRadius = ComputeSceneBoundRadius();
         mShadowMapRenderer.BeginShadowPass(commandList, sunDir, kSceneBoundRadius);
 
-        mEntityMeshRenderer.RenderDepthOnly(
-            commandList,
-            mShadowMapRenderer.GetRootSignature(),
-            mShadowMapRenderer.GetPipelineState(),
-            mShadowMapRenderer.GetLightViewProjection());
+        // Shadows off: the pass still clears the map, so the lighting reads "nothing
+        // occludes" rather than a stale map from before the switch.
+        if (mShadowsEnabled)
+        {
+            mEntityMeshRenderer.RenderDepthOnly(
+                commandList,
+                mShadowMapRenderer.GetRootSignature(),
+                mShadowMapRenderer.GetPipelineState(),
+                mShadowMapRenderer.GetLightViewProjection());
 
-        // Vegetation casts through its own alpha-tested depth pipeline rather
-        // than the shared one, because a leaf card has to clip to its texture
-        // or it would cast the shadow of a solid rectangle.
-        mVegetationRenderer.RenderShadowDepth(
-            commandList,
-            mShadowMapRenderer.GetLightViewProjection(),
-            kShadowDepthFormat);
+            // Vegetation casts through its own alpha-tested depth pipeline rather
+            // than the shared one, because a leaf card has to clip to its texture
+            // or it would cast the shadow of a solid rectangle.
+            mVegetationRenderer.RenderShadowDepth(
+                commandList,
+                mShadowMapRenderer.GetLightViewProjection(),
+                kShadowDepthFormat);
+        }
 
         mShadowMapRenderer.EndShadowPass(commandList);
 
@@ -976,7 +998,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 continue;
 
             PointLightComponent& pl = *entity.PointLight;
-            if (pl.CastShadows && shadowLights.size() < kMaxShadowCastingPointLights)
+            if (mShadowsEnabled && pl.CastShadows && shadowLights.size() < kMaxShadowCastingPointLights)
             {
                 shadowLights.push_back({ entity.Transform.Position, (std::max)(pl.Radius, 0.05f) });
                 mCachedPointLights[pointLightIndex]._Pad0 = static_cast<float>(shadowLights.size() - 1);
@@ -1060,6 +1082,9 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         commandList->ResourceBarrier(1, &toDepthWrite);
         geometryDepthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     }
+
+    // Subsurface materials register their profiles as the G-Buffer is drawn.
+    SubsurfaceProfiles::BeginFrame();
 
     // Clear scene depth and begin the G-Buffer geometry pass.
     commandList->ClearDepthStencilView(mSceneDsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -1148,6 +1173,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     const bool probesDebugEnabled = probesEnabled && mProbeSettings.DebugShowProbes;
     const bool rtgiWillRun = mRtgiSettings.Enabled && mEntities != nullptr && !probesEnabled;
     const bool rtaoWillRun = mRtaoSettings.Enabled && mEntities != nullptr;
+    // Known only now: the G-Buffer pass above is what registers subsurface materials.
+    const bool subsurfaceWillRun = mSubsurfaceSettings.Enabled && SubsurfaceProfiles::AnyActiveThisFrame();
+    const bool subsurfaceRayTracedWillRun = subsurfaceWillRun
+        && mSubsurfaceSettings.Mode == 1
+        && mEntities != nullptr;
     const bool gtaoWillRun = mGtaoSettings.Enabled;
     const bool volumetricFogWillRun = mVolumetricFogSettings.Enabled && mVolumetricFogRenderer.IsInitialized();
 
@@ -1314,7 +1344,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // The fog pass itself traces nothing; it is in this list only through the
     // probe grid it may ask for.
     const bool sharedTlasNeeded = mEntities != nullptr
-        && (rtgiWillRun || rtaoWillRun || probeGridWillRun);
+        && (rtgiWillRun || rtaoWillRun || probeGridWillRun || subsurfaceRayTracedWillRun);
     if (sharedTlasNeeded)
     {
         PTERO_SCOPED_PASS_TIMER("GI", "TLAS build");
@@ -1672,11 +1702,18 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             const float* projMat    = mJitteredProjection.m[0];
             const float* worldToView = mNonJitteredViewMatrix.m[0];
 
+            // XeGTAO's raw output is per-pixel noise meant to be blurred by its own denoise
+            // passes. Without one (the level may author 0), an upscaler magnifies that
+            // grain from the lower render resolution straight onto the screen.
+            GtaoSettings gtaoSettings = mGtaoSettings;
+            if (UpscalerOwnsPostAaOutput())
+                gtaoSettings.DenoisePasses = (std::max)(gtaoSettings.DenoisePasses, 1);
+
             mGtaoRenderer.Dispatch(
                 commandList,
                 mDeferredLightingPass.GetSrvs().Normal,
                 mDepthSrvGpuHandle,
-                mGtaoSettings,
+                gtaoSettings,
                 projMat,
                 worldToView,
                 0); // fixed noise index - no temporal accumulation for GTAO
@@ -1874,6 +1911,50 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         mDepthBufferState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     }
 
+    // Subsurface scattering: upload this frame's profiles and give the lighting resolve
+    // somewhere to write the diffuse light it will scatter.
+    bool subsurfaceActive = false;
+    if (subsurfaceWillRun && mDeferredLightingPass.IsInitialized())
+    {
+        if (!mSubsurfaceRenderer.IsInitialized() && !mSubsurfaceRenderer.HasInitFailed())
+        {
+            if (!mSubsurfaceRenderer.Initialize(mSceneWidth, mSceneHeight, SceneColorFormat))
+            {
+                std::string sssError = "Subsurface scattering init failed";
+                if (mSubsurfaceRenderer.GetLastError()) sssError += std::string(": ") + mSubsurfaceRenderer.GetLastError();
+                PTERO_LOG_ERROR("Renderer", "%s", sssError.c_str());
+                mLastErrorMessage = sssError;
+            }
+        }
+
+        if (mSubsurfaceRenderer.IsInitialized() && mSubsurfaceRenderer.EnsureSize(mSceneWidth, mSceneHeight))
+        {
+            SubsurfaceScatteringRenderer::FrameInputs sssInputs;
+            sssInputs.Settings = &mSubsurfaceSettings;
+            sssInputs.ViewProjection = mJitteredViewProjection;
+            sssInputs.Projection = mJitteredProjection;
+            sssInputs.CameraPosition = mCamera.GetPosition();
+            sssInputs.SunDirection = mDeferredLightingPass.GetSunDirection();
+            sssInputs.SunColor = mDeferredLightingPass.GetSunColor();
+            sssInputs.SkyAmbient = mDeferredLightingPass.GetSkyAmbient();
+            sssInputs.Lights = mDeferredLightingPass.GetPointLights();
+            sssInputs.NumLights = mDeferredLightingPass.GetPointLightCount();
+            sssInputs.RayTracingAvailable = subsurfaceRayTracedWillRun
+                && mRtgiRenderer.IsInitialized() && mRtgiRenderer.IsTlasReady();
+            sssInputs.Shadows = &mDeferredLightingPass.GetShadowSnapshot();
+
+            const D3D12_GPU_VIRTUAL_ADDRESS sssConstants = mSubsurfaceRenderer.PrepareFrame(sssInputs);
+            if (sssConstants != 0)
+            {
+                mSubsurfaceRenderer.BeginLightingOutput(commandList);
+                mDeferredLightingPass.SetSubsurface(sssConstants, mSubsurfaceRenderer.GetDiffuseRtv());
+                subsurfaceActive = true;
+            }
+        }
+    }
+    if (!subsurfaceActive)
+        mDeferredLightingPass.SetSubsurface(0, {});
+
     if (mDeferredLightingPass.IsInitialized())
     {
         ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -1887,6 +1968,82 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             SceneColorFormat,
             mSceneWidth,
             mSceneHeight);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 4-SSS – Subsurface scattering
+    // Scatters the diffuse light the resolve just split out of every subsurface pixel
+    // (screen-space separable blur, or ray-traced surface probes) and swaps it back into
+    // the scene colour. Runs before anything is layered over the opaque surfaces.
+    // -----------------------------------------------------------------------
+    if (subsurfaceActive)
+    {
+        PTERO_SCOPED_PASS_TIMER("Lighting", mSubsurfaceRenderer.IsRayTracedThisFrame()
+            ? "Subsurface scattering (ray traced)" : "Subsurface scattering");
+
+        // Read from compute, which needs a state covering non-pixel stages.
+        D3D12_RESOURCE_BARRIER sssToCompute[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            sssToCompute[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, sssToCompute);
+
+        const GBufferSrvs& gbufferSrvs = mDeferredLightingPass.GetSrvs();
+        SubsurfaceScatteringRenderer::RayTracedSceneSrvs rtScene;
+        // The ray-traced pass shadows its samples with the lighting pass's shadow maps,
+        // from compute; the sun map rests in PIXEL_SHADER_RESOURCE, so widen it for the
+        // dispatch and put it back afterwards. (The point shadow array already rests in
+        // ALL_SHADER_RESOURCE.)
+        ID3D12Resource* sunShadowTexture = nullptr;
+        if (mSubsurfaceRenderer.IsRayTracedThisFrame())
+        {
+            const DeferredLightingPass::ShadowSnapshot& shadows = mDeferredLightingPass.GetShadowSnapshot();
+            rtScene.Tlas = mRtgiRenderer.GetTlasSrv();
+            rtScene.Vertices = mRtgiRenderer.GetVertexSrv();
+            rtScene.Indices = mRtgiRenderer.GetIndexSrv();
+            rtScene.InstanceInfo = mRtgiRenderer.GetInstanceInfoSrv();
+            rtScene.SunShadow = shadows.SunShadowSrv;
+            rtScene.PointShadows = shadows.PointShadowSrv;
+
+            sunShadowTexture = shadows.SunShadowSrv.ptr != 0 ? mShadowMapRenderer.GetShadowTexture() : nullptr;
+            if (sunShadowTexture)
+            {
+                const auto toAll = CD3DX12_RESOURCE_BARRIER::Transition(
+                    sunShadowTexture,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+                commandList->ResourceBarrier(1, &toAll);
+            }
+        }
+        mSubsurfaceRenderer.Apply(commandList, mSceneRtvHandle, gbufferSrvs.Albedo, gbufferSrvs.Normal, rtScene);
+        if (sunShadowTexture)
+        {
+            const auto toPixel = CD3DX12_RESOURCE_BARRIER::Transition(
+                sunShadowTexture,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &toPixel);
+        }
+
+        D3D12_RESOURCE_BARRIER sssToPixel[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            sssToPixel[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, sssToPixel);
+
+        // Later passes bind their own render targets, but some expect the scene target
+        // and full viewport to still be current, as the lighting resolve left them.
+        commandList->OMSetRenderTargets(1, &mSceneRtvHandle, FALSE, nullptr);
+        commandList->RSSetViewports(1, &vpFull);
+        commandList->RSSetScissorRects(1, &srFull);
     }
 
     // -----------------------------------------------------------------------
@@ -2214,9 +2371,31 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // reflections get temporally resolved along with everything else. The pass
     // composites in place, leaving the scene colour target the current image as before.
     // -----------------------------------------------------------------------
-    if (mSsrSettings.Enabled && mSsrRenderer.IsInitialized() && mDeferredLightingPass.IsInitialized())
+    const bool sssrRequested = mSsrSettings.Enabled && mSsrSettings.Technique == 1;
+    if (sssrRequested && !mSssrRenderer.IsInitialized() && !mSssrInitFailed)
     {
-        PTERO_SCOPED_PASS_TIMER("Post", "SSR");
+        if (!mSssrRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            OutputDebugStringA("DX12SceneRenderer: FidelityFX SSSR initialization failed - using the ray-march SSR instead.\n");
+            if (mSssrRenderer.GetLastErrorMessage())
+            {
+                OutputDebugStringA(mSssrRenderer.GetLastErrorMessage());
+                OutputDebugStringA("\n");
+            }
+            mSssrInitFailed = true;
+        }
+    }
+    const bool runSssr = sssrRequested && mSssrRenderer.IsInitialized();
+    // A failed SSSR falls back to the ray march rather than leaving reflections off.
+    const bool runSsr = mSsrSettings.Enabled && !runSssr && mSsrRenderer.IsInitialized();
+    if (!runSssr)
+    {
+        mSssrRenderer.InvalidateHistory();
+    }
+
+    if ((runSsr || runSssr) && mDeferredLightingPass.IsInitialized())
+    {
+        PTERO_SCOPED_PASS_TIMER("Post", runSssr ? "SSR (FidelityFX SSSR)" : "SSR");
         // The lighting resolve leaves the G-Buffer and depth as pixel-shader resources.
         // This pass reads them from compute, which needs a state covering non-pixel
         // stages, so move them across and put them back afterwards.
@@ -2250,18 +2429,41 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         XMStoreFloat4x4(&ssrInvViewProj, XMMatrixTranspose(XMMatrixInverse(nullptr, ssrViewProjection)));
 
         const GBufferSrvs& gbufferSrvs = mDeferredLightingPass.GetSrvs();
-        mSsrRenderer.Dispatch(
-            commandList,
-            mSceneColorTarget.Get(),
-            mSceneSrvGpuHandle,
-            mDepthSrvGpuHandle,
-            gbufferSrvs.Normal,
-            gbufferSrvs.Material,
-            gbufferSrvs.Albedo,
-            mSsrSettings,
-            ssrViewProj,
-            ssrInvViewProj,
-            mCamera.GetPosition());
+        if (runSssr)
+        {
+            XMFLOAT3 cameraForward;
+            const XMFLOAT3 rawForward = mCamera.GetForwardVector();
+            XMStoreFloat3(&cameraForward, XMVector3Normalize(XMLoadFloat3(&rawForward)));
+
+            mSssrRenderer.Dispatch(
+                commandList,
+                mSceneColorTarget.Get(),
+                mSceneSrvGpuHandle,
+                mDepthSrvGpuHandle,
+                gbufferSrvs.Normal,
+                gbufferSrvs.Material,
+                gbufferSrvs.Albedo,
+                mSsrSettings,
+                ssrViewProj,
+                ssrInvViewProj,
+                mCamera.GetPosition(),
+                cameraForward);
+        }
+        else
+        {
+            mSsrRenderer.Dispatch(
+                commandList,
+                mSceneColorTarget.Get(),
+                mSceneSrvGpuHandle,
+                mDepthSrvGpuHandle,
+                gbufferSrvs.Normal,
+                gbufferSrvs.Material,
+                gbufferSrvs.Albedo,
+                mSsrSettings,
+                ssrViewProj,
+                ssrInvViewProj,
+                mCamera.GetPosition());
+        }
 
         D3D12_RESOURCE_BARRIER ssrToPixel[3];
         for (UINT i = 0; i < 3; ++i)
@@ -2379,10 +2581,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         }
 
         const XMFLOAT3 cameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
-        // mCurrentCameraJitter is the offset whose NDC shift is (2x/w, 2y/h). FSR
-        // counts pixels with +Y down, which flips the vertical component.
-        const float fsrJitterX = mCurrentCameraJitter[0];
-        const float fsrJitterY = -mCurrentCameraJitter[1];
+        // mCurrentCameraJitter is the offset whose NDC shift is (2x/w, 2y/h). FSR and DLSS
+        // count pixels with +Y down, which flips the vertical component.
+        const float upscalerJitterX = mCurrentCameraJitter[0];
+        const float upscalerJitterY = -mCurrentCameraJitter[1];
 
         ID3D12Resource* colorInputResource = mSceneColorTarget.Get();
         ID3D12Resource* motionVectorResource = mMotionVectorRenderer.GetOutputResource();
@@ -2428,8 +2630,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             cameraData.CameraUp = mCamera.GetUpVector();
             cameraData.CameraRight = cameraRight;
             cameraData.CameraForward = mCamera.GetForwardVector();
-            cameraData.JitterX = mCurrentCameraJitter[0];
-            cameraData.JitterY = mCurrentCameraJitter[1];
+            // mCurrentCameraJitter shifts NDC with +Y up; DLSS, like FSR, counts pixels with
+            // +Y down. Passing it unflipped made DLSS undo the jitter vertically in the
+            // wrong direction, so even a still image wobbled, more at lower render scales.
+            cameraData.JitterX = upscalerJitterX;
+            cameraData.JitterY = upscalerJitterY;
             cameraData.Reset = mDlssSettings.ResetHistory || mTaaSettings.ResetHistory;
             cameraData.NearPlane = 0.1f;
             cameraData.FarPlane = mViewDistanceMeters;
@@ -2449,8 +2654,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         {
             PTERO_SCOPED_PASS_TIMER("Post", "FSR Upscaling");
             FsrRenderer::FrameData frameData{};
-            frameData.JitterX = fsrJitterX;
-            frameData.JitterY = fsrJitterY;
+            frameData.JitterX = upscalerJitterX;
+            frameData.JitterY = upscalerJitterY;
             frameData.FrameTimeDeltaMs = (std::max)(mFrameDeltaTimeMs, 0.1f);
             frameData.NearPlane = 0.1f;
             frameData.FarPlane = mViewDistanceMeters;
@@ -2472,8 +2677,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             FsrFrameGeneration::PrepareData prepareData{};
             prepareData.RenderWidth = mSceneWidth;
             prepareData.RenderHeight = mSceneHeight;
-            prepareData.JitterX = fsrJitterX;
-            prepareData.JitterY = fsrJitterY;
+            prepareData.JitterX = upscalerJitterX;
+            prepareData.JitterY = upscalerJitterY;
             prepareData.FrameTimeDeltaMs = (std::max)(mFrameDeltaTimeMs, 0.1f);
             prepareData.NearPlane = 0.1f;
             prepareData.FarPlane = mViewDistanceMeters;
@@ -2528,8 +2733,27 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // Runs after the selected AA/upscaling pass and before bloom/tonemapping.
     // -----------------------------------------------------------------------
     const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
+    // Sharpening an upscaled image sharpens whatever noise survived the upscale too. FSR
+    // already runs its own RCAS, so the engine's pass would be a second one on top; after
+    // DLSS it is kept, but no stronger than 0.5.
+    //
+    // A player-chosen upscaler sharpness (the Image settings page) replaces all of that:
+    // FSR applies it through RCAS (set in GameSettings.cpp), so the engine pass stays off;
+    // DLSS has no sharpening of its own any more, so the engine pass carries it.
+    SharpenSettings sharpenSettings = mSharpenSettings;
+    if (upscalerWillEvaluate && mUpscalerSharpness >= 0.0f)
+    {
+        sharpenSettings.ImageSharpeningEnabled = dlssWillEvaluate && mUpscalerSharpness > 0.0f;
+        sharpenSettings.ImageSharpeningStrength = mUpscalerSharpness;
+    }
+    else if (upscalerWillEvaluate)
+    {
+        if (fsrWillEvaluate && mFsrSettings.Sharpening)
+            sharpenSettings.ImageSharpeningEnabled = false;
+        sharpenSettings.ImageSharpeningStrength = (std::min)(sharpenSettings.ImageSharpeningStrength, 0.5f);
+    }
     const bool imageSharpenWillApply = !rtaoDebugViewActive
-        && mSharpenSettings.ImageSharpeningEnabled
+        && sharpenSettings.ImageSharpeningEnabled
         && mImageSharpenRenderer.IsInitialized();
 
     if (imageSharpenWillApply)
@@ -2554,7 +2778,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         }
 
         PTERO_SCOPED_PASS_TIMER("Post", "Image sharpen");
-        mImageSharpenRenderer.Apply(commandList, sharpenInputResource, sharpenInputSrv, mSharpenSettings);
+        mImageSharpenRenderer.Apply(commandList, sharpenInputResource, sharpenInputSrv, sharpenSettings);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -2727,6 +2951,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     if (IsGameUiActive() || IsUiPreviewActive())
     {
         PTERO_SCOPED_PASS_TIMER("Post", "RmlUi");
+        UpdateStatisticsOverlay();
         mRmlUiRenderer.Render(commandList);
 
         // The UI pass rebinds the render target, viewport and scissor; put the shared
@@ -2763,6 +2988,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
 void DX12SceneRenderer::Shutdown()
 {
+    mVideoLayer.Stop();
+    mVideoLayer.ShutdownGpu();
     mEntityMeshRenderer.Shutdown();
     mPointLightRenderer.Shutdown();
     mDecalRenderer.Shutdown();
@@ -2784,6 +3011,8 @@ void DX12SceneRenderer::Shutdown()
     mFsrWasActive = false;
     mChromaticAberrationRenderer.Shutdown();
     mSsrRenderer.Shutdown();
+    mSssrRenderer.Shutdown();
+    mSubsurfaceRenderer.Shutdown();
     mTaaRenderer.Shutdown();
     mSmaaRenderer.Shutdown();
     mImageSharpenRenderer.Shutdown();
@@ -3099,6 +3328,10 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
     if (mSsrRenderer.IsInitialized())
     {
         mSsrRenderer.Initialize(mSceneWidth, mSceneHeight);
+    }
+    if (mSssrRenderer.IsInitialized())
+    {
+        mSssrRenderer.Initialize(mSceneWidth, mSceneHeight);
     }
 
     if (!mMotionVectorRenderer.Initialize(mSceneWidth, mSceneHeight))
@@ -4298,9 +4531,102 @@ bool DX12SceneRenderer::CreateBufferWithUpload(
 
 bool DX12SceneRenderer::StartGame(bool separateWindow)
 {
-    if (mGameHost.IsRunning())
+    if (mGameHost.IsRunning() || IsGameIntroPlaying())
         return true;
 
+    if (mSkipGameIntro || !mVideoLayer.IsGpuInitialized())
+        return BeginGameAfterIntro(separateWindow);
+
+    mGameIntroSeparateWindow = separateWindow;
+    mGameIntroSkipKeyWasDown = false;
+    if (!mVideoLayer.Play("Videos/logo_pterosoft", false, "Letterbox"))
+    {
+        PTERO_LOG_WARNING("Game", "Intro video Videos/logo_pterosoft could not be played; starting the game directly.");
+        return BeginGameAfterIntro(separateWindow);
+    }
+
+    PTERO_LOG_INFO("Game", "Intro: playing Videos/logo_pterosoft.");
+    mGameIntroStage = GameIntroStage::Pterosoft;
+    return true;
+}
+
+void DX12SceneRenderer::UpdateGameIntro(float deltaTime)
+{
+    if (mGameIntroStage == GameIntroStage::None)
+        return;
+
+    mVideoLayer.Update(deltaTime);
+
+    // Any of these skips straight to the next stage (or into the game, from the second
+    // clip); edge-detected so holding the key through one skip doesn't eat the next.
+    const bool skipKeyDown = QtUi::GameWindowHasFocus() &&
+        ((GetAsyncKeyState(VK_SPACE) & 0x8000) != 0 || (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0 ||
+         (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0 || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
+    const bool skipRequested = skipKeyDown && !mGameIntroSkipKeyWasDown;
+    mGameIntroSkipKeyWasDown = skipKeyDown;
+
+    if (!mVideoLayer.ConsumeFinished() && !skipRequested)
+        return;
+
+    mVideoLayer.Stop();
+    mGameIntroSkipKeyWasDown = false;
+
+    if (mGameIntroStage == GameIntroStage::Pterosoft && mVideoLayer.Play("Videos/logo_engine", false, "Letterbox"))
+    {
+        PTERO_LOG_INFO("Game", "Intro: playing Videos/logo_engine.");
+        mGameIntroStage = GameIntroStage::Engine;
+        return;
+    }
+
+    PTERO_LOG_INFO("Game", "Intro finished; starting the game.");
+    mGameIntroStage = GameIntroStage::None;
+    BeginGameAfterIntro(mGameIntroSeparateWindow);
+}
+
+// FPS and frame time are averaged over a quarter second so the numbers can be read;
+// latency is the most recent frame's render latency, measured by DX12Context from the
+// frame starting (input sampled) to the GPU finishing it.
+void DX12SceneRenderer::UpdateStatisticsOverlay()
+{
+    if (!mShowStatisticsOverlay || !IsGameUiActive())
+    {
+        mRmlUiRenderer.SetStatisticsOverlay(false, {});
+        mStatisticsText.clear();
+        mStatisticsAccumulatedMs = 0.0f;
+        mStatisticsAccumulatedFrames = 0;
+        return;
+    }
+
+    mStatisticsAccumulatedMs += mFrameDeltaTimeMs;
+    ++mStatisticsAccumulatedFrames;
+    if (mStatisticsText.empty() || mStatisticsAccumulatedMs >= 250.0f)
+    {
+        mStatisticsFrameMs = mStatisticsAccumulatedMs / static_cast<float>((std::max)(mStatisticsAccumulatedFrames, 1));
+        mStatisticsFps = mStatisticsFrameMs > 0.0f ? 1000.0f / mStatisticsFrameMs : 0.0f;
+        mStatisticsAccumulatedMs = 0.0f;
+        mStatisticsAccumulatedFrames = 0;
+
+        char text[160] = {};
+        const double latency = DX12Context_GetRenderLatencyMilliseconds();
+        // With frame generation on, twice as many frames reach the screen as are rendered.
+        std::snprintf(text, sizeof(text), "%.0f FPS%s\n%.2f ms frame\n%.1f ms latency",
+            mStatisticsFps, mFrameGeneration.IsActive() ? " (x2 with frame generation)" : "",
+            mStatisticsFrameMs, latency);
+        mStatisticsText = text;
+    }
+    mRmlUiRenderer.SetStatisticsOverlay(true, mStatisticsText);
+}
+
+void DX12SceneRenderer::PrepareStandaloneGameSettings()
+{
+    if (mGameSettingsActive)
+        return;
+    BeginGameSettings(true);
+    ApplySavedGameSettings();
+}
+
+bool DX12SceneRenderer::BeginGameAfterIntro(bool separateWindow)
+{
     mGameInSeparateWindow = separateWindow;
 
     // Remember the editor pose so stopping the session restores the viewport exactly.
@@ -4377,8 +4703,23 @@ bool DX12SceneRenderer::StartGame(bool separateWindow)
         }
         return result;
     };
+    services.GetWinningScore = [](void* user) -> int {
+        return static_cast<DX12SceneRenderer*>(user)->mRmlUiRenderer.GetFarkleWinningScore();
+    };
+    // The editor tests with its own HUD and menu; the shipped menus are the standalone's.
+    services.Standalone = QtUi::IsStandaloneGame();
+    // Before Start: the game loads its first menu there, and the menu needs its options.
+    // A standalone game has had its settings applied since the level loaded (see
+    // PrepareStandaloneGameSettings); beginning again would take those applied values as
+    // the level's baseline and scale them a second time.
+    const bool settingsAlreadyApplied = mGameSettingsActive;
+    if (!settingsAlreadyApplied)
+        BeginGameSettings(services.Standalone);
     if (!mGameHost.Start(initialCamera, services))
+    {
+        EndGameSettings();
         return false;
+    }
 
     // Hover and click are the host's to make: the game module never sees them.
     mRmlUiRenderer.SetUiSoundCallback([this](bool click) {
@@ -4386,7 +4727,8 @@ bool DX12SceneRenderer::StartGame(bool separateWindow)
         // Clicks everywhere, but hover only on the menu and result screens. The play HUD
         // puts six dice and three actions under a pointer that is moving constantly, and
         // a tick for each one is chatter rather than feedback.
-        if (!click && mRmlUiRenderer.GetLoadedDocumentName().find("farkle.rml") != std::string::npos)
+        if (!click && (mRmlUiRenderer.GetLoadedDocumentName() == "Farkle/farkle.rml" ||
+                       mRmlUiRenderer.GetLoadedDocumentName() == "Farkle/game.rml"))
             return;
         mAudioManager->PlayOneShotByName(click ? "Click" : "Hover");
     });
@@ -4397,12 +4739,20 @@ bool DX12SceneRenderer::StartGame(bool separateWindow)
         (mGameHost.GetGameName().empty() ? std::string("Play") : mGameHost.GetGameName())
         + " - F11 Fullscreen";
     QtUi::OpenGameWindow(separateWindow, windowTitle.c_str());
+    // After the window exists, since the display mode is one of the settings.
+    if (services.Standalone && !settingsAlreadyApplied)
+        ApplySavedGameSettings();
 
     // The graph runs on a copy taken here, so On Game Start sees the level exactly as it
     // was when play was pressed even if the artist keeps editing the graph afterwards.
     mNodeGraphHost.SetUiRenderer(&mRmlUiRenderer);
+    mNodeGraphHost.SetVideoLayer(&mVideoLayer);
     if (mNodeGraphSource != nullptr)
     {
+        // Entities added since the level was loaded have no id yet. Nothing in the graph
+        // can point at them, but Find Entity can still hand one out.
+        if (mEntities != nullptr)
+            EnsureEntityIds(*mEntities);
         mNodeGraphRuntime.SetHost(&mNodeGraphHost);
         mNodeGraphRuntime.Start(*mNodeGraphSource);
     }
@@ -4413,15 +4763,41 @@ bool DX12SceneRenderer::StartGame(bool separateWindow)
 
 void DX12SceneRenderer::StopGame()
 {
+    if (IsGameIntroPlaying())
+    {
+        mGameIntroStage = GameIntroStage::None;
+        mVideoLayer.Stop();
+        mVideoLayer.ConsumeFinished();
+        EndGameSettings();
+        return;
+    }
+
     if (!mGameHost.IsRunning())
         return;
+
+    // A packaged game stopping is the process quitting. The teardown below exists to hand
+    // the editor back its own state - baseline graphics settings, editor camera - and in a
+    // standalone game that only rebuilds upscaler targets in the very last frame before
+    // exit, which is how quitting ended in a GPU hang. Just close the window; the host
+    // waits for the GPU and ends the process.
+    if (QtUi::IsStandaloneGame())
+    {
+        if (mAudioManager) mAudioManager->StopAll();
+        mGameStopRequested = false;
+        QtUi::CloseGameWindow();
+        return;
+    }
 
     // Stop the graph first: On Game Stop is still allowed to touch the UI, and the UI
     // outlives the game module.
     mNodeGraphRuntime.Stop();
     mGameHost.Stop();
+    EndGameSettings();
     mRmlUiRenderer.SetUiSoundCallback({});
     mRmlUiRenderer.CloseDocument();
+    // Like the soundtrack, a video belongs to the session.
+    mVideoLayer.Stop();
+    mVideoLayer.ConsumeFinished();
     // The soundtrack belongs to the session, not the level: it has to end here even if
     // the game module died without getting the chance to stop it itself.
     if (mAudioManager) mAudioManager->StopMusic();
@@ -4574,6 +4950,12 @@ void DX12SceneRenderer::UpdateCamera()
         return;
     }
 
+    if (IsGameIntroPlaying())
+    {
+        UpdateGameIntro(deltaTime);
+        return;
+    }
+
     // Feed the current keyboard state and mouse position into the camera every frame.
     mCamera.Update(
         deltaTime,
@@ -4648,6 +5030,8 @@ void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosi
     mCamera.SetPosition(cameraState.PositionX, cameraState.PositionY, cameraState.PositionZ);
     mCamera.SetRotation(cameraState.Pitch, cameraState.Yaw);
 
+    // Before the graph ticks, so On Video Finished fires in the frame the video ended.
+    mVideoLayer.Update(deltaTime);
     mNodeGraphRuntime.Tick(deltaTime);
 
     // A Stop Game node only raises a flag; tearing the runtime down from inside its own
@@ -4774,6 +5158,42 @@ void DX12SceneRenderer::UpdateSceneConstants()
         projF._32 += mCurrentCameraJitter[1] * 2.0f / static_cast<float>(mSceneHeight);
         projection = XMLoadFloat4x4(&projF);
     }
+    else if (IsDlssUpscalerActive() && mSceneWidth > 0 && mSceneHeight > 0)
+    {
+        // DLSS reconstructs from sub-pixel jitter just like FSR, but it used to get jitter
+        // only from the TAA branch below - so with TAA off (as it must be under an upscaler)
+        // DLSS saw the same samples every frame and could not resolve anything, leaving
+        // aliasing that crawls like noise, worse the lower the quality mode.
+        //
+        // NVIDIA's guidance: Halton(2,3), with 8 * (display / render)^2 phases so the
+        // sequence covers every output pixel at the current scale.
+        UINT outputWidth = mSceneWidth;
+        UINT outputHeight = mSceneHeight;
+        DX12Context_GetRenderSize(&outputWidth, &outputHeight);
+        const float scale = static_cast<float>((std::max)(outputWidth, mSceneWidth)) / static_cast<float>(mSceneWidth);
+        const UINT phaseCount = (std::max)(8u, static_cast<UINT>(std::ceil(8.0f * scale * scale)));
+
+        auto halton = [](UINT index, UINT base)
+        {
+            float fraction = 1.0f;
+            float result = 0.0f;
+            for (; index > 0; index /= base)
+            {
+                fraction /= static_cast<float>(base);
+                result += fraction * static_cast<float>(index % base);
+            }
+            return result;
+        };
+        mDlssJitterIndex = (mDlssJitterIndex % phaseCount) + 1; // Halton index 0 is (0,0)
+        mCurrentCameraJitter[0] = halton(mDlssJitterIndex, 2) - 0.5f;
+        mCurrentCameraJitter[1] = halton(mDlssJitterIndex, 3) - 0.5f;
+
+        XMFLOAT4X4 projF;
+        XMStoreFloat4x4(&projF, projection);
+        projF._31 += mCurrentCameraJitter[0] * 2.0f / static_cast<float>(mSceneWidth);
+        projF._32 += mCurrentCameraJitter[1] * 2.0f / static_cast<float>(mSceneHeight);
+        projection = XMLoadFloat4x4(&projF);
+    }
     else if (mTaaSettings.Enabled && mTaaSettings.JitterScale > 0.0f && mSceneWidth > 0 && mSceneHeight > 0)
     {
         // Halton(2,3) sequence gives a well-distributed low-discrepancy pattern.
@@ -4887,4 +5307,321 @@ bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementClass(
 bool DX12SceneRenderer::NodeGraphUiHost::SetUiElementVisible(const std::string& elementId, bool visible)
 {
     return mUiRenderer != nullptr && mUiRenderer->SetElementVisible(elementId, visible);
+}
+
+// The video nodes forward to the video layer the same way; it lives in Video.dll and
+// reports its own failures, which the log picks up here.
+
+bool DX12SceneRenderer::NodeGraphUiHost::PlayVideo(const std::string& fileName, bool loop, const std::string& fit)
+{
+    if (mVideoLayer == nullptr)
+        return false;
+
+    if (!mVideoLayer->Play(fileName, loop, fit))
+    {
+        PTERO_LOG_WARNING("Video", "Play Video '%s' failed: %s", fileName.c_str(), mVideoLayer->GetLastError().c_str());
+        return false;
+    }
+
+    return true;
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::PauseVideo()
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->Pause();
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::ResumeVideo()
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->Resume();
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::StopVideo()
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->Stop();
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SeekVideo(double seconds)
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->Seek(seconds);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetVideoLooping(bool loop)
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->SetLooping(loop);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetVideoVolume(double volume)
+{
+    if (mVideoLayer != nullptr)
+        mVideoLayer->SetVolume(static_cast<float>(volume));
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::IsVideoPlaying()
+{
+    return mVideoLayer != nullptr && mVideoLayer->IsPlaying();
+}
+
+double DX12SceneRenderer::NodeGraphUiHost::GetVideoTime()
+{
+    return mVideoLayer != nullptr ? mVideoLayer->GetTime() : 0.0;
+}
+
+double DX12SceneRenderer::NodeGraphUiHost::GetVideoDuration()
+{
+    return mVideoLayer != nullptr ? mVideoLayer->GetDuration() : 0.0;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::ConsumeVideoFinished()
+{
+    return mVideoLayer != nullptr && mVideoLayer->ConsumeFinished();
+}
+
+// Entities. The graph runs against the play session's copy of the level (Editor swaps
+// mEntities for the session), so whatever it moves snaps back when play stops, exactly
+// as it does for the game module.
+
+Entity* DX12SceneRenderer::NodeGraphUiHost::FindEntity(std::uint64_t entityId)
+{
+    if (entityId == 0 || mOwner.mEntities == nullptr)
+        return nullptr;
+
+    for (Entity& entity : *mOwner.mEntities)
+    {
+        if (entity.Id == entityId)
+            return &entity;
+    }
+
+    return nullptr;
+}
+
+std::uint64_t DX12SceneRenderer::NodeGraphUiHost::FindEntityByName(const std::string& name)
+{
+    if (mOwner.mEntities == nullptr)
+        return 0;
+
+    for (const Entity& entity : *mOwner.mEntities)
+    {
+        if (entity.Name == name)
+            return entity.Id;
+    }
+
+    return 0;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::GetEntityName(std::uint64_t entityId, std::string& name)
+{
+    const Entity* entity = FindEntity(entityId);
+    if (entity == nullptr)
+        return false;
+
+    name = entity->Name;
+    return true;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::GetEntityTransform(std::uint64_t entityId, NodeGraphTransform& transform)
+{
+    const Entity* entity = FindEntity(entityId);
+    if (entity == nullptr)
+        return false;
+
+    const TransformComponent& source = entity->Transform;
+    const DirectX::XMFLOAT3* vectors[3] = { &source.Position, &source.Rotation, &source.Scale };
+    double* targets[3] = { transform.Position, transform.Rotation, transform.Scale };
+    for (int v = 0; v < 3; ++v)
+    {
+        targets[v][0] = vectors[v]->x;
+        targets[v][1] = vectors[v]->y;
+        targets[v][2] = vectors[v]->z;
+    }
+
+    return true;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetEntityTransform(std::uint64_t entityId, const NodeGraphTransform& transform)
+{
+    Entity* entity = FindEntity(entityId);
+    if (entity == nullptr)
+        return false;
+
+    auto toFloat3 = [](const double* v) {
+        return DirectX::XMFLOAT3(static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]));
+    };
+    entity->Transform.Position = toFloat3(transform.Position);
+    entity->Transform.Rotation = toFloat3(transform.Rotation);
+    entity->Transform.Scale = toFloat3(transform.Scale);
+    return true;
+}
+
+namespace
+{
+    // One row per name in the catalogue's entity property list (NodeGraphCatalog.cpp).
+    // Each resolves to a float or bool field of a component the entity may not have.
+    struct EntityPropertyBinding
+    {
+        const char* Name;
+        float* (*Float)(Entity&);
+        bool* (*Flag)(Entity&);
+    };
+
+    const EntityPropertyBinding kEntityProperties[] = {
+        { "Light Intensity", [](Entity& e) { return e.PointLight ? &e.PointLight->IntensityLumens : nullptr; }, nullptr },
+        { "Light Radius", [](Entity& e) { return e.PointLight ? &e.PointLight->Radius : nullptr; }, nullptr },
+        { "Light Color R", [](Entity& e) { return e.PointLight ? &e.PointLight->ColorR : nullptr; }, nullptr },
+        { "Light Color G", [](Entity& e) { return e.PointLight ? &e.PointLight->ColorG : nullptr; }, nullptr },
+        { "Light Color B", [](Entity& e) { return e.PointLight ? &e.PointLight->ColorB : nullptr; }, nullptr },
+        { "Light Temperature", [](Entity& e) { return e.PointLight ? &e.PointLight->TemperatureKelvin : nullptr; }, nullptr },
+        { "Light Uses Temperature", nullptr, [](Entity& e) { return e.PointLight ? &e.PointLight->UseTemperature : nullptr; } },
+        { "Light Casts Shadows", nullptr, [](Entity& e) { return e.PointLight ? &e.PointLight->CastShadows : nullptr; } },
+        { "Particles Enabled", nullptr, [](Entity& e) { return e.ParticleSystem ? &e.ParticleSystem->Enabled : nullptr; } },
+        { "Particle Spawn Rate", [](Entity& e) { return e.ParticleSystem ? &e.ParticleSystem->SpawnRate : nullptr; }, nullptr },
+        { "Rain Enabled", nullptr, [](Entity& e) { return e.Rain ? &e.Rain->Enabled : nullptr; } },
+        { "Rain Intensity", [](Entity& e) { return e.Rain ? &e.Rain->Intensity : nullptr; }, nullptr },
+    };
+
+    const EntityPropertyBinding* FindEntityProperty(const std::string& name)
+    {
+        for (const EntityPropertyBinding& binding : kEntityProperties)
+        {
+            if (name == binding.Name)
+                return &binding;
+        }
+        return nullptr;
+    }
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::GetEntityProperty(
+    std::uint64_t entityId, const std::string& property, double& value)
+{
+    Entity* entity = FindEntity(entityId);
+    const EntityPropertyBinding* binding = FindEntityProperty(property);
+    if (entity == nullptr || binding == nullptr)
+        return false;
+
+    if (binding->Float != nullptr)
+    {
+        if (const float* field = binding->Float(*entity))
+        {
+            value = *field;
+            return true;
+        }
+    }
+    else if (const bool* flag = binding->Flag(*entity))
+    {
+        value = *flag ? 1.0 : 0.0;
+        return true;
+    }
+
+    return false;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetEntityProperty(
+    std::uint64_t entityId, const std::string& property, double value)
+{
+    Entity* entity = FindEntity(entityId);
+    const EntityPropertyBinding* binding = FindEntityProperty(property);
+    if (entity == nullptr || binding == nullptr)
+        return false;
+
+    if (binding->Float != nullptr)
+    {
+        if (float* field = binding->Float(*entity))
+        {
+            *field = static_cast<float>(value);
+            return true;
+        }
+    }
+    else if (bool* flag = binding->Flag(*entity))
+    {
+        *flag = value != 0.0;
+        return true;
+    }
+
+    return false;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::SetEntityAudioPlaying(std::uint64_t entityId, bool playing)
+{
+    Entity* entity = FindEntity(entityId);
+    if (entity == nullptr || !entity->AudioEmitter || mOwner.mAudioManager == nullptr)
+        return false;
+
+    // The emitter is registered by the per-frame audio update (DX12RendererAPI.cpp), which
+    // also keeps it positioned on the entity. Until that has run once there is no handle.
+    // RuntimeAutoPlayStarted is deliberately left alone: that update stops an emitter whose
+    // flag is set while AutoPlay is off, which would cut a graph-started sound instantly.
+    const int handle = entity->AudioEmitter->RuntimeEmitterHandle;
+    if (handle < 0)
+        return false;
+
+    const AudioManager::EmitterHandle emitter{ handle };
+    return playing ? mOwner.mAudioManager->PlayEmitter(emitter) : mOwner.mAudioManager->StopEmitter(emitter);
+}
+
+NodeGraphCameraPose DX12SceneRenderer::NodeGraphUiHost::GetCamera()
+{
+    const DirectX::XMFLOAT3 position = mOwner.mCamera.GetPosition();
+    const DirectX::XMFLOAT3 rotation = mOwner.mCamera.GetRotation();
+
+    NodeGraphCameraPose pose;
+    pose.Position[0] = position.x;
+    pose.Position[1] = position.y;
+    pose.Position[2] = position.z;
+    pose.Pitch = rotation.x;
+    pose.Yaw = rotation.y;
+    return pose;
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetCamera(const NodeGraphCameraPose& pose)
+{
+    mOwner.mCamera.SetPosition(
+        static_cast<float>(pose.Position[0]), static_cast<float>(pose.Position[1]), static_cast<float>(pose.Position[2]));
+    mOwner.mCamera.SetRotation(static_cast<float>(pose.Pitch), static_cast<float>(pose.Yaw));
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::PlayOneShot(const std::string& eventName)
+{
+    if (mOwner.mAudioManager != nullptr && !eventName.empty())
+        mOwner.mAudioManager->PlayOneShotByName(eventName);
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::PlayMusic(const std::string& eventName)
+{
+    return mOwner.mAudioManager != nullptr && !eventName.empty() && mOwner.mAudioManager->PlayMusicByName(eventName);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::StopMusic()
+{
+    if (mOwner.mAudioManager != nullptr)
+        mOwner.mAudioManager->StopMusic();
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::IsMusicPlaying()
+{
+    return mOwner.mAudioManager != nullptr && mOwner.mAudioManager->IsMusicPlaying();
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::IsKeyDown(int virtualKey)
+{
+    return QtUi::GameWindowHasFocus() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::PollUiClick(std::string& elementId)
+{
+    return mUiRenderer != nullptr && mUiRenderer->PollGraphClick(elementId);
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::ToggleFullscreen()
+{
+    QtUi::ToggleGameFullscreen();
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::IsStandalone()
+{
+    return QtUi::IsStandaloneGame();
 }

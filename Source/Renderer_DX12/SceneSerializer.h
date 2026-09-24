@@ -12,6 +12,7 @@
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
+#include "SubsurfaceSettings.h"
 #include "ChromaticAberrationSettings.h"
 #include "AgxTonemapSettings.h"
 #include "VolumetricFogSettings.h"
@@ -42,6 +43,7 @@ struct Scene
     RtAOSettings* Rtao = nullptr;
     GtaoSettings* Gtao = nullptr;
     SsrSettings* Ssr = nullptr;
+    SubsurfaceSettings* Subsurface = nullptr;
     ChromaticAberrationSettings* ChromaticAberration = nullptr;
     AgxTonemapSettings* Agx = nullptr;
     VolumetricFogSettings* VolumetricFog = nullptr;

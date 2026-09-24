@@ -1,0 +1,10 @@
+Ptero Engine session log
+Started 2026-09-24 19:50:41
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-24_19-50-41.txt
+----------------------------------------------------------------------
+[19:50:41.207] [INFO ] [Log         ] Logging to disk started.
+[19:50:41.207] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-24_19-50-41.txt
+[19:50:41.207] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[19:50:45.940] [INFO ] [CVar        ] 362 cvars registered. Type 'list' in the console to see them.
+[19:50:45.940] [INFO ] [Renderer    ] Renderer initialized.
+[19:50:46.146] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.

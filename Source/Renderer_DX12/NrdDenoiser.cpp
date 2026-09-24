@@ -628,30 +628,42 @@ void NrdDenoiser::Denoise(
         float maxFrames = std::max(1.0f, mMaxAccumTime * mFps);
         relaxSettings.diffuseMaxAccumulatedFrameNum     = static_cast<uint32_t>(maxFrames);
         relaxSettings.specularMaxAccumulatedFrameNum    = static_cast<uint32_t>(maxFrames);
-        // Keep fast history very short for this noisy 1spp diffuse GI so motion responds faster.
-        relaxSettings.diffuseMaxFastAccumulatedFrameNum = std::max(1u, static_cast<uint32_t>(maxFrames / 16.0f + 0.5f));
-        relaxSettings.historyFixFrameNum                = 0;
+        // Fast history is what the slow history gets clamped to (fastHistoryClampingSigmaScale),
+        // so it must average enough frames to have a meaningful mean and variance. This used
+        // to be maxFrames/16 - one frame - which clamped the long history back to the raw
+        // 1spp signal every frame and made the accumulation nearly a no-op. With NEE the
+        // signal is sparse (most bounce hits are in shadow, a few land in sun), so that
+        // showed as noise the accumulation should have removed. NRD's default ratio is 1/5.
+        relaxSettings.diffuseMaxFastAccumulatedFrameNum = std::max(2u, static_cast<uint32_t>(maxFrames / 5.0f + 0.5f));
+        relaxSettings.historyFixFrameNum                = 3;
         relaxSettings.atrousIterationNum                = static_cast<uint32_t>(
             std::clamp(mAtrousIterations, 2, 8));
-        // Disable the large default prepass blur; it is too soft for this GI signal.
-        relaxSettings.diffusePrepassBlurRadius          = 0.0f;
-        // Tighten spatial edge stopping so indirect light does not wash across edges as much.
-        relaxSettings.diffusePhiLuminance               = 0.65f;
+        // A modest prepass blur spreads isolated sunlit samples before they enter history;
+        // at 0 a sparse signal reaches the temporal pass as isolated fireflies and holes.
+        // Still below NRD's default of 30, which was too soft for this GI signal.
+        relaxSettings.diffusePrepassBlurRadius          = 15.0f;
+        // Luminance edge stopping. 0.65 treated the noise itself as edges, so the a-trous
+        // passes refused to blur sparse NEE samples into their neighbours. NRD default is 2.
+        relaxSettings.diffusePhiLuminance               = 1.5f;
         relaxSettings.lobeAngleFraction                 = 0.08f;
         relaxSettings.roughnessFraction                 = 0.10f;
         relaxSettings.diffuseMinLuminanceWeight         = 0.05f;
         relaxSettings.depthThreshold                    = mDisocclusionThreshold;
-        relaxSettings.fastHistoryClampingSigmaScale     = 1.2f;
+        relaxSettings.fastHistoryClampingSigmaScale     = 2.0f;   // NRD default; 1.2 clamped history to the noise
         relaxSettings.spatialVarianceEstimationHistoryThreshold = 1;
         relaxSettings.minHitDistanceWeight              = 0.2f;
         relaxSettings.luminanceEdgeStoppingRelaxation   = 0.15f;
         relaxSettings.normalEdgeStoppingRelaxation      = 0.1f;
         relaxSettings.roughnessEdgeStoppingRelaxation   = 0.5f;
         relaxSettings.enableAntiFirefly                 = true;
-        relaxSettings.antilagSettings.accelerationAmount = 0.9f;
-        relaxSettings.antilagSettings.spatialSigmaScale  = 2.0f;
-        relaxSettings.antilagSettings.temporalSigmaScale = 0.15f;
-        relaxSettings.antilagSettings.resetAmount        = 0.8f;
+        // Anti-lag resets history where the new frame disagrees with it. The previous values
+        // (0.9 / 2.0 / 0.15 / 0.8) fired on ordinary sampling noise: a sparse NEE signal
+        // disagrees with its history every frame, so history kept being thrown away.
+        // NRD defaults - still resets on real lighting changes.
+        relaxSettings.antilagSettings.accelerationAmount = 0.3f;
+        relaxSettings.antilagSettings.spatialSigmaScale  = 4.5f;
+        relaxSettings.antilagSettings.temporalSigmaScale = 0.5f;
+        relaxSettings.antilagSettings.resetAmount        = 0.5f;
         // Use material roughness from the G-buffer to preserve edges instead of blurring everything.
         relaxSettings.enableRoughnessEdgeStopping       = true;
 

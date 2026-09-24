@@ -1,0 +1,77 @@
+Ptero Engine session log
+Started 2026-09-24 17:10:03
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-24_17-10-03.txt
+----------------------------------------------------------------------
+[17:10:03.642] [INFO ] [Log         ] Logging to disk started.
+[17:10:03.642] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-24_17-10-03.txt
+[17:10:03.642] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[17:10:09.485] [INFO ] [CVar        ] 362 cvars registered. Type 'list' in the console to see them.
+[17:10:09.485] [INFO ] [Renderer    ] Renderer initialized.
+[17:10:09.781] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[17:10:10.095] [INFO ] [Game        ] Saved player settings: Settings applied.
+[17:10:10.096] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Characters/SSS_Demo/Head.fbx.ptero', materialPath='Characters/SSS_Demo/Face.json'
+[17:10:10.147] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=199349, indices=1191360, subMeshes=1
+[17:10:10.150] [INFO ] [Meshes      ] Shadow-pass constant buffer grown to 17 slots x 3 frames.
+[17:10:10.153] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2f0000000..0x2f09201f0 (9568752 bytes), releasing in 4 frames (frame 1).
+[17:10:10.155] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2f0e90000..0x2f131b700 (4765440 bytes), releasing in 4 frames (frame 1).
+[17:10:10.155] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=199349, indexCount=1191360, vbBytes=9568752, ibBytes=4765440
+[17:10:10.193] [INFO ] [Meshes      ] Entity constant buffer grown to 17 slots x 3 frames (13056 bytes).
+[17:10:10.193] [INFO ] [Meshes      ] Material constant buffer grown to 65 draws x 3 frames.
+[17:10:10.193] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Geometry_1', lodIndex=0, vertexCount=199349, indexCount=1191360, materialPath='Characters/SSS_Demo/Face.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1191360}, summedSubMeshIndices=1191360, validSubMeshRanges=true
+[17:10:11.279] [INFO ] [Renderer    ] Subsurface scattering initialised at 1920x1080 (ray-traced path available).
+[17:10:14.988] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 5.0 s. Everything above this line is what it did last.
+[17:10:15.124] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  nvGetCompilerInterface
+    #1  nvGetCompilerInterface
+    #2  nvGetCompilerInterface
+    #3  nvGetCompilerInterface
+    #4  nvGetCompilerInterface
+    #5  nvGetCompilerInterface
+    #6  nvGetCompilerInterface
+    #7  nvGetCompilerInterface
+    #8  nvGetCompilerInterface
+    #9  nvGetCompilerInterface
+    #10  nvGetCompilerInterface
+    #11  nvGetCompilerInterface
+    #12  nvGetCompilerInterface
+    #13  nvGetCompilerInterface
+    #14  nvGetCompilerInterface
+    #15  nvGetCompilerInterface
+    #16  OpenAdapter12
+    #17  NVDEV_Thunk
+    #18  NVDEV_Thunk
+    #19  NVDEV_Thunk
+    #20  NVDEV_Thunk
+    #21  OpenAdapter10
+    #22  NVAPI_Thunk
+    #23  SetDependencyInfo
+    #24  OpenAdapter10
+    #25  D3D12GetInterface
+    #26  D3D12GetInterface
+    #27  D3D12GetInterface
+    #28  D3D12GetInterface
+    #29  0x7fff25673350
+    #30  0x7ffecbd91eea
+    #31  D3D12GetInterface
+    #32  D3D12GetInterface
+    #33  D3D12GetInterface
+    #34  DeferredLightingPass::CreateLightingPipeline  (DeferredLightingPass.cpp:1162)
+    #35  DeferredLightingPass::ResolveLight  (DeferredLightingPass.cpp:473)
+    #36  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:1964)
+    #37  RendererDX12_Render  (DX12RendererAPI.cpp:1966)
+    #38  PrepareInitialMainWindowFrame  (EditorMain.cpp:101)
+    #39  InitInstance  (EditorMain.cpp:474)
+    #40  wWinMain  (EditorMain.cpp:232)
+    #41  __scrt_common_main_seh  (exe_common.inl:288)
+    #42  BaseThreadInitThunk
+    #43  RtlUserThreadStart
+[17:10:18.299] [INFO ] [FSR         ] Frame generation swap chain installed.
+[17:10:18.349] [INFO ] [FSR         ] Frame generation context created (3.1.6) for 1920x1080.
+[17:10:18.390] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2f0000000..0x2f09201f0 (frame 5).
+[17:10:18.390] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2f0e90000..0x2f131b700 (frame 5).
+[17:10:18.508] [INFO ] [Game        ] Level warmed up in 8.4 s; starting the intro.
+[17:10:18.531] [INFO ] [Game        ] Intro: playing Videos/logo_pterosoft.
+[17:10:18.626] [WARN ] [Watchdog    ] Render thread recovered after 8.6 s; resumed at frame 17.
+[17:10:25.684] [INFO ] [Game        ] Intro: playing Videos/logo_engine.
+[17:10:36.672] [INFO ] [Game        ] Intro finished; starting the game.
+[17:10:36.718] [INFO ] [FSR         ] Frame generation context released.

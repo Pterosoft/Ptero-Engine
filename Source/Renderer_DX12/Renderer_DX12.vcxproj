@@ -70,6 +70,14 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <!-- PteroGameRuntime=true builds the packaged game's renderer: no Qt anywhere (QtUiHeadless.cpp
+       and NodeGraphEditorHeadless.cpp stand in for the Qt-backed files, and Qt.props/QtNodes.props
+       are not imported), into its own folder so it never overwrites the editor's DLL. Built by
+       the editor's Release > Build Game (ReleaseGame.cpp) with Configuration=Release. -->
+  <PropertyGroup Condition="'$(PteroGameRuntime)'=='true'">
+    <OutDir>$(ProjectDir)$(Platform)\GameRuntime\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\GameRuntime\obj\</IntDir>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>..\..\Binaries</OutDir>
   </PropertyGroup>
@@ -77,14 +85,14 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;WIN32;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;SODIUM_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -101,12 +109,12 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;SODIUM_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -119,22 +127,22 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>PTERO_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PTERO_DEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;SODIUM_STATIC;QT_NO_VERSION_TAGGING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;..\SDKs\libsodium-1.0.22\bin\x64\Debug\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
@@ -147,20 +155,20 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;RENDERERDX12_EXPORTS;SYSTEM_EXPORTS;RMLUI_STATIC_LIB;_WINDOWS;_USRDLL;SODIUM_STATIC;QT_NO_VERSION_TAGGING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\SDKs\CoACD\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
@@ -206,8 +214,13 @@
     <ClInclude Include="Editor.h" />
     <ClInclude Include="..\System\include\System\PteroLog.h" />
     <ClInclude Include="..\System\include\System\CVar.h" />
+    <ClInclude Include="..\System\include\System\PackageFormat.h" />
+    <ClInclude Include="..\System\include\System\ProjectKey.h" />
+    <ClInclude Include="..\System\include\System\PackagingKeyObfuscation.h" />
+    <ClInclude Include="..\System\include\System\AssetFilter.h" />
     <ClInclude Include="EngineCVars.h" />
     <ClInclude Include="GameHost.h" />
+    <ClInclude Include="ReleaseGame.h" />
     <ClInclude Include="RmlUiRenderInterface.h" />
     <ClInclude Include="RmlUiSystemInterface.h" />
     <ClInclude Include="RmlUiRenderer.h" />
@@ -232,6 +245,9 @@
     <ClInclude Include="SMAARenderer.h" />
     <ClInclude Include="SMAASettings.h" />
     <ClInclude Include="SsrRenderer.h" />
+    <ClInclude Include="SssrRenderer.h" />
+    <ClInclude Include="SubsurfaceScattering.h" />
+    <ClInclude Include="SubsurfaceSettings.h" />
     <ClInclude Include="SsrSettings.h" />
     <ClInclude Include="ChromaticAberrationRenderer.h" />
     <ClInclude Include="ChromaticAberrationSettings.h" />
@@ -244,7 +260,6 @@
     <ClInclude Include="VegetationScatter.h" />
     <ClInclude Include="VegetationRenderer.h" />
     <ClInclude Include="WindSettings.h" />
-    <ClInclude Include="OceanSimulation.h" />
     <ClInclude Include="WaterRenderer.h" />
     <ClInclude Include="TextureManager.h" />
     <ClInclude Include="TimeOfDaySettings.h" />
@@ -272,6 +287,7 @@
     <ClCompile Include="DX12ShaderCompiler.cpp" />
     <ClCompile Include="Editor.cpp" />
     <ClCompile Include="GameHost.cpp" />
+    <ClCompile Include="ReleaseGame.cpp" />
     <ClCompile Include="RmlUiRenderInterface.cpp" />
     <ClCompile Include="RmlUiSystemInterface.cpp" />
     <ClCompile Include="RmlUiRenderer.cpp" />
@@ -283,9 +299,25 @@
     <ClCompile Include="..\System\src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="EngineCVars.cpp" />
+    <ClCompile Include="GameSettings.cpp" />
     <ClCompile Include="GlassRenderer.cpp" />
     <ClCompile Include="..\System\MaterialEditor.cpp" />
     <ClCompile Include="..\System\src\AssetManager.cpp" />
+    <!-- Game packaging (.ppak build/extract), part of the System module (see
+         System.vcxproj) - lz4 + libsodium glue, compiled directly here the same way the
+         other System sources above are, so the editor's Release menu (built in this
+         project) can call into it with no extra DLL boundary. GameLauncher.vcxproj
+         compiles the same three files for the runtime-extraction side. -->
+    <ClCompile Include="..\System\src\PackageFormat.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\DataFiles.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="GameConsoleWindow.cpp" />
+    <ClInclude Include="GameConsoleWindow.h" />
+    <ClInclude Include="..\System\include\System\DataFiles.h" />
+    <ClInclude Include="..\System\include\System\PackagedDataApi.h" />
+    <ClCompile Include="..\System\src\ProjectKey.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\AssetFilter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\SDKs\lz4-1.10.0\lib\lz4.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\SDKs\lz4-1.10.0\lib\lz4hc.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\CollisionGenerator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PreprocessorDefinitions>DISABLE_SPDLOG;NOMINMAX;COACD_API=;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -448,13 +480,14 @@
     <ClCompile Include="SkyRenderer.cpp" />
     <ClCompile Include="SMAARenderer.cpp" />
     <ClCompile Include="SsrRenderer.cpp" />
+    <ClCompile Include="SssrRenderer.cpp" />
+    <ClCompile Include="SubsurfaceScattering.cpp" />
     <ClCompile Include="ChromaticAberrationRenderer.cpp" />
     <ClCompile Include="TerrainGeometry.cpp" />
     <ClCompile Include="TerrainRenderer.cpp" />
     <ClCompile Include="GeometryRaycaster.cpp" />
     <ClCompile Include="VegetationScatter.cpp" />
     <ClCompile Include="VegetationRenderer.cpp" />
-    <ClCompile Include="OceanSimulation.cpp" />
     <ClCompile Include="WaterRenderer.cpp" />
     <ClCompile Include="TAARenderer.cpp" />
     <ClCompile Include="TextureManager.cpp" />
@@ -465,35 +498,6 @@
     <ClCompile Include="VolumetricCloudRenderer.cpp" />
     <ClCompile Include="VolumetricFogRenderer.cpp" />
     <ClCompile Include="XeGtaoRenderer.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="..\..\Data\Shaders\DeferredLighting.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\GBuffer.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\HelloCube.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\MeshEntity.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\PointLight.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\ShadowDepth.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\SkyPass.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\TAAResolve.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
-    <FxCompile Include="..\..\Data\Shaders\Terrain.hlsl">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
-    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\Data\Shaders\RtGI_Common.hlsli">
@@ -525,7 +529,8 @@
     <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\QtUi\QtUi.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\QtUi\QtUi.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\QtUi\QtUiHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="QtViewportRenderer.cpp" />
     <ClInclude Include="..\QtUi\QtUi.h" />
     <ClInclude Include="..\QtUi\UiTypes.h" />
@@ -538,14 +543,20 @@
     <ClCompile Include="..\System\src\NodeGraphCatalog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\System\src\NodeGraphEditorWindow.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphEditorWindow.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphEditorHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\System\include\System\NodeGraphCatalog.h" />
     <ClInclude Include="..\System\include\System\NodeGraphDocument.h" />
     <ClInclude Include="..\System\include\System\NodeGraphEditor.h" />
     <ClInclude Include="..\System\include\System\NodeGraphRuntime.h" />
   </ItemGroup>
-  <Import Project="..\QtUi\Qt.props" />
-  <Import Project="..\QtUi\QtNodes.props" />
+  <ItemDefinitionGroup Condition="'$(PteroGameRuntime)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>PTERO_GAME_RUNTIME;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <Import Project="..\QtUi\Qt.props" Condition="'$(PteroGameRuntime)'!='true'" />
+  <Import Project="..\QtUi\QtNodes.props" Condition="'$(PteroGameRuntime)'!='true'" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

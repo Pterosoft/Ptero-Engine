@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "System/DataFiles.h"
 
 #include "MaterialEditor.h"
 #include "include\System\SystemAssetApi.h"
@@ -15,32 +16,9 @@ namespace
 {
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-        {
-            return {};
-        }
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-            {
-                return std::filesystem::weakly_canonical(dataDirectory);
-            }
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-            {
-                break;
-            }
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        // Walks up from the exe to Data/ - or, in a packaged game, the virtual Data
+        // root the .ppak archives serve (see System/DataFiles.h).
+        return DataFiles::FindDataDirectory();
     }
 
     std::string NormalizeRelativeDataPath(const std::filesystem::path& relativePath)
@@ -86,6 +64,7 @@ namespace
             { "roughnessFactor", materialDefinition.RoughnessFactor },
             { "specularFactor", materialDefinition.SpecularFactor },
             { "normalScale", materialDefinition.NormalScale },
+            { "normalFlipGreen", materialDefinition.FlipNormalGreen },
             { "ambientOcclusionStrength", materialDefinition.AmbientOcclusionStrength },
             { "heightScale", materialDefinition.HeightScale },
             { "heightReference", materialDefinition.HeightReference },
@@ -102,6 +81,11 @@ namespace
             { "parallaxMinSteps", materialDefinition.ParallaxMinSteps },
             { "parallaxMaxSteps", materialDefinition.ParallaxMaxSteps },
             { "parallaxFadeDistance", materialDefinition.ParallaxFadeDistance },
+            { "useSubsurfaceScattering", materialDefinition.UseSubsurfaceScattering },
+            { "subsurfaceColor", materialDefinition.SubsurfaceColor },
+            { "subsurfaceFalloff", materialDefinition.SubsurfaceFalloff },
+            { "subsurfaceRadiusMm", materialDefinition.SubsurfaceRadiusMm },
+            { "subsurfaceTranslucency", materialDefinition.SubsurfaceTranslucency },
             { "doubleSided", materialDefinition.IsDoubleSided },
             { "useAlphaCutout", materialDefinition.UseAlphaCutout },
             { "useTransparentBlend", materialDefinition.UseTransparentBlend },
@@ -222,6 +206,7 @@ namespace
             outMaterialDefinition.RoughnessFactor = sourceJson.value("roughnessFactor", outMaterialDefinition.RoughnessFactor);
             outMaterialDefinition.SpecularFactor = sourceJson.value("specularFactor", outMaterialDefinition.SpecularFactor);
             outMaterialDefinition.NormalScale = sourceJson.value("normalScale", outMaterialDefinition.NormalScale);
+            outMaterialDefinition.FlipNormalGreen = sourceJson.value("normalFlipGreen", outMaterialDefinition.FlipNormalGreen);
             outMaterialDefinition.AmbientOcclusionStrength = sourceJson.value("ambientOcclusionStrength", outMaterialDefinition.AmbientOcclusionStrength);
             outMaterialDefinition.HeightScale = sourceJson.value("heightScale", outMaterialDefinition.HeightScale);
             outMaterialDefinition.HeightReference = sourceJson.value("heightReference", outMaterialDefinition.HeightReference);
@@ -249,6 +234,19 @@ namespace
             outMaterialDefinition.ParallaxMinSteps = sourceJson.value("parallaxMinSteps", outMaterialDefinition.ParallaxMinSteps);
             outMaterialDefinition.ParallaxMaxSteps = sourceJson.value("parallaxMaxSteps", outMaterialDefinition.ParallaxMaxSteps);
             outMaterialDefinition.ParallaxFadeDistance = sourceJson.value("parallaxFadeDistance", outMaterialDefinition.ParallaxFadeDistance);
+            outMaterialDefinition.UseSubsurfaceScattering = sourceJson.value("useSubsurfaceScattering", outMaterialDefinition.UseSubsurfaceScattering);
+            if (!TryReadOptionalFloatArray3(sourceJson, "subsurfaceColor", outMaterialDefinition.SubsurfaceColor))
+            {
+                outErrorMessage = "subsurfaceColor must be an array with 3 float values.";
+                return false;
+            }
+            if (!TryReadOptionalFloatArray3(sourceJson, "subsurfaceFalloff", outMaterialDefinition.SubsurfaceFalloff))
+            {
+                outErrorMessage = "subsurfaceFalloff must be an array with 3 float values.";
+                return false;
+            }
+            outMaterialDefinition.SubsurfaceRadiusMm = sourceJson.value("subsurfaceRadiusMm", outMaterialDefinition.SubsurfaceRadiusMm);
+            outMaterialDefinition.SubsurfaceTranslucency = sourceJson.value("subsurfaceTranslucency", outMaterialDefinition.SubsurfaceTranslucency);
             outMaterialDefinition.IsDoubleSided = sourceJson.value("doubleSided", outMaterialDefinition.IsDoubleSided);
             outMaterialDefinition.UseAlphaCutout = sourceJson.value("useAlphaCutout", outMaterialDefinition.UseAlphaCutout);
             outMaterialDefinition.UseTransparentBlend = sourceJson.value("useTransparentBlend", outMaterialDefinition.UseTransparentBlend);
@@ -465,7 +463,7 @@ bool MaterialEditor::LoadMaterialFromFile(const std::filesystem::path& materialF
 {
     mLastErrorMessage.clear();
 
-    std::ifstream inputStream(materialFilePath);
+    DataFiles::InputFile inputStream(materialFilePath);
     if (!inputStream)
     {
         mLastErrorMessage = "Failed to open the material JSON file from disk.";
@@ -514,7 +512,7 @@ bool MaterialEditor::SaveMaterialToFile(const std::filesystem::path& materialFil
     // serializer rebuilds the document from its own known fields only.
     // Read before opening the output stream, which truncates the file.
     {
-        std::ifstream existingStream(materialFilePath);
+        DataFiles::InputFile existingStream(materialFilePath);
         if (existingStream)
         {
             try
@@ -656,7 +654,7 @@ std::vector<std::filesystem::path> MaterialEditor::FindAvailableMaterials() cons
 {
     std::vector<std::filesystem::path> materialFiles;
     const std::filesystem::path materialLibraryDirectory = GetMaterialLibraryDirectory();
-    if (materialLibraryDirectory.empty() || !std::filesystem::exists(materialLibraryDirectory))
+    if (materialLibraryDirectory.empty() || !DataFiles::Exists(materialLibraryDirectory))
     {
         return materialFiles;
     }
@@ -789,7 +787,7 @@ bool MaterialEditor::LoadMultiMaterialFromFile(const std::filesystem::path& file
 {
     mLastErrorMessage.clear();
 
-    std::ifstream inputStream(filePath);
+    DataFiles::InputFile inputStream(filePath);
     if (!inputStream)
     {
         mLastErrorMessage = "Failed to open the multi-material JSON file from disk.";
@@ -950,7 +948,7 @@ std::vector<std::filesystem::path> MaterialEditor::FindAvailableMultiMaterials()
     }
 
     const std::filesystem::path multiMatDir = dataDirectory / "MultiMaterials";
-    if (!std::filesystem::exists(multiMatDir))
+    if (!DataFiles::Exists(multiMatDir))
     {
         return files;
     }

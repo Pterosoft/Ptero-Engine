@@ -5,6 +5,7 @@
 *.raw
 *.pdb
 *.sdf
+*.ilk
 Data/Geometry
 Source/SDKs
 Source/System/x64
@@ -14,3 +15,6 @@ Source/Ptero-Engine/x64
 Cache/QtBuild
 Cache/Qt-Release
 Cache/QtTests
+Farkle
+Website
+Binaries/ffmpeg

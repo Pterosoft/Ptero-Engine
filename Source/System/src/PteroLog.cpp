@@ -1,6 +1,7 @@
 #include "System/PteroLog.h"
 
 #include <windows.h>
+#include <dbghelp.h>
 #include <share.h>
 
 #include <algorithm>
@@ -13,6 +14,8 @@
 #include <deque>
 #include <exception>
 #include <mutex>
+
+#pragma comment(lib, "dbghelp.lib")
 
 namespace
 {
@@ -235,18 +238,97 @@ namespace
         }
     }
 
+    // "module+0xoffset" for an address, so a crash in a Release build without a
+    // debugger attached still says which DLL it happened in.
+    std::string DescribeAddress(DWORD64 address)
+    {
+        char text[MAX_PATH + 64] = {};
+        HMODULE module = nullptr;
+        if (::GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                 reinterpret_cast<LPCSTR>(address), &module) && module != nullptr)
+        {
+            char modulePath[MAX_PATH] = {};
+            ::GetModuleFileNameA(module, modulePath, MAX_PATH);
+            const char* name = std::strrchr(modulePath, '\\');
+            name = (name != nullptr) ? name + 1 : modulePath;
+            std::snprintf(text, sizeof(text), "%s+0x%llX", name,
+                          static_cast<unsigned long long>(address - reinterpret_cast<DWORD64>(module)));
+        }
+        else
+        {
+            std::snprintf(text, sizeof(text), "0x%llX", static_cast<unsigned long long>(address));
+        }
+
+        alignas(SYMBOL_INFO) char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+        SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolBuffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 displacement = 0;
+        std::string result = text;
+        if (::SymFromAddr(::GetCurrentProcess(), address, &displacement, symbol))
+        {
+            result += "  ";
+            result += symbol->Name;
+            IMAGEHLP_LINE64 line{};
+            line.SizeOfStruct = sizeof(line);
+            DWORD lineDisplacement = 0;
+            if (::SymGetLineFromAddr64(::GetCurrentProcess(), address, &lineDisplacement, &line))
+            {
+                const char* file = std::strrchr(line.FileName, '\\');
+                file = (file != nullptr) ? file + 1 : line.FileName;
+                char lineText[MAX_PATH + 32] = {};
+                std::snprintf(lineText, sizeof(lineText), "  (%s:%lu)", file, line.LineNumber);
+                result += lineText;
+            }
+        }
+        return result;
+    }
+
+    // Unwinds the faulting thread from the exception's own context record.
+    void LogCrashStack(const CONTEXT& faultContext)
+    {
+        CONTEXT context = faultContext;
+        std::string stack = "Crashing thread call stack:";
+        for (int frame = 0; frame < 48 && context.Rip != 0; ++frame)
+        {
+            char prefix[16] = {};
+            std::snprintf(prefix, sizeof(prefix), "\n    #%d  ", frame);
+            stack += prefix;
+            stack += DescribeAddress(context.Rip);
+
+            DWORD64 imageBase = 0;
+            PRUNTIME_FUNCTION function = ::RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+            if (function == nullptr)
+            {
+                context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                context.Rsp += sizeof(DWORD64);
+                continue;
+            }
+            PVOID handlerData = nullptr;
+            DWORD64 establisherFrame = 0;
+            ::RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function,
+                               &context, &handlerData, &establisherFrame, nullptr);
+        }
+        PteroLog::Write(PteroLog::Level::Fatal, "Crash", stack.c_str());
+    }
+
     LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info)
     {
         LogState& state = State();
+
+        // Harmless if the watchdog already initialized dbghelp for this process.
+        ::SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+        ::SymInitialize(::GetCurrentProcess(), nullptr, TRUE);
 
         if (info != nullptr && info->ExceptionRecord != nullptr)
         {
             const EXCEPTION_RECORD& record = *info->ExceptionRecord;
             PteroLog::Writef(PteroLog::Level::Fatal, "Crash",
-                             "Unhandled %s (0x%08X) at address 0x%p.",
+                             "Unhandled %s (0x%08X) at address 0x%p (%s).",
                              ExceptionName(record.ExceptionCode),
                              static_cast<unsigned>(record.ExceptionCode),
-                             record.ExceptionAddress);
+                             record.ExceptionAddress,
+                             DescribeAddress(reinterpret_cast<DWORD64>(record.ExceptionAddress)).c_str());
 
             if (record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record.NumberParameters >= 2)
             {
@@ -256,6 +338,9 @@ namespace
                                  operation == 0 ? "reading" : (operation == 1 ? "writing" : "executing"),
                                  reinterpret_cast<void*>(record.ExceptionInformation[1]));
             }
+
+            if (info->ContextRecord != nullptr)
+                LogCrashStack(*info->ContextRecord);
         }
         else
         {

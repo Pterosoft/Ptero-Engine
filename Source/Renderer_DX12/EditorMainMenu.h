@@ -22,6 +22,7 @@
 #include "VolumetricCloudSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
+#include "SubsurfaceSettings.h"
 #include "ChromaticAberrationSettings.h"
 #include "BloomSettings.h"
 #include "PointShadowSettings.h"
@@ -71,6 +72,8 @@ void RenderEditorMainMenu(
     RtAOSettings* rtaoSettings,
     GtaoSettings* gtaoSettings,
     SsrSettings* ssrSettings,
+    SubsurfaceSettings* subsurfaceSettings,
+    bool subsurfaceRayTracingSupported,
     ChromaticAberrationSettings* chromaticAberrationSettings,
     AgxTonemapSettings* agxSettings,
     VolumetricFogSettings* volumetricFogSettings,

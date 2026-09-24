@@ -1,0 +1,39 @@
+Ptero Engine session log
+Started 2026-09-24 14:56:58
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-24_14-56-58.txt
+----------------------------------------------------------------------
+[14:56:58.435] [INFO ] [Log         ] Logging to disk started.
+[14:56:58.436] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-24_14-56-58.txt
+[14:56:58.436] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[14:57:02.920] [INFO ] [CVar        ] 353 cvars registered. Type 'list' in the console to see them.
+[14:57:02.921] [INFO ] [Renderer    ] Renderer initialized.
+[14:57:03.122] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[14:57:15.003] [ERROR] [Watchdog    ] Render thread has not completed frame 1044 for 5.1 s. Everything above this line is what it did last.
+[14:57:15.197] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserMsgWaitForMultipleObjectsEx
+    #1  QEventDispatcherWin32::processEvents
+    #2  QWindowsGuiEventDispatcher::processEvents
+    #3  QEventLoop::exec
+    #4  QDialog::exec
+    #5  QtUi::fileDialog  (QtUi.cpp:1113)
+    #6  QtUi::OpenFileName  (QtUi.cpp:1141)
+    #7  `anonymous namespace'::PromptForSceneOpenPath  (Editor.cpp:84)
+    #8  Editor::OpenScene  (Editor.cpp:1021)
+    #9  RenderEditorMainMenu  (EditorMainMenu.cpp:1956)
+    #10  RendererDX12_Render  (DX12RendererAPI.cpp:2059)
+    #11  wWinMain  (EditorMain.cpp:293)
+    #12  __scrt_common_main_seh  (exe_common.inl:288)
+    #13  BaseThreadInitThunk
+    #14  RtlUserThreadStart
+[14:57:16.391] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_1', meshPath='Characters/SSS_Demo/Head.fbx.ptero', materialPath='Characters/SSS_Demo/Face.json'
+[14:57:16.399] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_1', vertices=23249, indices=74460, subMeshes=1
+[14:57:16.401] [INFO ] [Meshes      ] Shadow-pass constant buffer grown to 17 slots x 3 frames.
+[14:57:16.402] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xc9c0000..0xcad0730 (1115952 bytes), releasing in 4 frames (frame 1045).
+[14:57:16.403] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0xb5e0000..0xb628b70 (297840 bytes), releasing in 4 frames (frame 1045).
+[14:57:16.403] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=23249, indexCount=74460, vbBytes=1115952, ibBytes=297840
+[14:57:16.409] [INFO ] [Meshes      ] Entity constant buffer grown to 17 slots x 3 frames (13056 bytes).
+[14:57:16.409] [INFO ] [Meshes      ] Material constant buffer grown to 65 draws x 3 frames.
+[14:57:16.409] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Geometry_1', lodIndex=0, vertexCount=23249, indexCount=74460, materialPath='Characters/SSS_Demo/Face.json', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=74460}, summedSubMeshIndices=74460, validSubMeshRanges=true
+[14:57:16.722] [WARN ] [Watchdog    ] Render thread recovered after 6.8 s; resumed at frame 1047.
+[14:57:16.839] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xc9c0000..0xcad0730 (frame 1049).
+[14:57:16.839] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0xb5e0000..0xb628b70 (frame 1049).

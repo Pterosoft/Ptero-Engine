@@ -2,6 +2,8 @@
 
 #include "RmlUiRenderInterface.h"
 
+#include "System/DataFiles.h"
+
 #include <RmlUi/Core/Types.h>
 
 #include <wincodec.h>
@@ -30,26 +32,9 @@ namespace
 
     std::wstring GetShaderDirectory()
     {
-        wchar_t modulePath[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-        std::wstring directory(modulePath);
-        const auto slash = directory.find_last_of(L"\\/");
-        directory = (slash != std::wstring::npos) ? directory.substr(0, slash + 1) : L"";
-
-        for (int attempt = 0; attempt < 6; ++attempt)
-        {
-            const std::wstring candidate = directory + L"Data\\Shaders\\";
-            if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
-                return candidate;
-
-            const auto up = directory.find_last_of(L"\\/", directory.size() - 2);
-            if (up == std::wstring::npos)
-                break;
-
-            directory = directory.substr(0, up + 1);
-        }
-
-        return L"Data\\Shaders\\";
+        // The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        return dataDirectory.empty() ? std::wstring(L"Data\\Shaders\\") : (dataDirectory / L"Shaders").wstring() + L"\\";
     }
 
     std::wstring Utf8ToWide(const std::string& text)
@@ -168,9 +153,11 @@ bool RmlUiRenderInterface::CreateRootSignature()
 
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    // Wrap, as RmlUi's own backends do: an image decorator set to repeat (the menus'
+    // wood planks) emits texture coordinates past 1 and relies on the sampler to tile.
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
     sampler.ShaderRegister = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -668,11 +655,13 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
     if (path.is_relative() && !mDocumentDirectory.empty())
     {
         std::filesystem::path candidate = std::filesystem::path(mDocumentDirectory) / path;
-        if (std::filesystem::exists(candidate))
+        if (DataFiles::Exists(candidate))
             path = std::move(candidate);
     }
 
-    if (!std::filesystem::exists(path))
+    // Read through DataFiles (UI.ppak in a packaged game) and decode from memory.
+    std::vector<std::uint8_t> fileBytes;
+    if (!DataFiles::ReadBytes(path, fileBytes) || fileBytes.empty())
     {
         mLastError = "RmlUiRenderInterface: texture not found: " + source;
         return 0;
@@ -686,9 +675,12 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
         return 0;
     }
 
+    ComPtr<IWICStream> fileStream;
     ComPtr<IWICBitmapDecoder> decoder;
-    if (FAILED(imagingFactory->CreateDecoderFromFilename(
-            path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder)))
+    if (FAILED(imagingFactory->CreateStream(&fileStream))
+        || FAILED(fileStream->InitializeFromMemory(fileBytes.data(), static_cast<DWORD>(fileBytes.size())))
+        || FAILED(imagingFactory->CreateDecoderFromStream(
+            fileStream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, &decoder)))
     {
         mLastError = "RmlUiRenderInterface: failed to decode texture: " + source;
         return 0;

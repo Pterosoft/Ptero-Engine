@@ -1,11 +1,13 @@
 <rml>
-<head><title>Farkle</title><link type="text/rcss" href="farkle.rcss"/><link type="text/rcss" href="results.rcss"/>
-<style>
-#menu-card { position: absolute; left: 34%; top: 17%; width: 32%; padding: 4vh; text-align: center; }
-#menu-title { font-family: "Pirata One"; font-size: 9vh; margin-bottom: 1vh; }
-.menu-note { font-family: "Fondamento"; font-size: 2.4vh; margin-bottom: 3vh; }
-.menu-action { display: block; width: 100%; height: 6.5vh; line-height: 6.5vh; margin: 1vh 0; font-size: 2.9vh; decorator: image(button-dark); color: #eccc91ff; }
-.menu-action:hover, .menu-action:focus { color: #fff3caff; }
-</style></head>
-<body><div id="menu-card" class="parchment"><div id="menu-title">Farkle</div><div class="menu-note">Good dice. Better company.</div><button id="start-button" class="menu-action">New Match</button><button id="fullscreen-button" class="menu-action">Fullscreen [F11]</button><button id="exit-button" class="menu-action">Exit to Editor</button></div></body>
-</rml>
+<head><title>Farkle — Main Menu</title><link type="text/rcss" href="farkle.rcss"/><link type="text/rcss" href="menus.rcss"/></head>
+<body class="menu-screen" data-screen="menu">
+<div id="main-board" class="wood-panel">
+<button id="start-button" class="menu-button primary">Play</button>
+<button id="settings-button" class="menu-button" data-page="settings-graphics.rml">Settings</button>
+<button id="credits-button" class="menu-button" data-page="credits.rml">Credits</button>
+<button id="exit-button" class="menu-button">Exit</button>
+<img class="fleur-mark" sprite="fleur"/><div class="menu-flavor">Same dice. New stories.</div>
+</div>
+<div id="story-card" class="parchment"><img class="fleur-mark" sprite="fleur"/><h1>More Than<br/>a Game</h1><div class="menu-flavor">In every roll, a chance.<br/>Good company turns<br/>simple games into<br/>unforgettable nights.</div><img class="fleur-mark" sprite="fleur"/></div>
+<div class="menu-masthead"><div class="menu-title">Farkle</div><div class="menu-subtitle">A tavern game of dice</div></div>
+</body></rml>

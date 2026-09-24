@@ -1,9 +1,19 @@
 {
     "AgxTonemapSettings": {
+        "AutoExposureGreyPoint": 0.18000000715255737,
+        "AutoExposureHighPercent": 0.8999999761581421,
+        "AutoExposureHistogramLogMax": 6.0,
+        "AutoExposureHistogramLogMin": -10.0,
+        "AutoExposureLowPercent": 0.10000000149011612,
+        "AutoExposureMeteringMask": 0.5,
+        "AutoExposureSpeedDown": 1.0,
+        "AutoExposureSpeedUp": 3.0,
         "Enabled": true,
-        "Ev100Max": 16.0,
-        "Ev100Min": -1.0,
-        "Exposure": 0.0,
+        "Ev100": -4.0,
+        "Ev100Max": 1.0,
+        "Ev100Min": 1.0,
+        "Exposure": 2.0,
+        "ExposureMode": 1,
         "Global": {
             "Contrast": {
                 "Blue": 0.0,
@@ -164,14 +174,22 @@
         "Threshold": 0.8999999761581421
     },
     "CameraPosition": {
-        "X": -124.06556701660156,
-        "Y": -182.9955596923828,
-        "Z": 13.05587100982666
+        "X": 59.628719329833984,
+        "Y": -109.35771179199219,
+        "Z": 13.700733184814453
     },
     "CameraRotation": {
-        "X": -0.09927939623594284,
-        "Y": 0.6800313591957092,
+        "X": -0.1692803055047989,
+        "Y": 2.340022087097168,
         "Z": 0.0
+    },
+    "ChromaticAberrationSettings": {
+        "CenterX": 0.5,
+        "CenterY": 0.5,
+        "Enabled": false,
+        "Falloff": 2.0,
+        "SampleCount": 6,
+        "Strength": 2.0
     },
     "DlssSettings": {
         "Enabled": false,
@@ -179,10 +197,12 @@
     },
     "Entities": [
         {
+            "Id": 5269257152765874,
             "NameComponent": {
                 "Name": "Terrain_1"
             },
             "TerrainComponent": {
+                "ActivePaintLayer": 0,
                 "BrushRadius": 8.0,
                 "BrushSmoothingPasses": 1,
                 "BrushStrength": 0.5,
@@ -194,6 +214,8 @@
                 "HeightmapDdsPath": "K:/Ptero-Engine/Data/Textures/Terrain/Malta.dds",
                 "HeightmapRawPath": "Textures/Terrain/Malta.png",
                 "MaterialPath": "",
+                "PaintLayers": [],
+                "SplatMapPath": "",
                 "Width": 4096,
                 "WorldSize": 1024.0
             },
@@ -205,7 +227,7 @@
                 },
                 "Rotation": {
                     "x": 0.0,
-                    "y": 0.0,
+                    "y": -0.0,
                     "z": 0.0
                 },
                 "Scale": {
@@ -214,8 +236,47 @@
                     "z": 1.0
                 }
             }
+        },
+        {
+            "Id": 8995100729008736,
+            "NameComponent": {
+                "Name": "Water_2"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 106.67129516601563,
+                    "y": -265.22491455078125,
+                    "z": 11.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            },
+            "WaterComponent": {
+                "DebugMode": 0,
+                "MaterialPath": "Materials/Ocean.json",
+                "Resolution": 512,
+                "SizeX": 100000.0,
+                "SizeY": 100000.0,
+                "WaveScale": 1.0
+            }
         }
     ],
+    "FormatVersion": 2,
+    "FsrSettings": {
+        "Enabled": false,
+        "FrameGeneration": false,
+        "Mode": 1,
+        "Sharpening": true,
+        "Sharpness": 0.5
+    },
     "GTAOSettings": {
         "DebugView": 0,
         "DenoisePasses": 2,
@@ -237,13 +298,21 @@
         "DebugView": 0,
         "Enabled": false,
         "GiIntensity": 1.0,
+        "HistoryClampScale": 0.4000000059604645,
+        "HistoryDepthSensitivity": 128.0,
+        "HistoryNormalThreshold": 0.9200000166893005,
         "Hysteresis": 0.800000011920929,
         "IntervalLengthScale": 1.0,
         "ProbeSpacingBase": 16,
+        "RayBias": 0.019999999552965164,
         "RayLengthBase": 1.5,
         "RayLengthScale": 2.0,
         "RaysPerProbe": 1,
-        "SparseProbeTableCapacity": 65536
+        "SparseProbeCellSize": 16,
+        "SparseProbeReuseStrength": 0.3499999940395355,
+        "SparseProbeSearchSteps": 32,
+        "SparseProbeTableCapacity": 65536,
+        "SpatialFilterStrength": 1.0
     },
     "RtAOSettings": {
         "AOPower": 1.5,
@@ -258,16 +327,26 @@
         "AccumulationBlend": 1.0,
         "ColorLeakIntensity": 1.0,
         "DebugView": 0,
+        "DepthThreshold": 0.10000000149011612,
         "Enabled": true,
         "GiIntensity": 1.0,
         "MaxBounces": 2,
+        "MaxHistoryLength": 10,
         "NextEventEstimation": true,
+        "NormalThreshold": 0.5,
         "NrdAtrousIterations": 5,
         "NrdDisocclusionThreshold": 0.20000000298023224,
         "NrdMaxAccumulationTime": 0.3499999940395355,
         "NrdSharpenAmount": 0.3499999940395355,
         "RadianceClamp": 10.0,
         "RaysPerPixel": 1,
+        "SpatialRadius": 20.0,
+        "SpatialReuseEnabled": false,
+        "SpatialSamples": 4,
+        "SpecularEnabled": false,
+        "SpecularIntensity": 0.10000000149011612,
+        "SpecularRoughnessThreshold": 0.6000000238418579,
+        "TemporalReuseEnabled": false,
         "UseNrdDenoiser": true
     },
     "SMAASettings": {
@@ -278,14 +357,50 @@
         "MaxSearchSteps": 16.0,
         "MaxSearchStepsDiag": 8.0
     },
+    "SharpenSettings": {
+        "ImageSharpeningEnabled": true,
+        "ImageSharpeningStrength": 0.20000000298023224,
+        "TextureMipLODBias": -1.5,
+        "TextureSharpeningEnabled": true
+    },
+    "SsrSettings": {
+        "DebugView": 0,
+        "EdgeFadeStart": 0.8500000238418579,
+        "Enabled": true,
+        "Intensity": 1.0,
+        "MaxDistance": 60.0,
+        "MaxRoughness": 0.6000000238418579,
+        "MaxSteps": 48,
+        "RefineSteps": 6,
+        "SssrDepthThickness": 0.014999999664723873,
+        "SssrMaxTraversalIntersections": 128,
+        "SssrMinTraversalOccupancy": 4,
+        "SssrMostDetailedMip": 0,
+        "SssrSamplesPerQuad": 1,
+        "SssrTemporalStability": 0.699999988079071,
+        "SssrTemporalVarianceGuidedTracing": true,
+        "SssrTemporalVarianceThreshold": 0.0,
+        "StepGrowth": 1.0499999523162842,
+        "StepSize": 0.25,
+        "Technique": 0,
+        "Thickness": 0.5
+    },
+    "SubsurfaceSettings": {
+        "Enabled": true,
+        "FollowSurface": true,
+        "Mode": 0,
+        "Quality": 1,
+        "RtSamples": 12,
+        "Transmission": true,
+        "TransmissionIntensity": 1.0
+    },
     "TaaSettings": {
         "BlendFactor": 0.5,
         "Enabled": false,
-        "JitterScale": 1.0,
-        "SharpeningStrength": 0.20000000298023224,
-        "UseSharpening": true
+        "JitterScale": 1.0
     },
     "TimeOfDaySettings": {
+        "Enabled": true,
         "GroundAlbedo": 0.10000000149011612,
         "OverrideSkyColor": false,
         "OverrideSunColor": false,
@@ -300,6 +415,57 @@
         "TimeOfDay": 12.0,
         "Turbidity": 2.5
     },
+    "VolumetricCloudSettings": {
+        "AmbientIntensityScale": 1.0,
+        "AnvilBias": 0.25,
+        "BaseNoiseScaleMeters": 24000.0,
+        "CloudTopOffsetMeters": 350.0,
+        "CloudType": 0.5,
+        "Coverage": 0.550000011920929,
+        "CurlStrength": 0.6000000238418579,
+        "DebugView": 0,
+        "Density": 0.6000000238418579,
+        "DetailFadeDistanceMeters": 25000.0,
+        "DetailNoiseScaleMeters": 1600.0,
+        "DetailStrength": 0.3499999940395355,
+        "DetailWindSpeedScale": 2.0,
+        "DistanceFadeStartMeters": 80000.0,
+        "Enabled": true,
+        "ExtinctionScale": 0.05000000074505806,
+        "GroundBounceScale": 0.30000001192092896,
+        "LayerBottomMeters": 1200.0,
+        "LayerThicknessMeters": 2229.60009765625,
+        "LightMarchDistanceMeters": 1600.0,
+        "LightSteps": 6,
+        "MaxSteps": 96,
+        "MaxTraceDistanceMeters": 120000.0,
+        "MsExtinctionFalloff": 0.550000011920929,
+        "MsPhaseFalloff": 0.5,
+        "MsScatterFalloff": 0.550000011920929,
+        "MultiScatterOctaves": 3,
+        "PhaseBlend": 0.2800000011920929,
+        "PhaseG0": 0.800000011920929,
+        "PhaseG1": -0.25,
+        "PlanetRadiusKm": 6360.0,
+        "PowderStrength": 0.3499999940395355,
+        "ResolutionDivisor": 2,
+        "ScatteringColorB": 1.0,
+        "ScatteringColorG": 1.0,
+        "ScatteringColorR": 1.0,
+        "ShadowConeSpread": 0.11999999731779099,
+        "ShadowStepGrowth": 1.350000023841858,
+        "SunIntensityScale": 1.0,
+        "TemporalBlend": 0.9200000166893005,
+        "TemporalUpsampling": true,
+        "WeatherCellSize": 1.0,
+        "WeatherCoverageBias": 0.0,
+        "WeatherScaleMeters": 90000.0,
+        "WeatherSeed": 1337,
+        "WeatherTypeBias": 0.0,
+        "WindDirectionDegrees": 45.0,
+        "WindSkew": 0.3499999940395355,
+        "WindSpeed": 12.0
+    },
     "VolumetricFogSettings": {
         "Anisotropy": 0.5,
         "BaseHeight": 0.0,
@@ -307,16 +473,18 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.1324000060558319,
-        "DepthSlices": 64,
-        "EmissiveColorB": 0.0,
-        "EmissiveColorG": 0.0,
-        "EmissiveColorR": 0.0,
+        "Density": 0.004999999888241291,
+        "DepthSlices": 128,
+        "EmissiveColorB": 1.0,
+        "EmissiveColorG": 1.0,
+        "EmissiveColorR": 1.0,
         "EmissiveIntensity": 0.0,
-        "Enabled": false,
-        "FroxelTileSize": 8,
+        "Enabled": true,
+        "FroxelTileSize": 16,
+        "GiIntensity": 1.0,
         "HeightFalloff": 0.0,
         "MaxDistance": 100.0,
+        "ScatteringAlbedo": 0.8999999761581421,
         "StartDistance": 0.10000000149011612
     }
 }

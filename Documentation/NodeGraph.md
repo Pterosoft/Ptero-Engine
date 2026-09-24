@@ -83,19 +83,32 @@ current step is still walking.
 
 | Category | Nodes |
 | --- | --- |
-| Events | On Game Start, On Game Stop, On Tick |
+| Events | On Game Start, On Game Stop, On Tick, On Video Finished, On Key Pressed, On Key Released, On UI Button Clicked |
 | Functions | Function Entry, Call Function, Return |
 | Flow | Branch, Delay, Gate, Sequence, Do Once, Do N, Flip Flop, For Loop, Switch |
 | Logic | Multiplexer, And, Or, Not, Compare |
-| Math | Add, Subtract, Multiply, Divide, Clamp, Lerp, Random Range |
-| Values | Number, Boolean, String, Append, To String |
+| Math | Add, Subtract, Multiply, Divide, Clamp, Lerp, Random Range, Random Integer, Random Chance, Min, Max, Modulo, Abs, Floor, Sin, Cos, Ease, Lerp Angle |
+| Values | Number, Boolean, String, Append, To String, Format Number |
 | Variables | Get Variable, Set Variable |
 | UI | Show/Close/Reload UI Document, Set UI Visible, Set UI Input Enabled, Set UI Text, Set UI Property, Set UI Class, Set UI Element Visible |
-| Game | Stop Game, Get Play Time, Print String |
+| Video | Play Video, Pause Video, Resume Video, Stop Video, Seek Video, Set Video Looping, Set Video Volume, Is Video Playing, Get Video Time, Get Video Duration |
+| Input | Is Key Down |
+| Entity | Entity, Find Entity, Is Entity Valid, Get Entity Name, Get/Set Entity Position, Move Entity By, Get/Set Entity Rotation, Rotate Entity By, Get/Set Entity Scale, Move Entity To, Get/Set Entity Property, Play/Stop Entity Audio |
+| Camera | Get Camera, Set Camera, Move Camera To, Release Camera, Camera Look Point |
+| Audio | Play Sound, Play Music, Play Music Playlist, Stop Music, Is Music Playing |
+| Game | Stop Game, Toggle Fullscreen, Is Standalone, Get Play Time, Print String |
 
 The UI nodes drive `RmlUiRenderer` through `DX12SceneRenderer::NodeGraphUiHost`. Element
 nodes address elements by their RML `id` and report failure on a `Success` pin, so a typo
 shows up rather than doing nothing quietly.
+
+The video nodes drive one full-screen video layer (`VideoLayer` in `Source/Video`) through
+the same host. **Play Video** takes a path inside `Data` (`.webm` optional) or just the file
+name, a Fit of Letterbox, Fill or Stretch, and a Volume; it reports on `Success` and logs
+why when it fails. The video's Opus soundtrack plays with it, in step with the picture. The video sits over the scene and under the game UI, so a menu or a "skip" prompt can
+be drawn on top of it. Its clock is the game's frame time. A video that ends without looping
+hides itself and fires **On Video Finished** in the same frame; **Stop Video** hides it
+without firing. See `Documentation/Video.md`.
 
 Variables are declared in the window's Variables dock with a name, a C++ type and a
 default:
@@ -117,6 +130,56 @@ existing connection.
 on which branch wrote it. The Variables dock runs a typed default through the *runtime's*
 own parser, so the editor and the interpreter cannot disagree about what a default means:
 typing `3.7` into an `Int` stores `3`, and `hello` stores `0`.
+
+Many of these were lifted out of the Farkle game module (`Source/Game`) as the parts of
+it that any game needs, rather than Farkle's own rules: the thousands-separated score text is
+Format Number, the quintic ease on the camera travel and the dice throw is Ease's *Smoother*
+curve, the throw itself is Move Entity To with an Arc Height, the table-to-result camera flight
+is Move Camera To, "where do the dice land" is Camera Look Point, and the shuffled soundtrack
+that never repeats a track is Play Music Playlist. Farkle still runs on its own C++; nothing in
+it was switched over to the graph.
+
+### Entities
+
+Entity nodes address an entity by its **id**, a number saved with each entity in the level
+(`"Id"` beside `"NameComponent"`). Names repeat and list positions shift, so neither is a safe
+reference; the id survives renames, reordering and save/load. Levels saved before ids existed
+get them when loaded, and keep them from the next save on. Duplicating or pasting an entity
+gives the copy a new id and leaves the original's alone (`EnsureEntityIds` in
+`Source/Renderer_DX12/EntityIds.h`).
+
+Every entity node has an **Entity** picker on its body. It lists the level's entities by name,
+re-read each time it drops down, and its ◎ button takes whatever is selected in the Outliner
+or the viewport. The picker is the default for the node's blue **Entity** pin, so the common
+case needs nothing wired; connect an **Entity** or **Find Entity** node when the target varies.
+A reference to an entity that has since been deleted shows as `<missing id>` and logs when it
+runs, rather than quietly pointing somewhere else.
+
+Positions are in metres, rotations and camera angles in **degrees** (the engine stores
+radians; the nodes convert). **Get/Set Entity Property** reaches component fields that are not
+transforms: light intensity, radius, colour and temperature, shadow casting, particle
+enable and spawn rate, rain enable and intensity. Booleans travel as 1 and 0, and **Success** is
+false when the entity lacks that component. Entities cannot be hidden yet - there is no
+visibility flag the renderer honours - so a graph that wants something gone moves it away,
+as Farkle does with its dice.
+
+The graph edits the play session's copy of the level, so every change snaps back when play
+stops.
+
+### Latent nodes, camera and audio
+
+**Move Entity To** and **Move Camera To** fire **Then** immediately and **Completed** on
+arrival, like Delay. Firing one again restarts it from wherever it has got to; a newer move of
+the same entity (or any camera node) cancels the one in flight without firing its Completed.
+
+The game module writes its own camera every frame before the graph runs. **Set Camera** and
+**Move Camera To** therefore *hold* the camera: the runtime re-applies the pose at the end of
+every tick until **Release Camera** hands it back. **Get Camera** reports the held pose while
+there is one.
+
+**On Key Pressed/Released** and **Is Key Down** only see keys while the game window has focus.
+**On UI Button Clicked** has its own queue in `RmlUiRenderer`, separate from the game module's,
+so both can react to the same button. Random nodes are reseeded every play session.
 
 ## Functions and libraries
 

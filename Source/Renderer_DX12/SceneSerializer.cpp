@@ -1,6 +1,9 @@
 #include "pch.h"
 
 #include "SceneSerializer.h"
+#include "EntityIds.h"
+
+#include "System/DataFiles.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -142,7 +145,16 @@ namespace
             { "RefineSteps", settings.RefineSteps },
             { "MaxDistance", settings.MaxDistance },
             { "EdgeFadeStart", settings.EdgeFadeStart },
-            { "DebugView", settings.DebugView }
+            { "DebugView", settings.DebugView },
+            { "Technique", settings.Technique },
+            { "SssrDepthThickness", settings.SssrDepthThickness },
+            { "SssrMaxTraversalIntersections", settings.SssrMaxTraversalIntersections },
+            { "SssrMinTraversalOccupancy", settings.SssrMinTraversalOccupancy },
+            { "SssrMostDetailedMip", settings.SssrMostDetailedMip },
+            { "SssrSamplesPerQuad", settings.SssrSamplesPerQuad },
+            { "SssrTemporalVarianceGuidedTracing", settings.SssrTemporalVarianceGuidedTracing },
+            { "SssrTemporalVarianceThreshold", settings.SssrTemporalVarianceThreshold },
+            { "SssrTemporalStability", settings.SssrTemporalStability }
         };
     }
 
@@ -159,6 +171,40 @@ namespace
         settings.MaxDistance = settingsJson.value("MaxDistance", settings.MaxDistance);
         settings.EdgeFadeStart = settingsJson.value("EdgeFadeStart", settings.EdgeFadeStart);
         settings.DebugView = settingsJson.value("DebugView", settings.DebugView);
+        settings.Technique = settingsJson.value("Technique", settings.Technique);
+        settings.SssrDepthThickness = settingsJson.value("SssrDepthThickness", settings.SssrDepthThickness);
+        settings.SssrMaxTraversalIntersections = settingsJson.value("SssrMaxTraversalIntersections", settings.SssrMaxTraversalIntersections);
+        settings.SssrMinTraversalOccupancy = settingsJson.value("SssrMinTraversalOccupancy", settings.SssrMinTraversalOccupancy);
+        settings.SssrMostDetailedMip = settingsJson.value("SssrMostDetailedMip", settings.SssrMostDetailedMip);
+        settings.SssrSamplesPerQuad = settingsJson.value("SssrSamplesPerQuad", settings.SssrSamplesPerQuad);
+        settings.SssrTemporalVarianceGuidedTracing = settingsJson.value("SssrTemporalVarianceGuidedTracing", settings.SssrTemporalVarianceGuidedTracing);
+        settings.SssrTemporalVarianceThreshold = settingsJson.value("SssrTemporalVarianceThreshold", settings.SssrTemporalVarianceThreshold);
+        settings.SssrTemporalStability = settingsJson.value("SssrTemporalStability", settings.SssrTemporalStability);
+    }
+
+    json SerializeSubsurfaceSettings(const SubsurfaceSettings& settings)
+    {
+        return json{
+            { "Enabled", settings.Enabled },
+            { "Mode", settings.Mode },
+            { "Quality", settings.Quality },
+            { "FollowSurface", settings.FollowSurface },
+            { "Transmission", settings.Transmission },
+            { "TransmissionIntensity", settings.TransmissionIntensity },
+            { "RtSamples", settings.RtSamples }
+        };
+    }
+
+    // The debug view is left out on purpose, like the other passes' overlays.
+    void DeserializeSubsurfaceSettings(const json& settingsJson, SubsurfaceSettings& settings)
+    {
+        settings.Enabled = settingsJson.value("Enabled", settings.Enabled);
+        settings.Mode = std::clamp(settingsJson.value("Mode", settings.Mode), 0, 1);
+        settings.Quality = std::clamp(settingsJson.value("Quality", settings.Quality), 0, 2);
+        settings.FollowSurface = settingsJson.value("FollowSurface", settings.FollowSurface);
+        settings.Transmission = settingsJson.value("Transmission", settings.Transmission);
+        settings.TransmissionIntensity = std::clamp(settingsJson.value("TransmissionIntensity", settings.TransmissionIntensity), 0.0f, 10.0f);
+        settings.RtSamples = std::clamp(settingsJson.value("RtSamples", settings.RtSamples), 1, 64);
     }
 
     json SerializeChromaticAberrationSettings(const ChromaticAberrationSettings& settings)
@@ -752,6 +798,8 @@ void SceneSerializer::Serialize(const std::string& filepath)
         sceneJson["GTAOSettings"] = SerializeGtaoSettings(*mScene->Gtao);
     if (mScene->Ssr != nullptr)
         sceneJson["SsrSettings"] = SerializeSsrSettings(*mScene->Ssr);
+    if (mScene->Subsurface != nullptr)
+        sceneJson["SubsurfaceSettings"] = SerializeSubsurfaceSettings(*mScene->Subsurface);
     if (mScene->ChromaticAberration != nullptr)
         sceneJson["ChromaticAberrationSettings"] = SerializeChromaticAberrationSettings(*mScene->ChromaticAberration);
     if (mScene->Agx != nullptr)
@@ -769,9 +817,13 @@ void SceneSerializer::Serialize(const std::string& filepath)
     if (mScene->NodeGraph != nullptr && !mScene->NodeGraph->IsEmpty())
         sceneJson["NodeGraph"] = json::parse(mScene->NodeGraph->ToJsonString());
 
+    // Node graphs reference entities by id, so every entity must have one on disk.
+    EnsureEntityIds(*mScene->Entities);
+
     for (const Entity& entity : *mScene->Entities)
     {
         json entityJson;
+        entityJson["Id"] = entity.Id;
         if (entity.HasNameComponent())
         {
             // The non-intrusive JSON macros on the component types handle conversion to JSON automatically.
@@ -854,8 +906,9 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         return false;
     }
 
-    std::ifstream inputStream(filepath);
-    if (!inputStream)
+    // Through DataFiles, so a packaged game reads the level out of Levels.ppak.
+    std::string sceneText;
+    if (!DataFiles::ReadText(filepath, sceneText))
     {
         return false;
     }
@@ -867,7 +920,7 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         {
             return false;
         }
-        inputStream >> sceneJson;
+        sceneJson = json::parse(sceneText);
     }
     catch (...)
     {
@@ -936,6 +989,8 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         DeserializeGtaoSettings(sceneJson["GTAOSettings"], *mScene->Gtao);
     if (mScene->Ssr != nullptr && sceneJson.contains("SsrSettings"))
         DeserializeSsrSettings(sceneJson["SsrSettings"], *mScene->Ssr);
+    if (mScene->Subsurface != nullptr && sceneJson.contains("SubsurfaceSettings"))
+        DeserializeSubsurfaceSettings(sceneJson["SubsurfaceSettings"], *mScene->Subsurface);
     if (mScene->ChromaticAberration != nullptr && sceneJson.contains("ChromaticAberrationSettings"))
         DeserializeChromaticAberrationSettings(sceneJson["ChromaticAberrationSettings"], *mScene->ChromaticAberration);
     if (mScene->Agx != nullptr && sceneJson.contains("AgxTonemapSettings"))
@@ -992,6 +1047,9 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         for (const json& entityJson : entitiesJson)
         {
             Entity& entity = mScene->CreateEntity();
+            // Levels saved before entity ids existed have none; EnsureEntityIds below
+            // assigns them, and the next save keeps them.
+            entity.Id = entityJson.value("Id", std::uint64_t(0));
 
             if (entityJson.contains("NameComponent"))
             {
@@ -1073,6 +1131,7 @@ bool SceneSerializer::Deserialize(const std::string& filepath, ProgressCallback 
         return false;
     }
 
+    EnsureEntityIds(*mScene->Entities);
     ReportDeserializeProgress(progressCallback, userData, 1.0f, "Scene loaded.");
     return true;
 }

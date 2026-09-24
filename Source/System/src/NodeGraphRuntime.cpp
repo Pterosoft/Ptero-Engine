@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <utility>
 
 namespace
 {
@@ -76,6 +78,89 @@ namespace
 
         return text.empty() ? "0" : text;
     }
+
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kDegreesToRadians = kPi / 180.0;
+    constexpr double kRadiansToDegrees = 180.0 / kPi;
+    // A frame's worth of clicks. The UI queues at most this many anyway.
+    constexpr int kMaxUiClicksPerTick = 32;
+
+    // Reshapes a 0..1 progress value. Names match the catalogue's easing list.
+    double ApplyEasing(double t, const std::string& easing)
+    {
+        t = (std::min)((std::max)(t, 0.0), 1.0);
+        if (easing == "Linear") return t;
+        if (easing == "Smooth") return t * t * (3.0 - 2.0 * t);
+        if (easing == "Ease In") return t * t;
+        if (easing == "Ease Out") return 1.0 - (1.0 - t) * (1.0 - t);
+        if (easing == "Ease In Out")
+            return t < 0.5 ? 2.0 * t * t : 1.0 - (-2.0 * t + 2.0) * (-2.0 * t + 2.0) * 0.5;
+        // Smoother, and anything unrecognised: zero velocity and acceleration at both
+        // ends, which is what keeps a camera move from starting or stopping with a jolt.
+        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    }
+
+    // Names from the catalogue's key list to Win32 virtual-key codes; 0 when unknown.
+    int VirtualKeyFromName(const std::string& name)
+    {
+        if (name.size() == 1)
+        {
+            const char c = name[0];
+            if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+                return c;
+        }
+
+        if (name.size() >= 2 && name.size() <= 3 && name[0] == 'F')
+        {
+            const int number = std::atoi(name.c_str() + 1);
+            if (number >= 1 && number <= 12)
+                return VK_F1 + number - 1;
+        }
+
+        static const std::pair<const char*, int> kNamed[] = {
+            { "Space", VK_SPACE }, { "Enter", VK_RETURN }, { "Escape", VK_ESCAPE }, { "Tab", VK_TAB },
+            { "Backspace", VK_BACK }, { "Up", VK_UP }, { "Down", VK_DOWN }, { "Left", VK_LEFT },
+            { "Right", VK_RIGHT }, { "Shift", VK_SHIFT }, { "Ctrl", VK_CONTROL }, { "Alt", VK_MENU },
+            { "Left Mouse", VK_LBUTTON }, { "Right Mouse", VK_RBUTTON }, { "Middle Mouse", VK_MBUTTON }
+        };
+        for (const auto& [label, key] : kNamed)
+        {
+            if (name == label)
+                return key;
+        }
+
+        return 0;
+    }
+
+    // "1234567.891" -> "1,234,567.89" with two decimals and grouping on.
+    std::string FormatNumber(double value, int decimals, bool grouping)
+    {
+        decimals = (std::min)((std::max)(decimals, 0), 6);
+        char buffer[64] = {};
+        std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, value);
+        std::string text = buffer;
+        if (!grouping)
+            return text;
+
+        const std::size_t start = (!text.empty() && text[0] == '-') ? 1 : 0;
+        std::size_t integerEnd = text.find('.');
+        if (integerEnd == std::string::npos)
+            integerEnd = text.size();
+
+        for (std::ptrdiff_t i = static_cast<std::ptrdiff_t>(integerEnd) - 3;
+             i > static_cast<std::ptrdiff_t>(start); i -= 3)
+        {
+            text.insert(static_cast<std::size_t>(i), ",");
+        }
+
+        return text;
+    }
+
+    std::uint64_t EntityIdFromValue(const NodeGraphValue& value)
+    {
+        const double number = value.AsNumber();
+        return number >= 1.0 ? static_cast<std::uint64_t>(number) : 0;
+    }
 }
 
 NodeGraphValue NodeGraphValue::FromBool(bool value)
@@ -111,6 +196,7 @@ NodeGraphValue NodeGraphValue::Parse(const std::string& text, NodePinKind kind)
     case NodePinKind::Bool:
         return FromBool(text == "true" || text == "1");
     case NodePinKind::Number:
+    case NodePinKind::Entity:
         return FromNumber(text.empty() ? 0.0 : std::strtod(text.c_str(), nullptr));
     case NodePinKind::String:
         return FromString(text);
@@ -218,6 +304,13 @@ void NodeGraphRuntime::Start(const NodeGraphDocument& document)
     mDeltaSeconds = 0.0f;
     mStopRequested = false;
     mLog.clear();
+    mCameraHeld = false;
+    mPlaylistActive = false;
+    mPlaylistTrack = -1;
+
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    mRandomState = static_cast<unsigned>(counter.QuadPart ^ (counter.QuadPart >> 32)) | 1u;
 
     BuildIndex();
     ResetVariables();
@@ -242,6 +335,15 @@ void NodeGraphRuntime::Tick(float deltaSeconds)
     mDeltaSeconds = deltaSeconds;
     mPlayTimeSeconds += deltaSeconds;
 
+    // The host advanced the video before this tick, so an end reached this frame is
+    // reported in the same frame.
+    if (mHost != nullptr && mHost->ConsumeVideoFinished())
+    {
+        FireEvents("Event.VideoFinished");
+    }
+
+    FireInputEvents();
+
     // Delays resume before this frame's tick events so a graph that delays by zero-ish
     // amounts stays in step with the frame it was scheduled from.
     for (std::size_t i = 0; i < mNodes.size(); ++i)
@@ -256,13 +358,228 @@ void NodeGraphRuntime::Tick(float deltaSeconds)
         if (state.DelayRemaining <= 0.0)
         {
             state.DelayActive = false;
-            mStepsRemaining = kMaxStepsPerExecution;
-            mExecDepth = 0;
-            FireExec(static_cast<int>(i), 0);
+            FireEntry(static_cast<int>(i), 0);
         }
     }
 
+    // Tweens advance with the delays, before Tick, so a graph reading an entity's
+    // position on Tick sees where it will be drawn this frame.
+    AdvanceTweens(deltaSeconds);
+
     FireEvents("Event.Tick");
+
+    UpdatePlaylist();
+
+    // Last, so a held camera wins over the pose the game module wrote this frame.
+    if (mCameraHeld && mHost != nullptr)
+    {
+        mHost->SetCamera(mCameraPose);
+    }
+}
+
+void NodeGraphRuntime::FireEntry(int nodeIndex, int outPortIndex)
+{
+    mStepsRemaining = kMaxStepsPerExecution;
+    mExecDepth = 0;
+    FireExec(nodeIndex, outPortIndex);
+}
+
+void NodeGraphRuntime::FireInputEvents()
+{
+    if (mHost == nullptr)
+    {
+        return;
+    }
+
+    // Drain first and fire afterwards: a handler that loads another document clears the
+    // UI's queue, and the clicks already taken must still be delivered.
+    std::vector<std::string> clicks;
+    std::string elementId;
+    while (static_cast<int>(clicks.size()) < kMaxUiClicksPerTick && mHost->PollUiClick(elementId))
+    {
+        clicks.push_back(elementId);
+    }
+
+    for (const std::string& clicked : clicks)
+    {
+        for (std::size_t i = 0; i < mNodes.size(); ++i)
+        {
+            if (mNodes[i].Data->TypeId != "Event.UiButtonClicked")
+            {
+                continue;
+            }
+
+            const std::string* filter = mNodes[i].Data->FindParam("Element Id");
+            if (filter != nullptr && !filter->empty() && *filter != clicked)
+            {
+                continue;
+            }
+
+            mNodes[i].State.LastValue = NodeGraphValue::FromString(clicked);
+            FireEntry(static_cast<int>(i), 0);
+        }
+    }
+
+    for (std::size_t i = 0; i < mNodes.size(); ++i)
+    {
+        const std::string& typeId = mNodes[i].Data->TypeId;
+        const bool pressed = typeId == "Event.KeyPressed";
+        if (!pressed && typeId != "Event.KeyReleased")
+        {
+            continue;
+        }
+
+        const int key = VirtualKeyFromName(ParamValue(static_cast<int>(i), "Key", NodePinKind::String).AsString());
+        NodeState& state = mNodes[i].State;
+        const bool down = key != 0 && mHost->IsKeyDown(key);
+        const bool wasDown = state.KeyWasDown;
+        state.KeyWasDown = down;
+
+        if (pressed ? (down && !wasDown) : (!down && wasDown))
+        {
+            FireEntry(static_cast<int>(i), 0);
+        }
+    }
+}
+
+void NodeGraphRuntime::AdvanceTweens(float deltaSeconds)
+{
+    for (std::size_t i = 0; i < mNodes.size(); ++i)
+    {
+        NodeState& state = mNodes[i].State;
+        if (!state.TweenActive)
+        {
+            continue;
+        }
+
+        const int nodeIndex = static_cast<int>(i);
+        const bool camera = mNodes[i].Data->TypeId == "Camera.MoveTo";
+        state.TweenElapsed += static_cast<double>(deltaSeconds);
+        const double t = state.TweenDuration > 0.0 ? (std::min)(state.TweenElapsed / state.TweenDuration, 1.0) : 1.0;
+        const double eased = ApplyEasing(t, ParamValue(nodeIndex, "Easing", NodePinKind::String).AsString());
+
+        double pose[5]{};
+        for (int a = 0; a < 5; ++a)
+        {
+            pose[a] = state.TweenFrom[a] + (state.TweenTo[a] - state.TweenFrom[a]) * eased;
+        }
+
+        if (camera)
+        {
+            // Pitch/yaw were unwrapped when the move began (To = From + shortest delta),
+            // so a straight blend already turns the short way round.
+            mCameraHeld = true;
+            mCameraPose.Position[0] = pose[0];
+            mCameraPose.Position[1] = pose[1];
+            mCameraPose.Position[2] = pose[2];
+            mCameraPose.Pitch = pose[3];
+            // Wrapped back into -180..180 so the unwrapped target (350 -> 370, say) never
+            // leaks out through Get Camera or into the engine camera.
+            mCameraPose.Yaw = std::remainder(pose[4], 2.0 * kPi);
+        }
+        else if (mHost != nullptr)
+        {
+            // The arc runs on raw time, not the eased curve, so the peak stays mid-flight
+            // whatever easing the horizontal motion uses.
+            const double arc = ParamValue(nodeIndex, "Arc Height", NodePinKind::Number).AsNumber();
+            pose[2] += arc * std::sin(kPi * t);
+
+            NodeGraphTransform transform;
+            if (!mHost->GetEntityTransform(state.TweenEntity, transform))
+            {
+                // The entity went away mid-move; there is nothing left to arrive.
+                state.TweenActive = false;
+                continue;
+            }
+
+            for (int a = 0; a < 3; ++a)
+            {
+                transform.Position[a] = pose[a];
+            }
+            mHost->SetEntityTransform(state.TweenEntity, transform);
+        }
+
+        if (t >= 1.0)
+        {
+            state.TweenActive = false;
+            FireEntry(nodeIndex, 1);
+        }
+    }
+}
+
+void NodeGraphRuntime::UpdatePlaylist()
+{
+    if (!mPlaylistActive || mHost == nullptr || mHost->IsMusicPlaying())
+    {
+        return;
+    }
+
+    PlayNextPlaylistTrack();
+}
+
+void NodeGraphRuntime::PlayNextPlaylistTrack()
+{
+    if (mPlaylistCount <= 0)
+    {
+        mPlaylistActive = false;
+        return;
+    }
+
+    int next = 0;
+    if (!mPlaylistShuffle)
+    {
+        next = (mPlaylistTrack + 1) % mPlaylistCount;
+    }
+    else if (mPlaylistCount > 1 && mPlaylistTrack >= 0)
+    {
+        // Draw from the tracks other than the one that just ended, so nothing repeats
+        // back to back: pick among N-1 and skip past the excluded index.
+        next = static_cast<int>(NextRandom() * (mPlaylistCount - 1));
+        if (next >= mPlaylistTrack)
+        {
+            ++next;
+        }
+    }
+    else
+    {
+        next = static_cast<int>(NextRandom() * mPlaylistCount);
+    }
+
+    next = (std::min)(next, mPlaylistCount - 1);
+    const std::string track = mPlaylistPrefix + std::to_string(next + 1);
+    if (!mHost->PlayMusic(track))
+    {
+        // A missing track would otherwise be retried every frame forever.
+        Log("Play Music Playlist: '" + track + "' could not be played; the playlist stopped.");
+        mPlaylistActive = false;
+        return;
+    }
+
+    mPlaylistTrack = next;
+}
+
+double NodeGraphRuntime::NextRandom()
+{
+    mRandomState = mRandomState * 1664525u + 1013904223u;
+    return static_cast<double>(mRandomState >> 8) / static_cast<double>(1u << 24);
+}
+
+NodeGraphCameraPose NodeGraphRuntime::CurrentCamera()
+{
+    if (mCameraHeld || mHost == nullptr)
+    {
+        return mCameraPose;
+    }
+
+    return mHost->GetCamera();
+}
+
+std::uint64_t NodeGraphRuntime::ReadEntity(int nodeIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const int pin = NodeGraphCatalog::IndexOfInput(*node.Type, "Entity");
+    return EntityIdFromValue(pin >= 0 ? ReadInput(nodeIndex, pin)
+                                      : ParamValue(nodeIndex, "Entity", NodePinKind::Entity));
 }
 
 void NodeGraphRuntime::Stop()
@@ -283,6 +600,8 @@ void NodeGraphRuntime::Stop()
     mEvaluationStack.clear();
     mDocument.Clear();
     mStopRequested = false;
+    mCameraHeld = false;
+    mPlaylistActive = false;
 }
 
 bool NodeGraphRuntime::ConsumeStopRequest()
@@ -405,9 +724,7 @@ void NodeGraphRuntime::FireEvents(const char* eventTypeId)
             continue;
         }
 
-        mStepsRemaining = kMaxStepsPerExecution;
-        mExecDepth = 0;
-        FireExec(static_cast<int>(i), 0);
+        FireEntry(static_cast<int>(i), 0);
     }
 }
 
@@ -664,6 +981,132 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         return;
     }
 
+    if (typeId.compare(0, 7, "Entity.") == 0)
+    {
+        ExecuteEntityNode(nodeIndex);
+        return;
+    }
+
+    if (typeId == "Camera.Set" || typeId == "Camera.MoveTo" || typeId == "Camera.Release")
+    {
+        // Whichever camera node ran last owns the camera, so a move still in flight must
+        // not carry on over a Set, a Release or a newer move.
+        for (RuntimeNode& other : mNodes)
+        {
+            if (other.Data->TypeId == "Camera.MoveTo")
+            {
+                other.State.TweenActive = false;
+            }
+        }
+
+        if (typeId == "Camera.Release")
+        {
+            mCameraHeld = false;
+            FireExec(nodeIndex, 0);
+            return;
+        }
+
+        NodeGraphCameraPose target;
+        for (int a = 0; a < 3; ++a)
+        {
+            target.Position[a] = ReadInput(nodeIndex, 1 + a).AsNumber();
+        }
+        target.Pitch = ReadInput(nodeIndex, 4).AsNumber() * kDegreesToRadians;
+        target.Yaw = ReadInput(nodeIndex, 5).AsNumber() * kDegreesToRadians;
+
+        const double duration = typeId == "Camera.MoveTo" ? ReadInput(nodeIndex, 6).AsNumber() : 0.0;
+        if (duration <= 0.0)
+        {
+            mCameraHeld = true;
+            mCameraPose = target;
+            if (mHost != nullptr)
+            {
+                mHost->SetCamera(mCameraPose);
+            }
+
+            FireExec(nodeIndex, 0);
+            if (typeId == "Camera.MoveTo")
+            {
+                FireExec(nodeIndex, 1);
+            }
+            return;
+        }
+
+        const NodeGraphCameraPose from = CurrentCamera();
+        state.TweenActive = true;
+        state.TweenElapsed = 0.0;
+        state.TweenDuration = duration;
+        for (int a = 0; a < 3; ++a)
+        {
+            state.TweenFrom[a] = from.Position[a];
+            state.TweenTo[a] = target.Position[a];
+        }
+        state.TweenFrom[3] = from.Pitch;
+        state.TweenTo[3] = target.Pitch;
+        state.TweenFrom[4] = from.Yaw;
+        state.TweenTo[4] = from.Yaw + std::remainder(target.Yaw - from.Yaw, 2.0 * kPi);
+
+        mCameraHeld = true;
+        mCameraPose = from;
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId.compare(0, 6, "Audio.") == 0)
+    {
+        state.Success = false;
+
+        if (mHost == nullptr)
+        {
+            Log("Audio node ran with no host attached.");
+        }
+        else if (typeId == "Audio.PlaySound")
+        {
+            mHost->PlayOneShot(ReadInput(nodeIndex, 1).AsString());
+            state.Success = true;
+        }
+        else if (typeId == "Audio.PlayMusic")
+        {
+            mPlaylistActive = false;
+            const std::string eventName = ReadInput(nodeIndex, 1).AsString();
+            state.Success = mHost->PlayMusic(eventName);
+            if (!state.Success)
+            {
+                Log("Play Music: '" + eventName + "' could not be played.");
+            }
+        }
+        else if (typeId == "Audio.PlayPlaylist")
+        {
+            mPlaylistPrefix = ReadInput(nodeIndex, 1).AsString();
+            mPlaylistCount = static_cast<int>(ReadInput(nodeIndex, 2).AsNumber());
+            mPlaylistShuffle = ParamValue(nodeIndex, "Shuffle", NodePinKind::Bool).AsBool();
+            mPlaylistTrack = -1;
+            mPlaylistActive = true;
+            PlayNextPlaylistTrack();
+            state.Success = mPlaylistActive;
+        }
+        else if (typeId == "Audio.StopMusic")
+        {
+            mPlaylistActive = false;
+            mHost->StopMusic();
+            state.Success = true;
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId == "Game.ToggleFullscreen")
+    {
+        if (mHost != nullptr)
+        {
+            mHost->ToggleFullscreen();
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
     if (typeId.compare(0, 3, "UI.") == 0)
     {
         state.Success = false;
@@ -726,12 +1169,237 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         return;
     }
 
+    if (typeId.compare(0, 6, "Video.") == 0)
+    {
+        state.Success = false;
+
+        if (mHost == nullptr)
+        {
+            Log("Video node ran with no host attached.");
+        }
+        else if (typeId == "Video.Play")
+        {
+            const std::string fileName = ReadInput(nodeIndex, 1).AsString();
+            // Volume before the video starts, so it never plays a frame at the old level.
+            mHost->SetVideoVolume(ParamValue(nodeIndex, "Volume", NodePinKind::Number).AsNumber());
+            state.Success = mHost->PlayVideo(
+                fileName,
+                ReadInput(nodeIndex, 2).AsBool(),
+                ParamValue(nodeIndex, "Fit", NodePinKind::String).AsString());
+            if (!state.Success)
+            {
+                Log("Play Video: '" + fileName + "' could not be played.");
+            }
+        }
+        else if (typeId == "Video.Pause")
+        {
+            mHost->PauseVideo();
+            state.Success = true;
+        }
+        else if (typeId == "Video.Resume")
+        {
+            mHost->ResumeVideo();
+            state.Success = true;
+        }
+        else if (typeId == "Video.Stop")
+        {
+            mHost->StopVideo();
+            state.Success = true;
+        }
+        else if (typeId == "Video.Seek")
+        {
+            mHost->SeekVideo(ReadInput(nodeIndex, 1).AsNumber());
+            state.Success = true;
+        }
+        else if (typeId == "Video.SetLooping")
+        {
+            mHost->SetVideoLooping(ReadInput(nodeIndex, 1).AsBool());
+            state.Success = true;
+        }
+        else if (typeId == "Video.SetVolume")
+        {
+            mHost->SetVideoVolume(ReadInput(nodeIndex, 1).AsNumber());
+            state.Success = true;
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
     // Anything else with an exec input simply passes control on, which keeps a node that
     // was added to the catalogue but not yet taught to the runtime from breaking a graph.
     if (node.Type->OutputCount > 0 && node.Type->Outputs[0].Kind == NodePinKind::Exec)
     {
         FireExec(nodeIndex, 0);
     }
+}
+
+void NodeGraphRuntime::ExecuteEntityNode(int nodeIndex)
+{
+    RuntimeNode& node = mNodes[nodeIndex];
+    NodeState& state = node.State;
+    const std::string& typeId = node.Data->TypeId;
+    state.Success = false;
+
+    if (mHost == nullptr)
+    {
+        Log("Entity node ran with no host attached.");
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    const std::uint64_t entity = ReadEntity(nodeIndex);
+    NodeGraphTransform transform;
+    if (entity == 0 || !mHost->GetEntityTransform(entity, transform))
+    {
+        // Reported once per node execution, not silently: an unpicked or deleted entity is
+        // the most likely mistake in an entity graph.
+        Log(std::string(node.Type->Caption) + ": " +
+            (entity == 0 ? std::string("no entity chosen.")
+                         : "entity " + std::to_string(entity) + " is not in the level."));
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    double vector[3]{};
+    const bool takesVector = NodeGraphCatalog::IndexOfInput(*node.Type, "X") == 2;
+    if (takesVector)
+    {
+        for (int a = 0; a < 3; ++a)
+        {
+            vector[a] = ReadInput(nodeIndex, 2 + a).AsNumber();
+        }
+    }
+
+    if (typeId == "Entity.SetPosition" || typeId == "Entity.AddPosition")
+    {
+        const bool add = typeId == "Entity.AddPosition";
+        for (int a = 0; a < 3; ++a)
+        {
+            transform.Position[a] = (add ? transform.Position[a] : 0.0) + vector[a];
+        }
+        state.Success = mHost->SetEntityTransform(entity, transform);
+    }
+    else if (typeId == "Entity.SetRotation" || typeId == "Entity.AddRotation")
+    {
+        const bool add = typeId == "Entity.AddRotation";
+        for (int a = 0; a < 3; ++a)
+        {
+            transform.Rotation[a] = (add ? transform.Rotation[a] : 0.0) + vector[a] * kDegreesToRadians;
+        }
+        state.Success = mHost->SetEntityTransform(entity, transform);
+    }
+    else if (typeId == "Entity.SetScale")
+    {
+        for (int a = 0; a < 3; ++a)
+        {
+            transform.Scale[a] = vector[a];
+        }
+        state.Success = mHost->SetEntityTransform(entity, transform);
+    }
+    else if (typeId == "Entity.MoveTo")
+    {
+        // A newer move of the same entity takes over from one still in flight.
+        for (RuntimeNode& other : mNodes)
+        {
+            if (other.Data->TypeId == "Entity.MoveTo" && other.State.TweenEntity == entity)
+            {
+                other.State.TweenActive = false;
+            }
+        }
+
+        state.TweenEntity = entity;
+        state.TweenElapsed = 0.0;
+        state.TweenDuration = ReadInput(nodeIndex, 5).AsNumber();
+        for (int a = 0; a < 3; ++a)
+        {
+            state.TweenFrom[a] = transform.Position[a];
+            state.TweenTo[a] = vector[a];
+        }
+        state.TweenActive = true;
+        state.Success = true;
+
+        FireExec(nodeIndex, 0);
+        // A zero duration still arrives through the tween, on the next tick, so Completed
+        // is always a frame after Then and never re-enters this chain.
+        return;
+    }
+    else if (typeId == "Entity.SetProperty")
+    {
+        const std::string property = ParamValue(nodeIndex, "Property", NodePinKind::String).AsString();
+        state.Success = mHost->SetEntityProperty(entity, property, ReadInput(nodeIndex, 2).AsNumber());
+        if (!state.Success)
+        {
+            Log("Set Entity Property: entity " + std::to_string(entity) + " has no '" + property + "'.");
+        }
+    }
+    else if (typeId == "Entity.PlayAudio" || typeId == "Entity.StopAudio")
+    {
+        state.Success = mHost->SetEntityAudioPlaying(entity, typeId == "Entity.PlayAudio");
+    }
+
+    FireExec(nodeIndex, 0);
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluateEntityOutput(int nodeIndex, int outPortIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const std::string& typeId = node.Data->TypeId;
+
+    // Nodes with an exec input report the Success of their last run on their value pin.
+    if (node.Type->InputCount > 0 && node.Type->Inputs[0].Kind == NodePinKind::Exec)
+    {
+        return NodeGraphValue::FromBool(node.State.Success);
+    }
+
+    if (typeId == "Entity.Reference")
+    {
+        return NodeGraphValue::FromNumber(static_cast<double>(ReadEntity(nodeIndex)));
+    }
+
+    if (mHost == nullptr)
+    {
+        return NodeGraphValue::FromNumber(0.0);
+    }
+
+    if (typeId == "Entity.FindByName")
+    {
+        const std::uint64_t entity = mHost->FindEntityByName(ReadInput(nodeIndex, 0).AsString());
+        return outPortIndex == 0 ? NodeGraphValue::FromNumber(static_cast<double>(entity))
+                                 : NodeGraphValue::FromBool(entity != 0);
+    }
+
+    const std::uint64_t entity = ReadEntity(nodeIndex);
+
+    if (typeId == "Entity.IsValid" || typeId == "Entity.GetName")
+    {
+        std::string name;
+        const bool valid = entity != 0 && mHost->GetEntityName(entity, name);
+        return typeId == "Entity.IsValid" ? NodeGraphValue::FromBool(valid) : NodeGraphValue::FromString(name);
+    }
+
+    if (typeId == "Entity.GetProperty")
+    {
+        double value = 0.0;
+        const bool found = entity != 0 && mHost->GetEntityProperty(
+            entity, ParamValue(nodeIndex, "Property", NodePinKind::String).AsString(), value);
+        return outPortIndex == 0 ? NodeGraphValue::FromNumber(value) : NodeGraphValue::FromBool(found);
+    }
+
+    NodeGraphTransform transform;
+    if (entity == 0 || !mHost->GetEntityTransform(entity, transform) || outPortIndex < 0 || outPortIndex > 2)
+    {
+        return NodeGraphValue::FromNumber(0.0);
+    }
+
+    if (typeId == "Entity.GetPosition")
+        return NodeGraphValue::FromNumber(transform.Position[outPortIndex]);
+    if (typeId == "Entity.GetRotation")
+        return NodeGraphValue::FromNumber(transform.Rotation[outPortIndex] * kRadiansToDegrees);
+    if (typeId == "Entity.GetScale")
+        return NodeGraphValue::FromNumber(transform.Scale[outPortIndex]);
+
+    return NodeGraphValue::FromNumber(0.0);
 }
 
 NodeGraphValue NodeGraphRuntime::ReadInput(int nodeIndex, int inPortIndex)
@@ -859,9 +1527,73 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     {
         const double low = ReadInput(nodeIndex, 0).AsNumber();
         const double high = ReadInput(nodeIndex, 1).AsNumber();
-        mRandomState = mRandomState * 1664525u + 1013904223u;
-        const double unit = static_cast<double>(mRandomState >> 8) / static_cast<double>(1u << 24);
-        result = NodeGraphValue::FromNumber(low + (high - low) * unit);
+        result = NodeGraphValue::FromNumber(low + (high - low) * NextRandom());
+    }
+    else if (typeId == "Math.RandomInteger")
+    {
+        const double a = ReadInput(nodeIndex, 0).AsNumber();
+        const double b = ReadInput(nodeIndex, 1).AsNumber();
+        const double low = std::ceil((std::min)(a, b));
+        const double high = std::floor((std::max)(a, b));
+        const double span = high - low + 1.0;
+        result = NodeGraphValue::FromNumber(
+            span < 1.0 ? low : (std::min)(low + std::floor(NextRandom() * span), high));
+    }
+    else if (typeId == "Math.RandomChance")
+    {
+        result = NodeGraphValue::FromBool(NextRandom() < ReadInput(nodeIndex, 0).AsNumber());
+    }
+    else if (typeId == "Math.Min" || typeId == "Math.Max")
+    {
+        const double a = ReadInput(nodeIndex, 0).AsNumber();
+        const double b = ReadInput(nodeIndex, 1).AsNumber();
+        result = NodeGraphValue::FromNumber(typeId == "Math.Min" ? (std::min)(a, b) : (std::max)(a, b));
+    }
+    else if (typeId == "Math.Modulo")
+    {
+        const double a = ReadInput(nodeIndex, 0).AsNumber();
+        const double b = ReadInput(nodeIndex, 1).AsNumber();
+        double remainder = b == 0.0 ? 0.0 : std::fmod(a, b);
+        // fmod keeps the sign of A; wrapping wants the sign of B, so -1 mod 6 is 5.
+        if (remainder != 0.0 && ((remainder < 0.0) != (b < 0.0)))
+        {
+            remainder += b;
+        }
+        result = NodeGraphValue::FromNumber(remainder);
+    }
+    else if (typeId == "Math.Abs")
+    {
+        result = NodeGraphValue::FromNumber(std::abs(ReadInput(nodeIndex, 0).AsNumber()));
+    }
+    else if (typeId == "Math.Floor")
+    {
+        result = NodeGraphValue::FromNumber(std::floor(ReadInput(nodeIndex, 0).AsNumber()));
+    }
+    else if (typeId == "Math.Sin")
+    {
+        result = NodeGraphValue::FromNumber(std::sin(ReadInput(nodeIndex, 0).AsNumber() * kDegreesToRadians));
+    }
+    else if (typeId == "Math.Cos")
+    {
+        result = NodeGraphValue::FromNumber(std::cos(ReadInput(nodeIndex, 0).AsNumber() * kDegreesToRadians));
+    }
+    else if (typeId == "Math.Ease")
+    {
+        result = NodeGraphValue::FromNumber(ApplyEasing(
+            ReadInput(nodeIndex, 0).AsNumber(), ParamValue(nodeIndex, "Easing", NodePinKind::String).AsString()));
+    }
+    else if (typeId == "Math.LerpAngle")
+    {
+        const double a = ReadInput(nodeIndex, 0).AsNumber();
+        const double b = ReadInput(nodeIndex, 1).AsNumber();
+        result = NodeGraphValue::FromNumber(a + std::remainder(b - a, 360.0) * ReadInput(nodeIndex, 2).AsNumber());
+    }
+    else if (typeId == "Value.FormatNumber")
+    {
+        result = NodeGraphValue::FromString(FormatNumber(
+            ReadInput(nodeIndex, 0).AsNumber(),
+            static_cast<int>(ParamValue(nodeIndex, "Decimals", NodePinKind::Number).AsNumber()),
+            ParamValue(nodeIndex, "Grouping", NodePinKind::Bool).AsBool()));
     }
     else if (typeId == "Logic.And")
     {
@@ -937,6 +1669,82 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     else if (typeId.compare(0, 3, "UI.") == 0)
     {
         result = NodeGraphValue::FromBool(node.State.Success);
+    }
+    else if (typeId == "Video.IsPlaying")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsVideoPlaying());
+    }
+    else if (typeId == "Video.GetTime")
+    {
+        result = NodeGraphValue::FromNumber(mHost != nullptr ? mHost->GetVideoTime() : 0.0);
+    }
+    else if (typeId == "Video.GetDuration")
+    {
+        result = NodeGraphValue::FromNumber(mHost != nullptr ? mHost->GetVideoDuration() : 0.0);
+    }
+    else if (typeId.compare(0, 6, "Video.") == 0)
+    {
+        result = NodeGraphValue::FromBool(node.State.Success);
+    }
+    else if (typeId == "Event.UiButtonClicked")
+    {
+        result = NodeGraphValue::FromString(node.State.LastValue.AsString());
+    }
+    else if (typeId == "Input.IsKeyDown")
+    {
+        const int key = VirtualKeyFromName(ParamValue(nodeIndex, "Key", NodePinKind::String).AsString());
+        result = NodeGraphValue::FromBool(key != 0 && mHost != nullptr && mHost->IsKeyDown(key));
+    }
+    else if (typeId.compare(0, 7, "Entity.") == 0)
+    {
+        result = EvaluateEntityOutput(nodeIndex, outPortIndex);
+    }
+    else if (typeId == "Camera.Get")
+    {
+        const NodeGraphCameraPose pose = CurrentCamera();
+        switch (outPortIndex)
+        {
+        case 0: case 1: case 2: result = NodeGraphValue::FromNumber(pose.Position[outPortIndex]); break;
+        case 3: result = NodeGraphValue::FromNumber(pose.Pitch * kRadiansToDegrees); break;
+        case 4: result = NodeGraphValue::FromNumber(pose.Yaw * kRadiansToDegrees); break;
+        default: break;
+        }
+    }
+    else if (typeId == "Camera.LookPoint")
+    {
+        // Intersect the view ray with the horizontal plane: the point under the centre of
+        // the screen, e.g. where to drop something so it lands in view.
+        const NodeGraphCameraPose pose = CurrentCamera();
+        const double planeZ = ReadInput(nodeIndex, 0).AsNumber();
+        const double forward[3] = {
+            std::sin(pose.Yaw) * std::cos(pose.Pitch),
+            std::cos(pose.Yaw) * std::cos(pose.Pitch),
+            std::sin(pose.Pitch)
+        };
+        const double distance = std::abs(forward[2]) > 1e-6 ? (planeZ - pose.Position[2]) / forward[2] : -1.0;
+        const bool hit = distance > 0.0;
+        if (outPortIndex == 3)
+        {
+            result = NodeGraphValue::FromBool(hit);
+        }
+        else if (outPortIndex >= 0 && outPortIndex < 3)
+        {
+            result = NodeGraphValue::FromNumber(
+                hit ? pose.Position[outPortIndex] + forward[outPortIndex] * distance
+                    : (outPortIndex == 2 ? planeZ : pose.Position[outPortIndex]));
+        }
+    }
+    else if (typeId == "Audio.IsMusicPlaying")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsMusicPlaying());
+    }
+    else if (typeId.compare(0, 6, "Audio.") == 0)
+    {
+        result = NodeGraphValue::FromBool(node.State.Success);
+    }
+    else if (typeId == "Game.IsStandalone")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsStandalone());
     }
 
     mEvaluationStack.pop_back();

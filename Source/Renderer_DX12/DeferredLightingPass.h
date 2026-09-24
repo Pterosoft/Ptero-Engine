@@ -169,6 +169,41 @@ public:
     void SetPointShadowMatrices(const DirectX::XMFLOAT4X4* faceViewProjections, int activeShadowLightCount);
     void SetPointShadowDebug(int debugView, int filterRadius, float seamBlendDistance, float normalOffset);
 
+    // Subsurface scattering for the next ResolveLight(). With a constants address, the
+    // resolve switches to the pipeline variant that also writes each subsurface pixel's
+    // diffuse lighting to diffuseRtv (see SubsurfaceScattering.h). Pass 0 / {} to use the
+    // plain pipeline.
+    void SetSubsurface(D3D12_GPU_VIRTUAL_ADDRESS subsurfaceConstants, D3D12_CPU_DESCRIPTOR_HANDLE diffuseRtv)
+    {
+        mSubsurfaceConstants = subsurfaceConstants;
+        mSubsurfaceDiffuseRtv = diffuseRtv;
+    }
+
+    // CPU-side copies of the last values handed to SetSceneLighting / SetPointLights, for
+    // passes that need the same lights (the ray-traced subsurface transmission). Kept apart
+    // from the mapped constant buffer, which is write-combined and must not be read.
+    const DirectX::XMFLOAT3& GetSunDirection() const { return mCpuSunDirection; }
+    const DirectX::XMFLOAT3& GetSunColor() const { return mCpuSunColor; }
+    const DirectX::XMFLOAT3& GetSkyAmbient() const { return mCpuSkyAmbient; }
+    const PointLightGpu* GetPointLights() const { return mCpuPointLights; }
+    int GetPointLightCount() const { return mCpuPointLightCount; }
+
+    // CPU copies of the shadow data the lighting pass samples, for passes that must shadow
+    // exactly as it does (the ray-traced subsurface pass). Handles are null when disabled.
+    struct ShadowSnapshot
+    {
+        DirectX::XMFLOAT4X4         LightViewProj{};
+        float                       ShadowMapSize = 0.0f;
+        float                       ShadowBias = 0.0f;
+        D3D12_GPU_DESCRIPTOR_HANDLE SunShadowSrv{};
+        float                       PointShadowMapSize = 0.0f;
+        float                       PointShadowBias = 0.0f;
+        int                         PointShadowLightCount = 0;
+        D3D12_GPU_DESCRIPTOR_HANDLE PointShadowSrv{};
+        DirectX::XMFLOAT4X4         PointFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+    };
+    const ShadowSnapshot& GetShadowSnapshot() const { return mCpuShadows; }
+
     // Run the fullscreen deferred-lighting quad.
     // The scene colour RT must already be in RenderTarget state.
     // The G-Buffer must be in PixelShaderResource state (call EndGeometryPass first).
@@ -189,6 +224,8 @@ public:
 
     // G-Buffer SRV GPU handles for binding in the lighting shader.
     const GBufferSrvs& GetSrvs() const { return mSrvs; }
+    // Same targets with alpha forced to 1, for the editor's texture viewer only.
+    const GBufferSrvs& GetDebugSrvs() const { return mDebugSrvs; }
 
     // Raw G-Buffer resource pointers for resource-barrier transitions (e.g. before DXR).
     // Index: 0 = albedo, 1 = normal, 2 = material.
@@ -298,6 +335,8 @@ private:
 
     // CPU handles matching the SRV allocations (kept for re-creating SRVs on resize).
     D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[3]{};
+    GBufferSrvs                 mDebugSrvs{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mDebugSrvCpuHandles[3]{};
 
     // Current MSAA configuration.
     MsaaSettings mMsaaSettings{};
@@ -310,6 +349,21 @@ private:
     DX12Shader                                   mPixelShader;
     Microsoft::WRL::ComPtr<ID3D12RootSignature>  mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>  mPipelineState;
+    // Same resolve compiled with PTERO_SSS_OUTPUT=1: a second render target receives the
+    // diffuse lighting of subsurface pixels. Null if it failed to build, in which case
+    // subsurface scattering is simply skipped.
+    DX12Shader                                   mPixelShaderSubsurface;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>  mPipelineStateSubsurface;
+
+    D3D12_GPU_VIRTUAL_ADDRESS   mSubsurfaceConstants = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE mSubsurfaceDiffuseRtv{};
+
+    DirectX::XMFLOAT3 mCpuSunDirection{ 0.0f, 0.0f, -1.0f };
+    DirectX::XMFLOAT3 mCpuSunColor{ 0.0f, 0.0f, 0.0f };
+    DirectX::XMFLOAT3 mCpuSkyAmbient{ 0.0f, 0.0f, 0.0f };
+    PointLightGpu     mCpuPointLights[kMaxPointLights]{};
+    int               mCpuPointLightCount = 0;
+    ShadowSnapshot    mCpuShadows{};
 
     // Constant buffers.
     Microsoft::WRL::ComPtr<ID3D12Resource> mCameraCB;

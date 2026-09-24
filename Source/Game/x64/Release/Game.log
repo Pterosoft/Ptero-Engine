@@ -1,0 +1,10 @@
+﻿  pch.cpp
+  dllmain.cpp
+  Game.cpp
+  GameCamera.cpp
+     Creating library K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\Game.lib and object K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\Game.exp
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+  All 329 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  Game.vcxproj -> K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\Game.dll

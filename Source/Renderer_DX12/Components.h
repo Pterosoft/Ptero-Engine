@@ -598,14 +598,14 @@ struct TerrainComponent
 
 // WaterComponent: a flat, animated water surface (ocean / lake / pond) that
 // lives on the entity's XY plane at the entity's Z height.  The renderer
-// generates a tessellated grid of SizeX x SizeY world units, animates it with
-// summed Gerstner waves in the vertex shader, and writes realistic water
-// shading into the G-Buffer so the deferred lighting + RTGI passes give it sky
-// and sun reflections.
+// generates a tessellated grid of SizeX x SizeY world units, displaces it with
+// Gerstner + sine waves and a height map in the vertex shader, and shades it in
+// a forward pass after lighting (Data/Shaders/Water.hlsl, a port of
+// tuxalin/water-shader).
 //
 // The *area* (SizeX/SizeY) and tessellation (Resolution) are edited on the
-// component; the *look* (colour, roughness, wave motion, foam) comes from the
-// assigned water material JSON (see Data/Materials/Ocean.json and Water.json).
+// component; the *look* (colours, waves, reflection, foam, textures) comes from
+// the assigned water material JSON (see Data/Materials/Ocean.json and Water.json).
 struct WaterComponent
 {
     // World-space size of the water area, in metres, along the entity's local
@@ -615,29 +615,19 @@ struct WaterComponent
 
     // Grid tessellation (vertices per axis).  Higher = smoother waves at the
     // cost of more triangles.  Clamped to [2, 512] by the renderer.
-    // The wave spectrum is band-limited to this tessellation, so a low value
-    // yields fewer, smoother waves rather than polygonal faceting.
     int Resolution = 384;
 
-    // Data-relative .json water material.  Drives colour, roughness, wave
-    // amplitude/length/speed, choppiness and foam.  Empty = built-in ocean
-    // defaults.
+    // Data-relative .json water material ("water" block).  Empty = the
+    // shader's built-in defaults.
     std::string MaterialPath = "Materials/Ocean.json";
 
-    // Global multiplier on the material's wave amplitude/steepness, so the
-    // same material can be made calmer or rougher per placement without
-    // authoring a new material.
+    // Multiplier on the material's wave amplitude factor, so the same material
+    // can be made calmer or rougher per placement without authoring a new one.
     float WaveScale = 1.0f;
 
-    // How many times the surface detail UV tiles across the whole area.  Only
-    // affects the high-frequency ripple normals, not the main Gerstner waves.
-    float DetailTiling = 24.0f;
-
-    // Diagnostic view (see Water.hlsl WATER_DEBUG_*): 0 = off, 1 = Fresnel,
-    // 2 = N-dot-V, 3 = normals, 4 = thickness, 5 = reflection, 6 = transmission,
-    // 7 = foam, 8 = neutral 0.18 exposure test.  Isolating one term at a time
-    // separates an optics bug from a wave bug; mode 8 must render flat mid-grey,
-    // and anything else means the fault lies outside the water model.
+    // Diagnostic view (see Water.hlsl WATER_DEBUG_*): 0 = off, 1 = normals,
+    // 2 = Fresnel, 3 = water depth, 4 = refraction, 5 = reflection,
+    // 6 = specular, 7 = foam.
     int DebugMode = 0;
 };
 
@@ -845,6 +835,10 @@ struct VegetationAreaComponent
 
 struct Entity
 {
+    // Persistent identity, saved with the level. Names repeat and list positions shift
+    // under editing, so this is what a node graph's entity reference holds. 0 means "not
+    // assigned yet"; EnsureEntityIds (EntityIds.h) fills those in and splits duplicates.
+    std::uint64_t Id = 0;
     std::string Name = "Entity";
     TransformComponent Transform;
     std::optional<MeshComponent> Mesh;
@@ -1457,7 +1451,6 @@ inline void to_json(nlohmann::json& j, const WaterComponent& wc)
         { "Resolution",   wc.Resolution   },
         { "MaterialPath", wc.MaterialPath },
         { "WaveScale",    wc.WaveScale    },
-        { "DetailTiling", wc.DetailTiling },
         { "DebugMode",    wc.DebugMode    }
     };
 }
@@ -1469,12 +1462,11 @@ inline void from_json(const nlohmann::json& j, WaterComponent& wc)
     wc.Resolution   = j.value("Resolution",   384);
     wc.MaterialPath = j.value("MaterialPath", std::string{ "Materials/Ocean.json" });
     wc.WaveScale    = j.value("WaveScale",    1.0f);
-    wc.DetailTiling = j.value("DetailTiling", 24.0f);
     wc.DebugMode    = j.value("DebugMode",    0);
 
     if (wc.Resolution < 2)   wc.Resolution = 2;
     if (wc.Resolution > 512) wc.Resolution = 512;
-    if (wc.DebugMode < 0 || wc.DebugMode > 9) wc.DebugMode = 0;
+    if (wc.DebugMode < 0 || wc.DebugMode > 7) wc.DebugMode = 0;
 }
 
 inline void to_json(nlohmann::json& j, const VegetationLayer& vl)

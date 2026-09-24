@@ -1,4 +1,6 @@
 #include "pch.h"
+#include "System/DataFiles.h"
+#include <filesystem>
 #include "RainRenderer.h"
 
 #include "..\Ptero-Engine\RenderInterfaces.h"
@@ -27,23 +29,9 @@ extern "C"
 // ---------------------------------------------------------------------------
 static std::wstring GetShaderDir()
 {
-	wchar_t path[MAX_PATH] = {};
-	GetModuleFileNameW(nullptr, path, MAX_PATH);
-	std::wstring exe(path);
-	auto slash = exe.find_last_of(L"\\/");
-	std::wstring dir = (slash != std::wstring::npos) ? exe.substr(0, slash + 1) : L"";
-
-	// Walk up until we find a "Data/Shaders" folder.
-	for (int attempt = 0; attempt < 6; ++attempt)
-	{
-		std::wstring candidate = dir + L"Data\\Shaders\\";
-		if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
-			return candidate;
-		auto up = dir.find_last_of(L"\\/", dir.size() - 2);
-		if (up == std::wstring::npos) break;
-		dir = dir.substr(0, up + 1);
-	}
-	return L"Data\\Shaders\\";
+	// The repository's Data folder, or a packaged game's virtual one (DataFiles.h).
+	const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+	return dataDirectory.empty() ? std::wstring(L"Data\\Shaders\\") : (dataDirectory / L"Shaders").wstring() + L"\\";
 }
 
 static ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, UINT64 size)

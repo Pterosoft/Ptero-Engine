@@ -1,0 +1,14 @@
+<rml>
+<head>
+<title>Statistics</title>
+<!-- The engine's frame-rate/latency readout (RmlUiRenderer::SetStatisticsOverlay). Its own
+     document, kept in front of whatever game screen is loaded. Uses only the engine font
+     RmlUiRenderer loads at start-up, so it works with any game's UI. -->
+<style>
+body { display: block; width: 100%; height: 100%; margin: 0; pointer-events: none; background-color: #00000000; font-family: "Playfair Display"; }
+#stats { position: absolute; right: 1.2vh; top: 1.2vh; padding: 0.7vh 1.2vh; background-color: #000000a8; border-radius: 0.5vh; pointer-events: none; }
+#stats-text { display: block; font-size: 1.9vh; line-height: 1.3; color: #f2e6c8ff; text-align: right; font-effect: shadow(1px 1px #000000ff); }
+</style>
+</head>
+<body><div id="stats"><div id="stats-text"></div></div></body>
+</rml>

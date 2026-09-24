@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "System/DataFiles.h"
 
 #include "VegetationRenderer.h"
 
@@ -54,27 +55,9 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount =
-            GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-            return {};
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return std::filesystem::weakly_canonical(dataDirectory);
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        // Walks up from the exe to Data/ - or, in a packaged game, the virtual Data
+        // root the .ppak archives serve (see System/DataFiles.h).
+        return DataFiles::FindDataDirectory();
     }
 
     std::filesystem::path ResolveDataRelativePath(const std::string& relativePath)
@@ -84,14 +67,14 @@ namespace
 
         std::filesystem::path path(relativePath);
         std::error_code errorCode;
-        if (path.is_absolute() && std::filesystem::exists(path, errorCode))
+        if (path.is_absolute() && DataFiles::Exists(path))
             return std::filesystem::weakly_canonical(path, errorCode);
 
         const std::filesystem::path dataDirectory = FindProjectDataDirectory();
         if (!dataDirectory.empty())
         {
             path = (dataDirectory / path).lexically_normal();
-            if (std::filesystem::exists(path, errorCode))
+            if (DataFiles::Exists(path))
                 return std::filesystem::weakly_canonical(path, errorCode);
         }
 
@@ -109,11 +92,11 @@ namespace
 
         std::error_code errorCode;
         std::filesystem::path path(texturePath);
-        if (path.is_absolute() && std::filesystem::exists(path, errorCode))
+        if (path.is_absolute() && DataFiles::Exists(path))
             return std::filesystem::weakly_canonical(path, errorCode).string();
 
         const std::filesystem::path beside = (materialFilePath.parent_path() / path).lexically_normal();
-        if (std::filesystem::exists(beside, errorCode))
+        if (DataFiles::Exists(beside))
             return std::filesystem::weakly_canonical(beside, errorCode).string();
 
         const std::filesystem::path fromData = ResolveDataRelativePath(texturePath);
@@ -1018,7 +1001,7 @@ const VegetationRenderer::LayerMaterial& VegetationRenderer::ResolveLayerMateria
     if (resolved.empty())
         return material;
 
-    std::ifstream stream(resolved);
+    DataFiles::InputFile stream(resolved);
     if (!stream)
         return material;
 

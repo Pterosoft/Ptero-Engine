@@ -96,7 +96,10 @@ namespace
         ComPtr<ID3D12DescriptorHeap> SrvHeap;
         UINT RtvDescriptorSize = 0;
         UINT SrvDescriptorSize = 0;
-        UINT SrvDescriptorCapacity = 512; // increased to accommodate TAA, GI, volumetric cloud, and other pass descriptors
+        // Raised from 512 when FidelityFX SSSR arrived: it alone holds 47 slots (a depth pyramid
+        // of per-level UAVs plus ping-ponged denoiser history). Slots are never freed, so the
+        // margin also has to absorb every pass that is created lazily.
+        UINT SrvDescriptorCapacity = 1024;
         UINT NextAvailableSrvDescriptor = 1;
         std::array<ComPtr<ID3D12Resource>, FrameCount> RenderTargets;
 
@@ -112,6 +115,18 @@ namespace
         bool CommandListOpen = false;
         bool StreamlineCoreInitialized = false;
         bool StreamlineInitialized = false;
+
+        // Render latency: from a frame starting (the renderer samples input right after
+        // BeginFrame) to the GPU finishing it. The GPU writes a timestamp at the end of each
+        // frame; it is read back once that frame's fence has passed and mapped onto the CPU
+        // clock with the queue's clock calibration.
+        ComPtr<ID3D12QueryHeap> TimestampHeap;
+        ComPtr<ID3D12Resource> TimestampReadback;
+        const UINT64* MappedTimestamps = nullptr;
+        UINT64 GpuTimestampFrequency = 0;
+        std::array<LONGLONG, FrameCount> FrameStartQpc{};
+        std::array<bool, FrameCount> TimestampPending{};
+        double RenderLatencyMilliseconds = 0.0;
     };
 
     DX12ContextState g_Context;
@@ -592,6 +607,36 @@ extern "C"
             queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
             ThrowIfFailedWithContext(ctx.Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&ctx.CommandQueue)), "ID3D12Device::CreateCommandQueue");
 
+            // Non-fatal: without timestamps the render latency simply reads 0.
+            {
+                D3D12_QUERY_HEAP_DESC queryHeapDesc{};
+                queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+                queryHeapDesc.Count = FrameCount;
+                const D3D12_HEAP_PROPERTIES readbackHeap{ D3D12_HEAP_TYPE_READBACK };
+                D3D12_RESOURCE_DESC readbackDesc{};
+                readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+                readbackDesc.Width = sizeof(UINT64) * FrameCount;
+                readbackDesc.Height = 1;
+                readbackDesc.DepthOrArraySize = 1;
+                readbackDesc.MipLevels = 1;
+                readbackDesc.SampleDesc.Count = 1;
+                readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+                void* mapped = nullptr;
+                if (SUCCEEDED(ctx.CommandQueue->GetTimestampFrequency(&ctx.GpuTimestampFrequency))
+                    && SUCCEEDED(ctx.Device->CreateQueryHeap(&queryHeapDesc, IID_PPV_ARGS(&ctx.TimestampHeap)))
+                    && SUCCEEDED(ctx.Device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+                        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&ctx.TimestampReadback)))
+                    && SUCCEEDED(ctx.TimestampReadback->Map(0, nullptr, &mapped)))
+                {
+                    ctx.MappedTimestamps = static_cast<const UINT64*>(mapped);
+                }
+                else
+                {
+                    ctx.TimestampHeap.Reset();
+                    ctx.TimestampReadback.Reset();
+                }
+            }
+
             ReportContextProgress(L"Creating swap chain...");
             DXGI_SWAP_CHAIN_DESC1 swapChainDesc = MakeSwapChainDesc(ctx.Width, ctx.Height);
 
@@ -713,6 +758,29 @@ extern "C"
                 return false;
             }
 
+            // This slot's previous frame has retired, so its end timestamp is readable.
+            if (ctx.TimestampPending[ctx.FrameIndex] && ctx.MappedTimestamps && ctx.GpuTimestampFrequency)
+            {
+                UINT64 gpuNow = 0, cpuNow = 0;
+                LARGE_INTEGER qpcFrequency{};
+                if (SUCCEEDED(ctx.CommandQueue->GetClockCalibration(&gpuNow, &cpuNow)) && QueryPerformanceFrequency(&qpcFrequency))
+                {
+                    const UINT64 gpuEnd = ctx.MappedTimestamps[ctx.FrameIndex];
+                    const double gpuAgoSeconds = gpuNow >= gpuEnd
+                        ? static_cast<double>(gpuNow - gpuEnd) / static_cast<double>(ctx.GpuTimestampFrequency)
+                        : 0.0;
+                    const double endQpc = static_cast<double>(cpuNow) - gpuAgoSeconds * static_cast<double>(qpcFrequency.QuadPart);
+                    const double latency = (endQpc - static_cast<double>(ctx.FrameStartQpc[ctx.FrameIndex]))
+                        * 1000.0 / static_cast<double>(qpcFrequency.QuadPart);
+                    if (latency > 0.0 && latency < 2000.0)
+                        ctx.RenderLatencyMilliseconds = latency;
+                }
+                ctx.TimestampPending[ctx.FrameIndex] = false;
+            }
+            LARGE_INTEGER frameStart{};
+            QueryPerformanceCounter(&frameStart);
+            ctx.FrameStartQpc[ctx.FrameIndex] = frameStart.QuadPart;
+
             ThrowIfFailedWithContext(ctx.CommandAllocators[ctx.FrameIndex]->Reset(), "ID3D12CommandAllocator::Reset");
             ThrowIfFailedWithContext(ctx.CommandList->Reset(ctx.CommandAllocators[ctx.FrameIndex].Get(), nullptr), "ID3D12GraphicsCommandList::Reset");
             ctx.CommandListOpen = true;
@@ -751,11 +819,21 @@ extern "C"
                 return false;
             }
 
+            const bool timestamped = ctx.TimestampHeap && frameIndex < FrameCount;
+            if (timestamped)
+            {
+                ctx.CommandList->EndQuery(ctx.TimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frameIndex);
+                ctx.CommandList->ResolveQueryData(ctx.TimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frameIndex, 1,
+                    ctx.TimestampReadback.Get(), sizeof(UINT64) * frameIndex);
+            }
+
             ThrowIfFailedWithContext(ctx.CommandList->Close(), "ID3D12GraphicsCommandList::Close(frame)");
             ctx.CommandListOpen = false;
 
             ID3D12CommandList* commandLists[] = { ctx.CommandList.Get() };
             ctx.CommandQueue->ExecuteCommandLists(1, commandLists);
+            if (timestamped)
+                ctx.TimestampPending[frameIndex] = true;
 
             const HRESULT deviceStatusAfterExecute = ctx.Device ? ctx.Device->GetDeviceRemovedReason() : S_OK;
             if (FAILED(deviceStatusAfterExecute))
@@ -787,6 +865,12 @@ extern "C"
             SetContextError("DX12Context_EndFrame failed with an unknown exception.");
             return false;
         }
+    }
+
+    // Most recent render latency (frame start to GPU completion), in milliseconds.
+    __declspec(dllexport) double __stdcall DX12Context_GetRenderLatencyMilliseconds()
+    {
+        return g_Context.RenderLatencyMilliseconds;
     }
 
     __declspec(dllexport) void __stdcall DX12Context_AbortFrame()

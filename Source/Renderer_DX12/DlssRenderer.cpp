@@ -407,8 +407,13 @@ bool DlssRenderer::SetConstants(const CameraFrameData& cameraData, const sl::Fra
     FillRowMajor(constants.clipToPrevClip, clipToPrevClipF);
     FillRowMajor(constants.prevClipToClip, prevClipToClipF);
 
+    // Same conventions as FSR, which gets them right (FsrRenderer): the jitter is in render
+    // pixels with +Y down (the caller supplies it that way), and the motion vectors must
+    // point from the current frame back to the previous one. MotionVectors.hlsl writes
+    // current - previous in UV space, hence the negative scale. With +1 here DLSS
+    // reprojected every moving pixel the wrong way.
     constants.jitterOffset = { cameraData.JitterX, cameraData.JitterY };
-    constants.mvecScale = { 1.0f, 1.0f };
+    constants.mvecScale = { -1.0f, -1.0f };
     constants.cameraPinholeOffset = { 0.0f, 0.0f };
     constants.cameraPos = { cameraData.CameraPosition.x, cameraData.CameraPosition.y, cameraData.CameraPosition.z };
     constants.cameraUp = { cameraData.CameraUp.x, cameraData.CameraUp.y, cameraData.CameraUp.z };

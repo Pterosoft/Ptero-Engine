@@ -22,7 +22,12 @@ enum class NodePinKind
     String,
     // Accepts a connection from any value pin. Used by the variable and multiplexer
     // nodes, whose type is only known once the graph declares its variables.
-    Any
+    Any,
+    // A level entity, identified by the persistent id saved with it in the level - not by
+    // its name or its position in the entity list, both of which change under editing.
+    // Travels as a number at runtime; ids are kept below 2^53 so a double holds them
+    // exactly.
+    Entity
 };
 
 struct NodeGraphPin
@@ -42,7 +47,10 @@ enum class NodeParamKind
     Variable,
     // Picks one of the graph's functions - every Function Entry in the document, including
     // those merged in from an imported library.
-    Function
+    Function,
+    // Picks an entity of the open level. Stored as the entity's persistent id in decimal,
+    // so renaming or reordering entities never re-points a node at something else.
+    Entity
 };
 
 // A value edited on the node body itself. `Key` matches the name of an input pin whenever

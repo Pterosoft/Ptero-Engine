@@ -52,8 +52,8 @@ public:
        mShadowDepthTexture.Reset();
 		mDsvHeap.Reset();
 		mDsvHandles.clear();
-		mShadowSrvCpu = {};
-		mShadowSrvGpu = {};
+		// The SRV slot is kept: the shared heap never frees, so a map-size change
+		// (Shutdown + Initialize) must rewrite the same descriptor, not take another.
 		mRootSignature.Reset();
 		mPipelineState.Reset();
 		mVertexShader = DX12Shader{};

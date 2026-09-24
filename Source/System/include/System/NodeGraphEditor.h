@@ -2,7 +2,17 @@
 
 #include "System/NodeGraphDocument.h"
 
+#include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
+
+// One row of an entity picker: the persistent id a node stores, and the name it shows.
+struct NodeGraphEntityInfo
+{
+    std::uint64_t Id = 0;
+    std::string Name;
+};
 
 // The engine's handle on the Node Graph window.
 //
@@ -39,4 +49,12 @@ namespace NodeGraphEditor
     // Last .nodegraph the window imported from or exported to, empty when the graph has
     // only ever lived inside the level.
     const std::string& ExportPath();
+
+    // Where entity pickers get the open level's entities from, and the entity currently
+    // selected in the editor (0 for none) for their "use selection" button. The window
+    // cannot see the Entity type, so the editor supplies both. Queried each time a picker
+    // opens, so renames and new entities show up without any notification.
+    void SetEntitySource(
+        std::function<std::vector<NodeGraphEntityInfo>()> listEntities,
+        std::function<std::uint64_t()> selectedEntity);
 }

@@ -18,6 +18,8 @@
 #include "RtGlobalIllumination.h"
 #include "Components.h"
 #include "..\SDKs\DirectXTex\DirectXTex\DirectXTex.h"
+#include "System/DataFiles.h"
+#include "System/PteroLog.h"
 
 #include <algorithm>
 #include <array>
@@ -226,48 +228,33 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-            return {};
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return std::filesystem::weakly_canonical(dataDirectory);
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        if (dataDirectory.empty() || DataFiles::IsPackaged())
+            return dataDirectory;
+        std::error_code errorCode;
+        return std::filesystem::weakly_canonical(dataDirectory, errorCode);
     }
 
     std::array<float, 3> EstimateAverageTextureColor(const std::filesystem::path& texturePath)
     {
-        if (texturePath.empty() || !std::filesystem::exists(texturePath))
+        std::vector<std::uint8_t> fileBytes;
+        if (texturePath.empty() || !DataFiles::ReadBytes(texturePath, fileBytes) || fileBytes.empty())
             return ToRgbArray(1.0f, 1.0f, 1.0f);
 
         DirectX::ScratchImage image;
         DirectX::TexMetadata meta{};
-        const std::wstring widePath = texturePath.wstring();
         std::wstring ext = texturePath.extension().wstring();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
 
         HRESULT hr = S_OK;
         if (ext == L".dds")
-            hr = DirectX::LoadFromDDSFile(widePath.c_str(), DirectX::DDS_FLAGS_NONE, &meta, image);
+            hr = DirectX::LoadFromDDSMemory(fileBytes.data(), fileBytes.size(), DirectX::DDS_FLAGS_NONE, &meta, image);
         else if (ext == L".tga")
-            hr = DirectX::LoadFromTGAFile(widePath.c_str(), &meta, image);
+            hr = DirectX::LoadFromTGAMemory(fileBytes.data(), fileBytes.size(), &meta, image);
         else if (ext == L".hdr")
-            hr = DirectX::LoadFromHDRFile(widePath.c_str(), &meta, image);
+            hr = DirectX::LoadFromHDRMemory(fileBytes.data(), fileBytes.size(), &meta, image);
         else
-            hr = DirectX::LoadFromWICFile(widePath.c_str(), DirectX::WIC_FLAGS_NONE, &meta, image);
+            hr = DirectX::LoadFromWICMemory(fileBytes.data(), fileBytes.size(), DirectX::WIC_FLAGS_NONE, &meta, image);
 
         if (FAILED(hr))
             return ToRgbArray(1.0f, 1.0f, 1.0f);
@@ -918,7 +905,6 @@ bool RtGlobalIllumination::CreateRootSignature()
     params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[9].DescriptorTable = { 1, &mr };
     params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
     rsDesc.NumParameters = 10;
     rsDesc.pParameters = params;
@@ -1691,14 +1677,13 @@ void RtGlobalIllumination::BuildTlas(
                 resolvedPath = dataDirectory / inputPath;
         }
 
-        std::ifstream inputStream(resolvedPath);
-        if (!inputStream)
+        std::string materialText;
+        if (!DataFiles::ReadText(resolvedPath, materialText))
             return RtMaterialSlotInfo{};
 
         try
         {
-            nlohmann::json materialJson;
-            inputStream >> materialJson;
+            const nlohmann::json materialJson = nlohmann::json::parse(materialText);
 
             std::vector<RtMaterialSlotInfo> cachedSlots;
 

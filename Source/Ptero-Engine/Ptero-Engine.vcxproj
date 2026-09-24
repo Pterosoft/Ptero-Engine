@@ -182,6 +182,10 @@
     <ClCompile Include="..\System\src\NodeGraphDocument.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <!-- Both of the above read their files through DataFiles. -->
+    <ClCompile Include="..\System\src\DataFiles.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="EditorMain.cpp" />
     <ClCompile Include="GridGeometry.cpp" />
     <ClCompile Include="SplashScreen.cpp" />

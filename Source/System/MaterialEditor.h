@@ -60,6 +60,10 @@ struct MaterialDefinition
     // nothing in the scene for it to mirror it otherwise resolves to black.
     float SpecularFactor = 0.5f;
     float NormalScale = 1.0f;
+    // The engine reads tangent-space normal maps in the DirectX convention (green points
+    // down the texture). Set for OpenGL-convention maps (green up), whose relief would
+    // otherwise light from the wrong vertical direction.
+    bool FlipNormalGreen = false;
     float AmbientOcclusionStrength = 1.0f;
     float HeightScale = 0.05f;
     float Opacity = 1.0f;
@@ -88,6 +92,27 @@ struct MaterialDefinition
     // the map's brightest value so the relief starts at the surface instead of half a
     // volume below it, which otherwise turns the offset into a uniform slab shift.
     float HeightReference = 1.0f;
+
+    // --- Subsurface scattering ------------------------------------------------
+    // Light that enters the surface, scatters inside it and leaves somewhere else:
+    // skin, wax, marble, jade, leaves. The profile follows Jimenez et al.'s
+    // Separable SSS (Source/SDKs/separable-sss-1.0), which the renderer evaluates
+    // either as a screen-space blur or with ray-traced surface probes, depending on
+    // the scene's Subsurface Scattering settings.
+    bool UseSubsurfaceScattering = false;
+    // How much of each channel is scattered (the SDK's "strength"). 0 leaves that
+    // channel's diffuse light where it arrived; 1 scatters all of it.
+    std::array<float, 3> SubsurfaceColor{ 0.48f, 0.41f, 0.28f };
+    // Per-channel width of the diffusion profile relative to the radius (the SDK's
+    // "falloff"). Skin scatters red furthest, which is what gives it its warmth.
+    std::array<float, 3> SubsurfaceFalloff{ 1.0f, 0.37f, 0.3f };
+    // World-space distance, in millimetres, that the profile's full kernel spans.
+    // About 3 mm reproduces human skin at real-world scale; wax and marble want
+    // considerably more.
+    float SubsurfaceRadiusMm = 3.0f;
+    // How readily light passes all the way through thin parts (ears, fingers,
+    // leaves) and lights the far side. 0 disables transmission.
+    float SubsurfaceTranslucency = 0.8f;
 
     bool IsDoubleSided = false;
     bool UseAlphaCutout = false;

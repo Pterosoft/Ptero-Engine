@@ -33,13 +33,18 @@ cbuffer MaterialConstants : register(b1)
     // it is what gives a metal a specular response when the scene offers it nothing to
     // mirror. Travels to the lighting pass in the normal target's W channel.
     float  gSpecularFactor;
-    float  _MatPad1;
+    // Subsurface-scattering profile slot (Subsurface.hlsli), 0 = none. Packed above the
+    // specular value in the same channel.
+    int    gSubsurfaceSlot;
     float  gOpacityFactor;
     float  gAlphaCutoff;
     int    gHasOpacityMap;
     int    gUseAlphaCutout;
     int    gUseTransparentBlend;
-    float3 _MatPad2;
+    // 1 = negate the normal map's green channel: an OpenGL-convention map (green up)
+    // read in the engine's DirectX convention (green down the texture).
+    int    gFlipNormalGreen;
+    float2 _MatPad2;
     // UV transform: rotate the source UVs about (0.5, 0.5), scale by tiling, then offset.
     // The rotation arrives pre-resolved as sin/cos so the shader does no trigonometry.
     float2 gUvTiling;
@@ -353,6 +358,8 @@ PSOutput PSMain(PSInput input)
     {
         // BC5 stores only XY; rebuild Z after remapping into tangent space.
         float2 tsNormalXY = gNormalTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).rg * 2.0f - 1.0f;
+        if (gFlipNormalGreen != 0)
+            tsNormalXY.y = -tsNormalXY.y;
         float3 tsNormal = float3(tsNormalXY, sqrt(saturate(1.0f - dot(tsNormalXY, tsNormalXY))));
         tsNormal.xy *= gNormalScale;
         tsNormal.z = sqrt(saturate(1.0f - dot(tsNormal.xy, tsNormal.xy)));
@@ -362,12 +369,13 @@ PSOutput PSMain(PSInput input)
         N = normalize(T * tsNormal.x + B * tsNormal.y + N * tsNormal.z);
     }
     // Pack the normal target as oct-encoded world normal in XY plus scene depth in Z, and
-    // the material's reflectivity in W.
+    // the material's reflectivity (plus its subsurface profile slot) in W.
     // RTGI reads this surface texture as "normal + depth" for world-position
     // reconstruction and neighbourhood validation, while the deferred lighting pass
     // decodes the normal back from the XY oct representation.
     const float2 octNormal = EncodeOctNormal(N);
-    output.Normal = float4(octNormal, input.Position.z, PteroEncodeSurfaceSpecular(gSpecularFactor));
+    output.Normal = float4(octNormal, input.Position.z,
+        PteroEncodeSurfaceSpecularAndSubsurface(gSpecularFactor, (uint)max(gSubsurfaceSlot, 0)));
 
     // --- Material (roughness, metallic, AO) ---
     float4 metallicSample = gMetallicTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);

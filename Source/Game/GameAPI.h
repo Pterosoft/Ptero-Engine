@@ -12,7 +12,7 @@
 
 // Bump this whenever the structures or the exported entry points change so the host can
 // refuse a stale Game.dll instead of reading garbage out of it.
-inline constexpr std::uint32_t GameApiVersion = 3;
+inline constexpr std::uint32_t GameApiVersion = 5;
 
 struct GameTransform { float Position[3]{}; float Rotation[3]{}; float Scale[3]{1,1,1}; };
 // UTF-8 strings are borrowed during the call. No STL or engine objects cross DLLs.
@@ -35,6 +35,11 @@ struct GameServices {
     void (*PlaySound)(void*, const char*) = nullptr;
     bool (*PlayMusic)(void*, const char*) = nullptr;
     bool (*IsMusicPlaying)(void*) = nullptr;
+    // Read once when a match starts, so edits cannot change an ongoing match.
+    int (*GetWinningScore)(void*) = nullptr;
+    // True in the standalone game, false when playing from the editor. The editor keeps
+    // its testing HUD and menu; the standalone build gets the player menus and HUD.
+    bool Standalone = false;
 };
 enum GameAction { NoAction, Roll, Bank, Clear, Help, Pause, Close, Rematch, MainMenu,
     Continue, Fullscreen, StartMatch, SelectDie = 20, RemoveDie = 30, ExitGame = 40 };

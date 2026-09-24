@@ -34,6 +34,19 @@ cbuffer CameraConstants : register(b0)
 // ray-traced specular pass so all three agree on how reflective a surface is.
 #include "SurfaceSpecular.hlsli"
 
+// Subsurface scattering. When a subsurface material is on screen the resolve runs as a
+// second pipeline variant that also writes the pixel's diffuse lighting to SV_Target1,
+// which the subsurface pass scatters and swaps back in (SubsurfaceScattering.hlsl). In
+// screen-space mode it also adds light transmitted through thin parts, with thickness
+// measured from the shadow maps.
+#ifndef PTERO_SSS_OUTPUT
+#define PTERO_SSS_OUTPUT 0
+#endif
+#if PTERO_SSS_OUTPUT
+#define PTERO_SSS_CB_REGISTER b4
+#include "Subsurface.hlsli"
+#endif
+
 #define LIGHT_TYPE_RECT PTERO_LIGHT_TYPE_RECT
 
 cbuffer SceneLighting : register(b1)
@@ -334,10 +347,13 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
         [loop]
         for (int x = -filterRadius; x <= filterRadius; ++x)
         {
+            // Hardware comparison sampling: each tap is a bilinear-filtered depth test,
+            // so the edge moves continuously with the surface. Loading whole texels
+            // snapped every tap to the same grid, which left a texel-sized staircase no
+            // matter how wide the filter was - very visible under a large rect light.
             float2 sampleUv = saturate(uv + float2(x, y) * texelSize);
-            int2 samplePixel = int2(sampleUv * (mapSize - 1.0f));
-            float storedDepth = gPointShadowMaps.Load(int4(samplePixel, shadowIndex * 6 + faceIndex, 0)).r;
-            primaryVisibility += ((currentDepth - depthBias) <= storedDepth) ? 1.0f : 0.0f;
+            primaryVisibility += gPointShadowMaps.SampleCmpLevelZero(
+                gShadowSampler, float3(sampleUv, shadowIndex * 6 + faceIndex), currentDepth - depthBias);
             primaryWeight += 1.0f;
         }
     }
@@ -360,9 +376,8 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
         for (int x = -filterRadius; x <= filterRadius; ++x)
         {
             float2 sampleUv = saturate(secondUv + float2(x, y) * texelSize);
-            int2 samplePixel = int2(sampleUv * (mapSize - 1.0f));
-            float storedDepth = gPointShadowMaps.Load(int4(samplePixel, shadowIndex * 6 + secondFaceIndex, 0)).r;
-            secondaryVisibility += ((currentDepth - depthBias) <= storedDepth) ? 1.0f : 0.0f;
+            secondaryVisibility += gPointShadowMaps.SampleCmpLevelZero(
+                gShadowSampler, float3(sampleUv, shadowIndex * 6 + secondFaceIndex), currentDepth - depthBias);
             secondaryWeight += 1.0f;
         }
     }
@@ -400,9 +415,12 @@ float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
 // specularLevel – material reflectivity knob; 0.5 is neutral (see SurfaceSpecular.hlsli).
 //                Named apart from the Cook-Torrance `specular` term computed below.
 // -------------------------------------------------------------------------
+// diffuseAccum – receives the diffuse half of the result on its own, which is the part
+//                subsurface scattering redistributes.
 float3 EvalBRDF(float3 L_in, float3 lightRadiance,
                 float3 V, float3 N,
-                float3 albedo, float metallic, float roughness, float specularLevel)
+                float3 albedo, float metallic, float roughness, float specularLevel,
+                inout float3 diffuseAccum)
 {
     float NdotL = saturate(dot(N, L_in));
     if (NdotL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
@@ -437,13 +455,73 @@ float3 EvalBRDF(float3 L_in, float3 lightRadiance,
     float3 kD = (float3(1.0f, 1.0f, 1.0f) - F) * (1.0f - metallic);
     float3 diffuseTerm = kD * albedo;
 
+    diffuseAccum += diffuseTerm * lightRadiance * NdotL;
     return (diffuseTerm + specular) * lightRadiance * NdotL;
 }
+
+#if PTERO_SSS_OUTPUT
+// How much of the surface lies between this point and the sun, in metres, read from the
+// sun shadow map - the SDK's SSSSTransmittance thickness estimate. The shadow map stores
+// the depth of the first surface the sun reaches; the gap between that and this point
+// (pushed slightly inside) is the path the light took through the object. Anything else
+// standing in front of the sun makes the gap large, which correctly kills transmission.
+// Returns -1 where the shadow map has nothing to say.
+float SunTransmissionThickness(float3 worldPos, float3 N)
+{
+    const float3 shrunkPos = worldPos - 0.005f * N;
+    const float4 lightClip = mul(float4(shrunkPos, 1.0f), gLightViewProj);
+    const float3 projCoords = lightClip.xyz / lightClip.w;
+    const float2 uv = float2(projCoords.x * 0.5f + 0.5f, -projCoords.y * 0.5f + 0.5f);
+    if (any(uv < 0.0f.xx) || any(uv > 1.0f.xx) || projCoords.z < 0.0f || projCoords.z > 1.0f)
+        return -1.0f;
+
+    const float storedDepth = gShadowMap.SampleLevel(gPointSampler, uv, 0.0f).r;
+    // The sun projection is orthographic, so light-space depth is linear in world
+    // distance along the sun direction; the length of its z row is that scale.
+    const float depthPerMetre = length(float3(gLightViewProj._13, gLightViewProj._23, gLightViewProj._33));
+    return max(projCoords.z - storedDepth, 0.0f) / max(depthPerMetre, 1e-8f);
+}
+
+// Same estimate for a shadow-casting point, spot or rect light, from its cube shadow
+// map, which stores linear distance / radius. Returns -1 when the light has no shadow map.
+float PointTransmissionThickness(int lightIndex, float3 worldPos, float3 N)
+{
+    if (gPointLights[lightIndex].CastShadows < 0.5f)
+        return -1.0f;
+    const int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
+    if (shadowIndex < 0)
+        return -1.0f;
+
+    const float3 shrunkPos = worldPos - 0.005f * N;
+    const float distanceToLight = length(shrunkPos - gPointLights[lightIndex].Position);
+    const float mapSize = max(gPointShadowMapSize, 1.0f);
+
+    [unroll]
+    for (int face = 0; face < 6; ++face)
+    {
+        const float4 clipPos = mul(float4(shrunkPos, 1.0f), gPointShadowFaceViewProj[shadowIndex * 6 + face]);
+        if (abs(clipPos.w) <= 1e-5f)
+            continue;
+        const float3 ndc = clipPos.xyz / clipPos.w;
+        const float2 faceUv = float2(ndc.x * 0.5f + 0.5f, -ndc.y * 0.5f + 0.5f);
+        if (ndc.z < 0.0f || ndc.z > 1.0f || any(faceUv < 0.0f.xx) || any(faceUv > 1.0f.xx))
+            continue;
+
+        const int2 texel = int2(faceUv * (mapSize - 1.0f));
+        const float storedDistance = gPointShadowMaps.Load(int4(texel, shadowIndex * 6 + face, 0)).r
+                                   * max(gPointLights[lightIndex].Radius, 1e-4f);
+        return max(distanceToLight - storedDistance, 0.0f);
+    }
+    return -1.0f;
+}
+#endif
 
 // -------------------------------------------------------------------------
 // Pixel shader
 // -------------------------------------------------------------------------
-float4 PSMain(PSInput input) : SV_Target
+// sssDiffuse – for a subsurface pixel, receives the diffuse lighting the subsurface pass
+//              should scatter (rgb) and 1 in alpha; left at zero everywhere else.
+float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
 {
     float2 uv = input.TexCoord;
     uint2 pixel = uint2(input.Position.xy);
@@ -547,9 +625,39 @@ float4 PSMain(PSInput input) : SV_Target
     float3 V        = normalize(gCameraPos - worldPos);
 
     // ---- Sun directional light with PCF shadow ----
+    // Diffuse light gathered separately for subsurface scattering: the direct part (sun
+    // and scene lights, through EvalBRDF) and the indirect part (ambient, GI, shadow-map
+    // transmission) apart, because the ray-traced mode replaces only the direct part.
+    float3 diffuseLit      = float3(0.0f, 0.0f, 0.0f);
+    float3 indirectDiffuse = float3(0.0f, 0.0f, 0.0f);
+    float  fogTransmittance = 1.0f;
+
+#if PTERO_SSS_OUTPUT
+    const uint sssSlot = PteroDecodeSubsurfaceSlot(normalSample.w);
+    const bool sssPixel = PteroSssSlotActive(sssSlot);
+    // Screen-space mode measures transmission here from the shadow maps; the ray-traced
+    // mode measures it through the mesh itself in its own pass.
+    const bool sssShadowMapTransmission = sssPixel && gSssMode == 0u && gSssTransmission != 0u
+        && gSssProfiles[sssSlot].FalloffTranslucency.a > 0.0f;
+    float3 sssTransmitted = float3(0.0f, 0.0f, 0.0f);
+#endif
+
     float  shadowFactor = SampleShadowPCF(worldPos);
     float3 L_sun        = normalize(-gSunDirection);
-    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular);
+    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular, diffuseLit);
+
+#if PTERO_SSS_OUTPUT
+    [branch]
+    if (sssShadowMapTransmission)
+    {
+        const float sunThickness = SunTransmissionThickness(worldPos, N);
+        if (sunThickness >= 0.0f)
+        {
+            sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], sunThickness, N, L_sun,
+                                                   gSunColor, albedo * (1.0f - metallic));
+        }
+    }
+#endif
 
     // ---- Sky ambient (hemisphere diffuse + rough-specular approximation) ----
     // Only upward-facing surfaces see the sky hemisphere.
@@ -572,6 +680,7 @@ float4 PSMain(PSInput input) : SV_Target
     float  envWeight   = lerp(saturate(R_env.z * 0.5f + 0.5f), 0.5f, roughness);
     float3 ambientSpec = gSkyAmbient * envWeight * skyVis * F_amb * (1.0f / (roughness * roughness + 1.0f));
     float3 ambient     = (ambientDiff + ambientSpec) * ao;
+    indirectDiffuse   += ambientDiff * ao;
 
     // ---- Point lights ----
     float3 pointSum = float3(0.0f, 0.0f, 0.0f);
@@ -614,7 +723,20 @@ float4 PSMain(PSInput input) : SV_Target
 
         float pointShadow = SamplePointShadow(i, worldPos, N);
         pointShadowDebug = min(pointShadowDebug, pointShadow);
-        pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular);
+        pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular, diffuseLit);
+
+#if PTERO_SSS_OUTPUT
+        [branch]
+        if (sssShadowMapTransmission && active > 0.0f && falloff > 0.0f)
+        {
+            const float pointThickness = PointTransmissionThickness(i, worldPos, N);
+            if (pointThickness >= 0.0f)
+            {
+                sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], pointThickness, N, L_pt,
+                                                       gPointLights[i].Color * falloff, albedo * (1.0f - metallic));
+            }
+        }
+#endif
     }
 
     if (gPointShadowDebugView > 0)
@@ -624,6 +746,12 @@ float4 PSMain(PSInput input) : SV_Target
 
     // ---- Final composite ----
     float3 lit = sunContrib + ambient + pointSum;
+
+#if PTERO_SSS_OUTPUT
+    // Transmitted light exits as diffuse light, so it is scattered along with the rest.
+    lit        += sssTransmitted;
+    indirectDiffuse += sssTransmitted;
+#endif
 
     // Add DXR global illumination.
     // The RTGI / NRD path now stores demodulated diffuse irradiance so the denoiser
@@ -655,6 +783,25 @@ float4 PSMain(PSInput input) : SV_Target
             // lit result and multiplied by albedo below, a greyscale diagnostic
             // is swamped by direct sun and firelight and reads as an ordinary
             // scene - which is exactly how the depth view looked unreadable.
+            if (gRtgiDebugView == 15)
+            {
+                // NEE sun visibility (RtGI_RayGen writes green = reaches the sun, red =
+                // blocked, black = faces away) checked against this pass's shadow map:
+                //   green  both agree the sun reaches it
+                //   red    shadow map says lit, the RT shadow ray is blocked - the RT scene
+                //          holds a blocker the raster scene does not
+                //   blue   RT reaches the sun, the shadow map says shadowed
+                //   grey   both agree it is shadowed
+                //   black  faces away from the sun
+                if (dot(N, L_sun) <= 0.0f)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+                const bool rtLit = giDiffuseIrradiance.g > giDiffuseIrradiance.r;
+                const bool rasterLit = shadowFactor > 0.5f;
+                if (rtLit && rasterLit)  return float4(0.0f, 1.0f, 0.0f, 1.0f);
+                if (!rtLit && rasterLit) return float4(1.0f, 0.0f, 0.0f, 1.0f);
+                if (rtLit && !rasterLit) return float4(0.0f, 0.2f, 1.0f, 1.0f);
+                return float4(0.08f, 0.08f, 0.08f, 1.0f);
+            }
             if (gRtgiDebugView >= 10 || gRtgiDebugView == 1)
                 return float4(max(giDiffuseIrradiance, 0.0f.xxx), 1.0f);
             if (gRtgiDebugView == 2)
@@ -662,7 +809,9 @@ float4 PSMain(PSInput input) : SV_Target
                 const float giLuma = dot(max(giDiffuseIrradiance, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
                 return float4(giLuma.xxx, 1.0f);
             }
-            lit += giDiffuseIrradiance * albedo * (1.0f - metallic) * gGiIntensity * ao;
+            const float3 giDiffuse = giDiffuseIrradiance * albedo * (1.0f - metallic) * gGiIntensity * ao;
+            lit        += giDiffuse;
+            indirectDiffuse += giDiffuse;
         }
     }
 
@@ -696,10 +845,47 @@ float4 PSMain(PSInput input) : SV_Target
         }
 
         lit = (lit * fogSample.a) + fogSample.rgb;
+        // The scene target holds the fogged value, so the part the subsurface pass
+        // swaps out has to be the fogged diffuse as well.
+        fogTransmittance = fogSample.a;
     }
+
+#if PTERO_SSS_OUTPUT
+    // Only opaque subsurface pixels are scattered: a blended surface's diffuse is mixed
+    // with whatever is behind it in the scene target, so it cannot be swapped out.
+    if (sssPixel && albedoSample.a >= 0.999f)
+    {
+        // Screen space blurs all of the diffuse light. The ray-traced mode re-evaluates
+        // the direct light in world space and scatters that, so it is handed the direct
+        // part alone and leaves the indirect part where the lighting pass put it. Alpha
+        // marks the pixel (>= 0.5) and carries the fog transmittance the ray-traced result
+        // has to be attenuated by: a = 0.5 + 0.5 * transmittance.
+        const float3 sssSignal = (gSssMode == 1u) ? diffuseLit : (diffuseLit + indirectDiffuse);
+        sssDiffuse = float4(max(sssSignal * fogTransmittance, 0.0f.xxx), 0.5f + 0.5f * saturate(fogTransmittance));
+    }
+#endif
 
     // The lighting PSO uses standard source-alpha blending over the sky/scene
     // target. Opaque materials store 1 here; transparent materials carry their
     // combined scalar/texture opacity in the albedo G-buffer alpha channel.
     return float4(lit, saturate(albedoSample.a));
+}
+
+struct PSOutput
+{
+    float4 Color      : SV_Target0;
+#if PTERO_SSS_OUTPUT
+    float4 SssDiffuse : SV_Target1;
+#endif
+};
+
+PSOutput PSMain(PSInput input)
+{
+    float4 sssDiffuse = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    PSOutput output;
+    output.Color = ResolveLighting(input, sssDiffuse);
+#if PTERO_SSS_OUTPUT
+    output.SssDiffuse = sssDiffuse;
+#endif
+    return output;
 }

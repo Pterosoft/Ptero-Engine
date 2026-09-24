@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "System/DataFiles.h"
 
 #include "TerrainRenderer.h"
 
@@ -65,26 +66,9 @@ namespace
 
     std::filesystem::path FindProjectDataDirectory()
     {
-        wchar_t executablePath[MAX_PATH] = {};
-        const DWORD characterCount = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
-        if (characterCount == 0 || characterCount == std::size(executablePath))
-            return {};
-
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
-        while (!currentPath.empty())
-        {
-            const std::filesystem::path dataDirectory = currentPath / "Data";
-            if (std::filesystem::exists(dataDirectory) && std::filesystem::is_directory(dataDirectory))
-                return std::filesystem::weakly_canonical(dataDirectory);
-
-            const std::filesystem::path parentPath = currentPath.parent_path();
-            if (parentPath == currentPath)
-                break;
-
-            currentPath = parentPath;
-        }
-
-        return {};
+        // Walks up from the exe to Data/ - or, in a packaged game, the virtual Data
+        // root the .ppak archives serve (see System/DataFiles.h).
+        return DataFiles::FindDataDirectory();
     }
 
     std::filesystem::path ResolveDataRelativePath(const std::string& relativePath)
@@ -94,14 +78,14 @@ namespace
 
         std::filesystem::path path(relativePath);
         std::error_code errorCode;
-        if (path.is_absolute() && std::filesystem::exists(path, errorCode))
+        if (path.is_absolute() && DataFiles::Exists(path))
             return std::filesystem::weakly_canonical(path, errorCode);
 
         const std::filesystem::path dataDirectory = FindProjectDataDirectory();
         if (!dataDirectory.empty())
         {
             path = (dataDirectory / path).lexically_normal();
-            if (std::filesystem::exists(path, errorCode))
+            if (DataFiles::Exists(path))
                 return std::filesystem::weakly_canonical(path, errorCode);
         }
 
@@ -117,19 +101,19 @@ namespace
 
         std::filesystem::path path(texturePath);
         std::error_code errorCode;
-        if (path.is_absolute() && std::filesystem::exists(path, errorCode))
+        if (path.is_absolute() && DataFiles::Exists(path))
             return std::filesystem::weakly_canonical(path, errorCode).string();
 
         const std::filesystem::path dataDirectory = FindProjectDataDirectory();
         if (!dataDirectory.empty())
         {
             const std::filesystem::path dataCandidate = (dataDirectory / path).lexically_normal();
-            if (std::filesystem::exists(dataCandidate, errorCode))
+            if (DataFiles::Exists(dataCandidate))
                 return std::filesystem::weakly_canonical(dataCandidate, errorCode).string();
         }
 
         const std::filesystem::path materialRelativeCandidate = (materialFilePath.parent_path() / path).lexically_normal();
-        if (std::filesystem::exists(materialRelativeCandidate, errorCode))
+        if (DataFiles::Exists(materialRelativeCandidate))
             return std::filesystem::weakly_canonical(materialRelativeCandidate, errorCode).string();
 
         return {};
@@ -267,14 +251,14 @@ namespace
 
         std::filesystem::path path(splatPath);
         std::error_code ec;
-        if (!path.is_absolute() || !std::filesystem::exists(path, ec))
+        if (!path.is_absolute() || !DataFiles::Exists(path))
         {
             path = HeightmapImporter::ResolveDataRelativePath(splatPath);
-            if (path.empty() || !std::filesystem::exists(path, ec))
+            if (path.empty() || !DataFiles::Exists(path))
                 return false;
         }
 
-        std::ifstream in(path, std::ios::binary);
+        DataFiles::InputFile in(path, std::ios::binary);
         if (!in)
             return false;
 
@@ -945,7 +929,7 @@ TerrainRenderer::TerrainMaterialInfo TerrainRenderer::ResolveTerrainMaterial(con
         if (materialFilePath.empty())
             return materialInfo;
 
-        std::ifstream materialFile(materialFilePath);
+        DataFiles::InputFile materialFile(materialFilePath);
         if (!materialFile.is_open())
             return materialInfo;
 

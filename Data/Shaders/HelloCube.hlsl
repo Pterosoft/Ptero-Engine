@@ -29,13 +29,3 @@ float4 PSMain(PSInput input) : SV_Target
 {
     return input.Color;
 }
-
-PSInput main(VSInput input)
-{
-    return VSMain(input);
-}
-
-float4 main(PSInput input) : SV_Target
-{
-    return PSMain(input);
-}
