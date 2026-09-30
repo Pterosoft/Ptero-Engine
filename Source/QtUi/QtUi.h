@@ -217,6 +217,17 @@ void SetNextItemIcon(const char *icon);
 // checked while a QtUiCol_Button color is pushed. Falls back to the label when the icon
 // file is missing.
 bool IconButton(const char *name, const char *icon);
+// A list of strings kept across editor sessions (the Qt settings store), such as the
+// recently opened levels. Empty when nothing was saved under `key`.
+std::vector<std::string> LoadSettingList(const char *key);
+void SaveSettingList(const char *key, const std::vector<std::string> &values);
+// A toast card in the editor window's bottom-right corner, like Unreal's "New files
+// detected" notification. Declare it every frame it should stay up; it hides on the first
+// frame it is not declared. Returns 1 when the primary button was clicked, 2 for the
+// secondary one, 3 when it was dismissed with its close button, otherwise 0. Buttons with
+// a null label are not shown. Never takes keyboard focus from the viewport.
+int Notification(const char *id, const char *title, const char *text, const char *primaryButton,
+                 const char *secondaryButton);
 struct TextureView
 {
     HWND Window;

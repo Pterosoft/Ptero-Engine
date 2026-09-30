@@ -3,6 +3,7 @@
 #pragma warning(push)
 #pragma warning(disable : 4996) // Qt 6.11 overrides its own deprecated event hook.
 #include <QtWidgets/QtWidgets>
+#include <QtGui/QIconEngine>
 #include <QtGui/QPainter>
 #include <QtGui/QStandardItemModel>
 #include <QtCore/QElapsedTimer>
@@ -558,6 +559,68 @@ template <class T> void applyIcon(T *target, const QString &icon)
     target->setProperty("uiIconName", stamp);
     target->setIcon(QtUiTheme::Icon(icon));
 }
+// A tree header's expand chevron and its item icon, side by side in one icon: a
+// QToolButton draws either its arrow or its icon, never both. The rect is two squares
+// wide with a small gap; each half paints from the style at paint time, like any icon.
+class TreeHeaderIconEngine : public QIconEngine
+{
+  public:
+    TreeHeaderIconEngine(QIcon chevron, QIcon item) : chevron(std::move(chevron)), item(std::move(item)) {}
+    void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override
+    {
+        const int side = rect.height();
+        const int inset = side / 6; // the chevron reads better a little smaller than the icon
+        chevron.paint(painter, QRect(rect.left(), rect.top(), side, side).adjusted(inset, inset, -inset, -inset),
+                      Qt::AlignCenter, mode, state);
+        item.paint(painter, QRect(rect.right() + 1 - side, rect.top(), side, side), Qt::AlignCenter, mode, state);
+    }
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+    {
+        return scaledPixmap(size, mode, state, 1.0);
+    }
+    QPixmap scaledPixmap(const QSize &size, QIcon::Mode mode, QIcon::State state, qreal scale) override
+    {
+        QPixmap pm(size * scale);
+        pm.fill(Qt::transparent);
+        pm.setDevicePixelRatio(scale);
+        QPainter p(&pm);
+        paint(&p, QRect(QPoint(), size), mode, state);
+        return pm;
+    }
+    QSize actualSize(const QSize &size, QIcon::Mode, QIcon::State) override
+    {
+        return size;
+    }
+    QIconEngine *clone() const override
+    {
+        return new TreeHeaderIconEngine(chevron, item);
+    }
+
+  private:
+    QIcon chevron, item;
+};
+// Gives a tree header its icon, replacing Qt's arrow with a themed chevron beside it.
+// Returns false when the icon file is missing, so the caller keeps the plain arrow.
+bool applyTreeHeaderIcon(QToolButton *w, const QString &icon, bool expanded)
+{
+    const QIcon item = QtUiTheme::Icon(icon);
+    if (item.isNull())
+        return false;
+    const int side = QtUiTheme::Metric("iconSize", 18);
+    const QSize size(side * 2 + side / 3, side);
+    if (w->iconSize() != size)
+        w->setIconSize(size);
+    const QString stamp = icon + (expanded ? "#open#" : "#closed#") + QString::number(QtUiTheme::Generation());
+    if (w->property("uiIconName").toString() != stamp)
+    {
+        w->setProperty("uiIconName", stamp);
+        const QIcon chevron = QtUiTheme::Icon(expanded ? "chevron-down" : "chevron-right");
+        w->setIcon(QIcon(new TreeHeaderIconEngine(chevron, item)));
+    }
+    if (w->arrowType() != Qt::NoArrow)
+        w->setArrowType(Qt::NoArrow);
+    return true;
+}
 void textWidget(const QString &text, bool wrap = false, const QColor &tint = QColor())
 {
     Node &n = node(serial("text"));
@@ -739,6 +802,89 @@ void dimensions(QWidget *w, bool fresh)
     positionSet = false;
     nextAlpha = 1;
 }
+
+// QtUi::Notification's card: a frameless tool window owned by the shell, so it floats
+// above the native viewport and minimizes with the editor, and shown without activation
+// so it never takes the keyboard from whatever the user is doing.
+class Toast : public QFrame
+{
+  public:
+    Toast() : QFrame(shell, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus)
+    {
+        setObjectName("PteroToast");
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setFocusPolicy(Qt::NoFocus);
+        setStyleSheet("QFrame#PteroToast { background-color: palette(window); border: 1px solid palette(mid);"
+                      " border-left: 3px solid palette(highlight); border-radius: 4px; }");
+
+        title = new QLabel(this);
+        QFont titleFont = title->font();
+        titleFont.setBold(true);
+        titleFont.setPointSizeF(titleFont.pointSizeF() * 1.1);
+        title->setFont(titleFont);
+        close = new QToolButton(this);
+        close->setText(QString::fromUtf8("\xE2\x9C\x95"));
+        close->setAutoRaise(true);
+        close->setToolTip("Dismiss");
+        auto *header = new QHBoxLayout();
+        header->addWidget(title, 1);
+        header->addWidget(close, 0, Qt::AlignTop);
+
+        text = new QLabel(this);
+        text->setWordWrap(true);
+        text->setTextFormat(Qt::PlainText);
+
+        primary = new QPushButton(this);
+        secondary = new QPushButton(this);
+        primary->setDefault(true);
+        auto *buttons = new QHBoxLayout();
+        buttons->addStretch(1);
+        buttons->addWidget(secondary);
+        buttons->addWidget(primary);
+
+        for (QWidget *button : {static_cast<QWidget *>(close), static_cast<QWidget *>(primary), static_cast<QWidget *>(secondary)})
+            button->setFocusPolicy(Qt::NoFocus);
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(16, 10, 10, 12);
+        layout->setSpacing(8);
+        layout->addLayout(header);
+        layout->addWidget(text);
+        layout->addLayout(buttons);
+        setFixedWidth(380);
+
+        QObject::connect(primary, &QPushButton::clicked, this, [this] { result = 1; });
+        QObject::connect(secondary, &QPushButton::clicked, this, [this] { result = 2; });
+        QObject::connect(close, &QToolButton::clicked, this, [this] { result = 3; });
+    }
+
+    QLabel *title = nullptr;
+    QLabel *text = nullptr;
+    QToolButton *close = nullptr;
+    QPushButton *primary = nullptr;
+    QPushButton *secondary = nullptr;
+    int result = 0;
+    int seen = 0;
+};
+std::map<QString, QPointer<Toast>> toasts;
+
+// Stacks the visible toasts upward from the shell's bottom-right corner.
+void PlaceToasts()
+{
+    constexpr int kMargin = 16;
+    const QRect area(shell->mapToGlobal(QPoint(0, 0)), shell->size());
+    int bottom = area.bottom() - kMargin;
+    for (auto &[id, toast] : toasts)
+    {
+        if (!toast || toast->isHidden())
+            continue;
+        toast->adjustSize();
+        const QPoint position(area.right() - kMargin - toast->width(), bottom - toast->height());
+        if (toast->pos() != position)
+            toast->move(position);
+        bottom = position.y() - 8;
+    }
+}
 } // namespace
 
 namespace QtUi
@@ -882,6 +1028,52 @@ void *ShellWidget()
     // include it. Tool windows built directly on Qt - the node graph editor - parent
     // themselves to this so they inherit the editor's palette and stay above it.
     return shell;
+}
+int Notification(const char *id, const char *title, const char *text, const char *primaryButton,
+                 const char *secondaryButton)
+{
+    if (!shell)
+        return 0;
+
+    QPointer<Toast> &toast = toasts[QString::fromUtf8(id)];
+    if (!toast)
+        toast = new Toast();
+    toast->seen = frame;
+
+    auto setText = [](auto *widget, const char *value)
+    {
+        const QString text = QString::fromUtf8(value ? value : "");
+        if (widget->text() != text)
+            widget->setText(text);
+    };
+    setText(toast->title, title);
+    setText(toast->text, text);
+    setText(toast->primary, primaryButton);
+    setText(toast->secondary, secondaryButton);
+    toast->primary->setVisible(primaryButton != nullptr);
+    toast->secondary->setVisible(secondaryButton != nullptr);
+
+    // Follow the editor: hidden while it is minimized or a game has the screen.
+    const bool hostShown = IsWindowVisible(host) && !IsIconic(host) && !IsGameWindowOpen();
+    if (hostShown && toast->isHidden())
+    {
+        toast->setWindowOpacity(0.0);
+        toast->show();
+        auto *fade = new QPropertyAnimation(toast, "windowOpacity", toast);
+        fade->setDuration(180);
+        fade->setStartValue(0.0);
+        fade->setEndValue(1.0);
+        fade->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+    else if (!hostShown && !toast->isHidden())
+    {
+        toast->hide();
+    }
+    PlaceToasts();
+
+    const int result = toast->result;
+    toast->result = 0;
+    return result;
 }
 float FramebufferScale()
 {
@@ -1260,6 +1452,9 @@ void EndFrame()
             if (n->action)
                 n->action->setVisible(false);
         }
+    for (auto &[id, toast] : toasts)
+        if (toast && toast->seen != frame && !toast->isHidden())
+            toast->hide();
     if (frame == 2)
     {
         QList<QDockWidget *> left, right;
@@ -1712,6 +1907,7 @@ bool Selectable(const char *name, bool selected, int, UiVec2 size)
 }
 bool headerButton(const char *name, int flags)
 {
+    const QString icon = takeIcon();
     Node &n = node(key(name));
     bool fresh = !n.widget;
     auto *w = control<QToolButton>(n);
@@ -1727,7 +1923,15 @@ bool headerButton(const char *name, int flags)
             n.fired = true;
         });
     }
-    w->setArrowType(n.expanded ? Qt::DownArrow : Qt::RightArrow);
+    if (icon.isEmpty() || !applyTreeHeaderIcon(w, icon, n.expanded))
+        w->setArrowType(n.expanded ? Qt::DownArrow : Qt::RightArrow);
+    // A selected tree node shows like a selected leaf. Checkable only while selected, so a
+    // click on an unselected header does not leave it checked on its own.
+    const bool selected = (flags & QtUiTreeNodeFlags_Selected) != 0;
+    if (w->isCheckable() != selected)
+        w->setCheckable(selected);
+    if (w->isChecked() != selected)
+        w->setChecked(selected);
     take(n);
     return n.expanded;
 }
@@ -2610,6 +2814,20 @@ bool IconButton(const char *name, const char *icon)
     }
     applyToolTip(w, label(name));
     return clicked;
+}
+std::vector<std::string> LoadSettingList(const char *key)
+{
+    std::vector<std::string> values;
+    for (const QString &value : QSettings().value(QString::fromUtf8(key)).toStringList())
+        values.push_back(value.toLocal8Bit().toStdString());
+    return values;
+}
+void SaveSettingList(const char *key, const std::vector<std::string> &values)
+{
+    QStringList list;
+    for (const std::string &value : values)
+        list.append(QString::fromLocal8Bit(value.c_str()));
+    QSettings().setValue(QString::fromUtf8(key), list);
 }
 bool IsItemHovered()
 {

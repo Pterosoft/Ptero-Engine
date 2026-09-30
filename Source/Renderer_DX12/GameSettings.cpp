@@ -206,6 +206,7 @@ void DX12SceneRenderer::BeginGameSettings(bool standalone)
     baseline.GiMode = mGlobalIlluminationMode; baseline.Rtgi = mRtgiSettings;
     baseline.Cascades = mRadianceCascadesSettings; baseline.Fog = mVolumetricFogSettings;
     baseline.PointShadows = mPointShadowSettings;
+    baseline.VirtualShadows = mVirtualShadowMapSettings;
     baseline.Gtao = mGtaoSettings; baseline.Rtao = mRtaoSettings;
     baseline.ChromaticAberration = mChromaticAberrationSettings;
     mGameSettingsActive = true;
@@ -260,6 +261,7 @@ void DX12SceneRenderer::EndGameSettings()
     mGlobalIlluminationMode = baseline.GiMode; mRtgiSettings = baseline.Rtgi;
     mRadianceCascadesSettings = baseline.Cascades; mVolumetricFogSettings = baseline.Fog;
     mPointShadowSettings = baseline.PointShadows;
+    mVirtualShadowMapSettings = baseline.VirtualShadows;
     mGtaoSettings = baseline.Gtao; mRtaoSettings = baseline.Rtao;
     mChromaticAberrationSettings = baseline.ChromaticAberration;
     mShadowsEnabled = true;
@@ -408,6 +410,19 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     case 1: shadows.MapSize = 1024; shadows.FilterRadius = 1; break;
     case 3: shadows.MapSize = 2048; shadows.FilterRadius = (std::max)(baseline.PointShadows.FilterRadius, 3); break;
     default: shadows.MapSize = baseline.PointShadows.MapSize; shadows.FilterRadius = baseline.PointShadows.FilterRadius; break;
+    }
+    // The sun's virtual shadow map: a coarser level choice needs a quarter of the pages
+    // per step, so the pool shrinks with it.
+    auto& sunShadows = mVirtualShadowMapSettings;
+    sunShadows = baseline.VirtualShadows;
+    switch (Tier(values, "shadow-quality"))
+    {
+    case 0: sunShadows.ResolutionLodBias = baseline.VirtualShadows.ResolutionLodBias + 1.0f;
+            sunShadows.PhysicalPages = (std::min)(baseline.VirtualShadows.PhysicalPages, 1024); break;
+    case 1: sunShadows.ResolutionLodBias = baseline.VirtualShadows.ResolutionLodBias + 0.5f; break;
+    case 3: sunShadows.ResolutionLodBias = baseline.VirtualShadows.ResolutionLodBias - 0.5f;
+            sunShadows.PhysicalPages = (std::max)(baseline.VirtualShadows.PhysicalPages, 4096); break;
+    default: break;
     }
 
     // ---- Textures: a mip bias on top of the sharpening one. Positive samples smaller

@@ -6,6 +6,9 @@
 
 #define MAX_RADIANCE_PROBE_POINT_LIGHTS 16
 
+// Matches kMaxRadianceProbeCascades in RadianceProbeSettings.h.
+#define PROBE_MAX_CASCADES 4
+
 // The light record and the emitter-shape resolution are shared with the
 // deferred, GI and cascade passes so all of them agree on the layout and on
 // where a spot cone ends.
@@ -43,7 +46,10 @@ cbuffer RadianceProbeConstants : register(b0)
 
     int    g_MaxBounces;
     int    g_NumPointLights;
-    float2 g_Pad3;
+    // Whole cells the follow-camera grid moved since the last update: the
+    // probe now at coord c held coord c + shift last frame.
+    int    g_HistoryShiftX;
+    int    g_HistoryShiftY;
 
     PteroLightData g_PointLights[MAX_RADIANCE_PROBE_POINT_LIGHTS];
 
@@ -52,7 +58,17 @@ cbuffer RadianceProbeConstants : register(b0)
 
     int    g_DebugView;         // 4 = probe debug overlay
     int    g_DebugLightingMode; // 0 = diffuse, 1 = specular-style
-    float2 g_Pad4;
+    int    g_HistoryShiftZ;
+    float  g_Pad4;
+
+    // Per cascade. The single-grid origin, spacing and history shift above
+    // repeat cascade 0; use these.
+    float4 g_CascadeOrigin[PROBE_MAX_CASCADES];  // xyz = origin, w = spacing
+    int4   g_CascadeHistory[PROBE_MAX_CASCADES]; // xyz = cells moved, w = trace period in frames
+
+    uint   g_CascadeCount;
+    uint   g_ProbesPerCascade;
+    uint2  g_Pad5;
 }
 
 // ─── L1 Spherical Harmonics coefficients per probe ───────────────────────────
@@ -62,7 +78,7 @@ cbuffer RadianceProbeConstants : register(b0)
 // Simpler: 9 × float3 = 9 × 3 floats → pack as float4[7] (last xyz used, w = 0)
 struct ProbeSH
 {
-    float4 c[7]; // 7 × float4 = 28 floats; SH coefficients 0..8 RGB, c[6].w unused
+    float4 c[7]; // 7 × float4 = 28 floats; SH coefficients 0..8 RGB, c[6].w = validity
 };
 
 // ─── SH Basis evaluation (L2, 9 coefficients) ────────────────────────────────
@@ -174,25 +190,59 @@ float3 SHEvaluateDiffuseIrradiance(ProbeSH sh, float3 dir)
     return max(result, 0.0f);
 }
 
-// Convert a linear probe index to a 3D grid coordinate.
-uint3 ProbeIndexToCoord(uint idx)
+// The SH buffer holds the cascades back to back, cascade 0 first.
+uint ProbeIndexToCascade(uint idx)
 {
-    uint x = idx % g_ProbeGridX;
-    uint y = (idx / g_ProbeGridX) % g_ProbeGridY;
-    uint z = idx / (g_ProbeGridX * g_ProbeGridY);
+    return min(idx / max(g_ProbesPerCascade, 1u), max(g_CascadeCount, 1u) - 1u);
+}
+
+// Index within the probe's own cascade.
+uint ProbeIndexToLocal(uint idx)
+{
+    return idx - ProbeIndexToCascade(idx) * g_ProbesPerCascade;
+}
+
+// Convert an index within a cascade to a 3D grid coordinate.
+uint3 ProbeIndexToCoord(uint localIdx)
+{
+    uint x = localIdx % g_ProbeGridX;
+    uint y = (localIdx / g_ProbeGridX) % g_ProbeGridY;
+    uint z = localIdx / (g_ProbeGridX * g_ProbeGridY);
     return uint3(x, y, z);
 }
 
-// World-space position of a probe at grid coordinate (ix, iy, iz).
-float3 ProbeCoordToWorld(uint3 coord)
+uint ProbeCoordToIndex(uint cascade, uint3 coord)
 {
-    return g_ProbeOrigin + float3(coord) * g_ProbeSpacing;
+    return cascade * g_ProbesPerCascade
+         + coord.x + coord.y * g_ProbeGridX + coord.z * g_ProbeGridX * g_ProbeGridY;
 }
 
+// World-space position of a probe at grid coordinate (ix, iy, iz) of a cascade.
+float3 ProbeCoordToWorld(uint cascade, uint3 coord)
+{
+    return g_CascadeOrigin[cascade].xyz + float3(coord) * g_CascadeOrigin[cascade].w;
+}
+
+// Probes whose primary rays land on back faces more often than this are
+// inside geometry. The validity bit this drives lives in ProbeSH.c[6].w; see
+// RadianceProbeCommon.hlsli.
+#define PTERO_PROBE_MAX_BACKFACE_FRACTION 0.25f
+
 // RNG helpers.
+//
+// Hashed, not a linear function of its inputs: the LCG maps a linear seed onto
+// a lattice, so consecutive rays of one probe drew correlated directions - the
+// same fault RTGI fixed in InitRng.
+uint ProbePcgHash(uint v)
+{
+    const uint state = v * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
 uint ProbeRng(uint probeIdx, uint rayIdx, uint frameIndex)
 {
-    return (probeIdx * 1973u + rayIdx * 9277u + frameIndex * 26699u) | 1u;
+    return ProbePcgHash(probeIdx ^ ProbePcgHash(rayIdx ^ ProbePcgHash(frameIndex))) | 1u;
 }
 
 float ProbeRandFloat(inout uint state)

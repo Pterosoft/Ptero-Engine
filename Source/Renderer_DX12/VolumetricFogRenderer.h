@@ -53,11 +53,10 @@ public:
         // Radiance probe grid. Leave the SRV null to inject without indirect
         // light; the shader then skips the grid entirely.
         D3D12_GPU_DESCRIPTOR_HANDLE ProbeSrv{};
-        uint32_t ProbeGridX = 0;
-        uint32_t ProbeGridY = 0;
-        uint32_t ProbeGridZ = 0;
-        float ProbeSpacing = 0.0f;
-        float ProbeOrigin[3]{};
+        RadianceProbeFieldGpu ProbeField{};
+        // The probes hold pre-exposed irradiance (see HosekWilkieResult::PreExposure);
+        // this is the inverse, folded into the GI intensity.
+        float ProbeInvPreExposure = 1.0f;
 
         // Point shadow cubemap atlas. Leave the SRV null for unshadowed fog.
         D3D12_GPU_DESCRIPTOR_HANDLE PointShadowSrv{};
@@ -65,6 +64,12 @@ public:
         int PointShadowLightCount = 0;
         float PointShadowMapSize = 0.0f;
         float PointShadowBias = 0.0f;
+
+        // Virtual shadow map. When set with LocalEnabled, local lights' shadows come
+        // from it instead of the cubemap atlas; the pool must be readable from compute.
+        const VsmGpuConstants* Vsm = nullptr;
+        D3D12_GPU_VIRTUAL_ADDRESS VsmPageTable = 0;
+        D3D12_GPU_DESCRIPTOR_HANDLE VsmPoolSrv{};
     };
 
     VolumetricFogRenderer() = default;
@@ -127,12 +132,9 @@ private:
         float _Pad4 = 0.0f;
 
         uint32_t NumPointLights = 0;
-        uint32_t ProbeGridX = 0;
-        uint32_t ProbeGridY = 0;
-        uint32_t ProbeGridZ = 0;
+        uint32_t _ProbePad[3]{};
 
-        float ProbeOrigin[3]{};
-        float ProbeSpacing = 0.0f;
+        RadianceProbeFieldGpu ProbeField{};
 
         float PointShadowMapSize = 0.0f;
         float PointShadowBias = 0.0f;
@@ -144,20 +146,24 @@ private:
 
         float ViewProjInv[16]{};
         float CurrViewProj[16]{};
+
+        VsmGpuConstants Vsm{};
     };
 
     // Pinned against the offsets FogConstants has in VolumetricFogCommon.hlsli.
     // A field inserted on one side and not the other shifts everything after it
     // and shows up as fog lit by whatever happened to land where a light's
     // colour used to be, which reads as a shader bug rather than a layout one.
-    static_assert(offsetof(FogConstants, PointLights) == 208,
-        "FogConstants header must stay 208 bytes; see cbuffer FogConstants in VolumetricFogCommon.hlsli.");
-    static_assert(offsetof(FogConstants, PointShadowFaceViewProj) == 1744,
-        "FogConstants light array must stay at offset 208, 16 x 96 bytes.");
-    static_assert(offsetof(FogConstants, ViewProjInv) == 3280,
-        "FogConstants shadow matrix array must stay at offset 1744, 24 x 64 bytes.");
-    static_assert(offsetof(FogConstants, CurrViewProj) == 3344,
+    static_assert(offsetof(FogConstants, PointLights) == 272,
+        "FogConstants header must stay 272 bytes; see cbuffer FogConstants in VolumetricFogCommon.hlsli.");
+    static_assert(offsetof(FogConstants, PointShadowFaceViewProj) == 1808,
+        "FogConstants light array must stay at offset 272, 16 x 96 bytes.");
+    static_assert(offsetof(FogConstants, ViewProjInv) == 3344,
+        "FogConstants shadow matrix array must stay at offset 1808, 24 x 64 bytes.");
+    static_assert(offsetof(FogConstants, CurrViewProj) == 3408,
         "FogConstants matrices must stay packed at the end of the buffer.");
+    static_assert(offsetof(FogConstants, Vsm) == 3472,
+        "FogConstants virtual shadow map block must follow the matrices.");
 
     bool CreateRootSignatures();
     bool CreatePipelines();

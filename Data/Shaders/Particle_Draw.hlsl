@@ -245,7 +245,9 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     output.Position = mul(float4(worldPosition, 1.0f), ViewProj);
     output.WorldPos = worldPosition;
     output.ViewDepth = output.Position.w;
-    output.Uv = corner * 0.5f + 0.5f;
+    // corner.y = +1 is the top of the quad (offset along axisY / up), while texture
+    // row 0 is the top of the image, so v runs opposite to corner.y.
+    output.Uv = float2(corner.x * 0.5f + 0.5f, 0.5f - corner.y * 0.5f);
     output.Color = EvaluateLifeColor(normalizedAge) * BaseColorTint;
 
     // Flipbook frame. With no explicit frame rate the whole atlas is spread
@@ -337,7 +339,8 @@ float3 EvaluateSceneLighting(float3 worldPosition, float3 toCamera, float2 uv)
     // A sprite has no real normal. Blending the camera-facing direction toward
     // a hemisphere derived from the UV gives thick smoke enough shape for the
     // light to wrap around it, while thin wisps keep the flat card look.
-    const float2 centered = uv * 2.0f - 1.0f;
+    // v runs down the image (row 0 at the top of the quad), so flip it to get +y = up.
+    const float2 centered = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float radiusSq = saturate(dot(centered, centered));
     const float3 sphereNormal = normalize(float3(centered, sqrt(max(1.0f - radiusSq, 1e-4f))));
 

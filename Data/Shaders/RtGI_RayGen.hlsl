@@ -9,6 +9,7 @@
 //   5. Accumulate into a GIReservoir (WRS/RIS) and write reservoir + raw radiance output.
 
 #include "RtGI_Common.hlsli"
+#include "RtGI_Vsm.hlsli"
 
 // ─── Geometry buffers for secondary-hit normal interpolation ─────────────────
 // These mirror the pools uploaded by RtGlobalIllumination::BuildTlas each frame.
@@ -40,6 +41,14 @@ Texture2D<float4> t_NormalDepth : register(t1);   // xy: oct-encoded normal, z: 
 // ─── TLAS ─────────────────────────────────────────────────────────────────────
 RaytracingAccelerationStructure t_TLAS : register(t2);
 
+// ─── Base-colour textures for secondary hits ─────────────────────────────────
+// The table RtGlobalIllumination::RefreshMaterialTextureDescriptors fills; the
+// radiance probes and the specular pass sample the same one.
+Texture2D<float4> t_BaseTextures[32] : register(t7);
+SamplerState      gLinearWrapSampler : register(s0);
+
+static const uint INVALID_TEXTURE_INDEX = 0xffffffffu;
+
 // ─── Outputs ──────────────────────────────────────────────────────────────────
 RWStructuredBuffer<PackedGIReservoir> u_Reservoir : register(u0);
 RWTexture2D<float4>                   u_GIOutput   : register(u1);
@@ -63,14 +72,26 @@ bool TraceShadowRay(float3 origin, float3 dir, float maxDistance)
     return rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
 }
 
-float3 ResolveHitAlbedo(GpuInstanceInfo info, uint primIdx)
+// Base colour at a secondary hit: the material factor times its texture, as in
+// RadianceProbes_Update.hlsl. This used to return the factor alone, which for a
+// textured material is usually white - every bounce off sandstone came back as
+// if off white plaster, so RTGI was both brighter and greyer than the probes.
+float3 ResolveHitAlbedo(GpuInstanceInfo info, uint primIdx, float2 uv, float lod)
 {
     [loop]
     for (uint r = 0; r < info.materialRangeCount; ++r)
     {
         GpuMaterialRange range = t_MaterialRanges[info.materialRangeOffset + r];
         if (primIdx >= range.startPrimitive && primIdx < range.startPrimitive + range.primitiveCount)
-            return float3(range.baseColorR, range.baseColorG, range.baseColorB);
+        {
+            float3 baseColor = float3(range.baseColorR, range.baseColorG, range.baseColorB);
+            if (range.baseColorTextureIndex != INVALID_TEXTURE_INDEX)
+            {
+                baseColor *= t_BaseTextures[NonUniformResourceIndex(range.baseColorTextureIndex)]
+                    .SampleLevel(gLinearWrapSampler, uv, lod).rgb;
+            }
+            return baseColor;
+        }
     }
 
     return float3(1.0f, 1.0f, 1.0f);
@@ -127,8 +148,13 @@ float3 EvaluateSecondaryPointLights(float3 hitPos, float3 hitNormal, float3 hitG
                 // Offset along the geometric normal on the side the light is on. The
                 // unsigned normal pushed the origin *into* the surface for lights behind it.
                 const float3 lightSideNormal = hitGeoNormal * (dot(hitGeoNormal, lightDir) >= 0.0f ? 1.0f : -1.0f);
-                const float3 shadowOrigin = hitPos + lightSideNormal * shadowBias + lightDir * shadowBias;
-                visibility = TraceShadowRay(shadowOrigin, lightDir, maxShadowDistance) ? 1.0f : 0.0f;
+                // The shadow map first; the ray only where it has no fine enough page.
+                visibility = RtgiVsmLocalVisibility(g_PointLights[i], hitPos, lightSideNormal);
+                if (visibility < 0.0f)
+                {
+                    const float3 shadowOrigin = hitPos + lightSideNormal * shadowBias + lightDir * shadowBias;
+                    visibility = TraceShadowRay(shadowOrigin, lightDir, maxShadowDistance) ? 1.0f : 0.0f;
+                }
             }
         }
 
@@ -157,8 +183,13 @@ float3 EvaluateSecondaryDirect(float3 hitPos, float3 hitNormal, float3 hitGeoNor
         // stepping only along sunDir leaves the origin under the triangle at grazing angles
         // on dense meshes, so the ray hits its own surface and visibility turns to noise.
         const float3 sunSideNormal = hitGeoNormal * (dot(hitGeoNormal, sunDir) >= 0.0f ? 1.0f : -1.0f);
-        const float3 shadowOrigin = hitPos + sunSideNormal * shadowBias + sunDir * shadowBias;
-        sunVisibility = TraceShadowRay(shadowOrigin, sunDir, max(1e4f - shadowBias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
+        // The shadow map first; the ray only where it has no fine enough page.
+        sunVisibility = RtgiVsmSunVisibility(hitPos, sunSideNormal);
+        if (sunVisibility < 0.0f)
+        {
+            const float3 shadowOrigin = hitPos + sunSideNormal * shadowBias + sunDir * shadowBias;
+            sunVisibility = TraceShadowRay(shadowOrigin, sunDir, max(1e4f - shadowBias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
+        }
 
         // Binary: a blocked hit gets none of this light. There used to be a 0.35 floor here
         // to keep "energy" the unshadowed model had - but most of that energy was the far
@@ -274,6 +305,9 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
         float3 localPos2 = float3(v2.px, v2.py, v2.pz);
 
         float b0 = 1.0f - bary.x - bary.y;
+        float2 uv = b0 * float2(v0.u, v0.v)
+                  + bary.x * float2(v1.u, v1.v)
+                  + bary.y * float2(v2.u, v2.v);
         float3 localNormal = b0 * float3(v0.nx, v0.ny, v0.nz)
                            + bary.x * float3(v1.nx, v1.ny, v1.nz)
                            + bary.y * float3(v2.nx, v2.ny, v2.nz);
@@ -344,7 +378,9 @@ RayResult TraceGIRay(float3 origin, float3 dir, inout uint rngState)
             recordedPrimaryHit = true;
         }
 
-        float3 hitAlbedo = ApplyColorLeakIntensity(ResolveHitAlbedo(info, primIdx));
+        // Same mip choice as the probes, so both GI modes see the same colour.
+        float textureLod = saturate(log2(max(t * 0.25f, 1e-3f)));
+        float3 hitAlbedo = ApplyColorLeakIntensity(ResolveHitAlbedo(info, primIdx, uv, textureLod));
         result.radiance += throughput * EvaluateSecondaryDirect(shadePos, shadingNormal, shadingGeoNormal, hitAlbedo);
 
         throughput *= hitAlbedo;
@@ -567,6 +603,25 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
                 const float3 shadowOrigin = origin + sunSideNormal * shadowBias + sunDir * shadowBias;
                 const bool visible = TraceShadowRay(shadowOrigin, sunDir, max(1e4f - shadowBias * 2.0f, 1.0f));
                 diagnostic = visible ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+            }
+        }
+        else if (g_DebugView == 16)
+        {
+            // Who answers the sun's next-event visibility at a bounce hit. One ray
+            // along the normal; at its hit, green / red = the shadow map said lit /
+            // shadowed, blue = it has no page fine enough there, so a shadow ray is
+            // traced. Black: the ray escaped, or the hit faces away from the sun.
+            // Blue is where Max Shadow Texel is saving a leak - or costing a ray.
+            uint probeRng = 0x9e3779b9u;
+            const RayResult probe = TraceGIRay(worldPos + surfaceNormal * 0.002f, surfaceNormal, probeRng);
+            const float3 sunDir = -g_SunDir;
+            diagnostic = float3(0.0f, 0.0f, 0.0f);
+            if (probe.hitDist < 1e4f * 0.999f && dot(probe.geoNormal, sunDir) > 0.0f)
+            {
+                const float vsmVisibility = RtgiVsmSunVisibility(probe.hitPos, probe.geoNormal);
+                diagnostic = vsmVisibility < 0.0f
+                    ? float3(0.0f, 0.0f, 1.0f)
+                    : float3(1.0f - vsmVisibility, vsmVisibility, 0.0f);
             }
         }
         else if (g_DebugView == 14)

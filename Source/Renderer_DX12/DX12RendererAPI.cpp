@@ -439,10 +439,17 @@ namespace
     constexpr std::chrono::seconds kWatchdogStallThreshold{ 5 };
     constexpr std::chrono::seconds kWatchdogRepeatInterval{ 15 };
 
-    // How long one frame may spend reading meshes while a level streams in, and the
-    // paths that failed during it (so they count as done instead of retrying).
+    // How long one frame may spend reading meshes and textures while a level streams
+    // in, and the mesh paths that failed during it (so they count as done instead of
+    // retrying).
     constexpr std::chrono::milliseconds kSceneMeshStreamingBudget{ 30 };
     std::set<std::string> gStreamingFailedMeshPaths;
+    // The textures the level's meshes bind, gathered once every mesh is resolved and
+    // then read in order; the cursor is how many are done (loaded or failed).
+    std::vector<EntityMeshRenderer::TextureRequest> gStreamingTextures;
+    std::size_t gStreamingTextureCursor = 0;
+    bool gStreamingTexturesCollected = false;
+    std::uint64_t gStreamingTexturesGeneration = 0;
 
     // Stamped by the render loop so the watchdog knows whose stack to read.
     std::atomic<DWORD> gRenderThreadId{ 0 };
@@ -1753,6 +1760,9 @@ extern "C"
                 gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
                 gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
                 gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
+                gEditor.SetDpleSettings(&gSceneRenderer->GetDpleSettings());
+                gEditor.SetLensFlareSettings(&gSceneRenderer->GetLensFlareSettings());
+                gEditor.SetRadianceProbeSettings(&gSceneRenderer->GetProbeSettings());
                 gEditor.SetSceneSettings(
                     &gSceneRenderer->GetTimeOfDaySettings(),
                     &gSceneRenderer->GetTaaSettings(),
@@ -1771,7 +1781,7 @@ extern "C"
                     &gSceneRenderer->GetVolumetricCloudSettings(),
                     &gSceneRenderer->GetBloomSettings());
                 if (!gEditor.LoadSceneFromFile(gStandaloneLevel))
-                    throw std::runtime_error("Could not load the Farkle play level: " + gStandaloneLevel);
+                    throw std::runtime_error("Could not load the startup level: " + gStandaloneLevel);
                 gEditor.SetShowViewportGrid(false);
                 gSceneRenderer->SetGridEnabled(false);
                 gStandaloneLevelLoaded = true;
@@ -1865,8 +1875,41 @@ extern "C"
                         ++sceneMeshResolved;
                 }
             }
+            // Then the textures those meshes bind, the same time-boxed way. A draw used
+            // to read each one it found missing, so a level's whole texture set - every
+            // UDIM tile, gigabytes for the Desert's mastaba - landed in one multi-second
+            // frame while the overlay already read 100%. The draws bind the fallback
+            // for anything not in yet until this has been through the list.
+            EntityMeshRenderer& entityMeshRenderer = gSceneRenderer->GetEntityMeshRenderer();
+            if (!streamingSceneAssets || gStreamingTexturesGeneration != gEditor.GetSceneStreamGeneration())
+            {
+                gStreamingTexturesGeneration = gEditor.GetSceneStreamGeneration();
+                gStreamingTextures.clear();
+                gStreamingTextureCursor = 0;
+                gStreamingTexturesCollected = false;
+            }
+            else if (sceneMeshResolved >= sceneMeshTotal)
+            {
+                if (!gStreamingTexturesCollected)
+                {
+                    entityMeshRenderer.CollectTextureRequests(gEditor.GetEntities(), gStreamingTextures);
+                    gStreamingTextureCursor = 0;
+                    gStreamingTexturesCollected = true;
+                    PTERO_LOG_INFO("Renderer", "Level streaming: %zu textures to load.", gStreamingTextures.size());
+                }
+                while (gStreamingTextureCursor < gStreamingTextures.size()
+                    && std::chrono::steady_clock::now() - meshBudgetStart <= kSceneMeshStreamingBudget)
+                {
+                    entityMeshRenderer.PreloadTexture(gStreamingTextures[gStreamingTextureCursor++]);
+                }
+            }
+            const bool sceneTexturesDone = gStreamingTexturesCollected
+                && gStreamingTextureCursor >= gStreamingTextures.size();
+            entityMeshRenderer.SetDeferTextureLoads(streamingSceneAssets && !sceneTexturesDone);
+
             if (streamingSceneAssets)
-                gEditor.SetSceneAssetStreamingProgress(sceneMeshResolved, sceneMeshTotal);
+                gEditor.SetSceneAssetStreamingProgress(sceneMeshResolved, sceneMeshTotal,
+                    gStreamingTextureCursor, gStreamingTexturesCollected ? gStreamingTextures.size() : 1);
 
             if (gAudioManagerPtr != nullptr && gAudioManagerPtr->IsInitialized())
             {
@@ -2062,6 +2105,16 @@ extern "C"
             gbufferIds.GiAccum  = gSceneRenderer->GetGiAccumTextureId();
             gbufferIds.PointShadowArray = gSceneRenderer->GetPointShadowDebugTextureId();
             const FsrRuntimeStatus fsrStatus = gSceneRenderer->GetFsrRuntimeStatus();
+            char vsmStatus[192] = "Inactive (off, or shadows disabled).";
+            if (gSceneRenderer->IsVirtualShadowMapActive())
+            {
+                const auto& vsmStats = gSceneRenderer->GetVirtualShadowMapStatistics();
+                std::snprintf(vsmStatus, sizeof(vsmStatus),
+                    "%u / %u pages resident, %u requested, %u rendered this frame, %u waiting, %u lights%s",
+                    vsmStats.ResidentPages, vsmStats.PoolPages, vsmStats.RequestedPages,
+                    vsmStats.RenderedThisFrame, vsmStats.WaitingPages, vsmStats.LocalLights,
+                    vsmStats.PoolOverflow > 0 ? " - pool full, raise Pool Pages" : "");
+            }
             gUiBuildStart = std::chrono::steady_clock::now();
             if (!QtUi::IsGameWindowOpen()) RenderEditorMainMenu(
                 QtUi::HostHandle(),
@@ -2101,7 +2154,13 @@ extern "C"
                 &gSceneRenderer->GetVolumetricFogSettings(),
                 &gSceneRenderer->GetVolumetricCloudSettings(),
                 &gSceneRenderer->GetBloomSettings(),
+                &gSceneRenderer->GetLensFlareSettings(),
+                &gSceneRenderer->GetLensFlareRenderer(),
                 &gSceneRenderer->GetPointShadowSettings(),
+                &gSceneRenderer->GetVirtualShadowMapSettings(),
+                vsmStatus,
+                &gSceneRenderer->GetDpleSettings(),
+                gSceneRenderer->GetDpleErrorMessage(),
                 &gbufferIds,
                 gAudioManagerPtr,
                 CompileShadersFromMainMenu,
@@ -2110,6 +2169,9 @@ extern "C"
             gEditor.SetShowViewportGrid(gridEnabled);
             gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
             gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
+            gEditor.SetDpleSettings(&gSceneRenderer->GetDpleSettings());
+            gEditor.SetLensFlareSettings(&gSceneRenderer->GetLensFlareSettings());
+            gEditor.SetRadianceProbeSettings(&gSceneRenderer->GetProbeSettings());
             gEditor.SetSceneSettings(
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetTaaSettings(),

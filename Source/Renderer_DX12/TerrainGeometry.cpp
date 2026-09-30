@@ -48,6 +48,215 @@ namespace TerrainGeometry
         }
     }
 
+    GridRect BrushSampleRect(
+        int width,
+        int height,
+        float worldSize,
+        const DirectX::XMFLOAT2& brushCenterWorld,
+        float brushRadius)
+    {
+        GridRect rect;
+        if (width <= 1 || height <= 1 || worldSize <= 0.0f)
+            return rect;
+
+        const float centreCellX = ((brushCenterWorld.x + worldSize * 0.5f) / worldSize) * static_cast<float>(width  - 1);
+        const float centreCellY = ((brushCenterWorld.y + worldSize * 0.5f) / worldSize) * static_cast<float>(height - 1);
+        // The brushes do not agree on which axis sizes the footprint (some use
+        // the X cell size for both), which only matters on a non-square grid.
+        // Take the larger radius on both axes so the rect covers all of them.
+        const float radiusCells = (std::max)(
+            brushRadius / (worldSize / static_cast<float>(width  - 1)),
+            brushRadius / (worldSize / static_cast<float>(height - 1)));
+
+        rect.MinX = (std::max)(0, static_cast<int>(std::floor(centreCellX - radiusCells)));
+        rect.MaxX = (std::min)(width  - 1, static_cast<int>(std::ceil (centreCellX + radiusCells)));
+        rect.MinY = (std::max)(0, static_cast<int>(std::floor(centreCellY - radiusCells)));
+        rect.MaxY = (std::min)(height - 1, static_cast<int>(std::ceil (centreCellY + radiusCells)));
+        return (rect.MinX > rect.MaxX || rect.MinY > rect.MaxY) ? GridRect{} : rect;
+    }
+
+    GridRect SourceRectToMeshRect(
+        const GridRect& sourceRect,
+        int width,
+        int height,
+        int meshWidth,
+        int meshHeight)
+    {
+        if (sourceRect.IsEmpty() || width <= 1 || height <= 1 || meshWidth <= 1 || meshHeight <= 1)
+            return {};
+
+        // Mesh vertex m samples the heightmap at m * (src-1)/(mesh-1) and its
+        // bilinear footprint reaches one sample either side of that.
+        const double toMeshX = static_cast<double>(meshWidth  - 1) / static_cast<double>(width  - 1);
+        const double toMeshY = static_cast<double>(meshHeight - 1) / static_cast<double>(height - 1);
+
+        GridRect rect;
+        rect.MinX = static_cast<int>(std::floor((sourceRect.MinX - 1) * toMeshX)) - 1;
+        rect.MaxX = static_cast<int>(std::ceil ((sourceRect.MaxX + 1) * toMeshX)) + 1;
+        rect.MinY = static_cast<int>(std::floor((sourceRect.MinY - 1) * toMeshY)) - 1;
+        rect.MaxY = static_cast<int>(std::ceil ((sourceRect.MaxY + 1) * toMeshY)) + 1;
+        rect.MinX = (std::max)(0, rect.MinX);
+        rect.MinY = (std::max)(0, rect.MinY);
+        rect.MaxX = (std::min)(meshWidth  - 1, rect.MaxX);
+        rect.MaxY = (std::min)(meshHeight - 1, rect.MaxY);
+        return rect;
+    }
+
+    void FillMeshVertices(
+        const std::vector<std::uint16_t>& samples,
+        int width,
+        int height,
+        const std::vector<DirectX::XMFLOAT4>* layerWeights,
+        int meshWidth,
+        int meshHeight,
+        float worldSize,
+        float heightScale,
+        float heightOffset,
+        const GridRect& meshRect,
+        std::vector<TerrainVertex>& vertices)
+    {
+        if (width <= 1 || height <= 1 || meshWidth <= 1 || meshHeight <= 1 || meshRect.IsEmpty())
+            return;
+        if (static_cast<size_t>(width) * static_cast<size_t>(height) != samples.size())
+            return;
+        if (static_cast<size_t>(meshWidth) * static_cast<size_t>(meshHeight) != vertices.size())
+            return;
+
+        // Only consume the splat weights if they match the sample grid; a
+        // mismatched buffer (e.g. mid-resize) falls back to white so we never
+        // read out of bounds.
+        const bool useWeights = layerWeights != nullptr
+            && layerWeights->size() == samples.size();
+
+        const float halfSize = worldSize * 0.5f;
+        const float xStep = worldSize / static_cast<float>(meshWidth  - 1);
+        const float yStep = worldSize / static_cast<float>(meshHeight - 1);
+        const double toSourceX = static_cast<double>(width  - 1) / static_cast<double>(meshWidth  - 1);
+        const double toSourceY = static_cast<double>(height - 1) / static_cast<double>(meshHeight - 1);
+        const size_t stride = static_cast<size_t>(width);
+
+        for (int y = meshRect.MinY; y <= meshRect.MaxY; ++y)
+        {
+            const double sourceY = y * toSourceY;
+            const int y0 = (std::min)(height - 2, static_cast<int>(sourceY));
+            const float ty = static_cast<float>(sourceY - y0);
+
+            for (int x = meshRect.MinX; x <= meshRect.MaxX; ++x)
+            {
+                const double sourceX = x * toSourceX;
+                const int x0 = (std::min)(width - 2, static_cast<int>(sourceX));
+                const float tx = static_cast<float>(sourceX - x0);
+
+                const size_t i00 = static_cast<size_t>(y0) * stride + static_cast<size_t>(x0);
+                const size_t i10 = i00 + 1;
+                const size_t i01 = i00 + stride;
+                const size_t i11 = i01 + 1;
+
+                const float h0 = static_cast<float>(samples[i00]) * (1.0f - tx) + static_cast<float>(samples[i10]) * tx;
+                const float h1 = static_cast<float>(samples[i01]) * (1.0f - tx) + static_cast<float>(samples[i11]) * tx;
+                const float normalisedHeight = (h0 * (1.0f - ty) + h1 * ty) / 65535.0f;
+
+                TerrainVertex& v = vertices[static_cast<size_t>(y) * static_cast<size_t>(meshWidth) + static_cast<size_t>(x)];
+                v.Position = DirectX::XMFLOAT3(
+                    -halfSize + static_cast<float>(x) * xStep,
+                    -halfSize + static_cast<float>(y) * yStep,
+                    normalisedHeight * heightScale + heightOffset);
+                v.TexCoord = DirectX::XMFLOAT2(
+                    static_cast<float>(x) / static_cast<float>(meshWidth  - 1),
+                    static_cast<float>(y) / static_cast<float>(meshHeight - 1));
+
+                if (useWeights)
+                {
+                    const std::vector<DirectX::XMFLOAT4>& w = *layerWeights;
+                    const DirectX::XMVECTOR row0 = DirectX::XMVectorLerp(
+                        DirectX::XMLoadFloat4(&w[i00]), DirectX::XMLoadFloat4(&w[i10]), tx);
+                    const DirectX::XMVECTOR row1 = DirectX::XMVectorLerp(
+                        DirectX::XMLoadFloat4(&w[i01]), DirectX::XMLoadFloat4(&w[i11]), tx);
+                    DirectX::XMStoreFloat4(&v.Color, DirectX::XMVectorLerp(row0, row1, ty));
+                }
+                else
+                {
+                    v.Color = DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+                }
+            }
+        }
+    }
+
+    void ComputeMeshNormals(
+        int meshWidth,
+        int meshHeight,
+        const GridRect& meshRect,
+        std::vector<TerrainVertex>& vertices)
+    {
+        if (meshWidth <= 1 || meshHeight <= 1 || meshRect.IsEmpty())
+            return;
+        if (static_cast<size_t>(meshWidth) * static_cast<size_t>(meshHeight) != vertices.size())
+            return;
+
+        const auto at = [&](int x, int y) -> const DirectX::XMFLOAT3&
+        {
+            return vertices[static_cast<size_t>(y) * static_cast<size_t>(meshWidth) + static_cast<size_t>(x)].Position;
+        };
+
+        for (int y = meshRect.MinY; y <= meshRect.MaxY; ++y)
+        {
+            const int yU = (y > 0)              ? y - 1 : y;
+            const int yD = (y < meshHeight - 1) ? y + 1 : y;
+            for (int x = meshRect.MinX; x <= meshRect.MaxX; ++x)
+            {
+                const int xL = (x > 0)             ? x - 1 : x;
+                const int xR = (x < meshWidth - 1) ? x + 1 : x;
+
+                const DirectX::XMFLOAT3& pL = at(xL, y);
+                const DirectX::XMFLOAT3& pR = at(xR, y);
+                const DirectX::XMFLOAT3& pU = at(x, yU);
+                const DirectX::XMFLOAT3& pD = at(x, yD);
+
+                const float slopeX = (pR.z - pL.z) / (pR.x - pL.x);
+                const float slopeY = (pD.z - pU.z) / (pD.y - pU.y);
+
+                // Terrain is Z-up on the XY plane, so the gradient gives the
+                // normal directly as (-dz/dx, -dz/dy, 1).
+                DirectX::XMFLOAT3 normal(-slopeX, -slopeY, 1.0f);
+                DirectX::XMStoreFloat3(&normal, DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&normal)));
+                vertices[static_cast<size_t>(y) * static_cast<size_t>(meshWidth) + static_cast<size_t>(x)].Normal = normal;
+            }
+        }
+    }
+
+    void BuildMeshIndices(
+        int meshWidth,
+        int meshHeight,
+        std::vector<std::uint32_t>& outIndices)
+    {
+        outIndices.clear();
+        if (meshWidth <= 1 || meshHeight <= 1)
+            return;
+
+        // Two triangles per quad, CCW when looking down -Z. Written through a raw
+        // pointer: a full-size terrain is six million indices, and six million
+        // push_backs are a second or more of the load frame in a Debug build.
+        outIndices.resize(static_cast<size_t>(meshWidth - 1) * static_cast<size_t>(meshHeight - 1) * 6u);
+        std::uint32_t* out = outIndices.data();
+        for (int y = 0; y < meshHeight - 1; ++y)
+        {
+            for (int x = 0; x < meshWidth - 1; ++x)
+            {
+                const std::uint32_t i00 = static_cast<std::uint32_t>(y       * meshWidth + x);
+                const std::uint32_t i10 = static_cast<std::uint32_t>(y       * meshWidth + x + 1);
+                const std::uint32_t i01 = static_cast<std::uint32_t>((y + 1) * meshWidth + x);
+                const std::uint32_t i11 = static_cast<std::uint32_t>((y + 1) * meshWidth + x + 1);
+
+                *out++ = i00;
+                *out++ = i01;
+                *out++ = i11;
+                *out++ = i00;
+                *out++ = i11;
+                *out++ = i10;
+            }
+        }
+    }
+
     void BuildMesh(
         const std::vector<std::uint16_t>& samples,
         int width,
@@ -67,113 +276,12 @@ namespace TerrainGeometry
         if (static_cast<size_t>(width) * static_cast<size_t>(height) != samples.size())
             return;
 
-        // Only consume the splat weights if they match the sample grid; a
-        // mismatched buffer (e.g. mid-resize) falls back to white so we never
-        // read out of bounds.
-        const bool useWeights = layerWeights != nullptr
-            && layerWeights->size() == samples.size();
-
         outVertices.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
-        const float halfSize = worldSize * 0.5f;
-        const float xStep = worldSize / static_cast<float>(width  - 1);
-        const float yStep = worldSize / static_cast<float>(height - 1);
-
-        // First pass: positions + texcoords.  Normals are filled in a second
-        // pass once all positions are known.
-        for (int y = 0; y < height; ++y)
-        {
-            for (int x = 0; x < width; ++x)
-            {
-                const size_t index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-                const float normalisedHeight = static_cast<float>(samples[index]) / 65535.0f;
-                const float worldX = -halfSize + static_cast<float>(x) * xStep;
-                const float worldY = -halfSize + static_cast<float>(y) * yStep;
-                const float worldZ = normalisedHeight * heightScale + heightOffset;
-
-                TerrainVertex& v = outVertices[index];
-                v.Position = DirectX::XMFLOAT3(worldX, worldY, worldZ);
-                v.Normal   = DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f);
-                v.TexCoord = DirectX::XMFLOAT2(
-                    static_cast<float>(x) / static_cast<float>(width  - 1),
-                    static_cast<float>(y) / static_cast<float>(height - 1));
-                v.Color    = useWeights
-                    ? (*layerWeights)[index]
-                    : DirectX::XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-            }
-        }
-
-        // Second pass: indices.  Two triangles per quad, CCW when looking
-        // down -Y (so cull mode = back keeps the top side visible).
-        outIndices.reserve(static_cast<size_t>(width - 1) * static_cast<size_t>(height - 1) * 6u);
-        for (int y = 0; y < height - 1; ++y)
-        {
-            for (int x = 0; x < width - 1; ++x)
-            {
-                const std::uint32_t i00 = static_cast<std::uint32_t>(y       * width + x);
-                const std::uint32_t i10 = static_cast<std::uint32_t>(y       * width + x + 1);
-                const std::uint32_t i01 = static_cast<std::uint32_t>((y + 1) * width + x);
-                const std::uint32_t i11 = static_cast<std::uint32_t>((y + 1) * width + x + 1);
-
-                // Triangle 1: i00, i01, i11
-                outIndices.push_back(i00);
-                outIndices.push_back(i01);
-                outIndices.push_back(i11);
-                // Triangle 2: i00, i11, i10
-                outIndices.push_back(i00);
-                outIndices.push_back(i11);
-                outIndices.push_back(i10);
-            }
-        }
-
-        // Third pass: per-vertex normals from neighbour heights.  Boundary
-        // samples use one-sided differences.
-        for (int y = 0; y < height; ++y)
-        {
-            for (int x = 0; x < width; ++x)
-            {
-                const int xL = (x > 0)         ? x - 1 : x;
-                const int xR = (x < width - 1)  ? x + 1 : x;
-                const int yU = (y > 0)         ? y - 1 : y;
-                const int yD = (y < height - 1) ? y + 1 : y;
-
-                const size_t iL = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(xL);
-                const size_t iR = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(xR);
-                const size_t iU = static_cast<size_t>(yU) * static_cast<size_t>(width) + static_cast<size_t>(x);
-                const size_t iD = static_cast<size_t>(yD) * static_cast<size_t>(width) + static_cast<size_t>(x);
-
-                const float hL = static_cast<float>(samples[iL]) / 65535.0f * heightScale;
-                const float hR = static_cast<float>(samples[iR]) / 65535.0f * heightScale;
-                const float hU = static_cast<float>(samples[iU]) / 65535.0f * heightScale;
-                const float hD = static_cast<float>(samples[iD]) / 65535.0f * heightScale;
-
-                const float slopeX = (hR - hL) / ((xR - xL) * xStep);
-                const float slopeY = (hD - hU) / ((yD - yU) * yStep);
-
-                // Surface tangent along +X is (xStep, 0, slopeX); along +Y is (0, yStep, slopeY).
-                // The unnormalised normal is the cross product.
-                DirectX::XMFLOAT3 normal(
-                    -slopeX * yStep,
-                    -slopeY * xStep,
-                     xStep  * yStep);
-                const float length = std::sqrt(
-                    normal.x * normal.x +
-                    normal.y * normal.y +
-                    normal.z * normal.z);
-                if (length > std::numeric_limits<float>::epsilon())
-                {
-                    normal.x /= length;
-                    normal.y /= length;
-                    normal.z /= length;
-                }
-                else
-                {
-                    normal = DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f);
-                }
-
-                const size_t index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-                outVertices[index].Normal = normal;
-            }
-        }
+        const GridRect all = GridRect::Full(width, height);
+        FillMeshVertices(samples, width, height, layerWeights, width, height,
+                         worldSize, heightScale, heightOffset, all, outVertices);
+        ComputeMeshNormals(width, height, all, outVertices);
+        BuildMeshIndices(width, height, outIndices);
     }
 
     bool WorldToCell(
@@ -243,8 +351,11 @@ namespace TerrainGeometry
                 if (weight <= 0.0f)
                     continue;
 
+                // lround, not +0.5 and truncate: truncation rounds a negative
+                // (Lower) delta toward zero, so the lower brush dug less than
+                // the raise brush built up.
                 const size_t index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-                int newValue = static_cast<int>(samples[index]) + static_cast<int>(deltaSamples * weight + 0.5f);
+                int newValue = static_cast<int>(samples[index]) + static_cast<int>(std::lround(deltaSamples * weight));
                 newValue = (std::max)(0, (std::min)(65535, newValue));
                 samples[index] = static_cast<std::uint16_t>(newValue);
             }
@@ -275,12 +386,14 @@ namespace TerrainGeometry
         float brushRadius,
         float flattenHeightWorld,
         float heightScale,
-        float heightOffset)
+        float heightOffset,
+        float blend)
     {
         if (samples.empty() || width <= 0 || height <= 0)
             return;
         if (heightScale <= 0.0f)
             heightScale = 1.0f;
+        blend = (std::max)(0.0f, (std::min)(1.0f, blend));
 
         const float centreCellX = ((brushCenterWorld.x + worldSize * 0.5f) / worldSize) * static_cast<float>(width  - 1);
         const float centreCellY = ((brushCenterWorld.y + worldSize * 0.5f) / worldSize) * static_cast<float>(height - 1);
@@ -301,7 +414,7 @@ namespace TerrainGeometry
                 const float dx = static_cast<float>(x) - centreCellX;
                 const float dy = static_cast<float>(y) - centreCellY;
                 const float distance = std::sqrt(dx * dx + dy * dy);
-                const float weight   = Falloff(distance, radiusCells);
+                const float weight   = Falloff(distance, radiusCells) * blend;
                 if (weight <= 0.0f)
                     continue;
 
@@ -321,9 +434,12 @@ namespace TerrainGeometry
         const DirectX::XMFLOAT2& brushCenterWorld,
         float brushRadius,
         int   passes,
-        float /*heightScale*/)
+        float blend)
     {
         if (samples.empty() || width <= 0 || height <= 0 || passes <= 0)
+            return;
+        blend = (std::max)(0.0f, (std::min)(1.0f, blend));
+        if (blend <= 0.0f)
             return;
 
         const float centreCellX = ((brushCenterWorld.x + worldSize * 0.5f) / worldSize) * static_cast<float>(width  - 1);
@@ -335,11 +451,29 @@ namespace TerrainGeometry
         const int maxX = (std::min)(width  - 1, static_cast<int>(std::ceil (centreCellX + radiusCells)));
         const int minY = (std::max)(0, static_cast<int>(std::floor(centreCellY - radiusCells)));
         const int maxY = (std::min)(height - 1, static_cast<int>(std::ceil (centreCellY + radiusCells)));
+        if (maxX < minX || maxY < minY)
+            return;
 
-        std::vector<std::uint16_t> scratch(samples);
+        // Snapshot only the brushed region plus the one-sample border the 3x3
+        // kernel reads.  Copying the whole heightmap per pass cost ~32 MB of
+        // memory traffic per frame on a 4k terrain while the mouse was held.
+        const int sx0 = (std::max)(0, minX - 1);
+        const int sy0 = (std::max)(0, minY - 1);
+        const int sx1 = (std::min)(width  - 1, maxX + 1);
+        const int sy1 = (std::min)(height - 1, maxY + 1);
+        const int scratchWidth = sx1 - sx0 + 1;
+        std::vector<std::uint16_t> scratch(static_cast<size_t>(scratchWidth) * static_cast<size_t>(sy1 - sy0 + 1));
+
         for (int pass = 0; pass < passes; ++pass)
         {
-            std::copy(samples.begin(), samples.end(), scratch.begin());
+            for (int y = sy0; y <= sy1; ++y)
+            {
+                std::copy_n(
+                    samples.begin() + static_cast<std::ptrdiff_t>(static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(sx0)),
+                    scratchWidth,
+                    scratch.begin() + static_cast<std::ptrdiff_t>(static_cast<size_t>(y - sy0) * static_cast<size_t>(scratchWidth)));
+            }
+
             for (int y = minY; y <= maxY; ++y)
             {
                 for (int x = minX; x <= maxX; ++x)
@@ -347,27 +481,26 @@ namespace TerrainGeometry
                     const float dx = static_cast<float>(x) - centreCellX;
                     const float dy = static_cast<float>(y) - centreCellY;
                     const float distance = std::sqrt(dx * dx + dy * dy);
-                    const float weight   = Falloff(distance, radiusCells);
+                    const float weight   = Falloff(distance, radiusCells) * blend;
                     if (weight <= 0.0f)
                         continue;
 
-                    // 3x3 box average, weighted towards the centre.
-                    int   sum = 0;
-                    int   count = 0;
+                    // 3x3 box average, clamped at the patch border.
+                    int sum = 0;
+                    int count = 0;
                     for (int oy = -1; oy <= 1; ++oy)
                     {
-                        const int sy = (std::max)(0, (std::min)(height - 1, y + oy));
+                        const int ry = (std::max)(0, (std::min)(height - 1, y + oy)) - sy0;
                         for (int ox = -1; ox <= 1; ++ox)
                         {
-                            const int sx = (std::max)(0, (std::min)(width - 1, x + ox));
-                            const size_t sindex = static_cast<size_t>(sy) * static_cast<size_t>(width) + static_cast<size_t>(sx);
-                            sum   += static_cast<int>(scratch[sindex]);
+                            const int rx = (std::max)(0, (std::min)(width - 1, x + ox)) - sx0;
+                            sum += static_cast<int>(scratch[static_cast<size_t>(ry) * static_cast<size_t>(scratchWidth) + static_cast<size_t>(rx)]);
                             ++count;
                         }
                     }
-                    const int averaged = sum / (count > 0 ? count : 1);
+                    const float averaged = static_cast<float>(sum) / static_cast<float>(count);
                     const size_t index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-                    const float lerp = static_cast<float>(averaged) * weight
+                    const float lerp = averaged * weight
                                      + static_cast<float>(samples[index]) * (1.0f - weight);
                     samples[index] = static_cast<std::uint16_t>(lerp + 0.5f);
                 }

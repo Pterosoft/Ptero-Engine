@@ -24,6 +24,14 @@ public:
         mEntities = entities;
     }
 
+    // Entities VirtualGeometryRenderer draws in the G-Buffer (bit 0 of its
+    // mask) also get their motion vectors from it, from the clusters actually
+    // on screen rather than the full-resolution mesh, so this pass skips them.
+    void SetVirtualizedEntityMask(const std::vector<std::uint8_t>* mask)
+    {
+        mVirtualizedMask = mask;
+    }
+
     void Render(
         ID3D12GraphicsCommandList* commandList,
         const std::unordered_map<std::size_t, DirectX::XMFLOAT4X4>& previousTransforms,
@@ -105,6 +113,7 @@ private:
     // carried the same bug.
     std::map<const Mesh*, GpuMesh> mGpuMeshes;
     std::vector<Entity>* mEntities = nullptr;
+    const std::vector<std::uint8_t>* mVirtualizedMask = nullptr;
 
     UINT mWidth = 0;
     UINT mHeight = 0;

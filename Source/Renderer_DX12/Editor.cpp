@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Editor.h"
+#include "ParticleEffects.h"
 
 #include "System/DataFiles.h"
 #include "System/PteroLog.h"
@@ -71,31 +72,57 @@ namespace
         return true;
     }
 
+    // Data/Levels, where the Open and Save dialogs start. Empty when there is no Data folder.
+    std::string FindLevelsDirectory()
+    {
+        const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+        return dataDirectory.empty() ? std::string{} : (dataDirectory / "Levels").string();
+    }
+
+    // The dialogs start in the Levels folder. The buffer carries only a file name to
+    // suggest: a full path in it would move the dialog to that file's folder instead.
     bool PromptForSceneOpenPath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
     {
+        const std::string levelsDirectory = FindLevelsDirectory();
         OPENFILENAMEA openFileName{};
         openFileName.lStructSize = sizeof(openFileName);
         openFileName.hwndOwner = ownerWindowHandle;
         openFileName.lpstrTitle = "Open Scene";
-        openFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        openFileName.lpstrFilter = "Level\0*.level;*.json\0Level (.level)\0*.level\0Legacy JSON Level (.json)\0*.json\0All Files\0*.*\0";
         openFileName.lpstrFile = sceneFileBuffer;
         openFileName.nMaxFile = sceneFileBufferSize;
+        openFileName.lpstrInitialDir = levelsDirectory.empty() ? nullptr : levelsDirectory.c_str();
         openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
         return QtUi::OpenFileName(&openFileName) == TRUE;
     }
 
     bool PromptForSceneSavePath(HWND ownerWindowHandle, char* sceneFileBuffer, const DWORD sceneFileBufferSize)
     {
+        const std::string levelsDirectory = FindLevelsDirectory();
         OPENFILENAMEA saveFileName{};
         saveFileName.lStructSize = sizeof(saveFileName);
         saveFileName.hwndOwner = ownerWindowHandle;
         saveFileName.lpstrTitle = "Save Scene";
-        saveFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        saveFileName.lpstrFilter = "Level (.level)\0*.level\0Legacy JSON Level (.json)\0*.json\0All Files\0*.*\0";
         saveFileName.lpstrFile = sceneFileBuffer;
         saveFileName.nMaxFile = sceneFileBufferSize;
+        saveFileName.lpstrInitialDir = levelsDirectory.empty() ? nullptr : levelsDirectory.c_str();
         saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-        saveFileName.lpstrDefExt = "json";
+        saveFileName.lpstrDefExt = "level";
         return QtUi::SaveFileName(&saveFileName) == TRUE;
+    }
+
+    constexpr const char* kRecentLevelsSetting = "editor/recentLevels";
+    constexpr std::size_t kMaxRecentLevels = 10;
+
+    // One spelling per file, so opening a level by another route does not list it twice.
+    std::string NormalizeLevelPath(const std::string& filepath)
+    {
+        std::error_code error;
+        std::filesystem::path path = std::filesystem::absolute(std::filesystem::path(filepath), error);
+        if (error)
+            path = filepath;
+        return path.lexically_normal().make_preferred().string();
     }
 
     UiTextureID TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
@@ -545,9 +572,185 @@ Entity* Editor::GetSelectedEntity()
     return &mEntities[mSelectedEntityIndex];
 }
 
+std::vector<Entity*> Editor::GetSelectedEntities()
+{
+    std::vector<Entity*> entities;
+    for (int index : GetSelectedEntityIndices())
+        entities.push_back(&mEntities[index]);
+    return entities;
+}
+
+namespace
+{
+    // The components whose Properties edits carry over to the rest of a multi-selection.
+    // Each one holds nothing but its saved fields, so its JSON form is a complete, safe
+    // handle on it: a change can be found by diffing and applied by writing back.
+    // Terrain, vegetation and particle systems are left out because the renderer has to
+    // be told when they change, and the name because every entity would end up with one.
+    nlohmann::json ShareablePropertiesOf(const Entity& entity)
+    {
+        nlohmann::json properties = nlohmann::json::object();
+        properties["Transform"] = entity.Transform;
+        if (entity.Mesh)         properties["Mesh"]         = *entity.Mesh;
+        if (entity.PointLight)   properties["PointLight"]   = *entity.PointLight;
+        if (entity.AudioEmitter) properties["AudioEmitter"] = *entity.AudioEmitter;
+        if (entity.Decal)        properties["Decal"]        = *entity.Decal;
+        if (entity.Rain)         properties["Rain"]         = *entity.Rain;
+        if (entity.Water)        properties["Water"]        = *entity.Water;
+        return properties;
+    }
+
+    void ApplyShareableProperties(Entity& entity, const nlohmann::json& properties)
+    {
+        properties.at("Transform").get_to(entity.Transform);
+        if (entity.Mesh && properties.contains("Mesh"))
+        {
+            const std::string previousMeshPath = entity.Mesh->MeshPath;
+            properties.at("Mesh").get_to(*entity.Mesh);
+            // The loaded geometry belongs to the old path; the renderer reloads on null.
+            if (entity.Mesh->MeshPath != previousMeshPath)
+                entity.Mesh->MeshAsset.reset();
+        }
+        if (entity.PointLight && properties.contains("PointLight"))     properties.at("PointLight").get_to(*entity.PointLight);
+        if (entity.AudioEmitter && properties.contains("AudioEmitter")) properties.at("AudioEmitter").get_to(*entity.AudioEmitter);
+        if (entity.Decal && properties.contains("Decal"))               properties.at("Decal").get_to(*entity.Decal);
+        if (entity.Rain && properties.contains("Rain"))                 properties.at("Rain").get_to(*entity.Rain);
+        if (entity.Water && properties.contains("Water"))               properties.at("Water").get_to(*entity.Water);
+    }
+}
+
+void Editor::DrawPropertiesPanelForSelection(Entity* selectedEntity, AudioManager* audioManager)
+{
+    const bool shareEdits = selectedEntity != nullptr && GetSelectedEntityIndices().size() > 1;
+    const std::uint64_t primaryId = shareEdits ? selectedEntity->Id : 0;
+    const nlohmann::json before = shareEdits ? ShareablePropertiesOf(*selectedEntity) : nlohmann::json();
+
+    DrawPropertiesPanel(selectedEntity, audioManager);
+
+    if (!shareEdits)
+        return;
+
+    // The panel can add entities or change the selection, which may move or replace the
+    // primary; only an edit to the same entity is shared.
+    Entity* primary = GetSelectedEntity();
+    if (primary == nullptr || primary->Id != primaryId)
+        return;
+
+    const nlohmann::json after = ShareablePropertiesOf(*primary);
+    if (after == before)
+        return;
+
+    // Only the fields that were edited are copied, so the rest of each entity - where it
+    // stands, its own values for everything else - is kept. Adding or removing a whole
+    // component is not shared, and neither is a float that only moved by the rounding of
+    // a widget writing back all three of a vector's components (the Rotation field
+    // converts all three through degrees whichever one was dragged).
+    std::vector<std::pair<nlohmann::json::json_pointer, nlohmann::json>> edits;
+    for (const nlohmann::json& operation : nlohmann::json::diff(before, after))
+    {
+        if (operation.value("op", std::string{}) != "replace")
+            continue;
+
+        const nlohmann::json::json_pointer path(operation.at("path").get<std::string>());
+        const nlohmann::json& newValue = operation.at("value");
+        if (newValue.is_number_float() && before.contains(path) && before.at(path).is_number())
+        {
+            const double oldNumber = before.at(path).get<double>();
+            const double newNumber = newValue.get<double>();
+            if (std::abs(newNumber - oldNumber) <= 1e-5 * (std::max)(1.0, std::abs(oldNumber)))
+                continue;
+        }
+        edits.emplace_back(path, newValue);
+    }
+
+    if (edits.empty())
+        return;
+
+    bool changed = false;
+    for (Entity* other : GetSelectedEntities())
+    {
+        if (other == primary)
+            continue;
+
+        nlohmann::json properties = ShareablePropertiesOf(*other);
+        bool touched = false;
+        for (const auto& [path, value] : edits)
+        {
+            // Entities without the edited component are skipped.
+            if (!properties.contains(path))
+                continue;
+            properties[path] = value;
+            touched = true;
+        }
+
+        if (touched)
+        {
+            ApplyShareableProperties(*other, properties);
+            changed = true;
+        }
+    }
+
+    if (changed)
+        MarkSceneChanged();
+}
+
 bool Editor::IsEntitySelected(int entityIndex) const
 {
     return std::find(mSelectedEntityIndices.begin(), mSelectedEntityIndices.end(), entityIndex) != mSelectedEntityIndices.end();
+}
+
+std::vector<int> Editor::GetSelectedEntityIndices() const
+{
+    const int entityCount = static_cast<int>(mEntities.size());
+    std::vector<int> indices;
+    indices.reserve(mSelectedEntityIndices.size() + 1);
+    for (int index : mSelectedEntityIndices)
+    {
+        if (index >= 0 && index < entityCount)
+            indices.push_back(index);
+    }
+    if (mSelectedEntityIndex >= 0 && mSelectedEntityIndex < entityCount)
+        indices.push_back(mSelectedEntityIndex);
+
+    std::sort(indices.begin(), indices.end());
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+    return indices;
+}
+
+void Editor::SelectEntity(int entityIndex, bool additive)
+{
+    const bool validIndex = entityIndex >= 0 && entityIndex < static_cast<int>(mEntities.size());
+
+    if (!additive)
+    {
+        mSelectedEntityIndex = validIndex ? entityIndex : -1;
+        mSelectedEntityIndices.clear();
+        if (validIndex)
+            mSelectedEntityIndices.push_back(entityIndex);
+        return;
+    }
+
+    // A Ctrl+click on empty space keeps the selection rather than dropping it.
+    if (!validIndex)
+        return;
+
+    // Normalise first, so a primary set without the list is not lost by the toggle.
+    mSelectedEntityIndices = GetSelectedEntityIndices();
+
+    const auto existing = std::find(mSelectedEntityIndices.begin(), mSelectedEntityIndices.end(), entityIndex);
+    if (existing != mSelectedEntityIndices.end())
+    {
+        mSelectedEntityIndices.erase(existing);
+        // The gizmo and Properties panel follow the primary, so hand it to another
+        // selected entity rather than leave it on the one just deselected.
+        if (mSelectedEntityIndex == entityIndex)
+            mSelectedEntityIndex = mSelectedEntityIndices.empty() ? -1 : mSelectedEntityIndices.back();
+    }
+    else
+    {
+        mSelectedEntityIndices.push_back(entityIndex);
+        mSelectedEntityIndex = entityIndex;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -556,39 +759,56 @@ bool Editor::IsEntitySelected(int entityIndex) const
 
 bool Editor::CanCopySelectedEntity() const
 {
-    return mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size());
+    return !GetSelectedEntityIndices().empty();
 }
 
 bool Editor::CanPasteEntity() const
 {
-    return mCopiedEntity.has_value();
+    return !mCopiedEntities.empty();
 }
 
 bool Editor::CanDeleteSelectedEntity() const
 {
-    return !mSelectedEntityIndices.empty()
-        || (mSelectedEntityIndex >= 0 && mSelectedEntityIndex < static_cast<int>(mEntities.size()));
+    return !GetSelectedEntityIndices().empty();
 }
 
 bool Editor::CopySelectedEntity()
 {
-    if (!CanCopySelectedEntity()) return false;
-    mCopiedEntity = mEntities[mSelectedEntityIndex];
-    PTERO_LOG_INFO("Editor", "Copied entity '%s' (index %d).",
-                   mCopiedEntity->Name.c_str(), mSelectedEntityIndex);
+    const std::vector<int> indices = GetSelectedEntityIndices();
+    if (indices.empty()) return false;
+
+    mCopiedEntities.clear();
+    mCopiedEntities.reserve(indices.size());
+    for (int index : indices)
+        mCopiedEntities.push_back(mEntities[index]);
+
+    if (mCopiedEntities.size() == 1)
+        PTERO_LOG_INFO("Editor", "Copied entity '%s' (index %d).",
+                       mCopiedEntities.front().Name.c_str(), indices.front());
+    else
+        PTERO_LOG_INFO("Editor", "Copied %llu entities.",
+                       static_cast<unsigned long long>(mCopiedEntities.size()));
     return true;
 }
 
 bool Editor::PasteCopiedEntity()
 {
     if (!CanPasteEntity()) return false;
-    mEntities.push_back(*mCopiedEntity);
-    mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+
+    // Copies keep their source's Id; EnsureEntityIds gives the later duplicate a new one.
+    const int firstPastedIndex = static_cast<int>(mEntities.size());
+    mEntities.insert(mEntities.end(), mCopiedEntities.begin(), mCopiedEntities.end());
+
+    // The pasted set becomes the selection, so a second Ctrl+V or a delete acts on it.
     mSelectedEntityIndices.clear();
-    mSelectedEntityIndices.push_back(mSelectedEntityIndex);
+    for (int index = firstPastedIndex; index < static_cast<int>(mEntities.size()); ++index)
+        mSelectedEntityIndices.push_back(index);
+    mSelectedEntityIndex = mSelectedEntityIndices.back();
+
     MarkSceneChanged();
-    PTERO_LOG_INFO("Editor", "Pasted entity '%s' at index %d. Scene now holds %llu entities.",
-                   mEntities.back().Name.c_str(), mSelectedEntityIndex,
+    PTERO_LOG_INFO("Editor", "Pasted %llu entit%s. Scene now holds %llu entities.",
+                   static_cast<unsigned long long>(mCopiedEntities.size()),
+                   mCopiedEntities.size() == 1 ? "y" : "ies",
                    static_cast<unsigned long long>(mEntities.size()));
     return true;
 }
@@ -597,24 +817,9 @@ bool Editor::DeleteSelectedEntity()
 {
     if (!CanDeleteSelectedEntity()) return false;
 
-    if (!mSelectedEntityIndices.empty())
-    {
-        std::vector<int> indices = mSelectedEntityIndices;
-        std::sort(indices.begin(), indices.end());
-        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-
-        for (auto it = indices.rbegin(); it != indices.rend(); ++it)
-        {
-            if (*it >= 0 && *it < static_cast<int>(mEntities.size()))
-            {
-                mEntities.erase(mEntities.begin() + *it);
-            }
-        }
-    }
-    else
-    {
-        mEntities.erase(mEntities.begin() + mSelectedEntityIndex);
-    }
+    const std::vector<int> indices = GetSelectedEntityIndices();
+    for (auto it = indices.rbegin(); it != indices.rend(); ++it)
+        mEntities.erase(mEntities.begin() + *it);
 
     mSelectedEntityIndex = -1;
     mSelectedEntityIndices.clear();
@@ -639,9 +844,11 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.Dlss              = mDlssSettings;
     scene.Fsr               = mFsrSettings;
     scene.Subsurface        = mSubsurfaceSettings;
+    scene.Dple              = mDpleSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi              = mRtgiSettings;
     scene.RadianceCascades  = mRadianceCascadesSettings;
+    scene.RadianceProbes    = mRadianceProbeSettings;
     scene.Rtao              = mRtaoSettings;
     scene.Gtao              = mGtaoSettings;
     scene.Ssr               = mSsrSettings;
@@ -650,6 +857,7 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.VolumetricFog     = mVolumetricFogSettings;
     scene.VolumetricCloud   = mVolumetricCloudSettings;
     scene.Bloom             = mBloomSettings;
+    scene.LensFlare         = mLensFlareSettings;
 
     // Snapshot rather than hand out the editor's copy: the serializer takes a mutable
     // pointer, and nothing outside the Node Graph window may write that document.
@@ -664,6 +872,7 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
         mLastSceneStatusMessage = "Scene saved: " + filepath;
         mSceneDirty = false;
         mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
+        AddRecentLevel(filepath);
         return true;
     }
     catch (const std::exception& e)
@@ -744,11 +953,11 @@ void Editor::UpdatePlaySession()
             if (setting) mRestorePlaySettings.emplace_back([setting, value=*setting] { *setting=value; });
         };
         remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings);
-        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mSubsurfaceSettings); remember(mGlobalIlluminationMode);
-        remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRtaoSettings);
+        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mSubsurfaceSettings); remember(mDpleSettings); remember(mGlobalIlluminationMode);
+        remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRadianceProbeSettings); remember(mRtaoSettings);
         remember(mGtaoSettings); remember(mSsrSettings); remember(mChromaticAberrationSettings);
         remember(mAgxSettings); remember(mVolumetricFogSettings); remember(mVolumetricCloudSettings);
-        remember(mBloomSettings);
+        remember(mBloomSettings); remember(mLensFlareSettings);
         // Playing in the viewport, F11 hides the panels for the session. Stopping puts
         // them back rather than leaving the editor fullscreen with nothing running.
         remember(&mViewportFullscreen);
@@ -756,31 +965,7 @@ void Editor::UpdatePlaySession()
         mRestorePlaySettings.emplace_back([this, grid, wireframe] {
             mSceneRenderer->SetGridEnabled(grid); mSceneRenderer->SetWireframeEnabled(wireframe);
         });
-        if (_stricmp(std::filesystem::path(mCurrentSceneFilePath).filename().string().c_str(), "Farkle.json")!=0) {
-            wchar_t executable[MAX_PATH]{};
-            GetModuleFileNameW(nullptr, executable, MAX_PATH);
-            auto directory=std::filesystem::path(executable).parent_path();
-            std::filesystem::path level;
-            for (int i=0; i<6; ++i) {
-                auto candidate=directory / "Data" / "Levels" / "Farkle.json";
-                if (std::filesystem::exists(candidate)) { level=candidate; break; }
-                directory=directory.parent_path();
-            }
-            if (level.empty()) throw std::runtime_error("Could not find Data/Levels/Farkle.json.");
-            Scene scene;
-            scene.Entities=&mEntities; scene.NodeGraph=&mPlayNodeGraph;
-            scene.TimeOfDay=mTimeOfDaySettings; scene.Taa=mTaaSettings; scene.Smaa=mSmaaSettings;
-            scene.Sharpen=mSharpenSettings; scene.Dlss=mDlssSettings; scene.Fsr=mFsrSettings; scene.Subsurface=mSubsurfaceSettings;
-            scene.GlobalIllumination=mGlobalIlluminationMode; scene.Rtgi=mRtgiSettings;
-            scene.RadianceCascades=mRadianceCascadesSettings; scene.Rtao=mRtaoSettings;
-            scene.Gtao=mGtaoSettings; scene.Ssr=mSsrSettings;
-            scene.ChromaticAberration=mChromaticAberrationSettings; scene.Agx=mAgxSettings;
-            scene.VolumetricFog=mVolumetricFogSettings; scene.VolumetricCloud=mVolumetricCloudSettings;
-            scene.Bloom=mBloomSettings;
-            mEntities.clear();
-            SceneSerializer serializer(&scene);
-            if (!serializer.Deserialize(level.string())) throw std::runtime_error("Could not load the Farkle play level.");
-        }
+        // Play runs the level that is open, on the copy taken above.
         mSceneRenderer->SetEntities(&mEntities);
         mSceneRenderer->SetNodeGraph(&mPlayNodeGraph);
         mSceneRenderer->SetGridEnabled(false); mSceneRenderer->SetWireframeEnabled(false);
@@ -807,9 +992,11 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.Dlss          = mDlssSettings;
     scene.Fsr           = mFsrSettings;
     scene.Subsurface    = mSubsurfaceSettings;
+    scene.Dple          = mDpleSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi          = mRtgiSettings;
     scene.RadianceCascades = mRadianceCascadesSettings;
+    scene.RadianceProbes = mRadianceProbeSettings;
     scene.Rtao          = mRtaoSettings;
     scene.Gtao          = mGtaoSettings;
     scene.Ssr           = mSsrSettings;
@@ -818,6 +1005,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.VolumetricFog = mVolumetricFogSettings;
     scene.VolumetricCloud = mVolumetricCloudSettings;
     scene.Bloom         = mBloomSettings;
+    scene.LensFlare     = mLensFlareSettings;
 
     NodeGraphDocument nodeGraph;
     scene.NodeGraph = &nodeGraph;
@@ -889,9 +1077,11 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.Dlss          = &data.Dlss;
         scene.Fsr           = &data.Fsr;
         scene.Subsurface    = &data.Subsurface;
+        scene.Dple          = &data.Dple;
         scene.GlobalIllumination = &data.GlobalIlluminationMode;
         scene.Rtgi          = &data.Rtgi;
         scene.RadianceCascades = &data.RadianceCascades;
+        scene.RadianceProbes = &data.RadianceProbes;
         scene.Rtao          = &data.Rtao;
         scene.Gtao          = &data.Gtao;
         scene.Ssr           = &data.Ssr;
@@ -900,6 +1090,7 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.VolumetricFog = &data.VolumetricFog;
         scene.VolumetricCloud = &data.VolumetricCloud;
         scene.Bloom         = &data.Bloom;
+        scene.LensFlare     = &data.LensFlare;
         // Parsed on the worker, handed to the Qt window in UpdateSceneLoading: the node
         // editor is a widget and must only ever be touched from the main thread.
         scene.NodeGraph     = &data.NodeGraph;
@@ -979,7 +1170,12 @@ bool Editor::SaveSceneAs(HWND ownerWindowHandle)
     char sceneFileBuffer[MAX_PATH] = {};
     if (!mCurrentSceneFilePath.empty())
     {
-        strcpy_s(sceneFileBuffer, mCurrentSceneFilePath.c_str());
+        // Offer the current name as a .level even when the scene came from a legacy
+        // .json: Save As is where a level moves to the new extension. Plain Save keeps
+        // writing the file that was opened, so nothing is duplicated behind the user's back.
+        std::filesystem::path suggested = std::filesystem::path(mCurrentSceneFilePath).filename();
+        suggested.replace_extension(".level");
+        strcpy_s(sceneFileBuffer, suggested.string().c_str());
     }
 
     if (!PromptForSceneSavePath(ownerWindowHandle, sceneFileBuffer, static_cast<DWORD>(std::size(sceneFileBuffer))))
@@ -998,11 +1194,6 @@ bool Editor::OpenScene(HWND ownerWindowHandle)
     }
 
     char sceneFileBuffer[MAX_PATH] = {};
-    if (!mCurrentSceneFilePath.empty())
-    {
-        strcpy_s(sceneFileBuffer, mCurrentSceneFilePath.c_str());
-    }
-
     if (!PromptForSceneOpenPath(ownerWindowHandle, sceneFileBuffer, static_cast<DWORD>(std::size(sceneFileBuffer))))
     {
         return false;
@@ -1022,6 +1213,61 @@ bool Editor::NewScene(HWND ownerWindowHandle)
     return true;
 }
 
+const std::vector<std::string>& Editor::GetRecentLevels()
+{
+    if (!mRecentLevelsLoaded)
+    {
+        mRecentLevelsLoaded = true;
+        mRecentLevels = QtUi::LoadSettingList(kRecentLevelsSetting);
+        if (mRecentLevels.size() > kMaxRecentLevels)
+            mRecentLevels.resize(kMaxRecentLevels);
+    }
+    return mRecentLevels;
+}
+
+void Editor::AddRecentLevel(const std::string& filepath)
+{
+    if (filepath.empty())
+        return;
+    GetRecentLevels();
+    const std::string normalized = NormalizeLevelPath(filepath);
+    std::erase_if(mRecentLevels, [&normalized](const std::string& entry)
+    {
+        return _stricmp(entry.c_str(), normalized.c_str()) == 0;
+    });
+    mRecentLevels.insert(mRecentLevels.begin(), normalized);
+    if (mRecentLevels.size() > kMaxRecentLevels)
+        mRecentLevels.resize(kMaxRecentLevels);
+    QtUi::SaveSettingList(kRecentLevelsSetting, mRecentLevels);
+}
+
+bool Editor::OpenRecentLevel(HWND ownerWindowHandle, const std::string& filepath)
+{
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(std::filesystem::path(filepath), error))
+    {
+        mLastSceneStatusMessage = "Level no longer exists: " + filepath;
+        GetRecentLevels();
+        std::erase(mRecentLevels, filepath);
+        QtUi::SaveSettingList(kRecentLevelsSetting, mRecentLevels);
+        return false;
+    }
+
+    if (!ConfirmDiscardUnsavedScene(ownerWindowHandle))
+    {
+        return false;
+    }
+
+    return BeginLoadSceneFromFile(filepath);
+}
+
+void Editor::ClearRecentLevels()
+{
+    mRecentLevelsLoaded = true;
+    mRecentLevels.clear();
+    QtUi::SaveSettingList(kRecentLevelsSetting, mRecentLevels);
+}
+
 void Editor::UpdateSceneLoading()
 {
     // InProgress first: the worker fills Result and only then clears it, so the
@@ -1034,6 +1280,8 @@ void Editor::UpdateSceneLoading()
     {
         auto& data       = *mSceneLoadState.Result;
         mEntities        = std::move(data.Entities);
+        // The serializer loaded the effect files; lay unsaved Particle Editor edits on top.
+        ResyncParticleEffects();
         mSelectedEntityIndex = -1;
         mSelectedEntityIndices.clear();
         mNextGeometryInstanceId = static_cast<int>(mEntities.size()) + 1;
@@ -1051,9 +1299,11 @@ void Editor::UpdateSceneLoading()
         if (mDlssSettings)            *mDlssSettings            = data.Dlss;
         if (mFsrSettings)             *mFsrSettings             = data.Fsr;
         if (mSubsurfaceSettings)      *mSubsurfaceSettings      = data.Subsurface;
+        if (mDpleSettings)            *mDpleSettings            = data.Dple;
         if (mGlobalIlluminationMode)  *mGlobalIlluminationMode  = data.GlobalIlluminationMode;
         if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
         if (mRadianceCascadesSettings) *mRadianceCascadesSettings = data.RadianceCascades;
+        if (mRadianceProbeSettings)   *mRadianceProbeSettings   = data.RadianceProbes;
         if (mRtaoSettings)            *mRtaoSettings            = data.Rtao;
         if (mGtaoSettings)            *mGtaoSettings            = data.Gtao;
         if (mSsrSettings)             *mSsrSettings             = data.Ssr;
@@ -1062,6 +1312,7 @@ void Editor::UpdateSceneLoading()
         if (mVolumetricFogSettings)   *mVolumetricFogSettings   = data.VolumetricFog;
         if (mVolumetricCloudSettings) *mVolumetricCloudSettings = data.VolumetricCloud;
         if (mBloomSettings)           *mBloomSettings           = data.Bloom;
+        if (mLensFlareSettings)       *mLensFlareSettings       = data.LensFlare;
 
         NodeGraphEditor::SetDocument(data.NodeGraph);
         mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
@@ -1069,12 +1320,16 @@ void Editor::UpdateSceneLoading()
         mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
         mSceneDirty = false;
         ResetUndoHistory();
+        AddRecentLevel(mCurrentSceneFilePath);
 
-        // The render loop resolves the meshes from here on and reports back.
+        // The render loop resolves the meshes and textures from here on and reports back.
         mSceneAssetsStreaming = true;
         mSceneAssetsFinishing = false;
         mSceneAssetsResolved = 0;
         mSceneAssetsTotal = 0;
+        mSceneTexturesLoaded = 0;
+        mSceneTexturesTotal = 0;
+        ++mSceneStreamGeneration;
     }
     else
     {
@@ -1084,12 +1339,16 @@ void Editor::UpdateSceneLoading()
     mSceneLoadState.Result.reset();
 }
 
-void Editor::SetSceneAssetStreamingProgress(size_t resolvedMeshes, size_t totalMeshes)
+void Editor::SetSceneAssetStreamingProgress(
+    size_t resolvedMeshes, size_t totalMeshes, size_t loadedTextures, size_t totalTextures)
 {
     if (!mSceneAssetsStreaming) return;
     mSceneAssetsResolved = resolvedMeshes;
     mSceneAssetsTotal = totalMeshes;
-    if (resolvedMeshes < totalMeshes)
+    const bool meshesDone = resolvedMeshes >= totalMeshes;
+    mSceneTexturesLoaded = meshesDone ? loadedTextures : 0;
+    mSceneTexturesTotal = meshesDone ? totalTextures : 0;
+    if (!meshesDone || loadedTextures < totalTextures)
     {
         mSceneAssetsFinishing = false;
         return;
@@ -1103,8 +1362,11 @@ void Editor::SetSceneAssetStreamingProgress(size_t resolvedMeshes, size_t totalM
 namespace
 {
     // Parsing the file is quick next to reading the meshes, so it gets a small
-    // slice of the bar and the meshes get the rest.
+    // slice of the bar. Textures are most of a level's bytes - a UDIM-heavy one can
+    // be gigabytes of them - so they get the larger share of the rest.
     constexpr float kSceneFileProgressShare = 0.1f;
+    constexpr float kSceneMeshProgressShare = 0.3f;
+    constexpr float kSceneTextureProgressShare = 1.0f - kSceneFileProgressShare - kSceneMeshProgressShare;
 }
 
 bool Editor::IsSceneLoading() const
@@ -1116,12 +1378,20 @@ float Editor::GetSceneLoadProgress() const
 {
     if (mSceneLoadState.InProgress.load())
         return kSceneFileProgressShare * mSceneLoadState.Progress.load();
-    if (mSceneAssetsStreaming && mSceneAssetsTotal > 0)
-        return kSceneFileProgressShare + (1.0f - kSceneFileProgressShare)
-            * (static_cast<float>(mSceneAssetsResolved) / static_cast<float>(mSceneAssetsTotal));
-    if (mSceneAssetsStreaming)
-        return kSceneFileProgressShare;
-    return 1.0f;
+    if (!mSceneAssetsStreaming)
+        return 1.0f;
+
+    const auto fraction = [](size_t done, size_t total)
+    {
+        return total > 0 ? static_cast<float>(done) / static_cast<float>(total) : 1.0f;
+    };
+    if (mSceneAssetsResolved < mSceneAssetsTotal)
+        return kSceneFileProgressShare
+            + kSceneMeshProgressShare * fraction(mSceneAssetsResolved, mSceneAssetsTotal);
+    // The last sliver is the finishing frame, so the bar never sits at 100% while
+    // something is still loading.
+    return kSceneFileProgressShare + kSceneMeshProgressShare
+        + kSceneTextureProgressShare * 0.98f * fraction(mSceneTexturesLoaded, mSceneTexturesTotal);
 }
 
 std::string Editor::GetSceneLoadStatusMessage() const
@@ -1129,7 +1399,10 @@ std::string Editor::GetSceneLoadStatusMessage() const
     if (!mSceneLoadState.InProgress.load() && mSceneAssetsStreaming)
     {
         if (mSceneAssetsFinishing)
-            return "Loading textures...";
+            return "Finishing...";
+        if (mSceneAssetsResolved >= mSceneAssetsTotal)
+            return "Loading textures (" + std::to_string(mSceneTexturesLoaded) + "/"
+                + std::to_string(mSceneTexturesTotal) + ")...";
         return "Loading meshes (" + std::to_string(mSceneAssetsResolved) + "/"
             + std::to_string(mSceneAssetsTotal) + ")...";
     }
@@ -1207,6 +1480,31 @@ bool Editor::TryGetViewportWorldPositionOnGrid(
 {
     using namespace DirectX;
 
+    XMFLOAT3 rayOrigin{};
+    XMFLOAT3 rayDirection{};
+    if (!TryGetViewportRay(mousePosition, viewportOrigin, viewportSize, camera, rayOrigin, rayDirection))
+        return false;
+
+    if (std::abs(rayDirection.z) < 0.0001f) return false;
+
+    const float t = -rayOrigin.z / rayDirection.z;
+    if (t < 0.0f) return false;
+
+    XMStoreFloat3(&outWorldPosition,
+        XMLoadFloat3(&rayOrigin) + XMLoadFloat3(&rayDirection) * t);
+    return true;
+}
+
+bool Editor::TryGetViewportRay(
+    const UiVec2& mousePosition,
+    const UiVec2& viewportOrigin,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera,
+    DirectX::XMFLOAT3& outOrigin,
+    DirectX::XMFLOAT3& outDirection) const
+{
+    using namespace DirectX;
+
     if (viewportSize.x <= 0.0f || viewportSize.y <= 0.0f) return false;
 
     float ndcX = ((mousePosition.x - viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f;
@@ -1220,16 +1518,44 @@ bool Editor::TryGetViewportWorldPositionOnGrid(
     nearClip = nearClip / XMVectorSplatW(nearClip);
     farClip  = farClip  / XMVectorSplatW(farClip);
 
-    XMVECTOR dir = XMVector3Normalize(farClip - nearClip);
-    float dirZ = XMVectorGetZ(dir);
-    if (std::abs(dirZ) < 0.0001f) return false;
-
-    float t = -XMVectorGetZ(nearClip) / dirZ;
-    if (t < 0.0f) return false;
-
-    XMVECTOR hit = nearClip + dir * t;
-    XMStoreFloat3(&outWorldPosition, hit);
+    XMStoreFloat3(&outOrigin, nearClip);
+    XMStoreFloat3(&outDirection, XMVector3Normalize(farClip - nearClip));
     return true;
+}
+
+bool Editor::TryPickTerrainUnderCursor(
+    const UiVec2& mousePosition,
+    const UiVec2& viewportOrigin,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera,
+    DirectX::XMFLOAT3& outWorldPosition) const
+{
+    if (mTerrainRenderer == nullptr)
+        return false;
+
+    DirectX::XMFLOAT3 rayOrigin{};
+    DirectX::XMFLOAT3 rayDirection{};
+    if (!TryGetViewportRay(mousePosition, viewportOrigin, viewportSize, camera, rayOrigin, rayDirection))
+        return false;
+
+    // The brush used to hit the z = 0 grid, which sits under (or over) the
+    // terrain surface, so strokes landed tens of metres from the cursor.
+    constexpr float kMaxPickDistance = 10000.0f;
+    return mTerrainRenderer->Raycast(rayOrigin, rayDirection, kMaxPickDistance, outWorldPosition);
+}
+
+void Editor::EndTerrainBrushStroke()
+{
+    mTerrainStrokeActive = false;
+    if (!mTerrainStrokeApplied || mTerrainRenderer == nullptr)
+        return;
+    mTerrainStrokeApplied = false;
+
+    std::string status;
+    mTerrainRenderer->EndBrushStroke(&status);
+    if (!status.empty())
+        mLastTerrainBrushMessage = status;
+    MarkSceneChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,6 +1590,34 @@ void Editor::HandleViewportInteraction(
         return;
     }
 
+    // Terrain brush mode owns the left button: a press starts a stroke and
+    // the brush applies every frame while it is held (it used to apply once,
+    // on release, at the z = 0 grid position under the cursor).
+    if (mTerrainBrushModeActive && mTerrainRenderer != nullptr)
+    {
+        mViewportSelection.IsDragging = false;
+        if (QtUi::IsMouseClicked(QtUiMouseButton_Left))
+            mTerrainStrokeActive = true;
+        if (!mTerrainStrokeActive || !QtUi::IsMouseDown(QtUiMouseButton_Left))
+            return;
+
+        DirectX::XMFLOAT3 hit{};
+        if (!TryPickTerrainUnderCursor(io.MousePos, viewportOrigin, viewportSize, camera, hit))
+            return;
+
+        std::string statusMessage;
+        if (mTerrainRenderer->ApplyBrushAt(DirectX::XMFLOAT2(hit.x, hit.y), io.DeltaTime, &statusMessage))
+        {
+            mTerrainStrokeApplied = true;
+            mLastTerrainBrushMessage = statusMessage;
+        }
+        else if (!statusMessage.empty())
+        {
+            mLastTerrainBrushMessage = "Brush skipped: " + statusMessage;
+        }
+        return;
+    }
+
     if (QtUi::IsMouseClicked(QtUiMouseButton_Left))
     {
         mViewportSelection.IsDragging = true;
@@ -1288,31 +1642,6 @@ void Editor::FinishViewportSelection(
     const UiVec2& viewportSize,
     const EditorCamera& camera)
 {
-    // Terrain brush mode intercepts the click before any prototype
-    // placement so the artist can paint with the existing left-click
-    // gesture. The renderer applies the stroke to the terrain patch
-    // containing the picked world XY ground-plane position.
-    if (mTerrainBrushModeActive && mTerrainRenderer != nullptr)
-    {
-        DirectX::XMFLOAT3 worldPosition{};
-        if (TryGetViewportWorldPositionOnGrid(mViewportSelection.Current, viewportOrigin, viewportSize, camera, worldPosition))
-        {
-            const DirectX::XMFLOAT2 pickXZ(worldPosition.x, worldPosition.y);
-            std::string statusMessage;
-            const bool applied = mTerrainRenderer->ApplyBrushAt(pickXZ, &statusMessage);
-            if (applied)
-            {
-                MarkSceneChanged();
-                mLastTerrainBrushMessage = statusMessage;
-            }
-            else if (!statusMessage.empty())
-            {
-                mLastTerrainBrushMessage = "Brush skipped: " + statusMessage;
-            }
-        }
-        return;
-    }
-
     if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mSpotLightPrototypeSelected || mRectLightPrototypeSelected || mAudioEmitterPrototypeSelected || mDecalPrototypeSelected || mRainPrototypeSelected || mParticleSystemPrototypeSelected || mTerrainPrototypeSelected || mWaterPrototypeSelected || mVegetationPrototypeSelected)
     {
         if (mTerrainPrototypeSelected)
@@ -1408,7 +1737,20 @@ void Editor::FinishViewportSelection(
                 Entity entity;
                 entity.Name = "ParticleSystem_" + std::to_string(static_cast<int>(mEntities.size()) + 1);
                 entity.Transform.Position = worldPosition;
-                entity.AddParticleSystemComponent();
+                ParticleSystemComponent& particles = entity.AddParticleSystemComponent();
+                // New emitters use an effect file, written from the defaults on first use.
+                std::string effectError;
+                particles.ParticlePath = ParticleEffects::EnsureDefaultEffect(&effectError);
+                if (particles.ParticlePath.empty())
+                    PTERO_LOG_WARNING("Particles", "%s", effectError.c_str());
+                if (!particles.ParticlePath.empty())
+                {
+                    ParticleEffects::Load(particles.ParticlePath, particles);
+                    // Unsaved edits to that effect in the Particle Editor apply here too.
+                    if (mParticleEditor.Dirty && _stricmp(mParticleEditor.Path.c_str(), particles.ParticlePath.c_str()) == 0)
+                        CopyParticleEffect(mParticleEditor.Effect, particles);
+                    mParticleEffectFilesScanned = false;
+                }
                 mEntities.push_back(std::move(entity));
                 mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
                 mSelectedEntityIndices = { mSelectedEntityIndex };
@@ -1452,9 +1794,16 @@ void Editor::FinishViewportSelection(
     const float selectionWidth = selectionMax.x - selectionMin.x;
     const float selectionHeight = selectionMax.y - selectionMin.y;
 
+    // Ctrl adds to the selection: a Ctrl+click toggles one entity, a Ctrl+drag adds the
+    // boxed ones to what is already selected.
+    const bool additive = QtUi::GetIO().KeyCtrl;
+
     if (isSelectMode && (selectionWidth > 4.0f || selectionHeight > 4.0f))
     {
-        mSelectedEntityIndices.clear();
+        if (additive)
+            mSelectedEntityIndices = GetSelectedEntityIndices();
+        else
+            mSelectedEntityIndices.clear();
         for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
         {
             UiVec2 screenPos;
@@ -1462,13 +1811,16 @@ void Editor::FinishViewportSelection(
                 continue;
 
             if (screenPos.x >= selectionMin.x && screenPos.x <= selectionMax.x &&
-                screenPos.y >= selectionMin.y && screenPos.y <= selectionMax.y)
+                screenPos.y >= selectionMin.y && screenPos.y <= selectionMax.y &&
+                !IsEntitySelected(i))
             {
                 mSelectedEntityIndices.push_back(i);
             }
         }
 
-        mSelectedEntityIndex = mSelectedEntityIndices.empty() ? -1 : mSelectedEntityIndices.front();
+        // An additive box keeps the primary it started with.
+        if (!additive || !IsEntitySelected(mSelectedEntityIndex))
+            mSelectedEntityIndex = mSelectedEntityIndices.empty() ? -1 : mSelectedEntityIndices.front();
         return;
     }
 
@@ -1492,10 +1844,7 @@ void Editor::FinishViewportSelection(
         }
     }
 
-    mSelectedEntityIndex = bestIdx;
-    mSelectedEntityIndices.clear();
-    if (bestIdx >= 0)
-        mSelectedEntityIndices.push_back(bestIdx);
+    SelectEntity(bestIdx, additive);
 }
 
 // ---------------------------------------------------------------------------
@@ -1655,6 +2004,19 @@ void Editor::HandleManualGizmoInteraction(
         return bestDistance;
     };
 
+    auto captureSelectionGroup = [&]()
+    {
+        mManualGizmo.GroupIndices.clear();
+        mManualGizmo.GroupStartTransforms.clear();
+        for (int index : GetSelectedEntityIndices())
+        {
+            if (index == mSelectedEntityIndex)
+                continue;
+            mManualGizmo.GroupIndices.push_back(index);
+            mManualGizmo.GroupStartTransforms.push_back(mEntities[index].Transform);
+        }
+    };
+
     auto beginAxisDrag = [&](ManualGizmoHandle handle, const XMFLOAT3& axisWorldDirection, const UiVec2& axisScreenEnd, float axisWorldLength)
     {
         const UiVec2 axisScreenDirection(axisScreenEnd.x - pivotScreen.x, axisScreenEnd.y - pivotScreen.y);
@@ -1675,6 +2037,7 @@ void Editor::HandleManualGizmoInteraction(
         mManualGizmo.PixelsPerWorldUnit = axisScreenLength / axisWorldLength;
         mManualGizmo.SecondaryPixelsPerWorldUnit = 1.0f;
         mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+        captureSelectionGroup();
         mBlockViewportSelection = true;
     };
 
@@ -1706,6 +2069,7 @@ void Editor::HandleManualGizmoInteraction(
         mManualGizmo.PixelsPerWorldUnit = primaryAxisScreenLength / primaryAxisWorldLength;
         mManualGizmo.SecondaryPixelsPerWorldUnit = secondaryAxisScreenLength / secondaryAxisWorldLength;
         mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+        captureSelectionGroup();
         mBlockViewportSelection = true;
     };
 
@@ -1851,6 +2215,7 @@ void Editor::HandleManualGizmoInteraction(
                 mManualGizmo.StartScale = selectedEntity->Transform.Scale;
                 mManualGizmo.AxisWorldDirection = rotationAxis;
                 mManualGizmo.StartAngle = std::atan2(io.MousePos.y - pivotScreen.y, io.MousePos.x - pivotScreen.x);
+                captureSelectionGroup();
                 mBlockViewportSelection = true;
                 return;
             }
@@ -1900,6 +2265,7 @@ void Editor::HandleManualGizmoInteraction(
         }
         break;
     }
+    case ManualGizmoHandle::Scale:
     case ManualGizmoHandle::ScaleXAxis:
     case ManualGizmoHandle::ScaleYAxis:
     case ManualGizmoHandle::ScaleZAxis:
@@ -1946,6 +2312,80 @@ void Editor::HandleManualGizmoInteraction(
     default:
         break;
     }
+
+    // Carry the rest of the selection along by whatever the drag did to the primary.
+    // Positions follow the primary's move; a rotation also swings each entity around
+    // the primary's pivot, so the group turns as one; scale is added per entity.
+    if (mManualGizmo.GroupIndices.empty())
+        return;
+
+    const TransformComponent& primary = selectedEntity->Transform;
+    const XMFLOAT3 positionDelta(
+        primary.Position.x - mManualGizmo.StartPosition.x,
+        primary.Position.y - mManualGizmo.StartPosition.y,
+        primary.Position.z - mManualGizmo.StartPosition.z);
+    const XMFLOAT3 rotationDelta(
+        primary.Rotation.x - mManualGizmo.StartRotation.x,
+        primary.Rotation.y - mManualGizmo.StartRotation.y,
+        primary.Rotation.z - mManualGizmo.StartRotation.z);
+    const XMFLOAT3 scaleDelta(
+        primary.Scale.x - mManualGizmo.StartScale.x,
+        primary.Scale.y - mManualGizmo.StartScale.y,
+        primary.Scale.z - mManualGizmo.StartScale.z);
+    // Only one component is non-zero during a rotate drag, so the order is immaterial.
+    const XMMATRIX groupRotation = PteroTransform::ComposeRotation(rotationDelta);
+    const XMVECTOR pivot = XMLoadFloat3(&mManualGizmo.StartPosition);
+
+    bool groupChanged = false;
+    for (std::size_t member = 0; member < mManualGizmo.GroupIndices.size(); ++member)
+    {
+        const int index = mManualGizmo.GroupIndices[member];
+        if (index < 0 || index >= static_cast<int>(mEntities.size()))
+            continue;
+
+        const TransformComponent& start = mManualGizmo.GroupStartTransforms[member];
+        TransformComponent moved = start;
+        switch (mManualGizmo.ActiveHandle)
+        {
+        case ManualGizmoHandle::Rotate:
+        {
+            const XMVECTOR offset = XMVectorSubtract(XMLoadFloat3(&start.Position), pivot);
+            XMStoreFloat3(&moved.Position, XMVectorAdd(pivot, XMVector3TransformNormal(offset, groupRotation)));
+            moved.Rotation = XMFLOAT3(
+                start.Rotation.x + rotationDelta.x,
+                start.Rotation.y + rotationDelta.y,
+                start.Rotation.z + rotationDelta.z);
+            break;
+        }
+        case ManualGizmoHandle::Scale:
+        case ManualGizmoHandle::ScaleXAxis:
+        case ManualGizmoHandle::ScaleYAxis:
+        case ManualGizmoHandle::ScaleZAxis:
+            moved.Scale = XMFLOAT3(
+                (std::max)(0.01f, start.Scale.x + scaleDelta.x),
+                (std::max)(0.01f, start.Scale.y + scaleDelta.y),
+                (std::max)(0.01f, start.Scale.z + scaleDelta.z));
+            break;
+        default:
+            moved.Position = XMFLOAT3(
+                start.Position.x + positionDelta.x,
+                start.Position.y + positionDelta.y,
+                start.Position.z + positionDelta.z);
+            break;
+        }
+
+        TransformComponent& current = mEntities[index].Transform;
+        if (!NearlyEqual(current.Position, moved.Position)
+            || !NearlyEqual(current.Rotation, moved.Rotation)
+            || !NearlyEqual(current.Scale, moved.Scale))
+        {
+            current = moved;
+            groupChanged = true;
+        }
+    }
+
+    if (groupChanged)
+        MarkSceneChanged();
 }
 
 void Editor::CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition)
@@ -2325,8 +2765,10 @@ void Editor::DrawTerrainViewportOverlay(
     if (!mTerrainBrushModeActive || !QtUi::IsWindowHovered())
         return;
 
+    // Same pick the brush itself uses, so the ring sits exactly where the
+    // stroke will land.
     DirectX::XMFLOAT3 mouseWorld{};
-    if (!TryGetViewportWorldPositionOnGrid(
+    if (!TryPickTerrainUnderCursor(
         QtUi::GetIO().MousePos,
         viewportOrigin,
         viewportSize,
@@ -2361,14 +2803,6 @@ void Editor::DrawTerrainViewportOverlay(
     if (brushTerrain == nullptr || brushEntity == nullptr)
         return;
 
-    float previewZ = brushEntity->Transform.Position.z + brushTerrain->HeightOffset;
-    if (mTerrainRenderer != nullptr)
-    {
-        float sampledZ = previewZ;
-        if (mTerrainRenderer->SampleHeightAt({ mouseWorld.x, mouseWorld.y }, sampledZ))
-            previewZ = sampledZ;
-    }
-
     UiU32 brushColor = UI_COL32(255, 215, 80, 245);
     switch (brushTerrain->Brush)
     {
@@ -2394,10 +2828,18 @@ void Editor::DrawTerrainViewportOverlay(
     for (int segment = 0; segment <= kBrushSegments; ++segment)
     {
         const float angle = (DirectX::XM_2PI * static_cast<float>(segment)) / static_cast<float>(kBrushSegments);
-        const DirectX::XMFLOAT3 worldPoint(
+        DirectX::XMFLOAT3 worldPoint(
             mouseWorld.x + std::cos(angle) * brushTerrain->BrushRadius,
             mouseWorld.y + std::sin(angle) * brushTerrain->BrushRadius,
-            previewZ + 0.05f);
+            mouseWorld.z);
+        // Drape the ring over the surface so it stays visible on slopes.
+        float surfaceZ = 0.0f;
+        if (mTerrainRenderer != nullptr
+            && mTerrainRenderer->SampleHeightAt({ worldPoint.x, worldPoint.y }, surfaceZ))
+        {
+            worldPoint.z = surfaceZ;
+        }
+        worldPoint.z += 0.05f;
 
         UiVec2 screenPoint{};
         if (TryProjectWorldToViewport(worldPoint, viewportOrigin, viewportSize, camera, screenPoint, false))
@@ -2417,7 +2859,7 @@ void Editor::DrawTerrainViewportOverlay(
     }
 
     UiVec2 centreScreen{};
-    if (TryProjectWorldToViewport({ mouseWorld.x, mouseWorld.y, previewZ + 0.05f }, viewportOrigin, viewportSize, camera, centreScreen, false))
+    if (TryProjectWorldToViewport({ mouseWorld.x, mouseWorld.y, mouseWorld.z + 0.05f }, viewportOrigin, viewportSize, camera, centreScreen, false))
     {
         drawList->AddCircleFilled(centreScreen, 3.5f, brushColor);
         drawList->AddCircle(centreScreen, 5.5f, UI_COL32(20, 20, 20, 210), 0, 1.5f);
@@ -2946,6 +3388,7 @@ void Editor::DrawViewport(
     {
         DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
         DrawLightShapeGizmos(viewportOrigin, viewportSize, camera);
+        DrawVegetationAreaBounds(viewportOrigin, viewportSize, camera);
         DrawTerrainViewportOverlay(viewportOrigin, viewportSize, camera);
         HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
         DrawManualGizmoPivot(viewportOrigin, viewportSize, camera, selectedEntity);
@@ -3013,6 +3456,14 @@ void Editor::DrawViewport(
     if (!playing)
         HandleViewportInteraction(viewportOrigin, viewportSize, camera, viewportHovered);
 
+    // A stroke ends on release wherever the cursor is by then, or when brush
+    // mode is switched off or play starts mid-stroke.
+    if (mTerrainStrokeActive
+        && (playing || !mTerrainBrushModeActive || !QtUi::IsMouseDown(QtUiMouseButton_Left)))
+    {
+        EndTerrainBrushStroke();
+    }
+
     QtUi::End();
     QtUi::PopStyleVar();
 }
@@ -3031,14 +3482,14 @@ void Editor::DrawLevelExplorerPanel()
 
     for (int i = 0; i < static_cast<int>(mEntities.size()); ++i)
     {
-        const bool selected = (mSelectedEntityIndex == i);
+        const bool selected = (mSelectedEntityIndex == i) || IsEntitySelected(i);
         QtUiTreeNodeFlags flags = QtUiTreeNodeFlags_Leaf | QtUiTreeNodeFlags_SpanLabelWidth;
         if (selected) flags |= QtUiTreeNodeFlags_Selected;
 
         QtUi::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(i)), flags,
                           "%s", mEntities[i].Name.c_str());
         if (QtUi::IsItemClicked())
-            mSelectedEntityIndex = i;
+            SelectEntity(i, QtUi::GetIO().KeyCtrl);
         QtUi::TreePop();
     }
 
@@ -3097,17 +3548,74 @@ namespace
             inOutPath);
     }
 
-    // Draws the CryEngine-style material paint-layer editor for one terrain.
+    // Brush type and settings, shared by the Properties panel and the Terrain
+    // Tool window.  Returns true when anything changed.
+    //
+    // A QtUi slider track has 1000 steps, so the old 0.1..1000 m radius moved
+    // a metre per notch and similar ranges elsewhere made the controls feel
+    // dead; each range here keeps one notch a useful increment.
+    bool DrawTerrainBrushControls(TerrainComponent& tc)
+    {
+        bool changed = false;
+
+        const char* brushNames[] = { "Raise", "Lower", "Flatten", "Smooth", "Paint" };
+        int brushTypeIndex = static_cast<int>(tc.Brush);
+        if (QtUi::Combo("Type##terrainbrush", &brushTypeIndex, brushNames, static_cast<int>(std::size(brushNames))))
+        {
+            tc.Brush = static_cast<TerrainComponent::BrushType>(brushTypeIndex);
+            changed = true;
+        }
+
+        changed |= QtUi::DragFloat("Radius (m)", &tc.BrushRadius, 0.1f, 0.5f, 200.0f, "%.1f");
+        changed |= QtUi::DragFloat("Strength", &tc.BrushStrength, 0.01f, 0.01f, 20.0f, "%.2f");
+        switch (tc.Brush)
+        {
+        case TerrainComponent::BrushType::Raise:
+        case TerrainComponent::BrushType::Lower:
+            QtUi::TextDisabled("Strength: metres per second at the brush centre.");
+            break;
+        case TerrainComponent::BrushType::Paint:
+            QtUi::TextDisabled("Strength: layer weight per second (1 = fully painted in a second).");
+            break;
+        default:
+            QtUi::TextDisabled("Strength: how fast the surface converges.");
+            break;
+        }
+
+        if (tc.Brush == TerrainComponent::BrushType::Flatten)
+            changed |= QtUi::InputFloat("Flatten Height (m, world)", &tc.FlattenHeight, 0.1f, 1.0f, "%.2f");
+        if (tc.Brush == TerrainComponent::BrushType::Smooth)
+            changed |= QtUi::DragInt("Smooth Passes", &tc.BrushSmoothingPasses, 1.0f, 1, 10);
+
+        return changed;
+    }
+
+    // Draws the paint-layer editor for one terrain: up to four layers, each a
+    // full material (or a plain texture), painted with the Paint brush.
     // Returns true when the terrain mesh must be rebuilt (adding/removing a
     // layer changes whether the splat weights are baked into the vertex
     // colour).  Sets `outSceneDirty` for any edit that should flag the level
     // as unsaved.
-    bool DrawTerrainLayerControls(TerrainComponent& tc, HWND ownerWindow, bool& outSceneDirty)
+    bool DrawTerrainLayerControls(
+        TerrainComponent& tc,
+        HWND ownerWindow,
+        TerrainRenderer* renderer,
+        std::size_t entityIndex,
+        bool& outSceneDirty)
     {
         bool needsRebuild = false;
 
-        QtUi::SeparatorText("Material Layers (paint)");
-        QtUi::TextDisabled("Add layers, pick a texture, then use the Paint brush.");
+        QtUi::SeparatorText("Paint Layers");
+        if (tc.PaintLayers.empty())
+        {
+            QtUi::TextDisabled("Add a layer and give it a material, then paint with the Paint brush. "
+                               "The first layer starts from the terrain's material.");
+        }
+        else
+        {
+            QtUi::TextDisabled("Pick the active layer, set the brush Type to Paint and hold the left "
+                               "mouse button over the terrain.");
+        }
 
         int layerToRemove = -1;
         for (int i = 0; i < static_cast<int>(tc.PaintLayers.size()); ++i)
@@ -3122,33 +3630,79 @@ namespace
                 outSceneDirty = true;
             }
             QtUi::SameLine();
-            QtUi::Text("Layer %d%s", i, isActive ? " (active)" : "");
+            const std::string layerName = !layer.MaterialPath.empty()
+                ? std::filesystem::path(layer.MaterialPath).stem().string()
+                : (!layer.DiffuseTexturePath.empty()
+                    ? std::filesystem::path(layer.DiffuseTexturePath).stem().string()
+                    : std::string("(no material)"));
+            QtUi::Text("Layer %d: %s%s", i, layerName.c_str(), isActive ? "  (active)" : "");
 
+            QtUi::SameLine();
+            if (QtUi::SmallButton("Fill") && renderer != nullptr)
+            {
+                // Covers the whole patch; handy for the base layer.
+                renderer->FillPaintLayer(entityIndex, i);
+                outSceneDirty = true;
+            }
+            QtUi::SetItemTooltip("Paint this layer over the whole terrain.");
             QtUi::SameLine();
             if (QtUi::SmallButton("Remove"))
                 layerToRemove = i;
 
-            QtUi::TextWrapped("Texture: %s",
-                layer.DiffuseTexturePath.empty() ? "(none)" : layer.DiffuseTexturePath.c_str());
-            if (QtUi::Button("Texture..."))
+            if (QtUi::Button("Material..."))
             {
-                std::string texPath = layer.DiffuseTexturePath;
-                if (PromptForDataFile(ownerWindow, "Select Layer Texture",
-                                      "Texture (DDS)\0*.dds\0All Files\0*.*\0", texPath))
+                std::string materialPath = layer.MaterialPath;
+                if (PromptForDataFile(ownerWindow, "Select Layer Material",
+                                      "Material\0*.material;*.json\0All Files\0*.*\0", materialPath))
                 {
-                    layer.DiffuseTexturePath = texPath;
+                    layer.MaterialPath = materialPath;
                     outSceneDirty = true;
                 }
             }
-            QtUi::SameLine();
-            if (QtUi::SmallButton("Clear Texture"))
+            QtUi::SetItemTooltip("Base colour, normal, roughness, AO and height / displacement all come "
+                                 "from the material. Its Tessellation settings displace this layer.");
+            if (!layer.MaterialPath.empty())
             {
-                layer.DiffuseTexturePath.clear();
-                outSceneDirty = true;
+                QtUi::SameLine();
+                if (QtUi::SmallButton("Clear Material"))
+                {
+                    layer.MaterialPath.clear();
+                    outSceneDirty = true;
+                }
+            }
+            else
+            {
+                // No material: the original texture + tint layer.
+                QtUi::SameLine();
+                if (QtUi::Button("Texture..."))
+                {
+                    std::string texPath = layer.DiffuseTexturePath;
+                    if (PromptForDataFile(ownerWindow, "Select Layer Texture",
+                                          "Texture (DDS)\0*.dds\0All Files\0*.*\0", texPath))
+                    {
+                        layer.DiffuseTexturePath = texPath;
+                        outSceneDirty = true;
+                    }
+                }
+                if (!layer.DiffuseTexturePath.empty())
+                {
+                    QtUi::SameLine();
+                    if (QtUi::SmallButton("Clear Texture"))
+                    {
+                        layer.DiffuseTexturePath.clear();
+                        outSceneDirty = true;
+                    }
+                }
             }
 
-            if (QtUi::DragFloat("Tile Scale", &layer.TileScale, 0.25f, 0.25f, 512.0f))
+            float tileSize = layer.EffectiveTileSize(tc.WorldSize);
+            if (QtUi::InputFloat("Tile Size (m)", &tileSize, 0.1f, 1.0f, "%.2f"))
+            {
+                layer.TileSizeMeters = (std::max)(tileSize, 0.01f);
                 outSceneDirty = true;
+            }
+            QtUi::SetItemTooltip("Metres covered by one repeat of the layer's textures. The "
+                                 "material's own UV tiling multiplies on top.");
 
             float tint[4] = { layer.TintR, layer.TintG, layer.TintB, layer.TintA };
             if (QtUi::ColorEdit4("Tint", tint))
@@ -3166,6 +3720,10 @@ namespace
 
         if (layerToRemove >= 0)
         {
+            // Shift the splat channels first, so every layer above the removed
+            // one keeps what was painted with it.
+            if (renderer != nullptr)
+                renderer->RemovePaintLayerChannel(entityIndex, layerToRemove);
             tc.PaintLayers.erase(tc.PaintLayers.begin() + layerToRemove);
             if (tc.ActivePaintLayer >= static_cast<int>(tc.PaintLayers.size()))
                 tc.ActivePaintLayer = (std::max)(0, static_cast<int>(tc.PaintLayers.size()) - 1);
@@ -3177,7 +3735,19 @@ namespace
         {
             if (QtUi::Button("Add Layer"))
             {
-                tc.PaintLayers.emplace_back();
+                TerrainPaintLayer layer;
+                if (tc.PaintLayers.empty() && !tc.MaterialPath.empty())
+                {
+                    // The splat starts as all layer 0, so seeding it with the
+                    // terrain's material keeps the terrain looking the same.
+                    layer.MaterialPath   = tc.MaterialPath;
+                    layer.TileSizeMeters = tc.MaterialTileSize;
+                }
+                else
+                {
+                    layer.TileSizeMeters = tc.MaterialTileSize;
+                }
+                tc.PaintLayers.push_back(std::move(layer));
                 tc.ActivePaintLayer = static_cast<int>(tc.PaintLayers.size()) - 1;
                 outSceneDirty = true;
                 needsRebuild  = true; // baking splat weights into vertex colour
@@ -3186,6 +3756,18 @@ namespace
         else
         {
             QtUi::TextDisabled("Maximum of %d layers reached.", kTerrainMaxLayers);
+        }
+
+        if (!tc.PaintLayers.empty())
+        {
+            if (QtUi::Checkbox("Height-Based Blending", &tc.HeightBlend))
+                outSceneDirty = true;
+            QtUi::SetItemTooltip("Where layers meet, the one whose height map is higher wins, so sand "
+                                 "fills the gaps between rocks instead of cross-fading with them.");
+            QtUi::BeginDisabled(!tc.HeightBlend);
+            if (QtUi::SliderFloat("Blend Sharpness", &tc.HeightBlendSharpness, 0.0f, 1.0f, "%.2f"))
+                outSceneDirty = true;
+            QtUi::EndDisabled();
         }
 
         return needsRebuild;
@@ -3382,14 +3964,18 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
         return;
     }
 
-    Entity* terrain = nullptr;
+    // Edit the selected terrain; fall back to the first one in the level.
+    Entity* terrain = (selectedEntity != nullptr
+                       && selectedEntity->HasTerrainComponent()
+                       && selectedEntity->Terrain.has_value())
+        ? selectedEntity
+        : nullptr;
     for (Entity& e : mEntities)
     {
-        if (e.HasTerrainComponent() && e.Terrain.has_value())
-        {
-            terrain = &e;
+        if (terrain != nullptr)
             break;
-        }
+        if (e.HasTerrainComponent() && e.Terrain.has_value())
+            terrain = &e;
     }
 
     if (terrain == nullptr)
@@ -3401,17 +3987,8 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
         QtUi::Text("Terrain: %s", terrain->Name.c_str());
         QtUi::SeparatorText("Brush");
         TerrainComponent& tc = *terrain->Terrain;
-        const char* brushNames[] = { "Raise", "Lower", "Flatten", "Smooth", "Paint" };
-        int brushTypeIndex = static_cast<int>(tc.Brush);
-        if (QtUi::Combo("Type", &brushTypeIndex, brushNames, std::size(brushNames)))
-        {
-            tc.Brush = static_cast<TerrainComponent::BrushType>(brushTypeIndex);
+        if (DrawTerrainBrushControls(tc))
             MarkSceneChanged();
-        }
-        if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,   0.1f, 0.1f, 1000.0f)) MarkSceneChanged();
-        if (QtUi::DragFloat("Strength (m/s, raise/lower)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) MarkSceneChanged();
-        if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) MarkSceneChanged();
-        if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) MarkSceneChanged();
 
         QtUi::Separator();
         bool brushActive = mTerrainBrushModeActive;
@@ -3419,25 +3996,9 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
         {
             mTerrainBrushModeActive = !brushActive;
         }
-        QtUi::SameLine();
-        if (QtUi::Button("Paint at Selected"))
-        {
-            if (mSelectedEntityIndex >= 0
-                && mSelectedEntityIndex < static_cast<int>(mEntities.size())
-                && mEntities[mSelectedEntityIndex].HasTerrainComponent())
-            {
-                Entity& e = mEntities[mSelectedEntityIndex];
-                e.Transform.Position; // (no-op, just to silence unused warnings)
-            }
-        }
-        if (selectedEntity && selectedEntity->HasTerrainComponent())
-        {
-            if (QtUi::Button("Apply Brush at Last Pick"))
-            {
-                // Will be triggered by a viewport click; the message below
-                // just shows the last status from the renderer.
-            }
-        }
+        QtUi::TextDisabled(brushActive
+            ? "Hold the left mouse button over the terrain to sculpt."
+            : "Brush mode takes over left-click in the viewport.");
 
         if (tc.Brush == TerrainComponent::BrushType::Paint && tc.PaintLayers.empty())
         {
@@ -3449,14 +4010,11 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
         // Material paint-layer editor.  A layer add/remove requires a mesh
         // rebuild because the splat weights are baked into the vertex colour.
         bool layerSceneDirty = false;
-        if (DrawTerrainLayerControls(tc, DX12Context_GetWindowHandle(), layerSceneDirty))
+        const std::size_t terrainIndex = static_cast<std::size_t>(terrain - mEntities.data());
+        if (DrawTerrainLayerControls(tc, DX12Context_GetWindowHandle(), mTerrainRenderer, terrainIndex, layerSceneDirty))
         {
             if (mTerrainRenderer != nullptr)
-            {
-                const std::size_t terrainIndex =
-                    static_cast<std::size_t>(terrain - mEntities.data());
                 mTerrainRenderer->MarkTerrainDirty(terrainIndex);
-            }
         }
         if (layerSceneDirty)
             MarkSceneChanged();
@@ -3475,7 +4033,7 @@ void Editor::DrawTerrainToolWindow(Entity* selectedEntity)
 // DrawComponentsPanel
 // ---------------------------------------------------------------------------
 
-void Editor::DrawLightStyleControls(
+bool Editor::DrawLightStyleControls(
     const char*   idSuffix,
     LightStyleId& style,
     float&        styleSpeed,
@@ -3483,6 +4041,7 @@ void Editor::DrawLightStyleControls(
     float&        stylePhaseOffset,
     std::string&  customStylePattern)
 {
+    bool changed = false;
     QtUi::PushID(idSuffix);
 
     const char* styleNames[kLightStyleCount];
@@ -3499,7 +4058,7 @@ void Editor::DrawLightStyleControls(
         // want 10 steps per second; the continuous fire curves want about 1, and
         // carrying 10 over to them turns a flame into a buzzing lamp.
         styleSpeed = LightStyles::GetStyleInfo(style).DefaultSpeed;
-        MarkSceneChanged();
+        changed = true;
     }
     QtUi::SetItemTooltip(
         "Fire and Torch are continuous noise curves; the rest are the classic\n"
@@ -3511,19 +4070,19 @@ void Editor::DrawLightStyleControls(
     if (QtUi::DragFloat("Speed", &styleSpeed, 0.05f, 0.0f, 60.0f, "%.2f"))
     {
         styleSpeed = (std::max)(styleSpeed, 0.0f);
-        MarkSceneChanged();
+        changed = true;
     }
     QtUi::SetItemTooltip("Pattern steps per second, or the noise rate for Fire and Torch.");
 
     if (QtUi::SliderFloat("Amount", &styleAmplitude, 0.0f, 2.0f, "%.2f"))
     {
         styleAmplitude = (std::max)(styleAmplitude, 0.0f);
-        MarkSceneChanged();
+        changed = true;
     }
     QtUi::SetItemTooltip("0 holds the light constant, 1 applies the style in full.");
 
     if (QtUi::DragFloat("Phase Offset", &stylePhaseOffset, 0.05f, -60.0f, 60.0f, "%.2f s"))
-        MarkSceneChanged();
+        changed = true;
     QtUi::SetItemTooltip("Offsets this light into the curve, so two torches in one room do not flicker in lockstep.");
 
     if (style == LightStyleId::Custom)
@@ -3533,13 +4092,288 @@ void Editor::DrawLightStyleControls(
         if (QtUi::InputText("Pattern", patternBuffer, std::size(patternBuffer)))
         {
             customStylePattern = patternBuffer;
-            MarkSceneChanged();
+            changed = true;
         }
         QtUi::SetItemTooltip("Letters 'a' (black) to 'z', where 'm' is the light's authored brightness.");
     }
 
     QtUi::EndDisabled();
     QtUi::PopID();
+    return changed;
+}
+
+// Every setting of a particle effect. Shared by the Particle Editor, where a change
+// dirties the .particle file being edited, and by the inline settings of a legacy
+// emitter in the Properties panel, where it dirties the level - so this only reports
+// the change and leaves the marking to the caller.
+bool Editor::DrawParticleEffectControls(ParticleSystemComponent& ps)
+{
+    bool changed = false;
+
+    QtUi::SeparatorText("Material");
+    QtUi::TextWrapped("Material: %s", ps.MaterialPath.empty() ? "(none)" : ps.MaterialPath.c_str());
+    QtUi::TextDisabled("Base Color is the sprite, Emissive Color the glow. Set \"Particle Material\" in the Material Editor.");
+    if (QtUi::Button("Select...##psmat"))
+    {
+        std::string updatedMaterialPath = ps.MaterialPath;
+        if (PromptForDataFile(
+                DX12Context_GetWindowHandle(),
+                "Select Particle Material",
+                "Material\0*.material;*.json\0All Files\0*.*\0",
+                updatedMaterialPath))
+        {
+            ps.MaterialPath = updatedMaterialPath;
+            changed = true;
+        }
+    }
+    QtUi::SameLine();
+    if (QtUi::Button("Clear##psmat"))
+    {
+        ps.MaterialPath.clear();
+        changed = true;
+    }
+
+    QtUi::SeparatorText("Emission");
+    if (QtUi::Checkbox("Burst##ps", &ps.Burst))
+        changed = true;
+    QtUi::SetItemTooltip("Off: emit continuously at Spawn Rate. On: emit Burst Count particles every Burst Interval.");
+
+    if (ps.Burst)
+    {
+        if (QtUi::DragInt("Burst Count##ps", &ps.BurstCount, 1.0f, 0, 4096))
+            changed = true;
+        if (QtUi::DragFloat("Burst Interval##ps", &ps.BurstInterval, 0.01f, 0.01f, 60.0f, "%.2f s"))
+            changed = true;
+    }
+    else
+    {
+        if (QtUi::DragFloat("Spawn Rate##ps", &ps.SpawnRate, 1.0f, 0.0f, 20000.0f, "%.0f /s"))
+            changed = true;
+    }
+
+    if (QtUi::DragFloat("Lifetime##ps", &ps.Lifetime, 0.01f, 0.01f, 60.0f, "%.2f s"))
+        changed = true;
+    if (QtUi::SliderFloat("Lifetime Variance##ps", &ps.LifetimeVariance, 0.0f, 0.95f, "%.2f"))
+        changed = true;
+    if (QtUi::DragInt("Max Particles##ps", &ps.MaxParticles, 16.0f, 1, kParticleMaxPerSystem))
+        changed = true;
+    QtUi::SetItemTooltip("Ceiling on the buffer. The system only allocates what Spawn Rate x Lifetime actually needs.");
+    if (QtUi::Checkbox("Prewarm##ps", &ps.Prewarm))
+        changed = true;
+    QtUi::SetItemTooltip("Start already at steady state instead of building up from empty on load.");
+
+    QtUi::SeparatorText("Shape");
+    const char* shapeNames[] = { "Point", "Sphere", "Box", "Cone", "Disc", "Edge" };
+    int shapeIndex = static_cast<int>(ps.Shape);
+    if (QtUi::Combo("Shape##ps", &shapeIndex, shapeNames, static_cast<int>(std::size(shapeNames))))
+    {
+        ps.Shape = static_cast<ParticleEmitterShape>(shapeIndex);
+        changed = true;
+    }
+    QtUi::TextDisabled("The emitter faces the entity's local +Z (world up when unrotated).");
+
+    if (ps.Shape == ParticleEmitterShape::Box)
+    {
+        float extents[3] = { ps.ShapeExtents.x, ps.ShapeExtents.y, ps.ShapeExtents.z };
+        if (QtUi::DragFloat3("Extents##ps", extents, 0.01f, 0.0f, 100.0f))
+        {
+            ps.ShapeExtents = { extents[0], extents[1], extents[2] };
+            changed = true;
+        }
+    }
+    else if (ps.Shape != ParticleEmitterShape::Point)
+    {
+        if (QtUi::DragFloat("Radius##ps", &ps.ShapeRadius, 0.01f, 0.0f, 100.0f, "%.3f m"))
+            changed = true;
+    }
+
+    if (ps.Shape == ParticleEmitterShape::Cone)
+    {
+        if (QtUi::SliderFloat("Cone Angle##ps", &ps.ConeAngleDegrees, 0.0f, 180.0f, "%.1f deg"))
+            changed = true;
+    }
+
+    if (ps.Shape == ParticleEmitterShape::Sphere ||
+        ps.Shape == ParticleEmitterShape::Cone ||
+        ps.Shape == ParticleEmitterShape::Disc)
+    {
+        if (QtUi::SliderFloat("Shell Bias##ps", &ps.ShapeShellBias, 0.0f, 1.0f, "%.2f"))
+            changed = true;
+        QtUi::SetItemTooltip("0 fills the shape, 1 puts every particle on its surface. A ring of flame around a log is a Disc at 1.");
+    }
+
+    QtUi::SeparatorText("Motion");
+    if (QtUi::DragFloat("Initial Speed##ps", &ps.InitialSpeed, 0.01f, 0.0f, 100.0f, "%.2f m/s"))
+        changed = true;
+    if (QtUi::SliderFloat("Speed Variance##ps", &ps.SpeedVariance, 0.0f, 1.0f, "%.2f"))
+        changed = true;
+
+    float acceleration[3] = { ps.Acceleration.x, ps.Acceleration.y, ps.Acceleration.z };
+    if (QtUi::DragFloat3("Acceleration##ps", acceleration, 0.05f, -50.0f, 50.0f))
+    {
+        ps.Acceleration = { acceleration[0], acceleration[1], acceleration[2] };
+        changed = true;
+    }
+    QtUi::SetItemTooltip("Positive Z for fire (hot gas rising); -9.8 Z for debris that falls.");
+
+    if (QtUi::DragFloat("Drag##ps", &ps.Drag, 0.01f, 0.0f, 20.0f, "%.2f"))
+        changed = true;
+    if (QtUi::SliderFloat("Wind Influence##ps", &ps.WindInfluence, 0.0f, 4.0f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("How strongly the scene-wide wind pushes this system.");
+
+    if (QtUi::DragFloat("Turbulence##ps", &ps.TurbulenceStrength, 0.01f, 0.0f, 20.0f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("What turns a cone of sprites into something that licks and curls. The main knob for fire.");
+    if (QtUi::DragFloat("Turbulence Scale##ps", &ps.TurbulenceFrequency, 0.01f, 0.01f, 10.0f, "%.2f"))
+        changed = true;
+    if (QtUi::DragFloat("Turbulence Speed##ps", &ps.TurbulenceSpeed, 0.01f, 0.0f, 10.0f, "%.2f"))
+        changed = true;
+    if (QtUi::DragFloat("Vortex##ps", &ps.VortexStrength, 0.01f, -20.0f, 20.0f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("Swirl about the emitter's up axis, for a flame that twists as it rises.");
+
+    QtUi::SeparatorText("Size and Rotation");
+    if (QtUi::DragFloat("Start Size##ps", &ps.StartSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
+        changed = true;
+    if (QtUi::DragFloat("End Size##ps", &ps.EndSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
+        changed = true;
+    if (QtUi::SliderFloat("Size Variance##ps", &ps.SizeVariance, 0.0f, 1.0f, "%.2f"))
+        changed = true;
+    if (QtUi::DragFloat("Rotation Speed##ps", &ps.RotationSpeedDegrees, 1.0f, -720.0f, 720.0f, "%.0f deg/s"))
+        changed = true;
+    if (QtUi::SliderFloat("Rotation Variance##ps", &ps.RotationSpeedVariance, 0.0f, 1.0f, "%.2f"))
+        changed = true;
+    if (QtUi::SliderFloat("Random Start Rotation##ps", &ps.RandomStartRotation, 0.0f, 1.0f, "%.2f"))
+        changed = true;
+
+    QtUi::SeparatorText("Color Over Life");
+    float colorStart[4] = { ps.ColorStart.x, ps.ColorStart.y, ps.ColorStart.z, ps.ColorStart.w };
+    if (QtUi::ColorEdit4("Start##pscol", colorStart))
+    {
+        ps.ColorStart = { colorStart[0], colorStart[1], colorStart[2], colorStart[3] };
+        changed = true;
+    }
+    float colorMid[4] = { ps.ColorMid.x, ps.ColorMid.y, ps.ColorMid.z, ps.ColorMid.w };
+    if (QtUi::ColorEdit4("Mid##pscol", colorMid))
+    {
+        ps.ColorMid = { colorMid[0], colorMid[1], colorMid[2], colorMid[3] };
+        changed = true;
+    }
+    float colorEnd[4] = { ps.ColorEnd.x, ps.ColorEnd.y, ps.ColorEnd.z, ps.ColorEnd.w };
+    if (QtUi::ColorEdit4("End##pscol", colorEnd))
+    {
+        ps.ColorEnd = { colorEnd[0], colorEnd[1], colorEnd[2], colorEnd[3] };
+        changed = true;
+    }
+    if (QtUi::SliderFloat("Mid Point##pscol", &ps.ColorMidPoint, 0.01f, 0.99f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("Where the middle key sits along the particle's life. Low values hold a flame's hot core longer.");
+    if (QtUi::DragFloat("Emissive Intensity##ps", &ps.EmissiveIntensity, 0.05f, 0.0f, 200.0f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("Multiplies the material's emissive colour. The main brightness control for fire.");
+
+    QtUi::SeparatorText("Flipbook");
+    QtUi::TextDisabled("Leave at 1x1 to inherit the material's own atlas layout.");
+    if (QtUi::SliderInt("Columns##ps", &ps.FlipbookColumns, 1, 16))
+        changed = true;
+    if (QtUi::SliderInt("Rows##ps", &ps.FlipbookRows, 1, 16))
+        changed = true;
+    if (QtUi::DragFloat("Frames Per Second##ps", &ps.FlipbookFps, 0.5f, 0.0f, 120.0f, "%.1f"))
+        changed = true;
+    QtUi::SetItemTooltip("0 spreads the whole atlas across the particle's lifetime, which is what a hand-authored flame sheet wants.");
+    if (QtUi::Checkbox("Blend Frames##ps", &ps.FlipbookBlendFrames))
+        changed = true;
+    if (QtUi::Checkbox("Random Start Frame##ps", &ps.FlipbookRandomStartFrame))
+        changed = true;
+
+    QtUi::SeparatorText("Rendering");
+    const char* facingNames[] = { "Billboard", "Velocity Stretched", "Horizontal", "Vertical" };
+    int facingIndex = static_cast<int>(ps.Facing);
+    if (QtUi::Combo("Facing##ps", &facingIndex, facingNames, static_cast<int>(std::size(facingNames))))
+    {
+        ps.Facing = static_cast<ParticleFacingMode>(facingIndex);
+        changed = true;
+    }
+    if (ps.Facing == ParticleFacingMode::VelocityStretched)
+    {
+        if (QtUi::DragFloat("Stretch##ps", &ps.StretchFactor, 0.005f, 0.0f, 4.0f, "%.3f"))
+            changed = true;
+    }
+    if (QtUi::Checkbox("Soft Particles##ps", &ps.SoftParticles))
+        changed = true;
+    QtUi::SetItemTooltip("Fades sprites where they meet geometry, so a flame does not cut a hard line into the floor.");
+    if (ps.SoftParticles)
+    {
+        if (QtUi::DragFloat("Soft Fade##ps", &ps.SoftFadeDistance, 0.01f, 0.001f, 10.0f, "%.3f m"))
+            changed = true;
+    }
+    if (QtUi::DragFloat("Cull Distance##ps", &ps.CullDistance, 1.0f, 1.0f, 10000.0f, "%.0f m"))
+        changed = true;
+
+    QtUi::SeparatorText("Light and Global Illumination");
+    QtUi::TextWrapped(
+        "An emissive system registers an analytic light standing in for the flame. "
+        "That one light drives the deferred shading, the ray-traced GI bounce and "
+        "the volumetric fog together.");
+    if (QtUi::Checkbox("Emit Light##ps", &ps.EmitLight))
+        changed = true;
+
+    QtUi::BeginDisabled(!ps.EmitLight);
+    if (QtUi::DragFloat("Intensity (lm)##ps", &ps.LightIntensityLumens, 10.0f, 0.0f, 100000.0f, "%.0f"))
+        changed = true;
+    if (QtUi::DragFloat("Light Radius##ps", &ps.LightRadius, 0.1f, 0.001f, 1000.0f, "%.2f m"))
+        changed = true;
+    if (QtUi::DragFloat("Height Offset##ps", &ps.LightHeightOffset, 0.01f, -50.0f, 50.0f, "%.2f m"))
+        changed = true;
+    QtUi::SetItemTooltip("A fire's apparent light source sits inside the flame, not at its base.");
+    if (QtUi::Checkbox("Color From Particles##ps", &ps.UseParticleColorForLight))
+        changed = true;
+    QtUi::SetItemTooltip("Take the light's colour from the particle gradient, so recolouring the fire recolours the light.");
+    if (!ps.UseParticleColorForLight)
+    {
+        float lightColor[3] = { ps.LightColorR, ps.LightColorG, ps.LightColorB };
+        if (QtUi::ColorEdit3("Light Color##ps", lightColor))
+        {
+            ps.LightColorR = lightColor[0];
+            ps.LightColorG = lightColor[1];
+            ps.LightColorB = lightColor[2];
+            changed = true;
+        }
+    }
+    if (QtUi::SliderFloat("GI Contribution##ps", &ps.GiContribution, 0.0f, 4.0f, "%.2f"))
+        changed = true;
+    QtUi::SetItemTooltip("Scales the indirect bounce only. Lower it when a fire is washing out a small room's GI.");
+    if (QtUi::Checkbox("Cast Shadows##pslight", &ps.LightCastShadows))
+        changed = true;
+    if (QtUi::Checkbox("Affect Volumetric Fog##pslight", &ps.LightAffectVolumetricFog))
+        changed = true;
+    QtUi::BeginDisabled(!ps.LightAffectVolumetricFog);
+    if (QtUi::SliderFloat("Volumetric Fog Intensity##pslight", &ps.LightVolumetricFogIntensity, 0.0f, 32.0f, "%.2f"))
+    {
+        ps.LightVolumetricFogIntensity = (std::max)(ps.LightVolumetricFogIntensity, 0.0f);
+        changed = true;
+    }
+    QtUi::SetItemTooltip(
+        "How strongly the light glows in volumetric fog. Scales the fog only;\n"
+        "the light on surfaces is unchanged. 0 removes it from the fog entirely.");
+    QtUi::EndDisabled();
+
+    QtUi::SeparatorText("Flicker");
+    if (DrawLightStyleControls(
+        "pslightstyle",
+        ps.LightStyle,
+        ps.LightStyleSpeed,
+        ps.LightStyleAmplitude,
+        ps.LightStylePhaseOffset,
+        ps.LightCustomStylePattern))
+        changed = true;
+    if (QtUi::Checkbox("Flicker The Sprites Too##ps", &ps.StyleDrivesParticleEmissive))
+        changed = true;
+    QtUi::SetItemTooltip("Applies the same curve to the sprites' brightness, so the flame dims with the light it casts.");
+    QtUi::EndDisabled();
+
+    return changed;
 }
 
 void Editor::DrawComponentsPanel()
@@ -3739,6 +4573,17 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::ColorEdit3("Color##pl", col)) { pl.ColorR = col[0]; pl.ColorG = col[1]; pl.ColorB = col[2]; MarkSceneChanged(); }
             if (QtUi::Checkbox("Cast Shadows##pl",          &pl.CastShadows)) MarkSceneChanged();
             if (QtUi::Checkbox("Affect Volumetric Fog##pl", &pl.AffectVolumetricFog)) MarkSceneChanged();
+            QtUi::BeginDisabled(!pl.AffectVolumetricFog);
+            if (QtUi::SliderFloat("Volumetric Fog Intensity##pl", &pl.VolumetricFogIntensity, 0.0f, 32.0f, "%.2f"))
+            {
+                pl.VolumetricFogIntensity = (std::max)(pl.VolumetricFogIntensity, 0.0f);
+                MarkSceneChanged();
+            }
+            QtUi::SetItemTooltip(
+                "How strongly this light scatters in volumetric fog - the beam or halo\n"
+                "it shows in haze. Scales the fog only; surfaces are lit the same.\n"
+                "0 removes the light from the fog entirely.");
+            QtUi::EndDisabled();
             if (QtUi::Checkbox("Affect Global Illumination##pl", &pl.AffectGlobalIllumination)) MarkSceneChanged();
             QtUi::SetItemTooltip(
                 "Whether this light contributes to the indirect bounce - ray-traced GI,\n"
@@ -3789,13 +4634,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
 
             QtUi::SeparatorText("Light Style");
-            DrawLightStyleControls(
+            if (DrawLightStyleControls(
                 "pl",
                 pl.Style,
                 pl.StyleSpeed,
                 pl.StyleAmplitude,
                 pl.StylePhaseOffset,
-                pl.CustomStylePattern);
+                pl.CustomStylePattern))
+                MarkSceneChanged();
         }
     }
 
@@ -3835,7 +4681,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::Button("Select Material"))
             {
                 std::string updatedMaterialPath = meshComponent.MaterialPath;
-                if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Material", "Material JSON\0*.json\0All Files\0*.*\0", updatedMaterialPath))
+                if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Material", "Material\0*.material;*.json\0All Files\0*.*\0", updatedMaterialPath))
                 {
                     meshComponent.MaterialPath = updatedMaterialPath;
                     MarkSceneChanged();
@@ -3879,6 +4725,54 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (meshComponent.MeshAsset)
             {
                 QtUi::Text("Available LODs: %zu", meshComponent.MeshAsset->GetLodCount());
+            }
+
+            QtUi::Spacing();
+            if (QtUi::Checkbox("Virtualized Geometry", &meshComponent.VirtualizedGeometry))
+            {
+                MarkSceneChanged();
+            }
+            if (QtUi::IsItemHovered())
+            {
+                QtUi::SetTooltip("%s",
+                    "Draw this mesh as a hierarchy of small clusters whose detail follows their size on screen, "
+                    "cluster by cluster, instead of switching between the LODs above. For dense meshes such as "
+                    "scans and sculpts. The hierarchy is built in the background the first time and cached.");
+            }
+            if (meshComponent.VirtualizedGeometry && meshComponent.MeshAsset && mSceneRenderer)
+            {
+                const VirtualGeometryRenderer& virtualGeometry = mSceneRenderer->GetVirtualGeometryRenderer();
+                QtUi::TextDisabled("%s", virtualGeometry.DescribeAsset(meshComponent.MeshAsset.get()).c_str());
+
+                const VirtualGeometryRenderer::Statistics& stats = virtualGeometry.GetStatistics();
+                QtUi::TextDisabled("Scene: %u instances, %u clusters (%u triangles) on screen, %u in shadows",
+                    stats.Instances, stats.VisibleClusters, stats.VisibleTriangles, stats.ShadowClusters);
+                QtUi::TextDisabled("%s rasterisation, occlusion culling %s (%u clusters recovered), pools %.1f MB",
+                    stats.MeshShaders ? "Mesh shader" : "Vertex shader",
+                    stats.Occlusion ? "on" : "off",
+                    stats.OcclusionRecovered,
+                    static_cast<double>(stats.PoolBytes) / (1024.0 * 1024.0));
+                if (stats.OverflowFlags != 0)
+                    QtUi::TextWrapped("A virtualized-geometry GPU budget ran out this frame; some clusters were dropped.");
+
+                // Scene-wide switches, the same variables as the vg.* console cvars.
+                VirtualGeometrySettings& vgSettings = mSceneRenderer->GetVirtualGeometryRenderer().GetSettings();
+                const char* debugViews[] = { "Off", "Clusters", "Instances", "LOD (DAG level)" };
+                QtUi::Combo("VG Debug View", &vgSettings.DebugView, debugViews, std::size(debugViews));
+                if (QtUi::IsItemHovered())
+                    QtUi::SetTooltip("%s", "Colour virtualized geometry by cluster, by instance, or by DAG level: "
+                        "green is original triangles, through yellow and red to magenta for the coarsest levels.");
+                QtUi::Checkbox("VG Enabled (off = ordinary LODs)", &vgSettings.Enabled);
+                QtUi::DragFloat("VG Error Threshold (px)", &vgSettings.ErrorThresholdPixels, 0.05f, 0.1f, 16.0f, "%.2f");
+                QtUi::Checkbox("VG Occlusion Culling", &vgSettings.OcclusionCulling);
+                QtUi::Checkbox("VG Backface Cluster Culling", &vgSettings.BackfaceCulling);
+                QtUi::Checkbox("VG Shadows", &vgSettings.Shadows);
+                if (virtualGeometry.IsMeshShaderSupported())
+                    QtUi::Checkbox("VG Mesh Shaders", &vgSettings.MeshShaders);
+                QtUi::Checkbox("VG Freeze Culling", &vgSettings.FreezeCulling);
+                if (QtUi::IsItemHovered())
+                    QtUi::SetTooltip("%s", "Keep culling and LOD selection from the camera as it is now, "
+                        "then fly around to inspect what was selected.");
             }
         }
     }
@@ -4168,6 +5062,19 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                         layer.MeshPath = meshBuf;
                         MarkSceneChanged();
                     }
+                    if (QtUi::Button("Load Mesh..."))
+                    {
+                        std::string updatedMeshPath = layer.MeshPath;
+                        if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Vegetation Mesh", "Ptero Geometry\0*.ptero\0All Files\0*.*\0", updatedMeshPath))
+                        {
+                            layer.MeshPath = updatedMeshPath;
+                            // Same courtesy as a Geometry entity: a mesh that ships with a
+                            // material gets it, unless the layer already has one chosen.
+                            if (layer.MaterialPath.empty())
+                                layer.MaterialPath = FindDefaultMaterialPathForMesh(layer.MeshPath);
+                            MarkSceneChanged();
+                        }
+                    }
 
                     char matBuf[512];
                     strncpy_s(matBuf, layer.MaterialPath.c_str(), sizeof(matBuf) - 1);
@@ -4183,10 +5090,60 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                             "cards clip to their texture instead of drawing as\n"
                             "opaque quads.");
                     }
+                    if (QtUi::Button("Load Material..."))
+                    {
+                        std::string updatedMaterialPath = layer.MaterialPath;
+                        if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Vegetation Material", "Material\0*.material;*.json\0All Files\0*.*\0", updatedMaterialPath))
+                        {
+                            layer.MaterialPath = updatedMaterialPath;
+                            MarkSceneChanged();
+                        }
+                    }
 
                     QtUi::SeparatorText("Density");
-                    if (QtUi::DragFloat("Per m2", &layer.Density, 0.01f, 0.0f, 200.0f, "%.3f"))
+                    // A bounded drag is a 1000-step slider in QtUi, so the range sets the
+                    // finest step. 0..10 steps by 0.01: trees want 0.01-0.1 per m2, grass a
+                    // few per m2. It was 0..200, whose finest step was already 0.2 trees per
+                    // square metre - a solid wall of trees.
+                    if (QtUi::DragFloat("Per m2", &layer.Density, 0.01f, 0.0f, 10.0f, "%.3f"))
                         MarkSceneChanged();
+                    if (QtUi::IsItemHovered())
+                        QtUi::SetTooltip("Candidates per square metre. Trees: about 0.01-0.1. Grass and ground cover: 1-10.");
+
+                    // The scatter walks the area row by row and gives up once it has
+                    // considered 8x the instance cap, so too dense a layer does not merely
+                    // thin out - it fills a strip along one edge and leaves the rest bare.
+                    {
+                        float footprint = 0.0f;
+                        switch (va.Shape)
+                        {
+                        case VegetationAreaShape::Box:
+                            footprint = 4.0f * va.ExtentX * va.ExtentY;
+                            break;
+                        case VegetationAreaShape::Sphere:
+                            footprint = DirectX::XM_PI * va.ExtentX * va.ExtentX;
+                            break;
+                        case VegetationAreaShape::Polygon:
+                            for (std::size_t p = 0; p < va.PolygonPoints.size(); ++p)
+                            {
+                                const DirectX::XMFLOAT2& a = va.PolygonPoints[p];
+                                const DirectX::XMFLOAT2& b = va.PolygonPoints[(p + 1) % va.PolygonPoints.size()];
+                                footprint += a.x * b.y - b.x * a.y;
+                            }
+                            footprint = std::abs(footprint) * 0.5f;
+                            break;
+                        }
+
+                        const double estimated = static_cast<double>(layer.Density) * footprint;
+                        if (layer.Enabled && estimated > static_cast<double>(kVegetationMaxInstances))
+                        {
+                            QtUi::TextColored(UiVec4(1.0f, 0.62f, 0.2f, 1.0f),
+                                "~%.0f instances wanted, the limit is %d: only part of the area will fill. "
+                                "Lower the density to %.4f or less.",
+                                estimated, kVegetationMaxInstances,
+                                footprint > 0.0f ? kVegetationMaxInstances / footprint : 0.0f);
+                        }
+                    }
                     if (QtUi::DragFloat("Spacing radius", &layer.CollisionRadius, 0.01f, 0.0f, 50.0f))
                         MarkSceneChanged();
                     if (QtUi::IsItemHovered())
@@ -4366,267 +5323,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
     }
 
     if (selectedEntity->ParticleSystem.has_value())
-    {
-        if (QtUi::CollapsingHeader("Particle System", QtUiTreeNodeFlags_DefaultOpen))
-        {
-            auto& ps = *selectedEntity->ParticleSystem;
-
-            if (QtUi::Checkbox("Enabled##ps", &ps.Enabled))
-                MarkSceneChanged();
-
-            QtUi::SeparatorText("Material");
-            QtUi::TextWrapped("Material: %s", ps.MaterialPath.empty() ? "(none)" : ps.MaterialPath.c_str());
-            QtUi::TextDisabled("Base Color is the sprite, Emissive Color the glow. Set \"Particle Material\" in the Material Editor.");
-            if (QtUi::Button("Select...##psmat"))
-            {
-                std::string updatedMaterialPath = ps.MaterialPath;
-                if (PromptForDataFile(
-                        DX12Context_GetWindowHandle(),
-                        "Select Particle Material",
-                        "Material JSON\0*.json\0All Files\0*.*\0",
-                        updatedMaterialPath))
-                {
-                    ps.MaterialPath = updatedMaterialPath;
-                    MarkSceneChanged();
-                }
-            }
-            QtUi::SameLine();
-            if (QtUi::Button("Clear##psmat"))
-            {
-                ps.MaterialPath.clear();
-                MarkSceneChanged();
-            }
-
-            QtUi::SeparatorText("Emission");
-            if (QtUi::Checkbox("Burst##ps", &ps.Burst))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Off: emit continuously at Spawn Rate. On: emit Burst Count particles every Burst Interval.");
-
-            if (ps.Burst)
-            {
-                if (QtUi::DragInt("Burst Count##ps", &ps.BurstCount, 1.0f, 0, 4096))
-                    MarkSceneChanged();
-                if (QtUi::DragFloat("Burst Interval##ps", &ps.BurstInterval, 0.01f, 0.01f, 60.0f, "%.2f s"))
-                    MarkSceneChanged();
-            }
-            else
-            {
-                if (QtUi::DragFloat("Spawn Rate##ps", &ps.SpawnRate, 1.0f, 0.0f, 20000.0f, "%.0f /s"))
-                    MarkSceneChanged();
-            }
-
-            if (QtUi::DragFloat("Lifetime##ps", &ps.Lifetime, 0.01f, 0.01f, 60.0f, "%.2f s"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Lifetime Variance##ps", &ps.LifetimeVariance, 0.0f, 0.95f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::DragInt("Max Particles##ps", &ps.MaxParticles, 16.0f, 1, kParticleMaxPerSystem))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Ceiling on the buffer. The system only allocates what Spawn Rate x Lifetime actually needs.");
-            if (QtUi::Checkbox("Prewarm##ps", &ps.Prewarm))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Start already at steady state instead of building up from empty on load.");
-
-            QtUi::SeparatorText("Shape");
-            const char* shapeNames[] = { "Point", "Sphere", "Box", "Cone", "Disc", "Edge" };
-            int shapeIndex = static_cast<int>(ps.Shape);
-            if (QtUi::Combo("Shape##ps", &shapeIndex, shapeNames, static_cast<int>(std::size(shapeNames))))
-            {
-                ps.Shape = static_cast<ParticleEmitterShape>(shapeIndex);
-                MarkSceneChanged();
-            }
-            QtUi::TextDisabled("The emitter faces the entity's local +Z (world up when unrotated).");
-
-            if (ps.Shape == ParticleEmitterShape::Box)
-            {
-                float extents[3] = { ps.ShapeExtents.x, ps.ShapeExtents.y, ps.ShapeExtents.z };
-                if (QtUi::DragFloat3("Extents##ps", extents, 0.01f, 0.0f, 100.0f))
-                {
-                    ps.ShapeExtents = { extents[0], extents[1], extents[2] };
-                    MarkSceneChanged();
-                }
-            }
-            else if (ps.Shape != ParticleEmitterShape::Point)
-            {
-                if (QtUi::DragFloat("Radius##ps", &ps.ShapeRadius, 0.01f, 0.0f, 100.0f, "%.3f m"))
-                    MarkSceneChanged();
-            }
-
-            if (ps.Shape == ParticleEmitterShape::Cone)
-            {
-                if (QtUi::SliderFloat("Cone Angle##ps", &ps.ConeAngleDegrees, 0.0f, 180.0f, "%.1f deg"))
-                    MarkSceneChanged();
-            }
-
-            if (ps.Shape == ParticleEmitterShape::Sphere ||
-                ps.Shape == ParticleEmitterShape::Cone ||
-                ps.Shape == ParticleEmitterShape::Disc)
-            {
-                if (QtUi::SliderFloat("Shell Bias##ps", &ps.ShapeShellBias, 0.0f, 1.0f, "%.2f"))
-                    MarkSceneChanged();
-                QtUi::SetItemTooltip("0 fills the shape, 1 puts every particle on its surface. A ring of flame around a log is a Disc at 1.");
-            }
-
-            QtUi::SeparatorText("Motion");
-            if (QtUi::DragFloat("Initial Speed##ps", &ps.InitialSpeed, 0.01f, 0.0f, 100.0f, "%.2f m/s"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Speed Variance##ps", &ps.SpeedVariance, 0.0f, 1.0f, "%.2f"))
-                MarkSceneChanged();
-
-            float acceleration[3] = { ps.Acceleration.x, ps.Acceleration.y, ps.Acceleration.z };
-            if (QtUi::DragFloat3("Acceleration##ps", acceleration, 0.05f, -50.0f, 50.0f))
-            {
-                ps.Acceleration = { acceleration[0], acceleration[1], acceleration[2] };
-                MarkSceneChanged();
-            }
-            QtUi::SetItemTooltip("Positive Z for fire (hot gas rising); -9.8 Z for debris that falls.");
-
-            if (QtUi::DragFloat("Drag##ps", &ps.Drag, 0.01f, 0.0f, 20.0f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Wind Influence##ps", &ps.WindInfluence, 0.0f, 4.0f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("How strongly the scene-wide wind pushes this system.");
-
-            if (QtUi::DragFloat("Turbulence##ps", &ps.TurbulenceStrength, 0.01f, 0.0f, 20.0f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("What turns a cone of sprites into something that licks and curls. The main knob for fire.");
-            if (QtUi::DragFloat("Turbulence Scale##ps", &ps.TurbulenceFrequency, 0.01f, 0.01f, 10.0f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Turbulence Speed##ps", &ps.TurbulenceSpeed, 0.01f, 0.0f, 10.0f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Vortex##ps", &ps.VortexStrength, 0.01f, -20.0f, 20.0f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Swirl about the emitter's up axis, for a flame that twists as it rises.");
-
-            QtUi::SeparatorText("Size and Rotation");
-            if (QtUi::DragFloat("Start Size##ps", &ps.StartSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("End Size##ps", &ps.EndSize, 0.005f, 0.0f, 50.0f, "%.3f m"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Size Variance##ps", &ps.SizeVariance, 0.0f, 1.0f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Rotation Speed##ps", &ps.RotationSpeedDegrees, 1.0f, -720.0f, 720.0f, "%.0f deg/s"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Rotation Variance##ps", &ps.RotationSpeedVariance, 0.0f, 1.0f, "%.2f"))
-                MarkSceneChanged();
-            if (QtUi::SliderFloat("Random Start Rotation##ps", &ps.RandomStartRotation, 0.0f, 1.0f, "%.2f"))
-                MarkSceneChanged();
-
-            QtUi::SeparatorText("Color Over Life");
-            float colorStart[4] = { ps.ColorStart.x, ps.ColorStart.y, ps.ColorStart.z, ps.ColorStart.w };
-            if (QtUi::ColorEdit4("Start##pscol", colorStart))
-            {
-                ps.ColorStart = { colorStart[0], colorStart[1], colorStart[2], colorStart[3] };
-                MarkSceneChanged();
-            }
-            float colorMid[4] = { ps.ColorMid.x, ps.ColorMid.y, ps.ColorMid.z, ps.ColorMid.w };
-            if (QtUi::ColorEdit4("Mid##pscol", colorMid))
-            {
-                ps.ColorMid = { colorMid[0], colorMid[1], colorMid[2], colorMid[3] };
-                MarkSceneChanged();
-            }
-            float colorEnd[4] = { ps.ColorEnd.x, ps.ColorEnd.y, ps.ColorEnd.z, ps.ColorEnd.w };
-            if (QtUi::ColorEdit4("End##pscol", colorEnd))
-            {
-                ps.ColorEnd = { colorEnd[0], colorEnd[1], colorEnd[2], colorEnd[3] };
-                MarkSceneChanged();
-            }
-            if (QtUi::SliderFloat("Mid Point##pscol", &ps.ColorMidPoint, 0.01f, 0.99f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Where the middle key sits along the particle's life. Low values hold a flame's hot core longer.");
-            if (QtUi::DragFloat("Emissive Intensity##ps", &ps.EmissiveIntensity, 0.05f, 0.0f, 200.0f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Multiplies the material's emissive colour. The main brightness control for fire.");
-
-            QtUi::SeparatorText("Flipbook");
-            QtUi::TextDisabled("Leave at 1x1 to inherit the material's own atlas layout.");
-            if (QtUi::SliderInt("Columns##ps", &ps.FlipbookColumns, 1, 16))
-                MarkSceneChanged();
-            if (QtUi::SliderInt("Rows##ps", &ps.FlipbookRows, 1, 16))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Frames Per Second##ps", &ps.FlipbookFps, 0.5f, 0.0f, 120.0f, "%.1f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("0 spreads the whole atlas across the particle's lifetime, which is what a hand-authored flame sheet wants.");
-            if (QtUi::Checkbox("Blend Frames##ps", &ps.FlipbookBlendFrames))
-                MarkSceneChanged();
-            if (QtUi::Checkbox("Random Start Frame##ps", &ps.FlipbookRandomStartFrame))
-                MarkSceneChanged();
-
-            QtUi::SeparatorText("Rendering");
-            const char* facingNames[] = { "Billboard", "Velocity Stretched", "Horizontal", "Vertical" };
-            int facingIndex = static_cast<int>(ps.Facing);
-            if (QtUi::Combo("Facing##ps", &facingIndex, facingNames, static_cast<int>(std::size(facingNames))))
-            {
-                ps.Facing = static_cast<ParticleFacingMode>(facingIndex);
-                MarkSceneChanged();
-            }
-            if (ps.Facing == ParticleFacingMode::VelocityStretched)
-            {
-                if (QtUi::DragFloat("Stretch##ps", &ps.StretchFactor, 0.005f, 0.0f, 4.0f, "%.3f"))
-                    MarkSceneChanged();
-            }
-            if (QtUi::Checkbox("Soft Particles##ps", &ps.SoftParticles))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Fades sprites where they meet geometry, so a flame does not cut a hard line into the floor.");
-            if (ps.SoftParticles)
-            {
-                if (QtUi::DragFloat("Soft Fade##ps", &ps.SoftFadeDistance, 0.01f, 0.001f, 10.0f, "%.3f m"))
-                    MarkSceneChanged();
-            }
-            if (QtUi::DragFloat("Cull Distance##ps", &ps.CullDistance, 1.0f, 1.0f, 10000.0f, "%.0f m"))
-                MarkSceneChanged();
-
-            QtUi::SeparatorText("Light and Global Illumination");
-            QtUi::TextWrapped(
-                "An emissive system registers an analytic light standing in for the flame. "
-                "That one light drives the deferred shading, the ray-traced GI bounce and "
-                "the volumetric fog together.");
-            if (QtUi::Checkbox("Emit Light##ps", &ps.EmitLight))
-                MarkSceneChanged();
-
-            QtUi::BeginDisabled(!ps.EmitLight);
-            if (QtUi::DragFloat("Intensity (lm)##ps", &ps.LightIntensityLumens, 10.0f, 0.0f, 100000.0f, "%.0f"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Light Radius##ps", &ps.LightRadius, 0.1f, 0.001f, 1000.0f, "%.2f m"))
-                MarkSceneChanged();
-            if (QtUi::DragFloat("Height Offset##ps", &ps.LightHeightOffset, 0.01f, -50.0f, 50.0f, "%.2f m"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("A fire's apparent light source sits inside the flame, not at its base.");
-            if (QtUi::Checkbox("Color From Particles##ps", &ps.UseParticleColorForLight))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Take the light's colour from the particle gradient, so recolouring the fire recolours the light.");
-            if (!ps.UseParticleColorForLight)
-            {
-                float lightColor[3] = { ps.LightColorR, ps.LightColorG, ps.LightColorB };
-                if (QtUi::ColorEdit3("Light Color##ps", lightColor))
-                {
-                    ps.LightColorR = lightColor[0];
-                    ps.LightColorG = lightColor[1];
-                    ps.LightColorB = lightColor[2];
-                    MarkSceneChanged();
-                }
-            }
-            if (QtUi::SliderFloat("GI Contribution##ps", &ps.GiContribution, 0.0f, 4.0f, "%.2f"))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Scales the indirect bounce only. Lower it when a fire is washing out a small room's GI.");
-            if (QtUi::Checkbox("Cast Shadows##pslight", &ps.LightCastShadows))
-                MarkSceneChanged();
-            if (QtUi::Checkbox("Affect Volumetric Fog##pslight", &ps.LightAffectVolumetricFog))
-                MarkSceneChanged();
-
-            QtUi::SeparatorText("Flicker");
-            DrawLightStyleControls(
-                "pslightstyle",
-                ps.LightStyle,
-                ps.LightStyleSpeed,
-                ps.LightStyleAmplitude,
-                ps.LightStylePhaseOffset,
-                ps.LightCustomStylePattern);
-            if (QtUi::Checkbox("Flicker The Sprites Too##ps", &ps.StyleDrivesParticleEmissive))
-                MarkSceneChanged();
-            QtUi::SetItemTooltip("Applies the same curve to the sprites' brightness, so the flame dims with the light it casts.");
-            QtUi::EndDisabled();
-        }
-    }
+        DrawParticleSystemProperties(*selectedEntity);
 
     if (selectedEntity->Water.has_value())
     {
@@ -4666,7 +5363,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 if (PromptForDataFile(
                         DX12Context_GetWindowHandle(),
                         "Select Water Material",
-                        "Material JSON\0*.json\0All Files\0*.*\0",
+                        "Material\0*.material;*.json\0All Files\0*.*\0",
                         updatedMaterialPath))
                 {
                     wc.MaterialPath = updatedMaterialPath;
@@ -4712,7 +5409,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 if (PromptForDataFile(
                     DX12Context_GetWindowHandle(),
                     "Select Terrain Material",
-                    "Material JSON\0*.json\0All Files\0*.*\0",
+                    "Material\0*.material;*.json\0All Files\0*.*\0",
                     updatedMaterialPath))
                 {
                     tc.MaterialPath = updatedMaterialPath;
@@ -4725,6 +5422,24 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                 tc.MaterialPath.clear();
                 MarkSceneChanged();
             }
+
+            // Metres per texture repeat; the material's own UV tiling multiplies on
+            // top.  A spin box, not a slider: useful sizes span 0.1 m to hundreds.
+            if (QtUi::InputFloat("Material Tile Size (m)", &tc.MaterialTileSize, 0.1f, 1.0f, "%.2f"))
+            {
+                tc.MaterialTileSize = (std::max)(tc.MaterialTileSize, 0.01f);
+                MarkSceneChanged();
+            }
+            if (QtUi::Checkbox("Break Up Tiling", &tc.BreakUpTiling))
+                MarkSceneChanged();
+            if (!tc.PaintLayers.empty())
+            {
+                QtUi::TextDisabled("Paint layers are active: each layer uses its own material "
+                                   "and tile size (see Paint Layers below).");
+            }
+            QtUi::SetItemTooltip("Blends randomly offset copies of the material so the repeat "
+                                 "pattern does not line up across the terrain. Costs a second "
+                                 "texture sample per map.");
 
             if (mTerrainRenderer != nullptr)
             {
@@ -4769,6 +5484,8 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
                                       updatedPath))
                 {
                     tc.HeightmapRawPath = updatedPath;
+                    // Sculpting belonged to the old source.
+                    tc.SculptedHeightmapPath.clear();
 
                     // For image sources the importer auto-detects the
                     // resolution.  If we keep the previous terrain's Width/
@@ -4813,49 +5530,63 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
 
             QtUi::SeparatorText("Geometry");
-            // We only mark the GPU mesh dirty when the user *finishes*
-            // editing a slider (mouse release).  Rebuilding the
-            // vertex/index buffers every frame while the user is dragging
-            // stalls the GPU and can crash on allocations near the VRAM
-            // ceiling.
-            if (QtUi::DragInt("Width (samples)",  &tc.Width,  1.0f, 1, 8192))
+            // Plain spin boxes rather than sliders: QtUi turns a bounded
+            // DragFloat into a 1000-step slider, which made World Size and
+            // Height Scale jump ~100 m per notch.  Spin boxes commit when the
+            // edit finishes, so the mesh is rebuilt once per edit.
+            bool geometryChanged = false;
+            std::string sourceExtension = std::filesystem::path(tc.HeightmapRawPath).extension().string();
+            for (char& c : sourceExtension) { c = static_cast<char>(::tolower(static_cast<unsigned char>(c))); }
+            const bool rawSource = sourceExtension == ".raw";
+            if (rawSource)
+            {
+                // A .raw file has no header, so its size is the artist's call.
+                geometryChanged |= QtUi::InputInt("Width (samples)",  &tc.Width,  1, 64);
+                geometryChanged |= QtUi::InputInt("Height (samples)", &tc.Height, 1, 64);
+                tc.Width  = std::clamp(tc.Width,  2, 16384);
+                tc.Height = std::clamp(tc.Height, 2, 16384);
+            }
+            else
+            {
+                // Image sources carry their own size; a mismatch only made the
+                // load fail and left a stale mesh on screen.
+                QtUi::TextDisabled("Resolution: %d x %d samples (from the image)", tc.Width, tc.Height);
+            }
+            if (QtUi::InputFloat("World Size (m)", &tc.WorldSize, 1.0f, 10.0f, "%.1f"))
+            {
+                tc.WorldSize = (std::max)(tc.WorldSize, 1.0f);
+                geometryChanged = true;
+            }
+            if (QtUi::InputFloat("Height Scale (m)", &tc.HeightScale, 1.0f, 10.0f, "%.2f"))
+            {
+                tc.HeightScale = (std::max)(tc.HeightScale, 0.001f);
+                geometryChanged = true;
+            }
+            geometryChanged |= QtUi::InputFloat("Height Offset (m)", &tc.HeightOffset, 0.1f, 1.0f, "%.2f");
+            if (geometryChanged)
+            {
                 MarkSceneChanged();
-            if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
-                mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
+                if (mTerrainRenderer != nullptr)
+                    mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
+            }
 
-            if (QtUi::DragInt("Height (samples)", &tc.Height, 1.0f, 1, 8192))
-                MarkSceneChanged();
-            if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
-                mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
-
-            if (QtUi::DragFloat("World Size (m)",   &tc.WorldSize,    1.0f, 1.0f, 100000.0f))
-                MarkSceneChanged();
-            if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
-                mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
-
-            if (QtUi::DragFloat("Height Scale (m)",  &tc.HeightScale,  1.0f, 0.001f, 100000.0f))
-                MarkSceneChanged();
-            if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
-                mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
-
-            if (QtUi::DragFloat("Height Offset (m)", &tc.HeightOffset, 0.1f, -100000.0f, 100000.0f))
-                MarkSceneChanged();
-            if (QtUi::IsItemDeactivatedAfterEdit() && mTerrainRenderer != nullptr)
-                mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
+            if (!tc.SculptedHeightmapPath.empty())
+            {
+                QtUi::TextWrapped("Sculpted: %s", tc.SculptedHeightmapPath.c_str());
+                if (QtUi::Button("Revert Sculpting"))
+                {
+                    // The sculpt file is left on disk; the terrain simply
+                    // reloads from the source heightmap.
+                    tc.SculptedHeightmapPath.clear();
+                    MarkSceneChanged();
+                    if (mTerrainRenderer != nullptr)
+                        mTerrainRenderer->ReloadTerrain(static_cast<std::size_t>(mSelectedEntityIndex));
+                }
+            }
 
             QtUi::SeparatorText("Brush");
-            const char* brushNames[] = { "Raise", "Lower", "Flatten", "Smooth", "Paint" };
-            int brushTypeIndex = static_cast<int>(tc.Brush);
-            if (QtUi::Combo("Type##terrainbrush", &brushTypeIndex,
-                             brushNames, std::size(brushNames)))
-            {
-                tc.Brush = static_cast<TerrainComponent::BrushType>(brushTypeIndex);
+            if (DrawTerrainBrushControls(tc))
                 MarkSceneChanged();
-            }
-            if (QtUi::DragFloat("Radius (m)",  &tc.BrushRadius,  0.1f, 0.1f, 1000.0f)) MarkSceneChanged();
-            if (QtUi::DragFloat("Strength (m/s)", &tc.BrushStrength, 0.01f, 0.001f, 100.0f)) MarkSceneChanged();
-            if (QtUi::DragFloat("Flatten Height (m)", &tc.FlattenHeight, 0.1f, -10000.0f, 10000.0f)) MarkSceneChanged();
-            if (QtUi::DragInt  ("Smooth Passes", &tc.BrushSmoothingPasses, 1, 1, 10)) MarkSceneChanged();
 
             QtUi::Separator();
             bool brushActive = mTerrainBrushModeActive;
@@ -4865,10 +5596,14 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             }
             QtUi::SameLine();
             QtUi::Checkbox("Show Tool Window", &mShowTerrainToolWindow);
+            if (brushActive)
+                QtUi::TextDisabled("Hold the left mouse button over the terrain to sculpt.");
 
             // Material paint-layer editor (mirrors the Terrain Tool window).
             bool layerSceneDirty = false;
-            if (DrawTerrainLayerControls(tc, DX12Context_GetWindowHandle(), layerSceneDirty))
+            if (DrawTerrainLayerControls(tc, DX12Context_GetWindowHandle(), mTerrainRenderer,
+                                         static_cast<std::size_t>((std::max)(mSelectedEntityIndex, 0)),
+                                         layerSceneDirty))
             {
                 if (mTerrainRenderer != nullptr && mSelectedEntityIndex >= 0)
                     mTerrainRenderer->MarkTerrainDirty(static_cast<std::size_t>(mSelectedEntityIndex));
@@ -5184,11 +5919,12 @@ void Editor::Draw(
         if (mShowUiEditorPanel)      DrawUiEditorPanel();
         if (mShowLevelExplorerPanel) DrawLevelExplorerPanel();
         QtUi::PushID(mSelectedEntityIndex);
-        if (mShowPropertiesPanel)    DrawPropertiesPanel(selectedEntity, audioManager);
+        if (mShowPropertiesPanel)    DrawPropertiesPanelForSelection(selectedEntity, audioManager);
         QtUi::PopID();
         if (mShowAudioManagerPanel)  DrawAudioManagerWindow(audioManager);
         if (mShowResourceDebugPanel) DrawResourceDebugWindow();
         if (mShowTerrainToolWindow)  DrawTerrainToolWindow(selectedEntity);
+        DrawParticleEditorWindow();
         DrawViewportResolutionWindow();
         DrawScreenshotWindow();
     }

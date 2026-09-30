@@ -1,0 +1,191 @@
+{
+    "name": "SM_Mastaba_Interior",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Interior_LimestoneWalls",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Interior_LimestoneWalls_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Interior_CarvedLimestone",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Interior_CarvedLimestone_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Interior_Floor",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Floor_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Interior_Ceiling",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Interior_Ceiling_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Interior_AltarSarcophagus",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Interior_AltarSarcophagus_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

@@ -186,8 +186,7 @@ bool RadianceProbeRenderer::Initialize(const RadianceProbeSettings& settings)
     mInitFailed = false;
     try
     {
-        const uint32_t total = static_cast<uint32_t>(
-            settings.GridX * settings.GridY * settings.GridZ);
+        const uint32_t total = static_cast<uint32_t>(ResolveTotalProbeCount(settings));
         if (total == 0)
         {
             mLastError = "RadianceProbeRenderer: probe count is zero.";
@@ -505,7 +504,7 @@ bool RadianceProbeRenderer::CreateBuffers(uint32_t totalProbes)
     mProbeSHStates[1] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     if (!mConstantBuffer)
-        mConstantBuffer = MakeCB(dev, sizeof(RadianceProbeConstants), &mMappedCb);
+        mConstantBuffer = MakeCB(dev, sizeof(RadianceProbeConstants) * kFramesInFlight, &mMappedCb);
 
     return true;
 }
@@ -567,24 +566,24 @@ void RadianceProbeRenderer::UploadConstants(
 {
     if (!mMappedCb) return;
 
-    // Compute probe grid origin: either fixed or camera-centred. Shared with
-    // deferred shading and the volumetric fog, which both read this same grid.
-    float ox = settings.OriginX;
-    float oy = settings.OriginY;
-    float oz = settings.OriginZ;
-    if (cameraPos)
-    {
-        ResolveProbeGridOrigin(settings, cameraPos[0], cameraPos[1], cameraPos[2], ox, oy, oz);
-    }
+    // Cascade origins: either fixed or camera-centred. Shared with deferred
+    // shading and the volumetric fog, which both read this same field.
+    const float noCamera[3] = { settings.OriginX, settings.OriginY, settings.OriginZ };
+    const float* cam = cameraPos ? cameraPos : noCamera;
+    const RadianceProbeFieldGpu field = ResolveProbeField(settings, cam[0], cam[1], cam[2]);
+    const int cascadeCount = static_cast<int>(field.CascadeCount);
 
     RadianceProbeConstants cb{};
     cb.ProbeGridX     = static_cast<uint32_t>(settings.GridX);
     cb.ProbeGridY     = static_cast<uint32_t>(settings.GridY);
     cb.ProbeGridZ     = static_cast<uint32_t>(settings.GridZ);
     cb.ProbeSpacing   = settings.Spacing;
-    cb.ProbeOriginX   = ox;
-    cb.ProbeOriginY   = oy;
-    cb.ProbeOriginZ   = oz;
+    cb.ProbeOriginX   = field.Cascades[0][0];
+    cb.ProbeOriginY   = field.Cascades[0][1];
+    cb.ProbeOriginZ   = field.Cascades[0][2];
+    cb.CascadeCount     = field.CascadeCount;
+    cb.ProbesPerCascade = static_cast<uint32_t>(ResolveProbesPerCascade(settings));
+    std::memcpy(cb.CascadeOrigin, field.Cascades, sizeof(cb.CascadeOrigin));
     cb.UpdateBlend    = settings.UpdateBlend;
     // Honour the setting. This was pinned to 1, which silently discarded the
     // "Rays Per Probe" slider, the probes.raysperprobe CVar and the value saved
@@ -621,7 +620,55 @@ void RadianceProbeRenderer::UploadConstants(
     cb.DebugView = settings.DebugShowProbes ? 4 : 0;
     cb.DebugLightingMode = settings.DebugLightingMode;
 
-    std::memcpy(mMappedCb, &cb, sizeof(cb));
+    // History scroll, per cascade. An origin only ever moves in whole cells of
+    // its cascade, so the shift is an exact integer. A changed spacing, grid
+    // shape or cascade count leaves no probe where it was; shifting by the full
+    // grid puts every history read out of range, which the shader treats as
+    // "start fresh".
+    const bool sameLayout = mHasHistoryOrigin
+        && mHistorySpacing == settings.Spacing
+        && mHistoryGrid[0] == settings.GridX
+        && mHistoryGrid[1] == settings.GridY
+        && mHistoryGrid[2] == settings.GridZ
+        && mHistoryCascadeCount == cascadeCount
+        && settings.Spacing > 0.0f;
+    for (int c = 0; c < cascadeCount; ++c)
+    {
+        int32_t* history = cb.CascadeHistory[c];
+        const float spacing = field.Cascades[c][3];
+        if (sameLayout)
+        {
+            for (int axis = 0; axis < 3; ++axis)
+                history[axis] = static_cast<int32_t>(std::lround((field.Cascades[c][axis] - mHistoryOrigin[c][axis]) / spacing));
+        }
+        else
+        {
+            history[0] = settings.GridX;
+            history[1] = settings.GridY;
+            history[2] = settings.GridZ;
+        }
+
+        // The finest cascade traces every probe every frame; each coarser one
+        // traces a share of its probes per frame. Its probes stand further
+        // apart and light far away changes less between frames, and without
+        // the rotation four cascades would cost four grids.
+        history[3] = (std::min)(1 << c, 4);
+
+        for (int axis = 0; axis < 3; ++axis)
+            mHistoryOrigin[c][axis] = field.Cascades[c][axis];
+    }
+    cb.HistoryShiftX = cb.CascadeHistory[0][0];
+    cb.HistoryShiftY = cb.CascadeHistory[0][1];
+    cb.HistoryShiftZ = cb.CascadeHistory[0][2];
+    mHasHistoryOrigin = true;
+    mHistorySpacing = settings.Spacing;
+    mHistoryGrid[0] = settings.GridX;
+    mHistoryGrid[1] = settings.GridY;
+    mHistoryGrid[2] = settings.GridZ;
+    mHistoryCascadeCount = cascadeCount;
+
+    mCbSlot = (mCbSlot + 1u) % kFramesInFlight;
+    std::memcpy(CurrentCb(), &cb, sizeof(cb));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -688,7 +735,7 @@ void RadianceProbeRenderer::Update(
     }
 
     cmdList->SetComputeRootSignature(mRootSignatureUpdate.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, CurrentCbAddress());
     cmdList->SetComputeRootDescriptorTable(1, mProbeSHSrvGpu[readIdx]);    // t0: prev SH
     cmdList->SetComputeRootDescriptorTable(2, vertexSrv);                   // t1: vertices
     cmdList->SetComputeRootDescriptorTable(3, indexSrv);                    // t2: indices
@@ -744,7 +791,7 @@ void RadianceProbeRenderer::DrawDebug(
     // Update view-projection matrices in the constant buffer.
     if (mMappedCb)
     {
-        auto* cb = reinterpret_cast<RadianceProbeConstants*>(mMappedCb);
+        auto* cb = CurrentCb();
         if (viewProj)    std::memcpy(cb->ViewProj,    viewProj,    64);
         if (viewProjInv) std::memcpy(cb->ViewProjInv, viewProjInv, 64);
         cb->DebugView = 4;
@@ -756,14 +803,14 @@ void RadianceProbeRenderer::DrawDebug(
 
     if (mMappedCb)
     {
-        auto* cb = reinterpret_cast<RadianceProbeConstants*>(mMappedCb);
+        auto* cb = CurrentCb();
         cb->DebugLightingMode = static_cast<int32_t>((std::max)(cb->DebugLightingMode, 0));
     }
 
     cmdList->SetGraphicsRootSignature(mRootSignatureDebug.Get());
     cmdList->SetPipelineState(mPSO_Debug.Get());
 
-    cmdList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetGraphicsRootConstantBufferView(0, CurrentCbAddress());
     cmdList->SetGraphicsRootDescriptorTable(1, mProbeSHSrvGpu[readIdx]);
 
     cmdList->OMSetRenderTargets(1, &sceneRtvHandle, FALSE, &sceneDsvHandle);

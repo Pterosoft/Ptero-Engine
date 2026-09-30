@@ -39,6 +39,13 @@ public:
         const DirectX::XMFLOAT3&   sunDir,
         float                       sceneBoundRadius);
 
+    // The light-space view-projection BeginShadowPass will use for these
+    // inputs, row-major and not transposed. A pure function, so geometry can
+    // be culled for the shadow map before its pass is recorded.
+    static DirectX::XMFLOAT4X4 ComputeLightViewProjection(
+        const DirectX::XMFLOAT3& sunDir,
+        float                     sceneBoundRadius);
+
     // Transition the shadow texture back to SRV state for use in the main pass.
     void EndShadowPass(ID3D12GraphicsCommandList* commandList);
 

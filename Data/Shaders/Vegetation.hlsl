@@ -61,8 +61,16 @@ cbuffer VegetationLayerConstants : register(b1)
     int    gHasRoughnessMap;
     int    gHasAoMap;
 
+    // 0 = separate maps, 1 = packed RMA, 2 = packed ORM (see GBuffer.hlsl).
     int    gHasPackedMaterialMap;
-    float3 _LayerPad0;
+    float2 _LayerPad0;
+    // 1 = cut out on gOpacityTexture.r instead of the base colour's alpha.
+    int    gHasOpacityMap;
+
+    // Reflectivity (0.5 neutral) and this frame's subsurface profile slot (0 = none).
+    float  gSpecularFactor;
+    int    gSubsurfaceSlot;
+    float2 _LayerPad1;
 };
 
 Texture2D gBaseColorTexture : register(t0);
@@ -80,6 +88,10 @@ Texture2D gInteractionMap   : register(t5);
 StructuredBuffer<VegetationInstance> gInstances       : register(t6);
 // Compacted list of visible instance indices produced by VegetationCull.hlsl.
 StructuredBuffer<uint>               gVisibleIndices  : register(t7);
+
+// Separate opacity mask, for materials that keep the cut-out shape out of the base
+// colour's alpha. Above the instance buffers because t5..t7 are taken.
+Texture2D gOpacityTexture   : register(t8);
 
 SamplerState gLinearSampler : register(s0);
 SamplerState gClampSampler  : register(s1);
@@ -210,6 +222,11 @@ static const float kBayer4x4[16] =
     15.0f / 16.0f, 7.0f / 16.0f, 13.0f / 16.0f,  5.0f / 16.0f
 };
 
+float VegetationAlpha(float2 uv, float baseAlpha)
+{
+    return gHasOpacityMap ? gOpacityTexture.Sample(gLinearSampler, uv).r : baseAlpha;
+}
+
 PSOutput PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace)
 {
     PSOutput output;
@@ -219,7 +236,7 @@ PSOutput PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace)
     // Alpha test.  Without this the leaf cards render as opaque rectangles,
     // which is the single most visible difference between foliage and ordinary
     // opaque geometry.
-    clip(texColor.a - gAlphaCutoff);
+    clip(VegetationAlpha(input.TexCoord, texColor.a) - gAlphaCutoff);
 
     // Distance fade as an ordered dither, so a fading instance dissolves
     // instead of popping.  TAA resolves the dither pattern into a smooth
@@ -254,19 +271,27 @@ PSOutput PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace)
         N = normalize(T * tsNormal.x + B * tsNormal.y + N * tsNormal.z);
     }
 
-    output.Normal = float4(EncodeOctNormal(N), input.Position.z, PteroEncodeSurfaceSpecular(kPteroDefaultSpecular));
+    // Leafy layers (the ones with transmission) are flagged as foliage for DPLE's material
+    // response; trunks, rocks and anything opaque stay ordinary surfaces. The flag is the
+    // sign of W, independent of the specular value and subsurface slot packed into its
+    // magnitude (SurfaceSpecular.hlsli), so a leaf can be foliage and scatter at once.
+    const float surface = PteroEncodeSurfaceSpecularAndSubsurface(gSpecularFactor, (uint)max(gSubsurfaceSlot, 0));
+    output.Normal = float4(EncodeOctNormal(N), input.Position.z,
+        gTranslucency > 0.0f ? -surface : surface);
 
     // --- Material ---
     const float4 metallicSample  = gMetallicTexture.Sample(gLinearSampler, input.TexCoord);
     const float4 roughnessSample = gRoughnessTexture.Sample(gLinearSampler, input.TexCoord);
     const float4 aoSample        = gAoTexture.Sample(gLinearSampler, input.TexCoord);
 
-    const float roughness = gHasRoughnessMap ? roughnessSample.r * gRoughnessFactor : gRoughnessFactor;
+    const float roughness = gHasRoughnessMap
+        ? (gHasPackedMaterialMap == 2 ? roughnessSample.g : roughnessSample.r) * gRoughnessFactor
+        : gRoughnessFactor;
     const float metallic  = gHasMetallicMap
-        ? (gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
+        ? (gHasPackedMaterialMap == 2 ? metallicSample.b : gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
         : gMetallicFactor;
     const float ao = gHasAoMap
-        ? lerp(1.0f, gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
+        ? lerp(1.0f, gHasPackedMaterialMap == 2 ? aoSample.r : gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
         : 1.0f;
 
     // Leaf transmission.  A thin leaf scatters light through itself, so the
@@ -282,7 +307,11 @@ PSOutput PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace)
         baseAlbedo = lerp(baseAlbedo, baseAlbedo * 1.6f, backlight);
     }
 
-    output.Albedo   = float4(baseAlbedo, texColor.a * gBaseColorTint.a);
+    // Opaque: the alpha test above already decided coverage. The lighting pass reads this
+    // channel as blend opacity (and SSS only takes pixels at 1), so writing the texture's
+    // alpha here mixed every soft or mip-thinned needle edge with the sky behind it -
+    // the blue-grey cast - and kept those pixels out of subsurface scattering.
+    output.Albedo   = float4(baseAlbedo, 1.0f);
     output.Material = float4(roughness, metallic, ao, 0.0f);
 
     return output;

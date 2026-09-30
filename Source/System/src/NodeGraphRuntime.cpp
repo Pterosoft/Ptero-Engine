@@ -307,6 +307,12 @@ void NodeGraphRuntime::Start(const NodeGraphDocument& document)
     mCameraHeld = false;
     mPlaylistActive = false;
     mPlaylistTrack = -1;
+    mReportedNoCharacter = false;
+
+    // Landings and jumps from before this session are not news.
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    mCharacterLandedSeen = character != nullptr ? character->GetLandedCount() : 0;
+    mCharacterJumpedSeen = character != nullptr ? character->GetJumpedCount() : 0;
 
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
@@ -343,6 +349,7 @@ void NodeGraphRuntime::Tick(float deltaSeconds)
     }
 
     FireInputEvents();
+    FireCharacterEvents();
 
     // Delays resume before this frame's tick events so a graph that delays by zero-ish
     // amounts stays in step with the frame it was scheduled from.
@@ -440,6 +447,198 @@ void NodeGraphRuntime::FireInputEvents()
             FireEntry(static_cast<int>(i), 0);
         }
     }
+}
+
+void NodeGraphRuntime::FireCharacterEvents()
+{
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        return;
+    }
+
+    // The character stepped after last frame's tick, so anything it did then is reported
+    // now. Several landings in one frame are one event: nothing can land twice visibly.
+    const bool jumped = character->GetJumpedCount() != mCharacterJumpedSeen;
+    const bool landed = character->GetLandedCount() != mCharacterLandedSeen;
+    mCharacterJumpedSeen = character->GetJumpedCount();
+    mCharacterLandedSeen = character->GetLandedCount();
+
+    if (jumped)
+    {
+        FireEvents("Event.CharacterJumped");
+    }
+
+    if (landed)
+    {
+        for (std::size_t i = 0; i < mNodes.size(); ++i)
+        {
+            if (mNodes[i].Data->TypeId != "Event.CharacterLanded")
+            {
+                continue;
+            }
+
+            mNodes[i].State.LastValue = NodeGraphValue::FromNumber(character->GetLastImpactSpeed());
+            FireEntry(static_cast<int>(i), 0);
+        }
+    }
+}
+
+void NodeGraphRuntime::ExecuteCharacterNode(int nodeIndex)
+{
+    RuntimeNode& node = mNodes[nodeIndex];
+    const std::string& typeId = node.Data->TypeId;
+    node.State.Success = false;
+
+    CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        if (!mReportedNoCharacter)
+        {
+            mReportedNoCharacter = true;
+            Log(std::string(node.Type->Caption) +
+                ": there is no player character to control. Character nodes need Game Settings > Player "
+                "Controller set to Node Graph; the C++ controller's character lives in Game.dll.");
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId == "Character.AddMovementInput")
+    {
+        character->AddMovementInput(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()));
+    }
+    else if (typeId == "Character.AddLookInput")
+    {
+        character->AddLookInput(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()));
+    }
+    else if (typeId == "Character.Jump")
+    {
+        character->Jump();
+    }
+    else if (typeId == "Character.StopJumping")
+    {
+        character->StopJumping();
+    }
+    else if (typeId == "Character.Crouch")
+    {
+        character->Crouch();
+    }
+    else if (typeId == "Character.UnCrouch")
+    {
+        character->UnCrouch();
+    }
+    else if (typeId == "Character.SetSprinting")
+    {
+        character->SetSprinting(ReadInput(nodeIndex, 1).AsBool());
+    }
+    else if (typeId == "Character.Teleport")
+    {
+        character->Teleport(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 3).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 4).AsNumber() * kDegreesToRadians));
+    }
+    else if (typeId == "Character.SetMovementSettings" || typeId == "Character.SetCameraSettings" ||
+             typeId == "Character.SetControlSettings")
+    {
+        // Every parameter on the node body is one settings field, keyed by its name.
+        for (unsigned i = 0; i < node.Type->ParamCount; ++i)
+        {
+            const NodeGraphParam& param = node.Type->Params[i];
+            const CharacterSettingField* field = FindCharacterSettingField(param.Key);
+            if (field == nullptr)
+            {
+                continue;
+            }
+
+            const NodePinKind kind = param.Kind == NodeParamKind::Bool ? NodePinKind::Bool : NodePinKind::Number;
+            SetCharacterSetting(character->Settings, *field, ParamValue(nodeIndex, param.Key, kind).AsNumber());
+        }
+
+        // Configured on Game Start, the first frame should already show the new eye height
+        // and field of view rather than blend in from the defaults.
+        if (!character->HasUpdated())
+        {
+            character->SnapCameraToSettings();
+        }
+    }
+    else if (typeId == "Character.SetMovementProperty" || typeId == "Character.SetCameraProperty")
+    {
+        const std::string property = ParamValue(nodeIndex, "Property", NodePinKind::String).AsString();
+        if (const CharacterSettingField* field = FindCharacterSettingField(property.c_str()))
+        {
+            SetCharacterSetting(character->Settings, *field, ReadInput(nodeIndex, 1).AsNumber());
+            node.State.Success = true;
+        }
+        else
+        {
+            Log(std::string(node.Type->Caption) + ": unknown property '" + property + "'.");
+        }
+    }
+
+    if (typeId != "Character.SetMovementProperty" && typeId != "Character.SetCameraProperty")
+    {
+        node.State.Success = true;
+    }
+
+    FireExec(nodeIndex, 0);
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluateCharacterOutput(int nodeIndex, int outPortIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const std::string& typeId = node.Data->TypeId;
+
+    // Nodes with an exec input report the Success of their last run on their value pin.
+    if (node.Type->InputCount > 0 && node.Type->Inputs[0].Kind == NodePinKind::Exec)
+    {
+        return NodeGraphValue::FromBool(node.State.Success);
+    }
+
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        return typeId == "Character.GetState" && outPortIndex < 4 ? NodeGraphValue::FromBool(false)
+                                                                  : NodeGraphValue::FromNumber(0.0);
+    }
+
+    if (typeId == "Character.GetState")
+    {
+        switch (outPortIndex)
+        {
+        case 0: return NodeGraphValue::FromBool(character->IsGrounded());
+        case 1: return NodeGraphValue::FromBool(character->IsFalling());
+        case 2: return NodeGraphValue::FromBool(character->IsCrouching());
+        case 3: return NodeGraphValue::FromBool(character->IsSprinting());
+        case 4: return NodeGraphValue::FromNumber(character->GetHorizontalSpeed());
+        case 5: return NodeGraphValue::FromNumber(character->GetVelocity()[2]);
+        default: break;
+        }
+    }
+    else if (typeId == "Character.GetLocation")
+    {
+        if (outPortIndex >= 0 && outPortIndex < 3)
+        {
+            return NodeGraphValue::FromNumber(character->GetPosition()[outPortIndex]);
+        }
+    }
+    else if (typeId == "Character.GetMovementProperty" || typeId == "Character.GetCameraProperty")
+    {
+        const std::string property = ParamValue(nodeIndex, "Property", NodePinKind::String).AsString();
+        if (const CharacterSettingField* field = FindCharacterSettingField(property.c_str()))
+        {
+            return NodeGraphValue::FromNumber(GetCharacterSetting(character->Settings, *field));
+        }
+    }
+
+    return NodeGraphValue::FromNumber(0.0);
 }
 
 void NodeGraphRuntime::AdvanceTweens(float deltaSeconds)
@@ -703,6 +902,21 @@ void NodeGraphRuntime::BuildIndex()
             source.PortIndex = connection.FromPort;
             mDataSources[PortKey(toIt->second, connection.ToPort)] = source;
         }
+    }
+
+    // An exec output wired to several nodes runs them top to bottom as they sit on the
+    // canvas (left to right on a tie), so the order is the one the graph shows rather than
+    // the order the links happened to be drawn in.
+    for (auto& [port, targets] : mExecTargets)
+    {
+        std::stable_sort(targets.begin(), targets.end(), [this](const DataSource& a, const DataSource& b)
+        {
+            const NodeGraphNode& nodeA = *mNodes[a.NodeIndex].Data;
+            const NodeGraphNode& nodeB = *mNodes[b.NodeIndex].Data;
+            if (nodeA.Y != nodeB.Y)
+                return nodeA.Y < nodeB.Y;
+            return nodeA.X < nodeB.X;
+        });
     }
 }
 
@@ -984,6 +1198,23 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
     if (typeId.compare(0, 7, "Entity.") == 0)
     {
         ExecuteEntityNode(nodeIndex);
+        return;
+    }
+
+    if (typeId.compare(0, 10, "Character.") == 0)
+    {
+        ExecuteCharacterNode(nodeIndex);
+        return;
+    }
+
+    if (typeId == "Input.SetMouseCaptured")
+    {
+        if (mHost != nullptr)
+        {
+            mHost->SetMouseCaptured(ReadInput(nodeIndex, 1).AsBool());
+        }
+
+        FireExec(nodeIndex, 0);
         return;
     }
 
@@ -1694,6 +1925,53 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     {
         const int key = VirtualKeyFromName(ParamValue(nodeIndex, "Key", NodePinKind::String).AsString());
         result = NodeGraphValue::FromBool(key != 0 && mHost != nullptr && mHost->IsKeyDown(key));
+    }
+    else if (typeId == "Input.GetAxis")
+    {
+        const int positive = VirtualKeyFromName(ParamValue(nodeIndex, "Positive", NodePinKind::String).AsString());
+        const int negative = VirtualKeyFromName(ParamValue(nodeIndex, "Negative", NodePinKind::String).AsString());
+        double value = 0.0;
+        if (mHost != nullptr)
+        {
+            if (positive != 0 && mHost->IsKeyDown(positive)) value += 1.0;
+            if (negative != 0 && mHost->IsKeyDown(negative)) value -= 1.0;
+        }
+        result = NodeGraphValue::FromNumber(value);
+    }
+    else if (typeId == "Input.GetLookInput" || typeId == "Input.GetMouseDelta")
+    {
+        double x = 0.0;
+        double y = 0.0;
+        if (mHost != nullptr)
+        {
+            mHost->GetMouseDelta(x, y);
+        }
+
+        if (typeId == "Input.GetLookInput")
+        {
+            // The player's own sensitivity and inversion, so a controller graph does not
+            // have to re-implement the options every game has.
+            const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+            const CharacterControlSettings controls =
+                character != nullptr ? character->Settings.Controls : CharacterControlSettings{};
+            x *= controls.MouseSensitivity;
+            // Screen +Y is down: moving the mouse up looks up.
+            y *= -controls.MouseSensitivity * (controls.InvertY ? -1.0 : 1.0);
+        }
+
+        result = NodeGraphValue::FromNumber(outPortIndex == 0 ? x : y);
+    }
+    else if (typeId == "Input.IsMouseCaptured")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsMouseCaptured());
+    }
+    else if (typeId == "Event.CharacterLanded")
+    {
+        result = NodeGraphValue::FromNumber(node.State.LastValue.AsNumber());
+    }
+    else if (typeId.compare(0, 10, "Character.") == 0)
+    {
+        result = EvaluateCharacterOutput(nodeIndex, outPortIndex);
     }
     else if (typeId.compare(0, 7, "Entity.") == 0)
     {

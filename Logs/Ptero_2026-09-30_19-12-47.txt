@@ -1,0 +1,48 @@
+Ptero Engine session log
+Started 2026-09-30 19:12:47
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-30_19-12-47.txt
+----------------------------------------------------------------------
+[19:12:47.764] [INFO ] [Log         ] Logging to disk started.
+[19:12:47.764] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-30_19-12-47.txt
+[19:12:47.764] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[19:12:52.760] [INFO ] [CVar        ] 427 cvars registered. Type 'list' in the console to see them.
+[19:12:52.760] [INFO ] [Renderer    ] Renderer initialized.
+[19:12:53.023] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[19:12:53.064] [INFO ] [VirtualGeometry] Virtualized geometry ready (mesh shader rasterisation, up to 4 concurrent builds).
+[19:12:53.154] [INFO ] [Shadows     ] Virtual shadow map pool: 2048 pages (8192 x 4096 texels, 128 MB).
+[19:12:53.321] [ERROR] [Renderer    ] Frame aborted after an exception: Could not load the startup level: Desert
+[19:12:53.321] [ERROR] [Renderer    ] RendererDX12_Render aborted the frame after an exception: Could not load the startup level: Desert
+[19:12:58.263] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 5.0 s. Everything above this line is what it did last.
+[19:12:58.298] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserWaitMessage
+    #1  DialogBoxIndirectParamAorW
+    #2  DialogBoxIndirectParamAorW
+    #3  SoftModalMessageBox
+    #4  DrawStateW
+    #5  MessageBoxTimeoutW
+    #6  MessageBoxTimeoutA
+    #7  MessageBoxA
+    #8  ReportRendererFailure  (EditorMain.cpp:146)
+    #9  PrepareInitialMainWindowFrame  (EditorMain.cpp:109)
+    #10  InitInstance  (EditorMain.cpp:474)
+    #11  wWinMain  (EditorMain.cpp:232)
+    #12  __scrt_common_main_seh  (exe_common.inl:288)
+    #13  BaseThreadInitThunk
+    #14  RtlUserThreadStart
+[19:13:13.306] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 20.0 s. Everything above this line is what it did last.
+[19:13:13.306] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtUserWaitMessage
+    #1  DialogBoxIndirectParamAorW
+    #2  DialogBoxIndirectParamAorW
+    #3  SoftModalMessageBox
+    #4  DrawStateW
+    #5  MessageBoxTimeoutW
+    #6  MessageBoxTimeoutA
+    #7  MessageBoxA
+    #8  ReportRendererFailure  (EditorMain.cpp:146)
+    #9  PrepareInitialMainWindowFrame  (EditorMain.cpp:109)
+    #10  InitInstance  (EditorMain.cpp:474)
+    #11  wWinMain  (EditorMain.cpp:232)
+    #12  __scrt_common_main_seh  (exe_common.inl:288)
+    #13  BaseThreadInitThunk
+    #14  RtlUserThreadStart

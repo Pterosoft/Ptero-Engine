@@ -48,8 +48,9 @@ StructuredBuffer<uint>            gSssIndices      : register(t6);
 StructuredBuffer<GpuInstanceInfo> gSssInstanceInfo : register(t7);
 
 // The lighting pass's shadow maps and comparison sampler.
-Texture2D                gSssSunShadowMap    : register(t8);
+Texture2D                gSssSunShadowMap    : register(t8);  // or the virtual shadow map's page pool (sun and local lights)
 Texture2DArray           gSssPointShadowMaps : register(t9);
+StructuredBuffer<uint>   gSssVsmPageTable    : register(t10); // virtual shadow map pages -> pool tiles
 SamplerComparisonState   gSssShadowSampler   : register(s0);
 
 // The five Gaussians of the reflectance profile. The SDK drops the narrowest (0.233 at
@@ -324,10 +325,19 @@ float3 LightRadianceAt(PteroLightData light, float3 position, out float3 L, out 
 // are what the rest of the frame is shadowed by, and the scattered light has to agree
 // with it. Rays are still used where they are the right tool: placing the samples on the
 // real surface, and measuring transmission thickness.
-float SunShadowVisibility(float3 worldPos)
+float SunShadowVisibility(float3 worldPos, float3 normal)
 {
     if (gSssHasSunShadow == 0u)
         return 1.0f;
+
+    [branch]
+    if (gSssVsm.Active != 0u)
+    {
+        int usedLevel;
+        return gSssVsm.Enabled != 0u
+            ? PteroVsmVisibility(gSssVsm, gSssVsmPageTable, gSssSunShadowMap, worldPos, normal, gSssCameraPos, usedLevel)
+            : 1.0f;
+    }
 
     const float4 lightClip = mul(float4(worldPos, 1.0f), gSssLightViewProj);
     const float3 projCoords = lightClip.xyz / lightClip.w;
@@ -350,10 +360,16 @@ float SunShadowVisibility(float3 worldPos)
 
 float PointShadowVisibility(PteroLightData light, float3 worldPos, float3 normal)
 {
-    if (gSssHasPointShadows == 0u || light.CastShadows < 0.5f)
+    if (light.CastShadows < 0.5f)
         return 1.0f;
     const int shadowIndex = (int)light.ShadowIndex;
-    if (shadowIndex < 0 || shadowIndex >= 4)
+    // Virtual shadow map: the shadow index is the light's slot in it.
+    [branch]
+    if (gSssVsm.LocalEnabled != 0u)
+        return shadowIndex < 0 ? 1.0f
+            : PteroVsmLocalVisibility(gSssVsm, gSssVsmPageTable, gSssSunShadowMap, (uint)shadowIndex, worldPos,
+                                      normal, gSssCameraPos, 1.0f);
+    if (gSssHasPointShadows == 0u || shadowIndex < 0 || shadowIndex >= 4)
         return 1.0f;
 
     const float radius = max(light.Radius, 1e-4f);
@@ -435,7 +451,7 @@ float3 WorldSpaceIrradiance(SurfaceHit surface, float3 shadingNormal, float igno
     const float3 L_sun = normalize(-gSssSunDirection);
     const float sunNdotL = saturate(dot(shadingNormal, L_sun));
     if (sunNdotL > 0.0f && dot(gSssSunColor, gSssSunColor) > 0.0f)
-        irradiance += gSssSunColor * sunNdotL * SunShadowVisibility(surface.RawPosition);
+        irradiance += gSssSunColor * sunNdotL * SunShadowVisibility(surface.RawPosition, shadingNormal);
 
     [loop]
     for (int li = 0; li < gSssNumLights && li < PTERO_SSS_MAX_LIGHTS; ++li)

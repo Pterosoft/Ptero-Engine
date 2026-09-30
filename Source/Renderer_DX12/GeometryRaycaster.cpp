@@ -81,7 +81,8 @@ void GeometryRaycaster::Clear()
 void GeometryRaycaster::Build(
     const std::vector<Entity>& entities,
     const XMFLOAT3&            regionMin,
-    const XMFLOAT3&            regionMax)
+    const XMFLOAT3&            regionMax,
+    bool                       forPlayer)
 {
     Clear();
 
@@ -97,7 +98,10 @@ void GeometryRaycaster::Build(
         if (!entity.HasMeshComponent() || !entity.Mesh->MeshAsset)
             continue;
 
-        AppendEntityTriangles(entity, i, regionMin, regionMax);
+        if (forPlayer && entity.HasWaterComponent())
+            continue;
+
+        AppendEntityTriangles(entity, i, regionMin, regionMax, forPlayer);
     }
 
     if (mTriangles.empty())
@@ -112,7 +116,8 @@ void GeometryRaycaster::Build(
     // from invalidating the reference it holds into mNodes.
     mNodes.reserve(mTriangles.size() * 2);
 
-    BuildNode(0, static_cast<std::uint32_t>(mTriangleIndices.size()), 0);
+    mNodes.emplace_back();
+    BuildNode(0, 0, static_cast<std::uint32_t>(mTriangleIndices.size()), 0);
 
     // Centroids are only needed while partitioning.
     mCentroids.clear();
@@ -123,7 +128,8 @@ void GeometryRaycaster::AppendEntityTriangles(
     const Entity&   entity,
     std::size_t     entityIndex,
     const XMFLOAT3& regionMin,
-    const XMFLOAT3& regionMax)
+    const XMFLOAT3& regionMax,
+    bool            finestLod)
 {
     const Mesh* mesh = entity.Mesh->MeshAsset.get();
     if (mesh == nullptr)
@@ -178,7 +184,10 @@ void GeometryRaycaster::AppendEntityTriangles(
         return;
     }
 
-    const std::size_t lodIndex = mesh->GetLodCount() - 1;
+    if (mesh->GetLodCount() == 0)
+        return;
+
+    const std::size_t lodIndex = finestLod ? 0 : mesh->GetLodCount() - 1;
     const MeshLod& lod = mesh->GetLod(lodIndex);
 
     for (std::size_t i = 0; i + 2 < lod.Indices.size(); i += 3)
@@ -213,11 +222,8 @@ void GeometryRaycaster::AppendEntityTriangles(
     }
 }
 
-std::uint32_t GeometryRaycaster::BuildNode(std::uint32_t first, std::uint32_t count, int depth)
+void GeometryRaycaster::BuildNode(std::uint32_t nodeIndex, std::uint32_t first, std::uint32_t count, int depth)
 {
-    const std::uint32_t nodeIndex = static_cast<std::uint32_t>(mNodes.size());
-    mNodes.emplace_back();
-
     XMFLOAT3 boundsMin(FLT_MAX, FLT_MAX, FLT_MAX);
     XMFLOAT3 boundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     XMFLOAT3 centroidMin(FLT_MAX, FLT_MAX, FLT_MAX);
@@ -255,7 +261,7 @@ std::uint32_t GeometryRaycaster::BuildNode(std::uint32_t first, std::uint32_t co
     {
         mNodes[nodeIndex].LeftFirst = first;
         mNodes[nodeIndex].Count     = count;
-        return nodeIndex;
+        return;
     }
 
     // Split on the widest centroid axis at the midpoint.  Median split would
@@ -278,7 +284,7 @@ std::uint32_t GeometryRaycaster::BuildNode(std::uint32_t first, std::uint32_t co
     {
         mNodes[nodeIndex].LeftFirst = first;
         mNodes[nodeIndex].Count     = count;
-        return nodeIndex;
+        return;
     }
 
     const float axisMin = (axis == 0) ? centroidMin.x : (axis == 1) ? centroidMin.y : centroidMin.z;
@@ -311,15 +317,22 @@ std::uint32_t GeometryRaycaster::BuildNode(std::uint32_t first, std::uint32_t co
     {
         mNodes[nodeIndex].LeftFirst = first;
         mNodes[nodeIndex].Count     = count;
-        return nodeIndex;
+        return;
     }
 
-    const std::uint32_t leftChild = BuildNode(first, leftCount, depth + 1);
-    BuildNode(left, count - leftCount, depth + 1);
+    // Both children are allocated before either subtree is built so they sit
+    // side by side, which is what lets traversal find the right child at
+    // LeftFirst + 1.  Building the left subtree first would push its own
+    // descendants in between.
+    const std::uint32_t leftChild = static_cast<std::uint32_t>(mNodes.size());
+    mNodes.emplace_back();
+    mNodes.emplace_back();
 
     mNodes[nodeIndex].LeftFirst = leftChild;
     mNodes[nodeIndex].Count     = 0;
-    return nodeIndex;
+
+    BuildNode(leftChild, first, leftCount, depth + 1);
+    BuildNode(leftChild + 1, left, count - leftCount, depth + 1);
 }
 
 bool GeometryRaycaster::Raycast(

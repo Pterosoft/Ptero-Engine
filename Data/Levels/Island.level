@@ -1,0 +1,4222 @@
+{
+    "AgxTonemapSettings": {
+        "AutoExposureGreyPoint": 0.18000000715255737,
+        "AutoExposureHighPercent": 0.8999999761581421,
+        "AutoExposureHistogramLogMax": 6.0,
+        "AutoExposureHistogramLogMin": -10.0,
+        "AutoExposureLowPercent": 0.10000000149011612,
+        "AutoExposureMeteringMask": 0.5,
+        "AutoExposureSpeedDown": 1.0,
+        "AutoExposureSpeedUp": 3.0,
+        "Enabled": true,
+        "Ev100": -4.0,
+        "Ev100Max": -2.0,
+        "Ev100Min": -2.0,
+        "Exposure": 0.0,
+        "ExposureMode": 1,
+        "Global": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.10000000149011612,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.11999999731779099,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Highlights": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Midtones": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "Shadows": {
+            "Contrast": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gain": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Gamma": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Saturation": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            },
+            "Vibrance": {
+                "Blue": 0.0,
+                "Green": 0.0,
+                "Red": 0.0,
+                "Total": 0.0,
+                "Yellow": 0.0
+            }
+        },
+        "ShoulderStrength": 1.0499999523162842,
+        "ToeStrength": 0.949999988079071
+    },
+    "BloomSettings": {
+        "Enabled": true,
+        "Intensity": 0.029999999329447746,
+        "Knee": 0.3499999940395355,
+        "MipLevels": 6,
+        "Radius": 1.0,
+        "Threshold": 0.8999999761581421
+    },
+    "CameraPosition": {
+        "X": 518.376220703125,
+        "Y": 515.1181030273438,
+        "Z": 12.982440948486328
+    },
+    "CameraRotation": {
+        "X": -0.3792012929916382,
+        "Y": 4.074983596801758,
+        "Z": 0.0
+    },
+    "ChromaticAberrationSettings": {
+        "CenterX": 0.5,
+        "CenterY": 0.5,
+        "Enabled": false,
+        "Falloff": 2.0,
+        "SampleCount": 6,
+        "Strength": 2.0
+    },
+    "DlssSettings": {
+        "Enabled": false,
+        "Mode": 3
+    },
+    "DpleSettings": {
+        "AOBias": 0.019999999552965164,
+        "AOPower": 1.0,
+        "BroadAOIntensity": 0.11999999731779099,
+        "BroadAORadius": 1.2000000476837158,
+        "ContactAOIntensity": 0.30000001192092896,
+        "ContactAORadius": 0.25,
+        "ContactShadowIntensity": 0.75,
+        "ContactShadowLength": 0.30000001192092896,
+        "ContactShadowSteps": 10,
+        "ContactShadowThickness": 0.019999999552965164,
+        "DetailMotionSuppression": 0.0,
+        "DirectLightWeight": 1.0,
+        "DisocclusionDepthTolerance": 0.05000000074505806,
+        "EnableAmbientOcclusion": true,
+        "EnableContactShadows": true,
+        "EnableDetailEnhancement": false,
+        "EnableMaterialResponse": true,
+        "EnableMicroSpecular": true,
+        "EnableSpatialDenoise": true,
+        "EnableTemporalReconstruction": true,
+        "Enabled": false,
+        "FineDetailStrength": 0.10000000149011612,
+        "FoliageAOScale": 0.6000000238418579,
+        "FoliageSaturation": 0.15000000596046448,
+        "HistoryWeightMoving": 0.7200000286102295,
+        "HistoryWeightStable": 0.9200000166893005,
+        "IndirectFractionMax": 0.8500000238418579,
+        "IndirectFractionMin": 0.15000000596046448,
+        "MaxCombinedAO": 0.44999998807907104,
+        "MaxLuminanceChange": 0.15000000596046448,
+        "MicroAOIntensity": 0.18000000715255737,
+        "MicroAORadius": 0.05999999865889549,
+        "MicroSpecularDetailScale": 1.5,
+        "MicroSpecularRoughnessMax": 0.8500000238418579,
+        "MicroSpecularStrength": 1.0,
+        "NeighborhoodClampScale": 1.25,
+        "SkinAOScale": 0.44999998807907104,
+        "SkinWarmth": 0.25,
+        "SpatialDenoiseRadius": 2,
+        "SpecularOcclusionStrength": 1.0,
+        "StructureStrength": 0.18000000715255737,
+        "WetResponseStrength": 0.20000000298023224,
+        "WetRoughnessThreshold": 0.18000000715255737,
+        "WorkingResolutionDivisor": 2
+    },
+    "Entities": [
+        {
+            "Id": 7987905120022105,
+            "NameComponent": {
+                "Name": "Terrain_1"
+            },
+            "TerrainComponent": {
+                "ActivePaintLayer": 0,
+                "BreakUpTiling": true,
+                "BrushRadius": 200.0,
+                "BrushSmoothingPasses": 10,
+                "BrushStrength": 20.0,
+                "BrushType": 0,
+                "FlattenHeight": 0.0,
+                "Height": 1254,
+                "HeightBlend": true,
+                "HeightBlendSharpness": 0.6000000238418579,
+                "HeightOffset": 0.0,
+                "HeightScale": 30.0,
+                "HeightmapDdsPath": "K:/Ptero-Engine/Data/Textures/Island.dds",
+                "HeightmapRawPath": "Textures/Island.png",
+                "MaterialPath": "",
+                "MaterialTileSize": 4.0,
+                "PaintLayers": [
+                    {
+                        "DiffuseTexturePath": "",
+                        "MaterialPath": "Materials/thai_beach_sand_tdsmeeko.material",
+                        "TileScale": 16.0,
+                        "TileSizeMeters": 4.0,
+                        "TintA": 1.0,
+                        "TintB": 1.0,
+                        "TintG": 1.0,
+                        "TintR": 1.0
+                    }
+                ],
+                "SculptedHeightmapPath": "Textures/Island.sculpt.raw",
+                "SplatMapPath": "K:/Ptero-Engine/Data/Textures/Island.splat",
+                "Width": 1254,
+                "WorldSize": 2048.0
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 0.12018934637308121,
+                    "y": -1.9814071655273438,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 344378491450810,
+            "NameComponent": {
+                "Name": "Water_2"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 368.3092956542969,
+                    "y": -150.90625,
+                    "z": 7.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            },
+            "WaterComponent": {
+                "DebugMode": 0,
+                "MaterialPath": "Materials/Ocean.json",
+                "Resolution": 384,
+                "SizeX": 100000.0,
+                "SizeY": 100000.0,
+                "WaveScale": 1.0
+            }
+        },
+        {
+            "Id": 4557905787764023,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thin_gate_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 511.5906677246094,
+                    "y": 444.80914306640625,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 857317743314373,
+            "MeshComponent": {
+                "DebugForcedLod": -1,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "",
+                "MeshPath": ""
+            },
+            "NameComponent": {
+                "Name": "Geometry_6"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 530.6143798828125,
+                    "y": 436.1528625488281,
+                    "z": 0.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2684298775523013,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 504.5906677246094,
+                    "y": 444.80914306640625,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 370520263883362,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 525.5906982421875,
+                    "y": 444.80914306640625,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6541628603507568,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thin_corner_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 530.5906982421875,
+                    "y": 450.1454772949219,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8920707074056810,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thin_corner_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 490.1695251464844,
+                    "y": 444.8089294433594,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.1920928955078125e-07
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3605654160396492,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 530.5906982421875,
+                    "y": 464.6535949707031,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6457868724779027,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 530.5906982421875,
+                    "y": 479.0849914550781,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 958865516311687,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 530.5906982421875,
+                    "y": 493.4989318847656,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7908853044829908,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 484.8329772949219,
+                    "y": 450.0814514160156,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -1.570796251296997
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8665172090658658,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 484.8329772949219,
+                    "y": 464.5580749511719,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -1.570796251296997
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8618967071021942,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thick_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 484.8329772949219,
+                    "y": 479.0328063964844,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -1.570796251296997
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1641502744436939,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_tower_round.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 528.0343017578125,
+                    "y": 500.2211608886719,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1551043037164142,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_tower_round.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.09619140625,
+                    "y": 500.2211608886719,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 1.5707964897155762
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1086220261785987,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thin_straight_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 493.0440368652344,
+                    "y": 501.8976745605469,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6624376108461021,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_thin_straight_02.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 507.7798156738281,
+                    "y": 501.8976745605469,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7566711903483702,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1411347616487096,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6970216461995108,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6162823371723004,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2374882427420500,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2228764883783968,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3151931442855624,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2386442972298685,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1792357177958746,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 446.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8881654958623941,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4670650906794026,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3198331118259221,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 634042128633329,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3513792498175742,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1627428492424878,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3654218762238164,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/Modular/M_Tavern_CeilingModule.json",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7181928008286909,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6532710908447598,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6237274404540790,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7521098580888826,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5334173400050067,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 523.7498168945313,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6216008124156871,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5610219200875946,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8348820196842996,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4524302537070516,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8526305191443388,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2731628297324967,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1518871735732661,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 709430102887868,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8424734432483199,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6211072579931070,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4479891649679846,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4714125698434338,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5551235708472896,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7674824739685120,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6375748486373479,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7011703509627613,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7185746784300593,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4037422659962560,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3493621882034692,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2714142215864313,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8819085822538437,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5178251415205137,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 557349586429327,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8075838439422060,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1810165676339950,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7340095679721343,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5268987447673863,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7148411791194231,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2047798548881333,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 550428603002175,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3404958222295618,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 391748121833584,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6339552240476833,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7566101984711738,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3173120373931035,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 676504104765879,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8067598388098166,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5909235845803357,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1517277292963878,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2528907434345865,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5032140725116330,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1046333521846101,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1460664274279429,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4902098780611890,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8637880660735278,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7837261512049175,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7852753578806537,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1698242478887339,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7216712683584748,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 8773006937905592,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3846949526464824,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5427318379549773,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4392888283016646,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 292160926596917,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5040482569028769,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5126027851052964,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4501877089527832,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6858554333531841,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7902559823425889,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6137169712796099,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4871988064422016,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7332610058531515,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4745241695321066,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7964030479878913,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 688182414643771,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6342646799667882,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3240639136892359,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4652062257215116,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7137188783735952,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 182329392144454,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 870782487745162,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 473.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3216990248489575,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 469.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3022361610078790,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 460.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 6834869412055274,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 455.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5966510405677809,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 464.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7666423032173238,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 487.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7573947035001926,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 482.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4628607716333880,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 478.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 3507016066173497,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 491.9096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4900545837625566,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 519.2498168945313,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 200299374768278,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 514.7498168945313,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 5800970719677611,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 510.24981689453125,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 893886879813572,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 505.74981689453125,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 1479343306957652,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 501.24981689453125,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4856758850642535,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 496.74981689453125,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 7170941342507371,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 492.24981689453125,
+                    "y": 496.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 2178809082873428,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Materials/cobblestone_pavement.material",
+                "MeshPath": "Geometry/Modular/sm_Floor_1_1.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_8"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 487.74981689453125,
+                    "y": 451.4096984863281,
+                    "z": 7.997259140014648
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4558249818513141,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_walkway_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 493.5440368652344,
+                    "y": 499.3976745605469,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -3.1415927410125732
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        },
+        {
+            "Id": 4971100815233631,
+            "MeshComponent": {
+                "DebugForcedLod": 0,
+                "LodUsageScale": 1.0,
+                "MaterialPath": "Geometry/modular_fort_01/Fort.json",
+                "MeshPath": "Geometry/modular_fort_01/modular_fort_01_wall_stairs_straight_01.fbx.ptero"
+            },
+            "NameComponent": {
+                "Name": "Geometry_4"
+            },
+            "TransformComponent": {
+                "Position": {
+                    "x": 508.0440673828125,
+                    "y": 485.6476745605469,
+                    "z": 8.0
+                },
+                "Rotation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": -1.5707963705062866
+                },
+                "Scale": {
+                    "x": 1.0,
+                    "y": 1.0,
+                    "z": 1.0
+                }
+            }
+        }
+    ],
+    "FormatVersion": 2,
+    "FsrSettings": {
+        "Enabled": false,
+        "FrameGeneration": false,
+        "Mode": 1,
+        "Sharpening": true,
+        "Sharpness": 0.5
+    },
+    "GTAOSettings": {
+        "DebugView": 0,
+        "DenoisePasses": 0,
+        "DepthMIPSamplingOffset": 3.299999952316284,
+        "Enabled": true,
+        "FalloffRange": 0.6150000095367432,
+        "FinalValuePower": 2.549999952316284,
+        "Intensity": 1.0,
+        "QualityLevel": 3,
+        "Radius": 1.0,
+        "RadiusMultiplier": 1.4570000171661377,
+        "SampleDistributionPower": 2.0,
+        "ThinOccluderCompensation": 0.0
+    },
+    "GlobalIlluminationMode": 1,
+    "RadianceCascadesSettings": {
+        "CascadeCount": 4,
+        "ColorBleedingStrength": 2.0,
+        "DebugView": 0,
+        "Enabled": false,
+        "GiIntensity": 1.0,
+        "HistoryClampScale": 0.4000000059604645,
+        "HistoryDepthSensitivity": 128.0,
+        "HistoryNormalThreshold": 0.9200000166893005,
+        "Hysteresis": 0.800000011920929,
+        "IntervalLengthScale": 1.0,
+        "ProbeSpacingBase": 16,
+        "RayBias": 0.019999999552965164,
+        "RayLengthBase": 1.5,
+        "RayLengthScale": 2.0,
+        "RaysPerProbe": 8,
+        "SparseProbeCellSize": 16,
+        "SparseProbeReuseStrength": 0.3499999940395355,
+        "SparseProbeSearchSteps": 32,
+        "SparseProbeTableCapacity": 65536,
+        "SpatialFilterStrength": 1.0
+    },
+    "RadianceProbeSettings": {
+        "Enabled": false,
+        "FollowCamera": true,
+        "GiIntensity": 1.0,
+        "GridX": 16,
+        "GridY": 16,
+        "GridZ": 16,
+        "OriginX": 0.0,
+        "OriginY": 0.0,
+        "OriginZ": 2.0,
+        "RaysPerProbe": 64,
+        "Spacing": 2.0,
+        "SpecularEnabled": true,
+        "SpecularIntensity": 1.0,
+        "UpdateBlend": 0.15000000596046448
+    },
+    "RtAOSettings": {
+        "AOPower": 1.5,
+        "DebugView": 0,
+        "Enabled": false,
+        "Intensity": 1.0,
+        "MaxRayLength": 1.0,
+        "RayBias": 0.004999999888241291,
+        "RaysPerPixel": 16
+    },
+    "RtGISettings": {
+        "AccumulationBlend": 1.0,
+        "ColorLeakIntensity": 1.0,
+        "DebugView": 0,
+        "DepthThreshold": 0.10000000149011612,
+        "Enabled": true,
+        "GiIntensity": 1.0,
+        "MaxBounces": 2,
+        "MaxHistoryLength": 10,
+        "NextEventEstimation": true,
+        "NormalThreshold": 0.5,
+        "NrdAtrousIterations": 5,
+        "NrdDisocclusionThreshold": 0.20000000298023224,
+        "NrdMaxAccumulationTime": 0.5,
+        "NrdSharpenAmount": 0.3499999940395355,
+        "RadianceClamp": 10.0,
+        "RaysPerPixel": 1,
+        "SpatialRadius": 20.0,
+        "SpatialReuseEnabled": false,
+        "SpatialSamples": 4,
+        "SpecularEnabled": true,
+        "SpecularIntensity": 0.10000000149011612,
+        "SpecularRoughnessThreshold": 0.6000000238418579,
+        "TemporalReuseEnabled": false,
+        "UseNrdDenoiser": true
+    },
+    "SMAASettings": {
+        "CornerRounding": 25.0,
+        "DebugView": 0,
+        "EdgeThreshold": 0.05000000074505806,
+        "Enabled": false,
+        "MaxSearchSteps": 16.0,
+        "MaxSearchStepsDiag": 8.0
+    },
+    "SharpenSettings": {
+        "ImageSharpeningEnabled": true,
+        "ImageSharpeningStrength": 0.20000000298023224,
+        "TextureMipLODBias": -1.5,
+        "TextureSharpeningEnabled": true
+    },
+    "SsrSettings": {
+        "DebugView": 0,
+        "EdgeFadeStart": 0.8500000238418579,
+        "Enabled": false,
+        "Intensity": 1.0,
+        "MaxDistance": 60.0,
+        "MaxRoughness": 0.6000000238418579,
+        "MaxSteps": 48,
+        "RefineSteps": 6,
+        "SssrDepthThickness": 0.014999999664723873,
+        "SssrMaxTraversalIntersections": 128,
+        "SssrMinTraversalOccupancy": 4,
+        "SssrMostDetailedMip": 0,
+        "SssrSamplesPerQuad": 1,
+        "SssrTemporalStability": 0.699999988079071,
+        "SssrTemporalVarianceGuidedTracing": true,
+        "SssrTemporalVarianceThreshold": 0.0,
+        "StepGrowth": 1.0499999523162842,
+        "StepSize": 0.25,
+        "Technique": 0,
+        "Thickness": 0.5
+    },
+    "SubsurfaceSettings": {
+        "Enabled": true,
+        "FollowSurface": true,
+        "Mode": 0,
+        "Quality": 1,
+        "RtSamples": 12,
+        "Transmission": true,
+        "TransmissionIntensity": 1.0
+    },
+    "TaaSettings": {
+        "BlendFactor": 0.5,
+        "Enabled": true,
+        "JitterScale": 1.0
+    },
+    "TimeOfDaySettings": {
+        "Enabled": true,
+        "GroundAlbedo": 0.10000000149011612,
+        "OverrideSkyColor": false,
+        "OverrideSunColor": false,
+        "SkyColorB": 1.0,
+        "SkyColorG": 0.44999998807907104,
+        "SkyColorR": 0.25,
+        "SkyIntensityLux": 20000.0,
+        "SunColorB": 0.800000011920929,
+        "SunColorG": 0.949999988079071,
+        "SunColorR": 1.0,
+        "SunIntensityLux": 120000.0,
+        "TimeOfDay": 9.524029731750488,
+        "Turbidity": 2.5
+    },
+    "VolumetricCloudSettings": {
+        "AmbientIntensityScale": 1.0,
+        "AnvilBias": 0.25,
+        "BaseNoiseScaleMeters": 24000.0,
+        "CloudTopOffsetMeters": 350.0,
+        "CloudType": 0.5,
+        "Coverage": 0.550000011920929,
+        "CurlStrength": 0.6000000238418579,
+        "DebugView": 0,
+        "Density": 0.6000000238418579,
+        "DetailFadeDistanceMeters": 25000.0,
+        "DetailNoiseScaleMeters": 1600.0,
+        "DetailStrength": 0.3499999940395355,
+        "DetailWindSpeedScale": 2.0,
+        "DistanceFadeStartMeters": 80000.0,
+        "Enabled": true,
+        "ExtinctionScale": 0.05000000074505806,
+        "GroundBounceScale": 0.30000001192092896,
+        "LayerBottomMeters": 1200.0,
+        "LayerThicknessMeters": 4000.0,
+        "LightMarchDistanceMeters": 1600.0,
+        "LightSteps": 6,
+        "MaxSteps": 96,
+        "MaxTraceDistanceMeters": 120000.0,
+        "MsExtinctionFalloff": 0.550000011920929,
+        "MsPhaseFalloff": 0.5,
+        "MsScatterFalloff": 0.550000011920929,
+        "MultiScatterOctaves": 3,
+        "PhaseBlend": 0.2800000011920929,
+        "PhaseG0": 0.800000011920929,
+        "PhaseG1": -0.25,
+        "PlanetRadiusKm": 6360.0,
+        "PowderStrength": 0.3499999940395355,
+        "ResolutionDivisor": 2,
+        "ScatteringColorB": 1.0,
+        "ScatteringColorG": 1.0,
+        "ScatteringColorR": 1.0,
+        "ShadowConeSpread": 0.11999999731779099,
+        "ShadowStepGrowth": 1.350000023841858,
+        "SunIntensityScale": 1.0,
+        "TemporalBlend": 0.9200000166893005,
+        "TemporalUpsampling": true,
+        "WeatherCellSize": 1.0,
+        "WeatherCoverageBias": 0.0,
+        "WeatherScaleMeters": 90000.0,
+        "WeatherSeed": 1337,
+        "WeatherTypeBias": 0.0,
+        "WindDirectionDegrees": 45.0,
+        "WindSkew": 0.3499999940395355,
+        "WindSpeed": 12.0
+    },
+    "VolumetricFogSettings": {
+        "Anisotropy": 0.5,
+        "BaseHeight": 0.0,
+        "ColorB": 1.0,
+        "ColorG": 1.0,
+        "ColorR": 1.0,
+        "DebugView": 0,
+        "Density": 0.019999999552965164,
+        "DepthSlices": 64,
+        "EmissiveColorB": 0.0,
+        "EmissiveColorG": 0.0,
+        "EmissiveColorR": 0.0,
+        "EmissiveIntensity": 0.0,
+        "Enabled": false,
+        "FroxelTileSize": 8,
+        "GiIntensity": 1.0,
+        "HeightFalloff": 0.0,
+        "MaxDistance": 100.0,
+        "ScatteringAlbedo": 0.8999999761581421,
+        "StartDistance": 0.10000000149011612
+    }
+}

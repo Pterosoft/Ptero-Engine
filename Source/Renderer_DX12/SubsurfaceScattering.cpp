@@ -14,6 +14,7 @@
 //   9  table t7  RTGI instance info       (ray traced only)
 //  10  table t8  sun shadow map           (ray traced only)
 //  11  table t9  point shadow map array    (ray traced only)
+//  12  SRV   t10 virtual shadow map page table (ray traced only, root descriptor)
 //  static s0     shadow comparison sampler
 
 #include "pch.h"
@@ -418,7 +419,7 @@ bool SubsurfaceScatteringRenderer::CreateRootSignature()
     for (UINT i = 0; i < 5; ++i)
         ranges[6 + i] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5 + i, 0, 0 };
 
-    D3D12_ROOT_PARAMETER params[12]{};
+    D3D12_ROOT_PARAMETER params[13]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -428,6 +429,10 @@ bool SubsurfaceScatteringRenderer::CreateRootSignature()
         params[i + 1].DescriptorTable = { 1, &ranges[i] };
         params[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
+    // 12: virtual shadow map page table (t10), a root descriptor.
+    params[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[12].Descriptor.ShaderRegister = 10;
+    params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // Same comparison sampler as the deferred lighting pass's gShadowSampler.
     D3D12_STATIC_SAMPLER_DESC shadowSampler{};
@@ -765,6 +770,7 @@ D3D12_GPU_VIRTUAL_ADDRESS SubsurfaceScatteringRenderer::PrepareFrame(const Frame
                   std::begin(constants.PointFaceViewProj));
         constants.HasSunShadow = shadows.SunShadowSrv.ptr != 0 ? 1u : 0u;
         constants.HasPointShadows = (shadows.PointShadowSrv.ptr != 0 && shadows.PointShadowLightCount > 0) ? 1u : 0u;
+        constants.Vsm = shadows.Vsm;
     }
 
     std::uint8_t* destination = mMappedConstants + mFrameSlot * mConstantStride;
@@ -838,6 +844,9 @@ void SubsurfaceScatteringRenderer::Apply(
         // the diffuse SRV (a 2D texture, never actually read) when a map is missing.
         commandList->SetComputeRootDescriptorTable(10, scene.SunShadow.ptr != 0 ? scene.SunShadow : mDiffuseSrvGpu);
         commandList->SetComputeRootDescriptorTable(11, scene.PointShadows.ptr != 0 ? scene.PointShadows : mDiffuseSrvGpu);
+        // Only read when the constants say the virtual shadow map is on.
+        commandList->SetComputeRootShaderResourceView(12,
+            scene.VsmPageTable != 0 ? scene.VsmPageTable : mConstantBuffer->GetGPUVirtualAddress());
         commandList->SetPipelineState(mPsoRayTraced.Get());
     }
     else

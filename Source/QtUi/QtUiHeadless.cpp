@@ -236,6 +236,7 @@ bool ConsumeGameCloseRequest() { bool result=gameCloseRequested; gameCloseReques
 bool ConsumeGameFullscreenRequest() { bool result=gameFullscreenRequested; gameFullscreenRequested=false; return result; }
 HWND HostHandle() { return host; }
 void *ShellWidget() { return nullptr; }
+int Notification(const char *, const char *, const char *, const char *, const char *) { return 0; }
 float FramebufferScale() { return 1.0f; }
 float FrameMilliseconds() { return uiFrameMs; }
 float EventMilliseconds() { return 0.0f; }
@@ -268,6 +269,8 @@ bool DuplicateStyle(const char *) { return false; }
 float StyleMetric(const char *, float fallback) { return fallback; }
 void SetNextItemIcon(const char *) {}
 bool IconButton(const char *, const char *) { return false; }
+std::vector<std::string> LoadSettingList(const char *) { return {}; }
+void SaveSettingList(const char *, const std::vector<std::string> &) {}
 const TextureView *TextureViews(std::size_t &count)
 {
     count = 0;

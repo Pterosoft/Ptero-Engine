@@ -149,6 +149,13 @@ public:
     // Needed to size editor gizmos: how many pixels a world unit spans at a
     // given depth follows from the vertical field of view and the viewport
     // height, and nothing else.
+    // Changes only the vertical field of view, keeping aspect ratio and clip planes; the
+    // play session's character camera zooms and widens through this every frame.
+    void SetFovYRadians(float fovYRadians)
+    {
+        mFovYRadians = fovYRadians;
+    }
+
     float GetFovYRadians() const
     {
         return mFovYRadians;

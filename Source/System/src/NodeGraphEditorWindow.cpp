@@ -28,10 +28,13 @@
 #include <QtNodes/internal/ConnectionIdHash.hpp>
 #include <QtNodes/DataFlowGraphModel>
 #include <QtNodes/DataFlowGraphicsScene>
+#include <QtNodes/DefaultNodePainter>
 #include <QtNodes/Definitions>
 #include <QtNodes/GraphicsView>
 #include <QtNodes/NodeDelegateModel>
 #include <QtNodes/NodeDelegateModelRegistry>
+#include <QtNodes/NodeStyle>
+#include <QtNodes/internal/AbstractNodeGeometry.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QtNodes/StyleCollection>
 #include <QtNodes/UndoCommands>
@@ -96,6 +99,8 @@ QColor CategoryColor(const char* category)
         return QColor(0x1a, 0x33, 0x55);
     if (name == "Camera")
         return QColor(0x2e, 0x2a, 0x52);
+    if (name == "Character")
+        return QColor(0x1c, 0x4a, 0x2c);
     if (name == "Audio")
         return QColor(0x4a, 0x1f, 0x3d);
     if (name == "Input")
@@ -297,6 +302,13 @@ public:
         : mType(type)
         , mContext(context)
     {
+        // No QGraphicsDropShadowEffect: an effect renders the node and every inline editor
+        // on it offscreen and blurs the result on each paint, bypassing the item cache. On
+        // a graph of a few hundred nodes that was ~98% of a repaint (255 ms against 3 ms).
+        // PteroNodePainter draws a cheap shadow in its place.
+        QtNodes::NodeStyle style = nodeStyle();
+        style.ShadowEnabled = false;
+        setNodeStyle(style);
         setBackgroundColor(CategoryColor(type->Category));
 
         for (unsigned i = 0; i < mType->ParamCount; ++i)
@@ -342,9 +354,10 @@ public:
         const NodeGraphPin* pin = PinAt(portType, portIndex);
         if (pin != nullptr && pin->Kind == NodePinKind::Exec)
         {
-            // Execution runs the other way round from data: one output fires exactly one
-            // target, but any number of paths may converge on the same input.
-            return portType == PortType::In ? ConnectionPolicy::Many : ConnectionPolicy::One;
+            // Any number of paths may converge on an exec input, and an exec output may fan
+            // out to several targets; the runtime runs those one after another, top to
+            // bottom as they sit on the canvas.
+            return ConnectionPolicy::Many;
         }
 
         return portType == PortType::In ? ConnectionPolicy::One : ConnectionPolicy::Many;
@@ -648,6 +661,35 @@ private:
 // ---------------------------------------------------------------------------------------
 // Graph model
 // ---------------------------------------------------------------------------------------
+
+// The stock painter plus a soft drop shadow, standing in for the QGraphicsDropShadowEffect
+// QtNodes would otherwise put on every node (see PteroNodeDelegate). A few translucent
+// rounded rects are drawn straight into the item, so they land in its device-coordinate
+// cache like the rest of the node and cost nothing once cached. The node's bounding rect
+// already has a margin of twice the port spacing around it, which the shadow stays inside.
+class PteroNodePainter : public QtNodes::DefaultNodePainter
+{
+public:
+    void paint(QPainter* painter, QtNodes::NodeGraphicsObject& ngo) const override
+    {
+        const QSize size = ngo.nodeScene()->nodeGeometry().size(ngo.nodeId());
+        const QRectF body(QPointF(0.0, 0.0), size);
+
+        painter->save();
+        painter->setPen(Qt::NoPen);
+        constexpr int kLayers = 4;
+        for (int layer = kLayers; layer >= 1; --layer)
+        {
+            const qreal spread = layer * 1.5;
+            painter->setBrush(QColor(0, 0, 0, 22));
+            painter->drawRoundedRect(body.translated(3.0, 4.0).adjusted(-spread, -spread, spread, spread),
+                                     3.0 + spread, 3.0 + spread);
+        }
+        painter->restore();
+
+        QtNodes::DefaultNodePainter::paint(painter, ngo);
+    }
+};
 
 // DataFlowGraphModel is built for pure data flow, where a cycle would mean an endless
 // propagation and types must match exactly. A blueprint-style graph needs the opposite on
@@ -1433,6 +1475,7 @@ public:
 
         mModel = std::make_unique<PteroGraphModel>(mRegistry);
         mScene = new PteroNodeScene(*mModel, this);
+        mScene->setNodePainter(std::make_unique<PteroNodePainter>());
         mScene->OnCreateComment = [this](const QPointF& scenePos) { CreateCommentAt(scenePos); };
 
         mView = new PteroGraphicsView(mScene, this);
@@ -1456,8 +1499,9 @@ public:
                          [this](NodeId) { MarkEdited(); });
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::nodeDeleted, this,
                          [this](NodeId) { MarkEdited(); });
+        // Fires for every node on every mouse move of a drag, so it takes the cheap path.
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::nodePositionUpdated, this,
-                         [this](NodeId) { MarkEdited(); });
+                         [this](NodeId nodeId) { MarkMoved(nodeId); });
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::connectionCreated, this,
                          [this](ConnectionId) { MarkEdited(); });
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::connectionDeleted, this,
@@ -1486,6 +1530,8 @@ public:
 
     void SetDocument(const NodeGraphDocument& document)
     {
+        // Whatever was still waiting to be applied belonged to the graph being replaced.
+        mEditPending = false;
         mSuspendEdits = true;
 
         // clearScene only deletes what the graph model owns, so the comment items - which
@@ -1595,6 +1641,12 @@ public:
     }
 
     void SetEditedCallback(std::function<void()> callback) { mOnEdited = std::move(callback); }
+    // Called instead of the edited callback when all that changed is where one node sits.
+    // Returns false if it could not apply the move, and a full edit is reported instead.
+    void SetNodeMovedCallback(std::function<bool(int, double, double)> callback)
+    {
+        mOnNodeMoved = std::move(callback);
+    }
 
     const QString& ExportPath() const { return mExportPath; }
 
@@ -1750,12 +1802,37 @@ private:
         MarkEdited();
     }
 
+    // Edits are gathered and applied once: deleting, pasting or duplicating a selection
+    // reports every node and every link separately, and rebuilding the document for each
+    // one made a bulk edit on a large graph take seconds. The rebuild runs on the next
+    // pass of the event loop, or sooner through FlushPendingEdits when the graph is read.
     void MarkEdited()
     {
         if (mSuspendEdits)
         {
             return;
         }
+
+        mEditPending = true;
+        if (!mFlushQueued)
+        {
+            mFlushQueued = true;
+            QTimer::singleShot(0, this, [this] {
+                mFlushQueued = false;
+                FlushPendingEdits();
+            });
+        }
+    }
+
+public:
+    void FlushPendingEdits()
+    {
+        if (!mEditPending)
+        {
+            return;
+        }
+
+        mEditPending = false;
 
         // A rename on a Function Entry body arrives here like any other edit, so this is
         // the one place that has to notice the function list may have moved.
@@ -1767,6 +1844,25 @@ private:
         }
 
         UpdateStatus();
+    }
+
+private:
+
+    // A move changes nothing but one position: no function list, node count or status to
+    // refresh, and no need to rebuild the whole document - which is what MarkEdited does,
+    // and what made dragging a selection across a large graph crawl.
+    void MarkMoved(NodeId nodeId)
+    {
+        if (mSuspendEdits)
+        {
+            return;
+        }
+
+        const QPointF position = mModel->nodeData(nodeId, NodeRole::Position).value<QPointF>();
+        if (!mOnNodeMoved || !mOnNodeMoved(static_cast<int>(nodeId), position.x(), position.y()))
+        {
+            MarkEdited();
+        }
     }
 
     void UpdateStatus()
@@ -2368,7 +2464,10 @@ private:
     QString mGraphName = QStringLiteral("Level Graph");
     QString mExportPath;
     std::function<void()> mOnEdited;
+    std::function<bool(int, double, double)> mOnNodeMoved;
     bool mSuspendEdits = false;
+    bool mEditPending = false;
+    bool mFlushQueued = false;
     bool mSuspendVariableSignals = false;
 };
 
@@ -2380,6 +2479,10 @@ NodeGraphWindow* gWindow = nullptr;
 // Authoritative copy of the graph. The window writes into it on every edit, so the level
 // serializer and the runtime can read it without the window having to exist.
 NodeGraphDocument gDocument;
+// True once gDocument was built from the window, so its node ids are the window's. A
+// document handed in by SetDocument keeps the ids it was saved with, which the window
+// does not reuse; until the next full rebuild a move cannot be matched up by id.
+bool gDocumentMatchesWindow = false;
 std::string gExportPath;
 unsigned gRevision = 0;
 
@@ -2405,12 +2508,41 @@ NodeGraphWindow* EnsureWindow()
         }
 
         gDocument = gWindow->BuildDocument();
+        gDocumentMatchesWindow = true;
         gExportPath = gWindow->ExportPath().toStdString();
         ++gRevision;
+    });
+    gWindow->SetNodeMovedCallback([](int nodeId, double x, double y) {
+        if (!gDocumentMatchesWindow)
+        {
+            return false;
+        }
+
+        for (NodeGraphNode& node : gDocument.Nodes)
+        {
+            if (node.Id == nodeId)
+            {
+                node.X = x;
+                node.Y = y;
+                ++gRevision;
+                return true;
+            }
+        }
+
+        return false;
     });
 
     gWindow->SetDocument(gDocument);
     return gWindow;
+}
+// Everything outside the window reads the graph through the accessors below, so bringing
+// gDocument up to date there means no reader can see an edit the window has only queued.
+void FlushWindowEdits()
+{
+    if (gWindow != nullptr)
+    {
+        gWindow->FlushPendingEdits();
+    }
 }
 } // namespace
 
@@ -2446,18 +2578,21 @@ bool IsVisible()
 
 void Shutdown()
 {
+    FlushWindowEdits();
     delete gWindow;
     gWindow = nullptr;
 }
 
 const NodeGraphDocument& Document()
 {
+    FlushWindowEdits();
     return gDocument;
 }
 
 void SetDocument(const NodeGraphDocument& document)
 {
     gDocument = document;
+    gDocumentMatchesWindow = false;
     gExportPath.clear();
 
     if (gWindow != nullptr)
@@ -2472,11 +2607,13 @@ void SetDocument(const NodeGraphDocument& document)
 
 unsigned Revision()
 {
+    FlushWindowEdits();
     return gRevision;
 }
 
 const std::string& ExportPath()
 {
+    FlushWindowEdits();
     return gExportPath;
 }
 

@@ -102,8 +102,14 @@ private:
     DX12Shader                                  mComputeShader;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+    // Ringed one copy per frame in flight: with the time of day driving the
+    // exposure the constants change every frame, and a single mapped copy would
+    // be rewritten while an earlier frame's dispatch still reads it.
+    static constexpr UINT                       kFramesInFlight = 3;
     Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
     void*                                       mMappedCb = nullptr;
+    UINT64                                      mCbStride = 0;
+    UINT                                        mFrameSlot = 0;
 
     // Private 3-slot shader-visible descriptor heap.
     //   slot 0 – t0: input SRV (refreshed via CopyDescriptors each frame)

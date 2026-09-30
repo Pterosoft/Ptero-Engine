@@ -1,0 +1,195 @@
+Ptero Engine session log
+Started 2026-09-30 16:49:58
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-30_16-49-58.txt
+----------------------------------------------------------------------
+[16:49:58.003] [INFO ] [Log         ] Logging to disk started.
+[16:49:58.003] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-30_16-49-58.txt
+[16:49:58.003] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[16:50:07.019] [INFO ] [CVar        ] 399 cvars registered. Type 'list' in the console to see them.
+[16:50:07.019] [INFO ] [Renderer    ] Renderer initialized.
+[16:50:07.229] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[16:50:07.975] [INFO ] [VirtualGeometry] Virtualized geometry ready (mesh shader rasterisation, up to 4 concurrent builds).
+[16:50:08.057] [INFO ] [Shadows     ] Virtual shadow map pool: 2048 pages (8192 x 4096 texels, 128 MB).
+[16:50:12.522] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 5.0 s. Everything above this line is what it did last.
+[16:50:12.659] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  nvGetCompilerInterface
+    #1  nvGetCompilerInterface
+    #2  nvGetCompilerInterface
+    #3  nvGetCompilerInterface
+    #4  nvGetCompilerInterface
+    #5  nvGetCompilerInterface
+    #6  nvGetCompilerInterface
+    #7  nvGetCompilerInterface
+    #8  nvGetCompilerInterface
+    #9  nvGetCompilerInterface
+    #10  nvGetCompilerInterface
+    #11  nvGetCompilerInterface
+    #12  OpenAdapter12
+    #13  NVDEV_Thunk
+    #14  NVDEV_Thunk
+    #15  NVDEV_Thunk
+    #16  NVDEV_Thunk
+    #17  NVDEV_Thunk
+    #18  OpenAdapter10
+    #19  NVAPI_Thunk
+    #20  SetDependencyInfo
+    #21  OpenAdapter10
+    #22  D3D12GetInterface
+    #23  D3D12GetInterface
+    #24  D3D12GetInterface
+    #25  D3D12GetInterface
+    #26  0x7ffdcbe83350
+    #27  0x7ffddbe71eea
+    #28  D3D12GetInterface
+    #29  D3D12GetInterface
+    #30  D3D12GetInterface
+    #31  DeferredLightingPass::CreateLightingPipeline  (DeferredLightingPass.cpp:1197)
+    #32  DeferredLightingPass::ResolveLight  (DeferredLightingPass.cpp:516)
+    #33  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:2240)
+    #34  RendererDX12_Render  (DX12RendererAPI.cpp:1968)
+    #35  PrepareInitialMainWindowFrame  (EditorMain.cpp:101)
+    #36  InitInstance  (EditorMain.cpp:474)
+    #37  wWinMain  (EditorMain.cpp:232)
+    #38  __scrt_common_main_seh  (exe_common.inl:288)
+    #39  BaseThreadInitThunk
+    #40  RtlUserThreadStart
+[16:50:27.667] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 20.1 s. Everything above this line is what it did last.
+[16:50:27.672] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  nvGetCompilerInterface
+    #1  nvGetCompilerInterface
+    #2  nvGetCompilerInterface
+    #3  nvGetCompilerInterface
+    #4  nvGetCompilerInterface
+    #5  nvGetCompilerInterface
+    #6  nvGetCompilerInterface
+    #7  nvGetCompilerInterface
+    #8  nvGetCompilerInterface
+    #9  nvGetCompilerInterface
+    #10  nvGetCompilerInterface
+    #11  nvGetCompilerInterface
+    #12  nvGetCompilerInterface
+    #13  nvGetCompilerInterface
+    #14  nvGetCompilerInterface
+    #15  nvGetCompilerInterface
+    #16  nvGetCompilerInterface
+    #17  OpenAdapter12
+    #18  NVDEV_Thunk
+    #19  NVDEV_Thunk
+    #20  NVDEV_Thunk
+    #21  NVDEV_Thunk
+    #22  OpenAdapter10
+    #23  NVAPI_Thunk
+    #24  SetDependencyInfo
+    #25  OpenAdapter10
+    #26  D3D12GetInterface
+    #27  D3D12GetInterface
+    #28  D3D12GetInterface
+    #29  D3D12GetInterface
+    #30  0x7ffdcbe83350
+    #31  0x7ffddbe71eea
+    #32  D3D12GetInterface
+    #33  D3D12GetInterface
+    #34  D3D12GetInterface
+    #35  DeferredLightingPass::CreateLightingPipeline  (DeferredLightingPass.cpp:1227)
+    #36  DeferredLightingPass::ResolveLight  (DeferredLightingPass.cpp:516)
+    #37  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:2240)
+    #38  RendererDX12_Render  (DX12RendererAPI.cpp:1968)
+    #39  PrepareInitialMainWindowFrame  (EditorMain.cpp:101)
+    #40  InitInstance  (EditorMain.cpp:474)
+    #41  wWinMain  (EditorMain.cpp:232)
+    #42  __scrt_common_main_seh  (exe_common.inl:288)
+    #43  BaseThreadInitThunk
+    #44  RtlUserThreadStart
+[16:50:32.175] [WARN ] [Watchdog    ] Render thread recovered after 24.7 s; resumed at frame 40.
+[16:50:38.364] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_2', meshPath='Geometry/Mastaba/SM_Mastaba_Exterior.fbx.ptero', materialPath='MultiMaterials/SM_Mastaba_Exterior.json'
+[16:50:38.373] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_2', vertices=11997, indices=36309, subMeshes=4
+[16:50:38.373] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_I', meshPath='Geometry/Mastaba/SM_Mastaba_Interior.fbx.ptero', materialPath='Geometry/Mastaba/SM_Mastaba_Interior.json'
+[16:50:38.376] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_I', vertices=3698, indices=11334, subMeshes=5
+[16:50:38.376] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.377] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.377] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.377] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.377] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.377] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.378] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:50:38.378] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:50:38.403] [INFO ] [Meshes      ] Entity constant buffer grown to 28 slots x 3 frames (21504 bytes).
+[16:50:38.403] [INFO ] [Meshes      ] Material constant buffer grown to 103 draws x 3 frames.
+[16:50:38.404] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1f0d0000..0x1f15c970 (575856 bytes), releasing in 4 frames (frame 1595).
+[16:50:38.405] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e7750000..0x2e7773754 (145236 bytes), releasing in 4 frames (frame 1595).
+[16:50:38.405] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=0, vertexCount=11997, indexCount=36309, vbBytes=575856, ibBytes=145236
+[16:50:38.405] [DEBUG] [Meshes      ] First draw for entityIndex=1, entity='Geometry_2', lodIndex=0, vertexCount=11997, indexCount=36309, materialPath='MultiMaterials/SM_Mastaba_Exterior.json', subMeshCount=4, draw[0]={materialId=0,indexStart=0,indexCount=5883}, draw[1]={materialId=1,indexStart=5883,indexCount=22260}, draw[2]={materialId=2,indexStart=28143,indexCount=6723}, draw[3]={materialId=3,indexStart=34866,indexCount=1443}, summedSubMeshIndices=36309, validSubMeshRanges=true
+[16:50:40.595] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e77b0000..0x2e77db560 (177504 bytes), releasing in 4 frames (frame 1595).
+[16:50:40.596] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1f16c000..0x1f177118 (45336 bytes), releasing in 4 frames (frame 1595).
+[16:50:40.596] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=0, vertexCount=3698, indexCount=11334, vbBytes=177504, ibBytes=45336
+[16:50:40.596] [DEBUG] [Meshes      ] First draw for entityIndex=2, entity='Geometry_I', lodIndex=0, vertexCount=3698, indexCount=11334, materialPath='Geometry/Mastaba/SM_Mastaba_Interior.json', subMeshCount=5, draw[0]={materialId=0,indexStart=0,indexCount=2400}, draw[1]={materialId=1,indexStart=2400,indexCount=3492}, draw[2]={materialId=2,indexStart=5892,indexCount=690}, draw[3]={materialId=3,indexStart=6582,indexCount=270}, draw[4]={materialId=4,indexStart=6852,indexCount=4482}, summedSubMeshIndices=11334, validSubMeshRanges=true
+[16:50:42.970] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xf649000..0xf651610 (34320 bytes), releasing in 4 frames (frame 1595).
+[16:50:42.971] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1ffd6000..0x1ffd990c (14604 bytes), releasing in 4 frames (frame 1595).
+[16:50:42.971] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=3, lodIndex=0, vertexCount=715, indexCount=3651, vbBytes=34320, ibBytes=14604
+[16:50:42.971] [DEBUG] [Meshes      ] First draw for entityIndex=3, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=5, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=7, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=9, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=11, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=13, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=15, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=17, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=19, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.006] [DEBUG] [Meshes      ] First draw for entityIndex=21, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:50:43.773] [ERROR] [Watchdog    ] Render thread has not completed frame 1595 for 5.1 s. Everything above this line is what it did last.
+[16:50:43.791] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtReadFile
+    #1  ReadFile
+    #2  fread_nolock_s
+    #3  read
+    #4  fgetc_nolock
+    #5  fread_nolock_s
+    #6  fread_s
+    #7  fread
+    #8  std::basic_filebuf<char,std::char_traits<char> >::xsgetn  (__msvc_filebuf.hpp:525)
+    #9  std::basic_istream<char,std::char_traits<char> >::read
+    #10  DataFiles::ReadBytes  (DataFiles.cpp:265)
+    #11  `anonymous namespace'::EstimateAverageTextureColor  (RtGlobalIllumination.cpp:242)
+    #12  `RtGlobalIllumination::BuildTlas'::`2'::<lambda_2>::operator()  (RtGlobalIllumination.cpp:1855)
+    #13  RtGlobalIllumination::BuildTlas  (RtGlobalIllumination.cpp:2006)
+    #14  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:1594)
+    #15  RendererDX12_Render  (DX12RendererAPI.cpp:1968)
+    #16  wWinMain  (EditorMain.cpp:293)
+    #17  __scrt_common_main_seh  (exe_common.inl:288)
+    #18  BaseThreadInitThunk
+    #19  RtlUserThreadStart
+[16:50:46.390] [INFO ] [Renderer    ] Subsurface scattering initialised at 1521x845 (ray-traced path available).
+[16:50:46.486] [INFO ] [VirtualGeometry] Loaded cluster hierarchy for a 12,103-triangle mesh: 424 clusters over 7 levels (22,690 triangles in all levels), 0.00 s.
+[16:50:46.490] [INFO ] [VirtualGeometry] Geometry pools rebuilt: 1 meshes, 424 clusters, 0.8 MB.
+[16:50:46.827] [WARN ] [Watchdog    ] Render thread recovered after 8.1 s; resumed at frame 1596.
+[16:50:47.094] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1f0d0000..0x1f15c970 (frame 1599).
+[16:50:47.094] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e7750000..0x2e7773754 (frame 1599).
+[16:50:47.094] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e77b0000..0x2e77db560 (frame 1599).
+[16:50:47.094] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1f16c000..0x1f177118 (frame 1599).
+[16:50:47.095] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xf649000..0xf651610 (frame 1599).
+[16:50:47.095] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1ffd6000..0x1ffd990c (frame 1599).
+[16:50:50.371] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x1f16c000..0x1f170890 (18576 bytes), releasing in 4 frames (frame 1837).
+[16:50:50.371] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2ec88c000..0x2ec88dc80 (7296 bytes), releasing in 4 frames (frame 1837).
+[16:50:50.371] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=9, lodIndex=1, vertexCount=387, indexCount=1824, vbBytes=18576, ibBytes=7296
+[16:50:50.419] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x1f16c000..0x1f170890 (frame 1841).
+[16:50:50.420] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2ec88c000..0x2ec88dc80 (frame 1841).
+[16:50:56.922] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e55c0000..0x2e564c970 (575856 bytes), releasing in 4 frames (frame 2280).
+[16:50:56.922] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xf610000..0xf633754 (145236 bytes), releasing in 4 frames (frame 2280).
+[16:50:56.997] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e55c0000..0x2e564c970 (frame 2284).
+[16:50:56.998] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xf610000..0xf633754 (frame 2284).
+[16:51:05.830] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0xf649000..0xf64d890 (18576 bytes), releasing in 4 frames (frame 2760).
+[16:51:05.830] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0xeaad000..0xeaaec80 (7296 bytes), releasing in 4 frames (frame 2760).
+[16:51:05.903] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0xf649000..0xf64d890 (frame 2764).
+[16:51:05.904] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0xeaad000..0xeaaec80 (frame 2764).

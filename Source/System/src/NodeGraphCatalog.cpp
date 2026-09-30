@@ -361,6 +361,122 @@ namespace
     constexpr Pin kLookPointOut[] = { { "X", Num }, { "Y", Num }, { "Z", Num }, { "Hit", Bool } };
     constexpr Param kLookPointParams[] = { { "Plane Height", "Plane Z", NodeParamKind::Number, "0", nullptr } };
 
+    // ---- Character --------------------------------------------------------------
+
+    // Names of CharacterSettingFields() rows (System/CharacterMovement.h). The runtime
+    // looks them up by name, so a label changed there must change here too.
+    constexpr const char* kCharacterMovementPropertyItems =
+        "Walk Speed|Sprint Speed|Crouch Speed|Acceleration|Braking|Air Control|Jump Velocity|Gravity|"
+        "Max Fall Speed|Jump Release Damping|Max Jump Count|Coyote Time|Jump Buffer Time|"
+        "Capsule Radius|Standing Height|Crouched Height|Step Height|Max Slope|Kill Depth";
+    constexpr const char* kCharacterCameraPropertyItems =
+        "Field of View|Sprint FOV Boost|Eye Height|Crouched Eye Height|Blend Speed|Head Bob Amount|"
+        "Head Bob Frequency|Landing Dip|Landing Dip Max|Min Pitch|Max Pitch|"
+        "Mouse Sensitivity|Invert Y|Crouch Toggle|Sprint Toggle|Capture Mouse";
+
+    constexpr Pin kLandedOut[] = { { "Then", Exec }, { "Impact Speed", Num } };
+
+    constexpr Pin kAxisOut[] = { { "Value", Num } };
+    constexpr Param kAxisParams[] = {
+        { "Positive", "Positive key", NodeParamKind::Enum, "W", kKeyItems },
+        { "Negative", "Negative key", NodeParamKind::Enum, "S", kKeyItems }
+    };
+    constexpr Pin kLookInputOut[] = { { "Turn", Num }, { "Look Up", Num } };
+    constexpr Pin kMouseDeltaOut[] = { { "X", Num }, { "Y", Num } };
+
+    constexpr Pin kSetMouseCapturedIn[] = { { "In", Exec }, { "Captured", Bool } };
+    constexpr Param kSetMouseCapturedParams[] = { { "Captured", "Captured", NodeParamKind::Bool, "true", nullptr } };
+    constexpr Pin kMouseCapturedOut[] = { { "Captured", Bool } };
+
+    constexpr Pin kMovementInputIn[] = { { "In", Exec }, { "Forward", Num }, { "Right", Num } };
+    constexpr Param kMovementInputParams[] = {
+        { "Forward", "Forward", NodeParamKind::Number, "0", nullptr },
+        { "Right", "Right", NodeParamKind::Number, "0", nullptr }
+    };
+    constexpr Pin kLookInputIn[] = { { "In", Exec }, { "Turn", Num }, { "Look Up", Num } };
+    constexpr Param kLookInputParams[] = {
+        { "Turn", "Turn", NodeParamKind::Number, "0", nullptr },
+        { "Look Up", "Look up", NodeParamKind::Number, "0", nullptr }
+    };
+
+    constexpr Pin kSetSprintingIn[] = { { "In", Exec }, { "Sprinting", Bool } };
+    constexpr Param kSetSprintingParams[] = { { "Sprinting", "Sprinting", NodeParamKind::Bool, "true", nullptr } };
+
+    constexpr Pin kCharacterStateOut[] = {
+        { "Grounded", Bool }, { "Falling", Bool }, { "Crouching", Bool }, { "Sprinting", Bool },
+        { "Speed", Num }, { "Vertical Speed", Num }
+    };
+
+    constexpr Pin kTeleportIn[] = { { "In", Exec }, { "X", Num }, { "Y", Num }, { "Z", Num }, { "Yaw", Num } };
+    constexpr Param kTeleportParams[] = {
+        { "X", "X", NodeParamKind::Number, "0", nullptr },
+        { "Y", "Y", NodeParamKind::Number, "0", nullptr },
+        { "Z", "Z", NodeParamKind::Number, "0", nullptr },
+        { "Yaw", "Yaw", NodeParamKind::Number, "0", nullptr }
+    };
+
+    constexpr Pin kSetCharacterPropertyIn[] = { { "In", Exec }, { "Value", Num } };
+    constexpr Pin kGetCharacterPropertyOut[] = { { "Value", Num } };
+    constexpr Param kSetMovementPropertyParams[] = {
+        { "Property", "Property", NodeParamKind::Enum, "Walk Speed", kCharacterMovementPropertyItems },
+        { "Value", "Value", NodeParamKind::Number, "4", nullptr }
+    };
+    constexpr Param kGetMovementPropertyParams[] = {
+        { "Property", "Property", NodeParamKind::Enum, "Walk Speed", kCharacterMovementPropertyItems }
+    };
+    constexpr Param kSetCameraPropertyParams[] = {
+        { "Property", "Property", NodeParamKind::Enum, "Field of View", kCharacterCameraPropertyItems },
+        { "Value", "Value", NodeParamKind::Number, "70", nullptr }
+    };
+    constexpr Param kGetCameraPropertyParams[] = {
+        { "Property", "Property", NodeParamKind::Enum, "Field of View", kCharacterCameraPropertyItems }
+    };
+
+    // The character's whole configuration, edited on the node body like a details panel.
+    // Keys are CharacterSettingFields() names and the defaults mirror the structs in
+    // CharacterMovement.h; the test harness checks the two agree.
+    constexpr Param kMovementSettingsParams[] = {
+        { "Walk Speed", "Walk speed (m/s)", NodeParamKind::Number, "4", nullptr },
+        { "Sprint Speed", "Sprint speed (m/s)", NodeParamKind::Number, "7", nullptr },
+        { "Crouch Speed", "Crouch speed (m/s)", NodeParamKind::Number, "2", nullptr },
+        { "Acceleration", "Acceleration", NodeParamKind::Number, "45", nullptr },
+        { "Braking", "Braking", NodeParamKind::Number, "30", nullptr },
+        { "Air Control", "Air control (0-1)", NodeParamKind::Number, "0.35", nullptr },
+        { "Jump Velocity", "Jump velocity (m/s)", NodeParamKind::Number, "5.2", nullptr },
+        { "Gravity", "Gravity (m/s2)", NodeParamKind::Number, "15", nullptr },
+        { "Max Fall Speed", "Max fall speed", NodeParamKind::Number, "50", nullptr },
+        { "Jump Release Damping", "Jump release damping", NodeParamKind::Number, "0.5", nullptr },
+        { "Max Jump Count", "Max jumps", NodeParamKind::Number, "1", nullptr },
+        { "Coyote Time", "Coyote time (s)", NodeParamKind::Number, "0.12", nullptr },
+        { "Jump Buffer Time", "Jump buffer (s)", NodeParamKind::Number, "0.12", nullptr },
+        { "Capsule Radius", "Capsule radius", NodeParamKind::Number, "0.35", nullptr },
+        { "Standing Height", "Standing height", NodeParamKind::Number, "1.8", nullptr },
+        { "Crouched Height", "Crouched height", NodeParamKind::Number, "1.1", nullptr },
+        { "Step Height", "Step height", NodeParamKind::Number, "0.4", nullptr },
+        { "Max Slope", "Max slope (deg)", NodeParamKind::Number, "50", nullptr },
+        { "Kill Depth", "Kill depth", NodeParamKind::Number, "500", nullptr }
+    };
+    constexpr Param kCameraSettingsParams[] = {
+        { "Field of View", "Field of view (deg)", NodeParamKind::Number, "70", nullptr },
+        { "Sprint FOV Boost", "Sprint FOV boost", NodeParamKind::Number, "6", nullptr },
+        { "Eye Height", "Eye height", NodeParamKind::Number, "1.65", nullptr },
+        { "Crouched Eye Height", "Crouched eye height", NodeParamKind::Number, "0.95", nullptr },
+        { "Blend Speed", "Blend speed", NodeParamKind::Number, "12", nullptr },
+        { "Head Bob Amount", "Head bob amount", NodeParamKind::Number, "0.03", nullptr },
+        { "Head Bob Frequency", "Head bob frequency", NodeParamKind::Number, "0.9", nullptr },
+        { "Landing Dip", "Landing dip", NodeParamKind::Number, "0.012", nullptr },
+        { "Landing Dip Max", "Landing dip max", NodeParamKind::Number, "0.18", nullptr },
+        { "Min Pitch", "Min pitch (deg)", NodeParamKind::Number, "-88", nullptr },
+        { "Max Pitch", "Max pitch (deg)", NodeParamKind::Number, "88", nullptr }
+    };
+    constexpr Param kControlSettingsParams[] = {
+        { "Mouse Sensitivity", "Mouse sensitivity", NodeParamKind::Number, "0.12", nullptr },
+        { "Invert Y", "Invert Y", NodeParamKind::Bool, "false", nullptr },
+        { "Crouch Toggle", "Crouch toggles", NodeParamKind::Bool, "false", nullptr },
+        { "Sprint Toggle", "Sprint toggles", NodeParamKind::Bool, "false", nullptr },
+        { "Capture Mouse", "Capture mouse", NodeParamKind::Bool, "true", nullptr }
+    };
+
     // ---- Audio ------------------------------------------------------------------
 
     constexpr Pin kAudioEventIn[] = { { "In", Exec }, { "Event", Str } };
@@ -420,6 +536,13 @@ namespace
           "Fires when a <button> in the game UI is clicked, or activated with Enter/Space. Button is its "
           "id; leave it empty to catch every button and branch on Element Id instead.",
           nullptr, 0, kUiClickedOut, Count(kUiClickedOut), kUiClickedParams, Count(kUiClickedParams) },
+        { "Event.CharacterLanded", "On Landed", "Events",
+          "Fires when the player character touches down after a jump or a fall. Impact Speed is how fast it "
+          "was falling, in m/s - use it for landing sounds or fall damage.",
+          nullptr, 0, kLandedOut, Count(kLandedOut), nullptr, 0 },
+        { "Event.CharacterJumped", "On Jumped", "Events",
+          "Fires when the player character leaves the ground in a jump.",
+          nullptr, 0, kEventOut, Count(kEventOut), nullptr, 0 },
 
         { "Flow.Branch", "Branch", "Flow",
           "Takes the True or the False path depending on Condition.",
@@ -602,6 +725,26 @@ namespace
         { "Input.IsKeyDown", "Is Key Down", "Input",
           "True while the key is held and the game window has focus.",
           nullptr, 0, kKeyDownOut, Count(kKeyDownOut), kKeyParams, Count(kKeyParams) },
+        { "Input.GetAxis", "Get Input Axis", "Input",
+          "1 while the Positive key is held, -1 while the Negative key is, 0 for neither or both - an axis "
+          "mapping, like W/S for moving forward or D/A for strafing.",
+          nullptr, 0, kAxisOut, Count(kAxisOut), kAxisParams, Count(kAxisParams) },
+        { "Input.GetLookInput", "Get Look Input", "Input",
+          "This frame's mouse movement as degrees to turn right and look up, with the player's Mouse "
+          "Sensitivity and Invert Y already applied. Feed it to Add Look Input. 0 while the mouse is not "
+          "captured.",
+          nullptr, 0, kLookInputOut, Count(kLookInputOut), nullptr, 0 },
+        { "Input.GetMouseDelta", "Get Mouse Delta", "Input",
+          "Raw mouse movement this frame, in pixels: +X right, +Y down. 0 while the mouse is not captured.",
+          nullptr, 0, kMouseDeltaOut, Count(kMouseDeltaOut), nullptr, 0 },
+        { "Input.SetMouseCaptured", "Set Mouse Captured", "Input",
+          "Captured hides the cursor and turns mouse movement into look input; released gives the cursor "
+          "back, e.g. for a menu. Escape always releases it, and a click in the game view takes it back.",
+          kSetMouseCapturedIn, Count(kSetMouseCapturedIn), kExecOut, Count(kExecOut),
+          kSetMouseCapturedParams, Count(kSetMouseCapturedParams) },
+        { "Input.IsMouseCaptured", "Is Mouse Captured", "Input",
+          "True while the mouse is captured for looking.",
+          nullptr, 0, kMouseCapturedOut, Count(kMouseCapturedOut), nullptr, 0 },
 
         { "Entity.Reference", "Entity", "Entity",
           "One entity of the level, picked by id. Renaming or reordering entities does not re-point it.",
@@ -683,6 +826,79 @@ namespace
           "looking at. Hit is false when the camera looks away from the plane.",
           kLookPointIn, Count(kLookPointIn), kLookPointOut, Count(kLookPointOut),
           kLookPointParams, Count(kLookPointParams) },
+
+        // The player character. Only available when Game Settings runs the player from a
+        // Node Graph controller; with the C++ controller the character lives in Game.dll.
+        { "Character.SetMovementSettings", "Set Movement Settings", "Character",
+          "Configures how the character moves: speeds, acceleration, jumping, gravity and its collision "
+          "capsule. Values on the node body; run it from On Game Start.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut),
+          kMovementSettingsParams, Count(kMovementSettingsParams) },
+        { "Character.SetCameraSettings", "Set Camera Settings", "Character",
+          "Configures the character's eye camera: field of view, eye heights, head bob, landing dip and "
+          "look limits. Values on the node body; run it from On Game Start.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut),
+          kCameraSettingsParams, Count(kCameraSettingsParams) },
+        { "Character.SetControlSettings", "Set Control Settings", "Character",
+          "Configures the player's controls: mouse sensitivity, Invert Y, crouch/sprint toggles and "
+          "whether the mouse is captured. Values on the node body; run it from On Game Start.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut),
+          kControlSettingsParams, Count(kControlSettingsParams) },
+        { "Character.AddMovementInput", "Add Movement Input", "Character",
+          "Walks the character this frame. Forward and Right are -1..1 relative to where it faces; calls in "
+          "the same frame add up. Call it every tick, e.g. from Get Input Axis.",
+          kMovementInputIn, Count(kMovementInputIn), kExecOut, Count(kExecOut),
+          kMovementInputParams, Count(kMovementInputParams) },
+        { "Character.AddLookInput", "Add Look Input", "Character",
+          "Turns the character's view: degrees to turn right and to look up. Pitch is kept within the "
+          "camera's Min/Max Pitch.",
+          kLookInputIn, Count(kLookInputIn), kExecOut, Count(kExecOut), kLookInputParams, Count(kLookInputParams) },
+        { "Character.Jump", "Jump", "Character",
+          "Starts a jump if the character can - on the ground, just off a ledge, or with a jump left for "
+          "a double jump. A press shortly before landing is remembered. Fire it once per key press.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut), nullptr, 0 },
+        { "Character.StopJumping", "Stop Jumping", "Character",
+          "Call when the jump key is released: a jump still rising is cut short, so a tap hops and a hold "
+          "jumps full height.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut), nullptr, 0 },
+        { "Character.Crouch", "Crouch", "Character",
+          "Crouches: lower capsule, lower eye, Crouch Speed.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut), nullptr, 0 },
+        { "Character.UnCrouch", "Uncrouch", "Character",
+          "Stands back up - as soon as there is room above the character.",
+          kExecIn, Count(kExecIn), kExecOut, Count(kExecOut), nullptr, 0 },
+        { "Character.SetSprinting", "Set Sprinting", "Character",
+          "Sprint on or off. Sprinting only takes effect while standing and moving forward.",
+          kSetSprintingIn, Count(kSetSprintingIn), kExecOut, Count(kExecOut),
+          kSetSprintingParams, Count(kSetSprintingParams) },
+        { "Character.GetState", "Get Character State", "Character",
+          "What the character is doing: on the ground, in the air, crouched, sprinting, its ground speed "
+          "and its vertical speed in m/s.",
+          nullptr, 0, kCharacterStateOut, Count(kCharacterStateOut), nullptr, 0 },
+        { "Character.GetLocation", "Get Character Location", "Character",
+          "World position of the character's feet, in metres.",
+          nullptr, 0, kVectorOut, Count(kVectorOut), nullptr, 0 },
+        { "Character.Teleport", "Teleport Character", "Character",
+          "Moves the character's feet to a position without collision, facing Yaw degrees. Stops it.",
+          kTeleportIn, Count(kTeleportIn), kExecOut, Count(kExecOut), kTeleportParams, Count(kTeleportParams) },
+        { "Character.SetMovementProperty", "Set Movement Property", "Character",
+          "Changes one of the character's movement settings - walk speed, jump velocity, gravity... - "
+          "e.g. for a slowing effect. Set Movement Settings configures them all at once.",
+          kSetCharacterPropertyIn, Count(kSetCharacterPropertyIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kSetMovementPropertyParams, Count(kSetMovementPropertyParams) },
+        { "Character.GetMovementProperty", "Get Movement Property", "Character",
+          "Reads one of the character's movement settings.",
+          nullptr, 0, kGetCharacterPropertyOut, Count(kGetCharacterPropertyOut),
+          kGetMovementPropertyParams, Count(kGetMovementPropertyParams) },
+        { "Character.SetCameraProperty", "Set Camera Property", "Character",
+          "Changes one of the character camera's settings - field of view, eye height, head bob, mouse "
+          "sensitivity... Booleans take any non-zero as true.",
+          kSetCharacterPropertyIn, Count(kSetCharacterPropertyIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kSetCameraPropertyParams, Count(kSetCameraPropertyParams) },
+        { "Character.GetCameraProperty", "Get Camera Property", "Character",
+          "Reads one of the character camera's settings. Booleans read as 1 or 0.",
+          nullptr, 0, kGetCharacterPropertyOut, Count(kGetCharacterPropertyOut),
+          kGetCameraPropertyParams, Count(kGetCameraPropertyParams) },
 
         { "Audio.PlaySound", "Play Sound", "Audio",
           "Fires an FMOD event once. Event is its name (\"Click\") or full path; the folder does not matter.",

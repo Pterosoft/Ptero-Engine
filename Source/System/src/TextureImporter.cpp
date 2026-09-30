@@ -41,6 +41,8 @@ bool TextureImporter::IsLikelyMaskTexturePath(const std::string& path)
         || lower.find("ao") != std::string::npos
         || lower.find("ambientocclusion") != std::string::npos
         || lower.find("opacity") != std::string::npos
+        || lower.find("height") != std::string::npos
+        || lower.find("displacement") != std::string::npos
         || lower.find("mask") != std::string::npos;
 }
 
@@ -67,7 +69,6 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
 
     // Convert to wide strings for DirectXTex APIs.
     const std::wstring wideSrc(srcPath.begin(), srcPath.end());
-    const std::wstring wideDest(destDdsPath.begin(), destDdsPath.end());
 
     DirectX::ScratchImage image;
     DirectX::TexMetadata  meta;
@@ -108,6 +109,44 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
         return false;
     }
 
+    const Role role = (IsLikelyNormalMapPath(srcPath) || IsLikelyNormalMapPath(destDdsPath))
+        ? Role::Normal
+        : (IsLikelyMaskTexturePath(srcPath) || IsLikelyMaskTexturePath(destDdsPath)) ? Role::Linear : Role::Color;
+
+    const bool encoded = Encode(image, destDdsPath, role);
+    if (shouldUninitialize)
+    {
+        CoUninitialize();
+    }
+    return encoded;
+}
+
+bool TextureImporter::ImportImage(const DirectX::ScratchImage& image, const std::string& destDdsPath, const Role role)
+{
+    mLastError.clear();
+
+    DirectX::ScratchImage copy;
+    if (FAILED(copy.InitializeFromImage(*image.GetImage(0, 0, 0))))
+    {
+        mLastError = "Out of memory while preparing the texture.";
+        return false;
+    }
+
+    const HRESULT comInitResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool encoded = Encode(copy, destDdsPath, role);
+    if (SUCCEEDED(comInitResult))
+    {
+        CoUninitialize();
+    }
+    return encoded;
+}
+
+bool TextureImporter::Encode(DirectX::ScratchImage& image, const std::string& destDdsPath, const Role role)
+{
+    const std::wstring wideDest(destDdsPath.begin(), destDdsPath.end());
+    DirectX::TexMetadata meta = image.GetMetadata();
+    HRESULT hr = S_OK;
+
     // If the source contains multiple mips or is already compressed, decompress first.
     if (DirectX::IsCompressed(meta.format))
     {
@@ -116,37 +155,42 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
         if (FAILED(hr))
         {
             mLastError = "Failed to decompress source DDS texture.";
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
             return false;
         }
         image = std::move(decompressed);
         meta  = image.GetMetadata();
     }
 
-    const bool isNormalMap = IsLikelyNormalMapPath(srcPath) || IsLikelyNormalMapPath(destDdsPath);
-    const bool isMaskTexture = IsLikelyMaskTexturePath(srcPath) || IsLikelyMaskTexturePath(destDdsPath);
+    const bool isNormalMap = role == Role::Normal;
+    const bool isMaskTexture = role == Role::Linear;
 
     // Ensure the image is in a format DirectXTex can compress from.
     // Color textures stay in sRGB so the saved DDS carries the correct transfer function.
     const DXGI_FORMAT workingFormat = (!isNormalMap && !isMaskTexture)
         ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
         : DXGI_FORMAT_R8G8B8A8_UNORM;
+    // Integer colour images are sRGB-encoded even when the file carries no colour-space tag
+    // (Substance Painter PNGs have no sRGB chunk, so WIC reports plain UNORM). Converting
+    // that UNORM to UNORM_SRGB would encode the gamma a second time and wash the colours
+    // out, so the source is declared sRGB and the bytes pass through untouched. Only float
+    // sources (HDR/EXR) are genuinely linear.
+    DirectX::TEX_FILTER_FLAGS convertFilter = DirectX::TEX_FILTER_DEFAULT;
+    if (!isNormalMap && !isMaskTexture
+        && !DirectX::IsSRGB(meta.format)
+        && DirectX::FormatDataType(meta.format) != DirectX::FORMAT_TYPE_FLOAT)
+    {
+        convertFilter |= DirectX::TEX_FILTER_SRGB_IN;
+    }
+
     if (meta.format != workingFormat && meta.format != DXGI_FORMAT_B8G8R8A8_UNORM)
     {
         DirectX::ScratchImage converted;
         hr = DirectX::Convert(image.GetImages(), image.GetImageCount(), meta,
-                              workingFormat, DirectX::TEX_FILTER_DEFAULT,
+                              workingFormat, convertFilter,
                               DirectX::TEX_THRESHOLD_DEFAULT, converted);
         if (FAILED(hr))
         {
             mLastError = "Failed to convert source texture to R8G8B8A8.";
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
             return false;
         }
         image = std::move(converted);
@@ -154,9 +198,12 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
     }
 
     // Generate a full mip chain before compression so runtime sampling looks correct.
+    // DirectXTex's own filter rather than WIC's: WIC runs through a factory DirectXTex caches
+    // process-wide, which crashes once the COM apartment it was created in has gone away
+    // (importers run on short-lived worker threads).
     DirectX::ScratchImage mippedImage;
     hr = DirectX::GenerateMipMaps(image.GetImages(), image.GetImageCount(), meta,
-                                  DirectX::TEX_FILTER_DEFAULT, 0, mippedImage);
+                                  DirectX::TEX_FILTER_DEFAULT | DirectX::TEX_FILTER_FORCE_NON_WIC, 0, mippedImage);
     if (FAILED(hr))
     {
         // Non-fatal – keep the single-mip image if mip generation failed.
@@ -205,10 +252,6 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
     if (FAILED(hr))
     {
         mLastError = "BC compression failed (HRESULT " + std::to_string(hr) + ").";
-        if (shouldUninitialize)
-        {
-            CoUninitialize();
-        }
         return false;
     }
 
@@ -220,16 +263,7 @@ bool TextureImporter::Import(const std::string& srcPath, const std::string& dest
     if (FAILED(hr))
     {
         mLastError = "Failed to save DDS file (HRESULT " + std::to_string(hr) + "): " + destDdsPath;
-        if (shouldUninitialize)
-        {
-            CoUninitialize();
-        }
         return false;
-    }
-
-    if (shouldUninitialize)
-    {
-        CoUninitialize();
     }
 
     return true;

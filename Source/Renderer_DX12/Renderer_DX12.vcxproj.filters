@@ -63,6 +63,9 @@
     <ClInclude Include="EditorMainMenu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DataFolderWatcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="DX12ShaderCompiler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -123,6 +126,18 @@
     <ClInclude Include="ShadowMapRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ShadowPageView.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapConstants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="PointLightRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -180,10 +195,31 @@
     <ClInclude Include="SssrRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DpleRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DpleSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="BloomSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="BloomRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FftBloomRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareOptics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensDiffraction.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RadianceProbeSettings.h">
@@ -226,6 +262,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ParticleRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ParticleEffects.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RainRenderer.h">
@@ -279,6 +318,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="EditorMainMenu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DataFolderWatcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\System\MaterialEditor.cpp">
@@ -380,6 +422,9 @@
     <ClCompile Include="ShadowMapRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="VirtualShadowMapRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="DeferredLightingPass.cpp">
       <Filter>Source Files\Renderer</Filter>
     </ClCompile>
@@ -425,7 +470,22 @@
     <ClCompile Include="SssrRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="DpleRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="BloomRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FftBloomRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensFlareRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensFlareOptics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensDiffraction.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RadianceProbeRenderer.cpp">
@@ -465,6 +525,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ParticleRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ParticleEffects.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="EditorParticles.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RainRenderer.cpp">

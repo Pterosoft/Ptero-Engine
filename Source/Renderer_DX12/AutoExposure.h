@@ -24,6 +24,18 @@
 class AutoExposure
 {
 public:
+    // Eye adaptation around an exposure decided elsewhere (the time of day): the
+    // target is ReferenceEv, moved by Strength times how many stops the metered
+    // view differs from ReferenceLogLuminance beyond the first DeadZone stops,
+    // then clamped to the settings' [Ev100Min, Ev100Max] as usual.
+    struct RelativeTarget
+    {
+        float ReferenceEv = 0.0f;
+        float ReferenceLogLuminance = 0.0f;
+        float Strength = 1.0f;
+        float DeadZone = 1.0f;
+    };
+
     bool Initialize();
     void Shutdown();
 
@@ -38,7 +50,8 @@ public:
         ID3D12Resource*             inputResource,
         D3D12_CPU_DESCRIPTOR_HANDLE inputCpuSrv,
         const AgxTonemapSettings&   settings,
-        float                       deltaTimeSeconds);
+        float                       deltaTimeSeconds,
+        const RelativeTarget*       relativeTarget = nullptr);
 
     // Snap to the metered exposure on the next frame instead of easing into it.
     // Call when the view changes discontinuously - a level load, a camera cut -
@@ -87,7 +100,12 @@ private:
         float DeltaTimeSeconds;
         float GreyPoint;
         float MeteringMask;
-        float Pad0;
+        UINT  RelativeMode;
+
+        float ReferenceEv;
+        float ReferenceLogLuminance;
+        float Strength;
+        float DeadZone;
     };
 
     DX12Shader                                  mHistogramShader;

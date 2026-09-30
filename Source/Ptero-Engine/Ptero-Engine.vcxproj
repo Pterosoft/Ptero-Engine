@@ -173,6 +173,10 @@
     <ClCompile Include="..\Renderer_DX12\SceneSerializer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <!-- The serializer reads the .particle files a level's emitters name. -->
+    <ClCompile Include="..\Renderer_DX12\ParticleEffects.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <!-- The launcher links the scene serializer directly, and a level now carries its
          node graph, so the document type has to come along. Nothing else from the node
          graph - neither the Qt editor nor the runtime - is needed here. -->

@@ -17,16 +17,23 @@
 #include "NrdDenoiser.h"        // NVIDIA NRD RELAX_DIFFUSE wrapper
 #include "TextureManager.h"
 #include "VegetationRenderer.h" // RayTracingBatch
+#include "VirtualShadowMapConstants.h"
 
+#include <DirectXMath.h>
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <string>
 #include <cstdint>
 #include <array>
+#include <cstddef>
+#include <memory>
 #include <vector>
 #include <unordered_map>
 
 using Microsoft::WRL::ComPtr;
+
+class VirtualGeometryRenderer;
+namespace VirtualGeometry { struct BuiltMesh; }
 
 // -----------------------------------------------------------------------
 // Per-vertex data uploaded into the global geometry SRV buffer.
@@ -132,7 +139,16 @@ struct alignas(256) RtGIConstants
     int      NumPointLights;
     float    _pad5[3]{};
     DeferredLightingPass::PointLightGpu PointLights[DeferredLightingPass::kMaxPointLights]{};
+
+    // Next-event visibility from the virtual shadow map (RtGI_Vsm.hlsli).
+    float    VsmMaxTexelSize;
+    int      VsmVisibility;     // 1 = ask the map first, trace only where it cannot answer
+    float    _pad6[2]{};
+    VsmGpuConstants Vsm{};      // Active = 0 when the map is not bound this frame
 };
+// HLSL starts a struct member of a cbuffer on a 16-byte register; the C++ side has
+// to land it there too or every field of g_Vsm reads shifted.
+static_assert(offsetof(RtGIConstants, Vsm) % 16 == 0, "RtGIConstants::Vsm must be 16-byte aligned to match g_Vsm");
 
 // -----------------------------------------------------------------------
 // One element in the per-pixel GI reservoir structured buffer.
@@ -170,10 +186,34 @@ public:
     // VegetationRenderer::CollectRayTracingBatches).  Vegetation is passed in
     // rather than pulled from the entity list because its instances are
     // procedural and have no entity of their own.
+    //
+    // `detail`, when given, lets meshes with a virtualized-geometry cluster DAG
+    // be traced against a static cut through it rather than every source
+    // triangle, with the cut chosen per instance from its distance to the camera.
+    struct BlasDetail
+    {
+        DirectX::XMFLOAT3 CameraPosition{};
+        // Source of the cluster DAGs; null traces source triangles only.
+        const VirtualGeometryRenderer* VirtualGeometry = nullptr;
+        float LodError     = 0.005f;   // metres, nearest tier
+        float TierDistance = 15.0f;    // metres, where the second tier starts
+        int   TierCount    = 3;
+    };
+
     void BuildTlas(
         ID3D12GraphicsCommandList4* cmdList,
         const std::vector<Entity>&  entities,
-        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches = nullptr);
+        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches = nullptr,
+        const BlasDetail* detail = nullptr);
+
+    // The virtual shadow map this frame's RayGen and specular passes may answer
+    // next-event visibility from, or null when it is not active. The pool must be
+    // readable by compute (VirtualShadowMapRenderer::RenderPages leaves it so).
+    // Call before Dispatch / DispatchSpecularOnly.
+    void SetVirtualShadowMap(
+        const VsmGpuConstants*      constants,
+        D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+        D3D12_GPU_DESCRIPTOR_HANDLE poolSrv);
 
     // Release all GPU resources.
     void Shutdown();
@@ -209,6 +249,25 @@ public:
         const float prevCameraJitter[2]       = nullptr,
         float       timeDeltaMs               = 0.0f);
 
+    // Runs only the specular reflection pass, for frames where the radiance
+    // probes supply diffuse GI and Dispatch() is skipped. Requires the TLAS
+    // to have been built this frame, exactly as Dispatch() does.
+    void DispatchSpecularOnly(
+        ID3D12GraphicsCommandList4*  cmdList,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+        const RtGISettings&          settings,
+        const float                  viewProjInv[16],
+        const float                  currViewProj[16],
+        const float                  worldToViewMatrix[16],
+        const float                  cameraPos[3],
+        float sunDirX, float sunDirY, float sunDirZ,
+        float sunR, float sunG, float sunB,
+        float skyR, float skyG, float skyB,
+        const DeferredLightingPass::PointLightGpu* pointLights,
+        uint32_t                     numPointLights);
+
     // Shader-visible SRV GPU handle for the final accumulated GI output (RGBA16F).
     D3D12_GPU_DESCRIPTOR_HANDLE GetOutputSrv()   const { return mOutputSrvGpu; }
 
@@ -238,6 +297,13 @@ private:
     void RefreshMaterialTextureDescriptors();
     // Create/re-create NRD resources and (re-)initialize NrdDenoiser.
     bool InitNrd();
+
+    void DispatchSpecular(
+        ID3D12GraphicsCommandList4*  cmdList,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+        const RtGISettings&          settings);
 
     void UploadConstants(
         const RtGISettings& s,
@@ -421,9 +487,11 @@ private:
 
     // Folds everything that affects the acceleration structure's contents into
     // one value, so an unchanged scene can be detected before any work is done.
+    // `cutSteps` is the BLAS cut each entity uses this frame (BlasKey::CutStep).
     std::uint64_t ComputeSceneSignature(
         const std::vector<Entity>& entities,
-        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches) const;
+        const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches,
+        const std::vector<std::int16_t>& cutSteps) const;
 
     // Signature of the scene the current TLAS was built from: entity count,
     // mesh identity, world transforms and material assignment, plus the same
@@ -451,10 +519,23 @@ private:
     void* mMappedMaterialRanges = nullptr;
 
     // ---- Acceleration structures ----
+    // One material slot's triangles in a cut BLAS: the cut regroups triangles by
+    // slot, so the source mesh's sub-mesh index ranges no longer describe it.
+    struct CutRange
+    {
+        uint32_t startPrimitive = 0;
+        uint32_t primitiveCount = 0;
+        uint32_t materialId     = 0;
+        uint32_t udimTile       = 0;   // 0 = not a UDIM tile
+    };
+
     struct BlasEntry
     {
+        // Null when the build failed; the entry then only remembers not to retry.
         ComPtr<ID3D12Resource> Result;
-        ComPtr<ID3D12Resource> Scratch;
+        // Empty for a BLAS of the source triangles, whose material ranges come
+        // from the mesh's sub-meshes.
+        std::vector<CutRange> CutRanges;
         // Keeps the asset the key addresses alive, so a freed mesh's address can
         // never be handed to a new mesh that then matches this entry and raytraces
         // the wrong geometry at the wrong pool offsets. A level swap - which is
@@ -468,12 +549,16 @@ private:
     };
     struct BlasKey
     {
-        const void* Mesh = nullptr;
-        bool        NonOpaque = false;
+        const void*  Mesh = nullptr;
+        bool         NonOpaque = false;
+        // -1: the source triangles. Otherwise a static cut through the mesh's
+        // cluster DAG at CutStepError(CutStep), in mesh units: instances whose
+        // scale and distance ask for about the same error share one BLAS.
+        std::int16_t CutStep = -1;
 
         bool operator==(const BlasKey& other) const noexcept
         {
-            return Mesh == other.Mesh && NonOpaque == other.NonOpaque;
+            return Mesh == other.Mesh && NonOpaque == other.NonOpaque && CutStep == other.CutStep;
         }
     };
 
@@ -481,11 +566,29 @@ private:
     {
         size_t operator()(const BlasKey& key) const noexcept
         {
-            return (reinterpret_cast<size_t>(key.Mesh) >> 4) ^ (key.NonOpaque ? 0x9e3779b9u : 0u);
+            return (reinterpret_cast<size_t>(key.Mesh) >> 4)
+                ^ (key.NonOpaque ? 0x9e3779b9u : 0u)
+                ^ (static_cast<size_t>(static_cast<std::uint16_t>(key.CutStep)) * 0x85ebca6bu);
         }
     };
 
     std::unordered_map<BlasKey, BlasEntry, BlasKeyHasher> mBlasCache;
+
+    // Distance tier each entity used last frame, by entity index, so a tier
+    // boundary is crossed with some hysteresis rather than flickering between
+    // two BLASes (and rebuilding the TLAS) while the camera hovers on it.
+    std::vector<std::uint8_t> mEntityBlasTier;
+
+    // Virtual shadow map for next-event visibility (SetVirtualShadowMap).
+    VsmGpuConstants             mVsmConstants{};
+    D3D12_GPU_VIRTUAL_ADDRESS   mVsmPageTable = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE mVsmPoolSrv{};
+    bool                        mVsmBound = false;
+
+    // Binds the map, or harmless stand-ins when it is not bound, at the given
+    // root parameters of whichever root signature is set.
+    void BindVirtualShadowMap(ID3D12GraphicsCommandList4* cmdList, UINT poolParam, UINT pageTableParam,
+                              D3D12_GPU_DESCRIPTOR_HANDLE fallbackTextureSrv);
     std::unordered_map<std::string, std::vector<RtMaterialSlotInfo>> mMaterialSlotCache;
     std::unordered_map<std::string, std::array<float, 3>> mTextureAverageColorCache;
     TextureManager mTextureManager;

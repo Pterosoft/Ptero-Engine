@@ -68,6 +68,8 @@ public:
 	UINT GetMapSize() const { return mMapSize; }
 	void SetShadowBias(float shadowBias) { mShadowBias = shadowBias; }
 	void SetSlopeScaledDepthBias(float slopeScaledDepthBias) { mSlopeScaledDepthBias = slopeScaledDepthBias; }
+	// What the depth pipeline was built with; other casters' pipelines match it.
+	float GetSlopeScaledDepthBias() const { return mSlopeScaledDepthBias; }
 
 	void BeginFrame(const std::vector<ShadowedPointLight>& lights)
 	{

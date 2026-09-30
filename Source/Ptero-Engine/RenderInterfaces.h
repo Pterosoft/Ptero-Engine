@@ -9,7 +9,11 @@ enum class ShaderStage
 {
     Vertex,
     Pixel,
-    Compute
+    Compute,
+    Hull,
+    Domain,
+    // Appended, never inserted: the value is part of every shader cache key.
+    Mesh
 };
 
 struct ShaderCompileRequest

@@ -47,7 +47,15 @@ cbuffer AutoExposureCb : register(b0)
     float DeltaTimeSeconds;
     float GreyPoint;       // scene luminance that should land on middle grey
     float MeteringMask;    // 0 = average the whole frame, 1 = full centre bias
-    float _Pad0;
+    uint  RelativeMode;    // 1 = adapt around ReferenceEv instead of metering absolutely
+
+    // Relative mode (time-of-day eye adaptation): the target is ReferenceEv plus
+    // Strength times how many stops the metered view is off ReferenceLogLuminance,
+    // ignoring the first DeadZone stops either way.
+    float ReferenceEv;
+    float ReferenceLogLuminance;
+    float Strength;
+    float DeadZone;
 };
 
 // The mask Unreal calls the metering mask: the centre of the frame is what the

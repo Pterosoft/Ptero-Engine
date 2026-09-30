@@ -119,6 +119,7 @@ QToolButton:hover { background: @buttonHover; border-color: @borderStrong; }
 QToolButton:checked { background: @accentSoft; border-color: @accent; }
 QToolButton[uiHeader="true"] { background: @header; border: none; border-radius: @radiusSmall; padding: 6px 6px; font-weight: 600; }
 QToolButton[uiHeader="true"]:hover { background: @buttonHover; }
+QToolButton[uiHeader="true"]:checked { background: @accentSoft; border: 1px solid @accent; color: @checkedText; }
 
 QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit {
     background: @base; color: @text; border: 1px solid @border; border-radius: @radiusSmall; padding: 3px 6px;

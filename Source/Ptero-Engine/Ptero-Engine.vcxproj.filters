@@ -59,6 +59,9 @@
     <ClCompile Include="..\Renderer_DX12\SceneSerializer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\Renderer_DX12\ParticleEffects.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Ptero-Engine.rc">

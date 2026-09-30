@@ -14,6 +14,11 @@
 Texture2D                 gSceneDepth     : register(t0);
 StructuredBuffer<ProbeSH> gRadianceProbes : register(t1);
 Texture2DArray            gPointShadowMaps : register(t2);
+Texture2D                 gVsmPool         : register(t3); // virtual shadow map page pool
+StructuredBuffer<uint>    gVsmPageTable    : register(t4); // virtual shadow map pages -> pool tiles
+
+// A froxel spans several screen pixels, so its shadow pages can be that much coarser.
+static const float kFogVsmFootprintScale = 8.0f;
 
 RWTexture3D<float4>       gLightingVolume : register(u0);
 
@@ -26,9 +31,22 @@ RWTexture3D<float4>       gLightingVolume : register(u0);
 // lines up with the shadow on the wall behind it.
 float SampleFogPointShadow(int lightIndex, float3 worldPos)
 {
-    if (gPointShadowLightCount <= 0)
-        return 1.0f;
     if (gPointLights[lightIndex].CastShadows < 0.5f)
+        return 1.0f;
+
+    // Virtual shadow map: the shadow index is the light's slot in it. Air has no
+    // normal, and whatever pages surfaces asked for are the ones resident; the lookup
+    // falls back to coarser mips (every light keeps its coarsest one) where needed.
+    [branch]
+    if (gFogVsm.LocalEnabled != 0u)
+    {
+        const int slot = (int)gPointLights[lightIndex].ShadowIndex;
+        return slot < 0 ? 1.0f
+            : PteroVsmLocalVisibility(gFogVsm, gVsmPageTable, gVsmPool, (uint)slot, worldPos, 0.0f.xxx,
+                                      gCameraPos, kFogVsmFootprintScale);
+    }
+
+    if (gPointShadowLightCount <= 0)
         return 1.0f;
 
     const int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
@@ -100,19 +118,42 @@ float SampleFogPointShadow(int lightIndex, float3 worldPos)
 // to leave the medium black.
 float3 SampleFogIndirect(float3 worldPos)
 {
-    const uint3 gridSize = uint3(gProbeGridX, gProbeGridY, gProbeGridZ);
-    if (gGiIntensity <= 0.0f || !PteroProbeGridValid(gridSize, gProbeSpacing))
+    if (gGiIntensity <= 0.0f || !PteroProbeFieldValid(gProbeField))
         return 0.0f.xxx;
 
-    const PteroProbeGridTap tap = PteroProbeGridLookup(gridSize, gProbeOrigin, gProbeSpacing, worldPos);
-
-    float3 ambient = 0.0f.xxx;
-    [unroll]
-    for (uint corner = 0; corner < 8; ++corner)
+    // Finest cascade first, handing over outward; see RadianceProbeCommon.
+    float3 result = 0.0f.xxx;
+    float remaining = 1.0f;
+    [loop]
+    for (uint cascade = 0; cascade < gProbeField.CascadeCount; ++cascade)
     {
-        ambient += tap.Weight[corner] * PteroEvaluateProbeAmbient(gRadianceProbes[tap.Index[corner]]);
+        const PteroProbeGridTap tap = PteroProbeGridLookup(gProbeField, cascade, worldPos);
+        if (tap.EdgeFade <= 0.0f)
+            continue;
+
+        // A froxel has no surface to be behind, but it can sit next to a probe
+        // buried in a wall; that one drops out and the rest are renormalised.
+        float3 weighted = 0.0f.xxx;
+        float3 plain = 0.0f.xxx;
+        float weightSum = 0.0f;
+        [unroll]
+        for (uint corner = 0; corner < 8; ++corner)
+        {
+            const ProbeSH sh = gRadianceProbes[tap.Index[corner]];
+            const float3 ambient = PteroEvaluateProbeAmbient(sh);
+            const float w = tap.Weight[corner] * PteroProbeValidity(sh);
+            weighted += w * ambient;
+            weightSum += w;
+            plain += tap.Weight[corner] * ambient;
+        }
+        const float3 ambient = (weightSum > 1e-4f) ? (weighted / weightSum) : plain;
+
+        result += remaining * tap.EdgeFade * ambient;
+        remaining *= 1.0f - tap.EdgeFade;
+        if (remaining <= PTERO_PROBE_CASCADE_EPSILON)
+            break;
     }
-    return ambient * gGiIntensity;
+    return result * gGiIntensity;
 }
 
 [numthreads(8, 8, 1)]

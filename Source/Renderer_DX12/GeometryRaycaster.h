@@ -51,10 +51,16 @@ public:
     // region and build the BVH.  Entities that carry a vegetation area, water
     // or terrain component are skipped: terrain has its own analytic height
     // query, and an area volume is not a surface.
+    //
+    // `forPlayer` builds the world a walking player collides with instead: the finest LOD
+    // for assets without collision hulls - the scatter only needs roughly where the
+    // ground is, but a player notices a stair its coarsest LOD melted into a ramp - and
+    // no water surfaces, which are to look at rather than to stand on.
     void Build(
         const std::vector<Entity>& entities,
         const DirectX::XMFLOAT3&   regionMin,
-        const DirectX::XMFLOAT3&   regionMax);
+        const DirectX::XMFLOAT3&   regionMax,
+        bool                       forPlayer = false);
 
     void Clear();
 
@@ -105,15 +111,16 @@ private:
         bool IsLeaf() const { return Count > 0; }
     };
 
-    // Recursively split [first, first+count) of mTriangleIndices.  Returns the
-    // index of the node it produced.
-    std::uint32_t BuildNode(std::uint32_t first, std::uint32_t count, int depth);
+    // Recursively split [first, first+count) of mTriangleIndices into the
+    // already-allocated node at nodeIndex.
+    void BuildNode(std::uint32_t nodeIndex, std::uint32_t first, std::uint32_t count, int depth);
 
     void AppendEntityTriangles(
         const Entity&            entity,
         std::size_t              entityIndex,
         const DirectX::XMFLOAT3& regionMin,
-        const DirectX::XMFLOAT3& regionMax);
+        const DirectX::XMFLOAT3& regionMax,
+        bool                     finestLod);
 
     std::vector<Triangle>      mTriangles;
     // Indirection so the build can reorder triangles without moving them.

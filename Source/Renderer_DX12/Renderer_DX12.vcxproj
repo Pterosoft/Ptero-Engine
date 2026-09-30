@@ -181,6 +181,11 @@
     <ClInclude Include="AgxTonemapSettings.h" />
     <ClInclude Include="AreaTex.h" />
     <ClInclude Include="BloomRenderer.h" />
+    <ClInclude Include="FftBloomRenderer.h" />
+    <ClInclude Include="LensFlareRenderer.h" />
+    <ClInclude Include="LensFlareSettings.h" />
+    <ClInclude Include="LensFlareOptics.h" />
+    <ClInclude Include="LensDiffraction.h" />
     <ClInclude Include="BloomSettings.h" />
     <ClInclude Include="DecalRenderer.h" />
     <ClInclude Include="DlssRenderer.h" />
@@ -201,6 +206,7 @@
     <ClInclude Include="RadianceProbeSettings.h" />
     <ClInclude Include="LightStyles.h" />
     <ClInclude Include="ParticleRenderer.h" />
+    <ClInclude Include="ParticleEffects.h" />
     <ClInclude Include="RainRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="RtAmbientOcclusion.h" />
@@ -226,6 +232,7 @@
     <ClInclude Include="RmlUiRenderer.h" />
     <ClInclude Include="..\Game\GameAPI.h" />
     <ClInclude Include="EditorMainMenu.h" />
+    <ClInclude Include="DataFolderWatcher.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="GlassRenderer.h" />
     <ClInclude Include="HosekWilkieSky.h" />
@@ -240,12 +247,18 @@
     <ClInclude Include="RtGlobalIllumination.h" />
     <ClInclude Include="SceneSerializer.h" />
     <ClInclude Include="ShadowMapRenderer.h" />
+    <ClInclude Include="ShadowPageView.h" />
+    <ClInclude Include="VirtualShadowMapConstants.h" />
+    <ClInclude Include="VirtualShadowMapRenderer.h" />
+    <ClInclude Include="VirtualShadowMapSettings.h" />
     <ClInclude Include="SharpenSettings.h" />
     <ClInclude Include="SkyRenderer.h" />
     <ClInclude Include="SMAARenderer.h" />
     <ClInclude Include="SMAASettings.h" />
     <ClInclude Include="SsrRenderer.h" />
     <ClInclude Include="SssrRenderer.h" />
+    <ClInclude Include="DpleRenderer.h" />
+    <ClInclude Include="DpleSettings.h" />
     <ClInclude Include="SubsurfaceScattering.h" />
     <ClInclude Include="SubsurfaceSettings.h" />
     <ClInclude Include="SsrSettings.h" />
@@ -259,6 +272,9 @@
     <ClInclude Include="GeometryRaycaster.h" />
     <ClInclude Include="VegetationScatter.h" />
     <ClInclude Include="VegetationRenderer.h" />
+    <ClInclude Include="VirtualGeometryRenderer.h" />
+    <ClInclude Include="VirtualGeometryBuilder.h" />
+    <ClInclude Include="VirtualGeometrySettings.h" />
     <ClInclude Include="WindSettings.h" />
     <ClInclude Include="WaterRenderer.h" />
     <ClInclude Include="TextureManager.h" />
@@ -273,6 +289,10 @@
     <ClCompile Include="AgxTonemapper.cpp" />
     <ClCompile Include="AutoExposure.cpp" />
     <ClCompile Include="BloomRenderer.cpp" />
+    <ClCompile Include="FftBloomRenderer.cpp" />
+    <ClCompile Include="LensFlareRenderer.cpp" />
+    <ClCompile Include="LensFlareOptics.cpp" />
+    <ClCompile Include="LensDiffraction.cpp" />
     <ClCompile Include="DecalRenderer.cpp" />
     <ClCompile Include="DeferredLightingPass.cpp" />
     <ClCompile Include="dllmain.cpp" />
@@ -292,14 +312,18 @@
     <ClCompile Include="RmlUiSystemInterface.cpp" />
     <ClCompile Include="RmlUiRenderer.cpp" />
     <ClCompile Include="EditorMainMenu.cpp" />
+    <ClCompile Include="DataFolderWatcher.cpp" />
     <ClCompile Include="EditorConsole.cpp" />
     <ClCompile Include="EditorUiViewer.cpp" />
     <ClCompile Include="EditorUndo.cpp" />
     <ClCompile Include="EditorLightGizmos.cpp" />
+    <ClCompile Include="EditorParticles.cpp" />
     <ClCompile Include="..\System\src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="EngineCVars.cpp" />
     <ClCompile Include="GameSettings.cpp" />
+    <ClCompile Include="GameProjectSettings.cpp" />
+    <ClCompile Include="PlayerCollision.cpp" />
     <ClCompile Include="GlassRenderer.cpp" />
     <ClCompile Include="..\System\MaterialEditor.cpp" />
     <ClCompile Include="..\System\src\AssetManager.cpp" />
@@ -402,6 +426,13 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <AdditionalIncludeDirectories>..\SDKs\DirectXTex;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <!-- Unreal .uasset import; AssetManager (compiled above) calls into it. -->
+    <ClCompile Include="..\System\src\UnrealAssetImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealPackage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealOodle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealTexture.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealStaticMesh.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealMaterial.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <!-- DirectXTex source units for texture conversion -->
     <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -472,15 +503,18 @@
     <ClCompile Include="RadianceCascadesRenderer.cpp" />
     <ClCompile Include="RadianceProbeRenderer.cpp" />
     <ClCompile Include="ParticleRenderer.cpp" />
+    <ClCompile Include="ParticleEffects.cpp" />
     <ClCompile Include="RainRenderer.cpp" />
     <ClCompile Include="RtAmbientOcclusion.cpp" />
     <ClCompile Include="RtGlobalIllumination.cpp" />
     <ClCompile Include="SceneSerializer.cpp" />
     <ClCompile Include="ShadowMapRenderer.cpp" />
+    <ClCompile Include="VirtualShadowMapRenderer.cpp" />
     <ClCompile Include="SkyRenderer.cpp" />
     <ClCompile Include="SMAARenderer.cpp" />
     <ClCompile Include="SsrRenderer.cpp" />
     <ClCompile Include="SssrRenderer.cpp" />
+    <ClCompile Include="DpleRenderer.cpp" />
     <ClCompile Include="SubsurfaceScattering.cpp" />
     <ClCompile Include="ChromaticAberrationRenderer.cpp" />
     <ClCompile Include="TerrainGeometry.cpp" />
@@ -488,6 +522,32 @@
     <ClCompile Include="GeometryRaycaster.cpp" />
     <ClCompile Include="VegetationScatter.cpp" />
     <ClCompile Include="VegetationRenderer.cpp" />
+    <ClCompile Include="VirtualGeometryRenderer.cpp" />
+    <ClCompile Include="VirtualGeometryBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <!-- meshoptimizer 1.3: clusterization and simplification for virtualized geometry
+         (VirtualGeometryBuilder.cpp, via demo\clusterlod.h). Own object folder: names like
+         partition, rasterizer and allocator are generic enough to collide. -->
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\allocator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\clusterizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexanalyzer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexgenerator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\meshletcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\meshletutils.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\opacitymap.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\overdrawoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\partition.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\quantization.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\rasterizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\remesher.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\simplifier.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\spatialorder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\stripifier.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\tangentspace.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vcacheoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vertexcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vertexfilter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vfetchoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
     <ClCompile Include="WaterRenderer.cpp" />
     <ClCompile Include="TAARenderer.cpp" />
     <ClCompile Include="TextureManager.cpp" />
@@ -512,6 +572,7 @@
     <None Include="..\..\Data\Shaders\RtGI_Spatial.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </None>
+    <None Include="..\..\Data\Shaders\RtGI_Vsm.hlsli" />
     <None Include="..\..\Data\Shaders\RtAO_Common.hlsli" />
     <None Include="..\..\Data\Shaders\RtAO_RayGen.hlsl" />
     <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl" />
@@ -545,12 +606,17 @@
     <ClCompile Include="..\System\src\NodeGraphCatalog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphTemplates.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphEditorWindow.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphEditorHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\System\include\System\NodeGraphCatalog.h" />
     <ClInclude Include="..\System\include\System\NodeGraphDocument.h" />
     <ClInclude Include="..\System\include\System\NodeGraphEditor.h" />
     <ClInclude Include="..\System\include\System\NodeGraphRuntime.h" />
+    <ClInclude Include="..\System\include\System\NodeGraphTemplates.h" />
+    <ClInclude Include="..\System\include\System\CharacterMovement.h" />
+    <ClInclude Include="PlayerCollision.h" />
+    <ClInclude Include="GameProjectSettings.h" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(PteroGameRuntime)'=='true'">
     <ClCompile>

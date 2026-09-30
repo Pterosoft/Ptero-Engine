@@ -15,6 +15,11 @@ The folder names below are the ones the projects reference, so keep them exactly
 | libvpx | 1.17.0 | `libvpx-1.17.0` | VP8/VP9 video decoding (Video project) |
 | libwebm | 1.0.0.32 | `libwebm-libwebm-1.0.0.32` | WebM container parsing (Video project) |
 | Hosek-Wilkie sky model | — | `HosekWilkie` | Analytic sky |
+| AMD FidelityFX SSSR | 1.3 | `FidelityFX-SSSR-1.3` | Screen-space reflections (blue-noise sampler compiled in; shaders ported) |
+| libsodium | 1.0.22 | `libsodium-1.0.22` | Game package (.ppak) encryption |
+| LZ4 | 1.10.0 | `lz4-1.10.0` | Game package (.ppak) compression |
+| Separable SSS | 1.0 | `separable-sss-1.0` | Reference for the subsurface scattering shaders (ported) |
+| water-shader (tuxalin) | — | `water-shader-master` | Reference for the water shaders (ported) |
 | meshoptimizer | 1.1 | `meshoptimizer` | LOD generation and mesh optimisation |
 | nlohmann json | — | `nlohmann` | Level and asset serialisation |
 | nodeeditor (QtNodes) | — | `nodeeditor` | Node Graph visual scripting editor |

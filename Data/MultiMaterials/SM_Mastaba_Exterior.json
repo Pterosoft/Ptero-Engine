@@ -1,0 +1,154 @@
+{
+    "name": "SM_Mastaba_Exterior",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Exterior_Limestone",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Limestone_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Exterior_Mudbrick",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_Mudbrick_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Exterior_CarvedLimestone",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_CarvedLimestone_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "M_Mastaba_Exterior_FloorStairs",
+            "normalFlipGreen": false,
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Mixed_AO_<UDIM>.dds",
+                "baseColor": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Base_color_<UDIM>.dds",
+                "emissive": "",
+                "height": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Height_<UDIM>.dds",
+                "metallic": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Metallic_<UDIM>.dds",
+                "metallicRoughness": "",
+                "normal": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Normal_DirectX_<UDIM>.dds",
+                "opacity": "",
+                "roughness": "Geometry/Mastaba/Textures/M_Mastaba_Exterior_FloorStairs_Roughness_<UDIM>.dds"
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

@@ -63,6 +63,10 @@ void Editor::ApplySceneState(const SceneUndoState& state)
     // Any drag in progress refers to entities that have just been replaced.
     mViewportSelection = ViewportSelectionState{};
     mManualGizmo = ManualGizmoState{};
+
+    // The snapshot holds each emitter's effect settings as they were when it was taken;
+    // the .particle file, or the Particle Editor's unsaved edit, may be newer.
+    ResyncParticleEffects();
 }
 
 void Editor::MarkSceneChanged()

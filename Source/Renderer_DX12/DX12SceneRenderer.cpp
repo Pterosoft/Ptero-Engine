@@ -3,6 +3,8 @@
 #include "../QtUi/QtUi.h"
 
 #include "..\System\include\System\AssetManager.h"
+#include "System/DataFiles.h"
+#include "System/NodeGraphTemplates.h"
 #include "System/PteroLog.h"
 #include "AudioManager.h"
 #include "EntityIds.h"
@@ -160,7 +162,39 @@ float DX12SceneRenderer::ComputeSceneBoundRadius() const
 
 bool DX12SceneRenderer::IsSceneContentDirtyForTemporal()
 {
-    return mEntityMeshRenderer.ConsumeSceneContentChangedFlag();
+    // Both flags are consumed every time; a short-circuit would leave one set.
+    const bool meshesChanged = mEntityMeshRenderer.ConsumeSceneContentChangedFlag();
+    const bool virtualGeometryChanged = mVirtualGeometryRenderer.ConsumeSceneContentChanged();
+    return meshesChanged || virtualGeometryChanged;
+}
+
+std::vector<PointShadowMapRenderer::ShadowedPointLight> DX12SceneRenderer::GatherShadowedPointLights(
+    std::vector<int>* outShadowIndexPerLight) const
+{
+    std::vector<PointShadowMapRenderer::ShadowedPointLight> shadowLights;
+    shadowLights.reserve(kMaxShadowCastingPointLights);
+    if (mEntities == nullptr)
+        return shadowLights;
+
+    int pointLightIndex = 0;
+    for (const Entity& entity : *mEntities)
+    {
+        if (!entity.HasPointLightComponent() || pointLightIndex >= DeferredLightingPass::kMaxPointLights)
+            continue;
+
+        const PointLightComponent& pl = *entity.PointLight;
+        int shadowIndex = -1;
+        if (mShadowsEnabled && pl.CastShadows && shadowLights.size() < kMaxShadowCastingPointLights)
+        {
+            shadowLights.push_back({ entity.Transform.Position, (std::max)(pl.Radius, 0.05f) });
+            shadowIndex = static_cast<int>(shadowLights.size()) - 1;
+        }
+
+        if (outShadowIndexPerLight != nullptr)
+            outShadowIndexPerLight->push_back(shadowIndex);
+        ++pointLightIndex;
+    }
+    return shadowLights;
 }
 
 void DX12SceneRenderer::ReportProgress(const wchar_t* message) const
@@ -273,6 +307,17 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             mLastErrorMessage = "Failed to initialize the entity mesh renderer.";
             Shutdown();
             return false;
+        }
+
+        // Non-fatal: without it, meshes flagged for virtualized geometry are
+        // simply drawn by the entity mesh renderer with their ordinary LODs.
+        ReportProgress(L"Initializing virtualized geometry...");
+        if (!mVirtualGeometryRenderer.Initialize())
+        {
+            PteroLog::Write(PteroLog::Level::Warning, "VirtualGeometry",
+                mVirtualGeometryRenderer.GetLastErrorMessage()
+                    ? mVirtualGeometryRenderer.GetLastErrorMessage()
+                    : "Virtualized geometry failed to initialize.");
         }
 
         // Initialize the terrain renderer.  Non-fatal if it fails -- the
@@ -399,6 +444,14 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
                 OutputDebugStringA(mShadowMapRenderer.GetLastError());
         }
 
+        // Non-fatal too: without it the sun falls back to the single map above.
+        ReportProgress(L"Initializing virtual shadow map...");
+        if (!mVirtualShadowMap.Initialize(mVirtualShadowMapSettings))
+        {
+            PTERO_LOG_ERROR("Shadows", "Virtual shadow map initialization failed: %s",
+                            mVirtualShadowMap.GetLastError() ? mVirtualShadowMap.GetLastError() : "unknown");
+        }
+
         ReportProgress(L"Initializing point light shadows...");
         mPointShadowMapRenderer.SetMapSize(static_cast<UINT>(mPointShadowSettings.MapSize));
         mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
@@ -498,6 +551,21 @@ bool DX12SceneRenderer::Initialize(ID3D12GraphicsCommandList* commandList)
             if (mBloomRenderer.GetLastErrorMessage())
                 OutputDebugStringA(mBloomRenderer.GetLastErrorMessage());
             mBloomSettings.Enabled = false;
+        }
+
+        // FFT convolution bloom and lens flares: non-fatal too. A failure leaves the pass
+        // uninitialised, so IsBloomActive / IsLensFlareActive report it off and the post
+        // chain simply skips it; the settings stay as authored.
+        if (!mFftBloomRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            PTERO_LOG_ERROR("Renderer", "FFT bloom unavailable: %s",
+                mFftBloomRenderer.GetLastErrorMessage() ? mFftBloomRenderer.GetLastErrorMessage() : "unknown error");
+        }
+        ReportProgress(L"Initializing lens flares...");
+        if (!mLensFlareRenderer.Initialize(mSceneWidth, mSceneHeight))
+        {
+            PTERO_LOG_ERROR("Renderer", "Lens flares unavailable: %s",
+                mLensFlareRenderer.GetLastErrorMessage() ? mLensFlareRenderer.GetLastErrorMessage() : "unknown error");
         }
 
         // RTGI is lazily initialized on first use (waits for a valid render size).
@@ -612,6 +680,29 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     mEntityMeshRenderer.SetTextureMipLODBias(textureMipLODBias);
     mTerrainRenderer.SetTextureMipLODBias(textureMipLODBias);
 
+    // Virtualized geometry decides first which entities it draws this frame,
+    // and the ordinary mesh and motion-vector passes skip exactly those.
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Virtual geometry setup");
+        VirtualGeometryRenderer::FrameInputs inputs;
+        inputs.Entities = mEntities;
+        inputs.PreviousTransforms = &mPreviousEntityTransforms;
+        inputs.CameraPosition = mCamera.GetPosition();
+        inputs.FovYRadians = mCamera.GetFovYRadians();
+        inputs.NearPlane = mCamera.GetNearPlane();
+        inputs.CullViewProjection = mNonJitteredViewProjection;
+        inputs.RasterViewProjection = mJitteredViewProjection;
+        inputs.SceneWidth = mSceneWidth;
+        inputs.SceneHeight = mSceneHeight;
+        inputs.MsaaSampleCount = mMsaaSettings.Enabled ? desiredMsaaSampleCount : 1u;
+        inputs.WireframeEnabled = mEntityMeshRenderer.IsWireframeEnabled();
+        inputs.TextureMipLodBias = mEntityMeshRenderer.GetTextureMipLODBias();
+        mVirtualGeometryRenderer.BeginFrame(commandList, inputs, mEntityMeshRenderer);
+
+        mEntityMeshRenderer.SetVirtualizedEntityMask(&mVirtualGeometryRenderer.GetEntityMask());
+        mMotionVectorRenderer.SetVirtualizedEntityMask(&mVirtualGeometryRenderer.GetEntityMask());
+    }
+
     const bool rtaoDebugViewActive = (mRtaoSettings.DebugView > 0);
     if (rtaoDebugViewActive != mRtaoDebugViewWasActive)
     {
@@ -622,25 +713,31 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // Evaluate the Hosek-Wilkie sky model from the current time-of-day settings.
     mHosekResult = EvaluateHosekWilkie(mTimeOfDaySettings);
 
-    // ---- Scale normalised Hosek colours by user-specified lux values ----
-    constexpr float kRefSkyLux = 20000.0f;
-    constexpr float kRefSunLux = 100000.0f;
-
+    // ---- Directional light and sky ambient, already lux-scaled ----
+    // "sun" here is whichever body lights the scene - the moon at night - so every
+    // consumer below follows it without knowing there are two.
+    //
     // Disabling time of day is expressed as zero sun and sky intensity. Every consumer of
     // these six values - deferred lighting, volumetric fog and clouds, and the forward
     // water pass through mFrameSunColor - then contributes nothing, so the switch does not
     // have to be threaded through each of those passes separately.
-    const float sunLuxScale = mTimeOfDaySettings.Enabled
-        ? (mTimeOfDaySettings.SunIntensityLux / kRefSunLux) : 0.0f;
-    const float skyLuxScale = mTimeOfDaySettings.Enabled
-        ? (mTimeOfDaySettings.SkyIntensityLux / kRefSkyLux) : 0.0f;
+    const float sunR = mHosekResult.LightR;
+    const float sunG = mHosekResult.LightG;
+    const float sunB = mHosekResult.LightB;
+    const float skyR = mHosekResult.AmbientR;
+    const float skyG = mHosekResult.AmbientG;
+    const float skyB = mHosekResult.AmbientB;
 
-    const float sunR = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorR : mHosekResult.SunR) * sunLuxScale;
-    const float sunG = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorG : mHosekResult.SunG) * sunLuxScale;
-    const float sunB = (mTimeOfDaySettings.OverrideSunColor ? mTimeOfDaySettings.SunColorB : mHosekResult.SunB) * sunLuxScale;
-    const float skyR = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorR : mHosekResult.SkyR) * skyLuxScale;
-    const float skyG = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorG : mHosekResult.SkyG) * skyLuxScale;
-    const float skyB = (mTimeOfDaySettings.OverrideSkyColor ? mTimeOfDaySettings.SkyColorB : mHosekResult.SkyB) * skyLuxScale;
+    // GI pre-exposure. RTGI and the radiance probes light with these values times
+    // giPreExposure, and everything that reads their output divides it back out,
+    // so their reservoirs, denoiser history, radiance clamp and half-float targets
+    // hold daylight magnitudes at any hour. Without it a moonlit night sits some
+    // eight stops down, where the denoiser and the half-float history lose it.
+    const float giPreExposure = mHosekResult.PreExposure;
+    const float giInvPreExposure = 1.0f / giPreExposure;
+    mGiPreExposure = giPreExposure;
+    const float giSunR = sunR * giPreExposure, giSunG = sunG * giPreExposure, giSunB = sunB * giPreExposure;
+    const float giSkyR = skyR * giPreExposure, giSkyG = skyG * giPreExposure, giSkyB = skyB * giPreExposure;
 
     // Cache lux-scaled sun/sky colour for the forward water pass (runs later in
     // Dispatch, after these locals are gone).
@@ -716,7 +813,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
         if (mParticleRenderer.IsInitialized())
         {
-            mParticleRenderer.SetSystems(mParticleSystems, deltaSeconds);
+            // Hands the list over; mParticleSystems comes back holding last frame's
+            // (stale) entries, which the clear above discards next frame. Code
+            // further down asks the renderer, not this vector, whether any exist.
+            mParticleRenderer.SetSystems(std::move(mParticleSystems), deltaSeconds);
         }
     }
 
@@ -801,7 +901,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
             // The fog reads this very record later, so all it needs here is
             // whether the artist let this light into the medium.
-            mCachedPointLightAffectsFog[entityLightIndex] = pl.AffectVolumetricFog;
+            mCachedPointLightAffectsFog[entityLightIndex] = pl.AffectVolumetricFog && pl.VolumetricFogIntensity > 0.0f;
+            mCachedPointLightFogScale[entityLightIndex] = (std::max)(pl.VolumetricFogIntensity, 0.0f);
         }
 
         // Append the particle systems' emissive proxy lights. They are ordinary
@@ -842,7 +943,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
             lightGiScale[lightIndex] = proxy.GiContribution;
 
-            mCachedPointLightAffectsFog[lightIndex] = proxy.AffectVolumetricFog;
+            mCachedPointLightAffectsFog[lightIndex] = proxy.AffectVolumetricFog && proxy.VolumetricFogIntensity > 0.0f;
+            mCachedPointLightFogScale[lightIndex] = proxy.VolumetricFogIntensity;
         }
 
         mDeferredLightingPass.SetPointLights(gpuLights, numLights);
@@ -921,18 +1023,116 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             mCamera.GetPosition());
     }
 
+    // The sun's shadow frustum, needed by the virtualized-geometry cull below
+    // as well as by the sun shadow pass itself.
+    const bool sunShadowPassRuns = mShadowMapRenderer.IsInitialized() && mTimeOfDaySettings.Enabled;
+    const XMFLOAT3 sunDirection(mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ);
+
+    // The virtual shadow map, when it is on, replaces the single sun map and (unless its
+    // LocalLights setting is off) the point-light cubemaps entirely. It decides here
+    // which of its pages to render this frame, because the virtualized-geometry cull
+    // below culls for each of them.
+    bool virtualShadowMapActive = false;
+    if (mVirtualShadowMapSettings.Enabled && mVirtualShadowMap.IsInitialized()
+        && mShadowsEnabled && mEntities != nullptr)
+    {
+        PTERO_SCOPED_PASS_TIMER("Shadows", "Virtual shadow map setup");
+        VirtualShadowMapRenderer::FrameInputs vsmInputs;
+        vsmInputs.Entities = mEntities;
+        vsmInputs.VirtualizedMask = &mVirtualGeometryRenderer.GetEntityMask();
+        vsmInputs.CameraPosition = mCamera.GetPosition();
+        vsmInputs.FovYRadians = mCamera.GetFovYRadians();
+        vsmInputs.ViewportHeight = mSceneHeight;
+        vsmInputs.SunEnabled = mTimeOfDaySettings.Enabled;
+        vsmInputs.SunDirection = sunDirection;
+        vsmInputs.VegetationSignature = mVegetationRenderer.GetShadowCasterSignature();
+
+        // Every shadow-casting light in the frame's array, entity lights and particle
+        // proxies alike, keyed by its place in the array.
+        std::vector<int> vsmLightIndices;
+        for (int lightIndex = 0; lightIndex < mNumCachedPointLights; ++lightIndex)
+        {
+            const DeferredLightingPass::PointLightGpu& light = mCachedPointLights[lightIndex];
+            if (light.CastShadows < 0.5f)
+                continue;
+            VirtualShadowMapRenderer::LocalLight local;
+            local.Key = static_cast<std::uint64_t>(lightIndex) + 1;
+            local.Position = light.Position;
+            local.Radius = light.Radius;
+            local.Direction = light.Direction;
+            switch (static_cast<LightType>(static_cast<int>(light.LightType)))
+            {
+            case LightType::Spot: local.EmitCosine = light.SpotCosOuter; break;
+            case LightType::Rect: local.EmitCosine = light.RectTwoSided > 0.5f ? -2.0f : 0.0f; break;
+            default:              local.EmitCosine = -2.0f; break;
+            }
+            vsmInputs.LocalLights.push_back(local);
+            vsmLightIndices.push_back(lightIndex);
+        }
+
+        virtualShadowMapActive = mVirtualShadowMap.BeginFrame(vsmInputs, mVirtualShadowMapSettings);
+
+        // A light's shadow index is its slot in the map; the cubemap pass below is skipped.
+        if (mVirtualShadowMap.AreLocalLightsActive())
+        {
+            for (int lightIndex = 0; lightIndex < mNumCachedPointLights; ++lightIndex)
+                mCachedPointLights[lightIndex]._Pad0 = -1.0f;
+            const std::vector<int>& slots = mVirtualShadowMap.GetLocalSlots();
+            for (std::size_t i = 0; i < vsmLightIndices.size() && i < slots.size(); ++i)
+                mCachedPointLights[vsmLightIndices[i]]._Pad0 = static_cast<float>(slots[i]);
+            mDeferredLightingPass.SetPointLights(mCachedPointLights, mNumCachedPointLights);
+        }
+    }
+    else
+    {
+        mVirtualShadowMap.SkipFrame();
+    }
+    const bool virtualLocalShadows = mVirtualShadowMap.AreLocalLightsActive();
+
+    const float sceneBoundRadius = (sunShadowPassRuns && !virtualShadowMapActive) ? ComputeSceneBoundRadius() : 0.0f;
+
+    // -----------------------------------------------------------------------
+    // PASS 0b – Virtualized geometry culling, for the camera and every shadow
+    // view at once. Like the vegetation cull, it has to run before the shadow
+    // passes, which draw from its per-view cluster lists.
+    // -----------------------------------------------------------------------
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Virtual geometry cull");
+        const bool sunShadowViewWanted = sunShadowPassRuns && mShadowsEnabled && !virtualShadowMapActive;
+        const XMFLOAT4X4 sunViewProjection = sunShadowViewWanted
+            ? ShadowMapRenderer::ComputeLightViewProjection(sunDirection, sceneBoundRadius)
+            : XMFLOAT4X4{};
+
+        std::vector<VirtualGeometryRenderer::PointShadowLight> pointShadowViews;
+        if (mPointShadowMapRenderer.IsInitialized() && !virtualLocalShadows)
+        {
+            for (const PointShadowMapRenderer::ShadowedPointLight& light : GatherShadowedPointLights(nullptr))
+                pointShadowViews.push_back({ light.Position, light.Radius });
+        }
+
+        mVirtualGeometryRenderer.CullViews(commandList, sunShadowViewWanted, sunViewProjection, pointShadowViews,
+            virtualShadowMapActive ? &mVirtualShadowMap.GetPageViews() : nullptr);
+    }
+
     // -----------------------------------------------------------------------
     // PASS 1 – Shadow pass (unchanged from forward renderer)
     // Render scene depth from the sun's perspective before touching the scene RT.
     // -----------------------------------------------------------------------
     // A black sun casts no visible shadow, so with time of day off this whole pass is
     // cost for nothing. Point lights keep their own shadow pass further down.
-    if (mShadowMapRenderer.IsInitialized() && mTimeOfDaySettings.Enabled)
+    if (virtualShadowMapActive)
+    {
+        PTERO_SCOPED_PASS_TIMER("Shadows", "Virtual shadow map pages");
+        mVirtualShadowMap.RenderPages(commandList, mEntityMeshRenderer, mVegetationRenderer, mVirtualGeometryRenderer);
+        mDeferredLightingPass.SetVirtualShadowMap(
+            mVirtualShadowMap.GetGpuConstants(),
+            mVirtualShadowMap.GetPageTableAddress(),
+            mVirtualShadowMap.GetPoolSrv());
+    }
+    else if (sunShadowPassRuns)
     {
         PTERO_SCOPED_PASS_TIMER("Shadows", "Sun shadow map");
-        const XMFLOAT3 sunDir(mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ);
-        const float kSceneBoundRadius = ComputeSceneBoundRadius();
-        mShadowMapRenderer.BeginShadowPass(commandList, sunDir, kSceneBoundRadius);
+        mShadowMapRenderer.BeginShadowPass(commandList, sunDirection, sceneBoundRadius);
 
         // Shadows off: the pass still clears the map, so the lighting reads "nothing
         // occludes" rather than a stale map from before the switch.
@@ -951,6 +1151,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 commandList,
                 mShadowMapRenderer.GetLightViewProjection(),
                 kShadowDepthFormat);
+
+            mVirtualGeometryRenderer.RenderSunShadow(commandList, mShadowMapRenderer.GetLightViewProjection());
         }
 
         mShadowMapRenderer.EndShadowPass(commandList);
@@ -962,7 +1164,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             mShadowMapRenderer.GetShadowSrvGpuHandle());
     }
 
-    if (mPointShadowMapRenderer.IsInitialized() && mEntities != nullptr)
+    if (mPointShadowMapRenderer.IsInitialized() && mEntities != nullptr && !virtualLocalShadows)
     {
        const UINT desiredPointShadowMapSize = static_cast<UINT>((mPointShadowSettings.MapSize > 0) ? mPointShadowSettings.MapSize : 1);
         if (mPointShadowMapRenderer.GetMapSize() != desiredPointShadowMapSize)
@@ -988,28 +1190,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
         mPointShadowMapRenderer.SetShadowBias(mPointShadowSettings.Bias);
         mPointShadowMapRenderer.SetSlopeScaledDepthBias(mPointShadowSettings.SlopeScaledDepthBias);
-        std::vector<PointShadowMapRenderer::ShadowedPointLight> shadowLights;
-        shadowLights.reserve(kMaxShadowCastingPointLights);
-
-        int pointLightIndex = 0;
-        for (Entity& entity : *mEntities)
-        {
-            if (!entity.HasPointLightComponent() || pointLightIndex >= DeferredLightingPass::kMaxPointLights)
-                continue;
-
-            PointLightComponent& pl = *entity.PointLight;
-            if (mShadowsEnabled && pl.CastShadows && shadowLights.size() < kMaxShadowCastingPointLights)
-            {
-                shadowLights.push_back({ entity.Transform.Position, (std::max)(pl.Radius, 0.05f) });
-                mCachedPointLights[pointLightIndex]._Pad0 = static_cast<float>(shadowLights.size() - 1);
-            }
-            else
-            {
-                mCachedPointLights[pointLightIndex]._Pad0 = -1.0f;
-            }
-
-            ++pointLightIndex;
-        }
+        std::vector<int> shadowIndexPerLight;
+        const std::vector<PointShadowMapRenderer::ShadowedPointLight> shadowLights =
+            GatherShadowedPointLights(&shadowIndexPerLight);
+        for (std::size_t lightIndex = 0; lightIndex < shadowIndexPerLight.size(); ++lightIndex)
+            mCachedPointLights[lightIndex]._Pad0 = static_cast<float>(shadowIndexPerLight[lightIndex]);
 
         PTERO_SCOPED_PASS_TIMER("Shadows", "Point shadow cubemaps");
         mPointShadowMapRenderer.BeginFrame(shadowLights);
@@ -1025,6 +1210,13 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                     mPointShadowMapRenderer.GetFaceViewProjection(lightIndex, faceIndex),
                     mPointShadowMapRenderer.GetLightPosition(lightIndex),
                     mPointShadowMapRenderer.GetLightFarPlane(lightIndex));
+                mVirtualGeometryRenderer.RenderPointShadowFace(
+                    commandList,
+                    lightIndex,
+                    mPointShadowMapRenderer.GetFaceViewProjection(lightIndex, faceIndex),
+                    mPointShadowMapRenderer.GetLightPosition(lightIndex),
+                    mPointShadowMapRenderer.GetLightFarPlane(lightIndex),
+                    mPointShadowMapRenderer.GetSlopeScaledDepthBias());
                 mPointShadowMapRenderer.EndShadowFacePass(commandList, lightIndex, faceIndex);
             }
         }
@@ -1098,6 +1290,40 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     constexpr DXGI_FORMAT kNormalFmt   = DXGI_FORMAT_R32G32B32A32_FLOAT;
     constexpr DXGI_FORMAT kMaterialFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
 
+    // Adaptive tessellation measures edges in rendered pixels: a length L at
+    // distance d spans L * pixelScale / d of them.
+    {
+        const float tessPixelScale = 0.5f * static_cast<float>((std::max)(mSceneHeight, 1u))
+            / std::tan(0.5f * mCamera.GetFovYRadians());
+        mEntityMeshRenderer.SetTessellationPixelScale(tessPixelScale);
+        mTerrainRenderer.SetTessellationView(mCamera.GetPosition(), tessPixelScale);
+    }
+
+    // Virtualized geometry draws first: it is typically the densest geometry in
+    // the scene and the best occluder, and its second phase needs the depth
+    // buffer to hold nothing but its own first phase.
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Virtual geometry (G-Buffer)");
+        mVirtualGeometryRenderer.RenderGBuffer(
+            commandList, mEntityMeshRenderer, 0,
+            kAlbedoFmt, kNormalFmt, kMaterialFmt, SceneDepthFormat,
+            mDeferredLightingPass.GetMsaaSampleCount());
+
+        // Clusters the first phase judged occluded by last frame's depth get a
+        // second chance against the depth just drawn. The HZB build reads the
+        // depth buffer, which interrupts the pass, so the targets are rebound.
+        if (!mMsaaSettings.Enabled
+            && mVirtualGeometryRenderer.RunOcclusionPass(
+                commandList, mSceneDepthTarget.Get(), mDepthBufferState, mDepthSrvGpuHandle))
+        {
+            mDeferredLightingPass.RebindGeometryTargets(commandList, mSceneDsvHandle, mSceneWidth, mSceneHeight);
+            mVirtualGeometryRenderer.RenderGBuffer(
+                commandList, mEntityMeshRenderer, 1,
+                kAlbedoFmt, kNormalFmt, kMaterialFmt, SceneDepthFormat,
+                mDeferredLightingPass.GetMsaaSampleCount());
+        }
+    }
+
     {
         PTERO_SCOPED_PASS_TIMER("Scene", "Entity meshes (G-Buffer)");
         mEntityMeshRenderer.Render(
@@ -1151,6 +1377,17 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     ResolveMsaaDepth(commandList);
     mMsaaResolveTimeMs = mDeferredLightingPass.GetLastResolveTimeMs();
 
+    // Hierarchical Z of the finished depth - terrain, meshes and foliage
+    // included - for next frame's virtualized-geometry occlusion test.
+    {
+        PTERO_SCOPED_PASS_TIMER("Scene", "Virtual geometry HZB");
+        mVirtualGeometryRenderer.EndFrame(
+            commandList,
+            mMsaaSettings.Enabled ? nullptr : mSceneDepthTarget.Get(),
+            mDepthBufferState,
+            mDepthSrvGpuHandle);
+    }
+
     // Reset TAA history on scene content changes.
     const bool sceneContentChanged = IsSceneContentDirtyForTemporal();
     if (sceneContentChanged)
@@ -1168,6 +1405,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     mProbeSettings.GridX = (std::clamp)(mProbeSettings.GridX, 1, 64);
     mProbeSettings.GridY = (std::clamp)(mProbeSettings.GridY, 1, 64);
     mProbeSettings.GridZ = (std::clamp)(mProbeSettings.GridZ, 1, 64);
+    mProbeSettings.CascadeCount = (std::clamp)(mProbeSettings.CascadeCount, 1, kMaxRadianceProbeCascades);
 
     const bool probesEnabled = mProbeSettings.Enabled && mEntities != nullptr;
     const bool probesDebugEnabled = probesEnabled && mProbeSettings.DebugShowProbes;
@@ -1222,7 +1460,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // fog is dispatched. Left null when no grid is available, in which case the
     // fog simply injects without indirect light.
     D3D12_GPU_DESCRIPTOR_HANDLE fogProbeSrv{};
-    XMFLOAT3 fogProbeOrigin{};
+    RadianceProbeFieldGpu fogProbeField{};
 
     const auto dispatchVolumetricFog = [&]()
     {
@@ -1253,8 +1491,15 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         uint32_t numFogLights = 0;
         for (int i = 0; i < mNumCachedPointLights; ++i)
         {
-            if (mCachedPointLightAffectsFog[i])
-                fogLights[numFogLights++] = mCachedPointLights[i];
+            if (!mCachedPointLightAffectsFog[i])
+                continue;
+            // The light's fog intensity scales this copy alone; the deferred pass
+            // keeps lighting surfaces from the unscaled record. A light at zero
+            // never gets here, so it costs the fog nothing.
+            VolumetricFogRenderer::FogPointLight& fogLight = fogLights[numFogLights++];
+            fogLight = mCachedPointLights[i];
+            const float fogScale = mCachedPointLightFogScale[i];
+            fogLight.Color = { fogLight.Color.x * fogScale, fogLight.Color.y * fogScale, fogLight.Color.z * fogScale };
         }
 
         VolumetricFogRenderer::FrameInputs fogInputs{};
@@ -1278,19 +1523,21 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         if (fogProbeSrv.ptr != 0)
         {
             fogInputs.ProbeSrv = fogProbeSrv;
-            fogInputs.ProbeGridX = static_cast<uint32_t>((std::max)(mProbeSettings.GridX, 0));
-            fogInputs.ProbeGridY = static_cast<uint32_t>((std::max)(mProbeSettings.GridY, 0));
-            fogInputs.ProbeGridZ = static_cast<uint32_t>((std::max)(mProbeSettings.GridZ, 0));
-            fogInputs.ProbeSpacing = mProbeSettings.Spacing;
-            fogInputs.ProbeOrigin[0] = fogProbeOrigin.x;
-            fogInputs.ProbeOrigin[1] = fogProbeOrigin.y;
-            fogInputs.ProbeOrigin[2] = fogProbeOrigin.z;
+            fogInputs.ProbeField = fogProbeField;
+            fogInputs.ProbeInvPreExposure = giInvPreExposure;
         }
 
         // Shadowed shafts. The cubemaps were rendered long before this point in
         // the frame and are left in ALL_SHADER_RESOURCE precisely so a compute
         // pass can read them.
-        if (mPointShadowMapRenderer.IsInitialized() && mPointShadowMapRenderer.GetActiveLightCount() > 0)
+        // With the virtual shadow map shadowing the lights, the fog reads that instead.
+        if (virtualLocalShadows)
+        {
+            fogInputs.Vsm = &mVirtualShadowMap.GetGpuConstants();
+            fogInputs.VsmPageTable = mVirtualShadowMap.GetPageTableAddress();
+            fogInputs.VsmPoolSrv = mVirtualShadowMap.GetPoolSrv();
+        }
+        else if (mPointShadowMapRenderer.IsInitialized() && mPointShadowMapRenderer.GetActiveLightCount() > 0)
         {
             fogInputs.PointShadowSrv = mPointShadowMapRenderer.GetShadowTextureArraySrvGpuHandle();
             fogInputs.PointShadowFaceViewProj = mPointShadowMapRenderer.GetAllFaceViewProjections();
@@ -1373,10 +1620,28 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                         mCamera.GetPosition(), kVegetationRayTracingRadius, vegetationBatches);
                 }
 
+                // Virtualized meshes are traced against a cut through their
+                // cluster DAG, coarser with distance from the camera.
+                RtGlobalIllumination::BlasDetail blasDetail;
+                blasDetail.CameraPosition  = mCamera.GetPosition();
+                blasDetail.VirtualGeometry = mRtgiSettings.VirtualGeometryBlas ? &mVirtualGeometryRenderer : nullptr;
+                blasDetail.LodError        = mRtgiSettings.BlasLodError;
+                blasDetail.TierDistance    = mRtgiSettings.BlasTierDistance;
+                blasDetail.TierCount       = mRtgiSettings.BlasTierCount;
+
                 mRtgiRenderer.BuildTlas(
                     sharedRtCmdList.Get(),
                     *mEntities,
-                    vegetationBatches.empty() ? nullptr : &vegetationBatches);
+                    vegetationBatches.empty() ? nullptr : &vegetationBatches,
+                    &blasDetail);
+
+                // Bounce hits may answer next-event visibility from the virtual
+                // shadow map, which RenderPages has already filled this frame.
+                if (mVirtualShadowMap.IsActiveThisFrame())
+                    mRtgiRenderer.SetVirtualShadowMap(&mVirtualShadowMap.GetGpuConstants(),
+                        mVirtualShadowMap.GetPageTableAddress(), mVirtualShadowMap.GetPoolSrv());
+                else
+                    mRtgiRenderer.SetVirtualShadowMap(nullptr, 0, {});
             }
         }
     }
@@ -1422,10 +1687,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 currNonJitteredVP.m[0],
                 prevVP.m[0],
                 &camPos.x,
-                // Sun direction and colours from the Hosek-Wilkie sky model.
+                // Sun direction and colours from the Hosek-Wilkie sky model, pre-exposed.
                 mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
-                sunR, sunG, sunB,
-                skyR, skyG, skyB,
+                giSunR, giSunG, giSunB,
+                giSkyR, giSkyG, giSkyB,
                 mGiPointLights,
                 static_cast<uint32_t>(mNumCachedPointLights),
                 worldToView.m[0],
@@ -1437,13 +1702,14 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 mFrameDeltaTimeMs);
 
             // Bind the RTGI output as the GI radiance source in the deferred lighting pass.
-            mDeferredLightingPass.SetGiSrv(mRtgiRenderer.GetOutputSrv(), mRtgiSettings.GiIntensity);
+            // Its intensity undoes the pre-exposure the GI was traced with.
+            mDeferredLightingPass.SetGiSrv(mRtgiRenderer.GetOutputSrv(), mRtgiSettings.GiIntensity * giInvPreExposure);
             mDeferredLightingPass.SetProbeSrv({}, nullptr, mCamera.GetPosition());
             mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
 
             // Bind the RTGI specular reflections if enabled.
             if (mRtgiSettings.SpecularEnabled)
-                mDeferredLightingPass.SetSpecularSrv(mRtgiRenderer.GetSpecularSrv(), mRtgiSettings.SpecularIntensity);
+                mDeferredLightingPass.SetSpecularSrv(mRtgiRenderer.GetSpecularSrv(), mRtgiSettings.SpecularIntensity * giInvPreExposure);
             else
                 mDeferredLightingPass.SetSpecularSrv({}, 0.0f);
 
@@ -1491,8 +1757,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         if (mProbeRenderer.IsInitialized())
         {
             const XMFLOAT3 camPos = mCamera.GetPosition();
-            const uint32_t totalProbes = static_cast<uint32_t>(
-                mProbeSettings.GridX * mProbeSettings.GridY * mProbeSettings.GridZ);
+            const uint32_t totalProbes = static_cast<uint32_t>(ResolveTotalProbeCount(mProbeSettings));
             if (totalProbes != mProbeRenderer.GetTotalProbes())
             {
                 if (!mProbeRenderer.Initialize(mProbeSettings) && mProbeRenderer.GetLastError())
@@ -1530,8 +1795,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                         static_cast<uint32_t>(mNumCachedPointLights),
                         &camPos.x,
                         mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
-                        sunR, sunG, sunB,
-                        skyR, skyG, skyB,
+                        giSunR, giSunG, giSunB,
+                        giSkyR, giSkyG, giSkyB,
                         mProbeFrameIndex++);
 
                     // The fog samples the grid whether or not probes are also
@@ -1539,16 +1804,56 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                     // from the deferred pass, which only gets it when probes
                     // are the chosen GI mode.
                     fogProbeSrv = mProbeRenderer.GetProbeSHSrv();
-                    ResolveProbeGridOrigin(
-                        mProbeSettings,
-                        camPos.x, camPos.y, camPos.z,
-                        fogProbeOrigin.x, fogProbeOrigin.y, fogProbeOrigin.z);
+                    fogProbeField = ResolveProbeField(mProbeSettings, camPos.x, camPos.y, camPos.z);
 
                     if (probesEnabled)
                     {
-                        mDeferredLightingPass.SetGiSrv({}, mRtgiSettings.GiIntensity);
+                        // The probes' own intensity - reusing RTGI's meant the
+                        // probe GI could only be tuned from a panel for a
+                        // mode that was not running.
+                        mDeferredLightingPass.SetGiSrv({}, mProbeSettings.GiIntensity * giInvPreExposure);
                         mDeferredLightingPass.SetProbeSrv(mProbeRenderer.GetProbeSHSrv(), &mProbeSettings, camPos);
                         mDeferredLightingPass.SetRtgiDebugView(mRtgiSettings.DebugView);
+
+                        // Specular reflections. RTGI's Dispatch() - the only
+                        // thing that ever ran the specular pass - is skipped in
+                        // probe mode, so reflections disappeared entirely.
+                        if (mProbeSettings.SpecularEnabled && mProbeSettings.SpecularIntensity > 0.0f)
+                        {
+                            PTERO_SCOPED_PASS_TIMER("GI", "Probe-mode specular");
+                            mRtgiRenderer.EnsureSize(mSceneWidth, mSceneHeight);
+
+                            const XMMATRIX specViewProjection = XMLoadFloat4x4(&mJitteredViewProjection);
+                            XMFLOAT4X4 specInvVP;
+                            XMStoreFloat4x4(&specInvVP, XMMatrixTranspose(XMMatrixInverse(nullptr, specViewProjection)));
+                            XMFLOAT4X4 specCurrVP;
+                            XMStoreFloat4x4(&specCurrVP, XMMatrixTranspose(XMLoadFloat4x4(&mNonJitteredViewProjection)));
+
+                            RtGISettings specSettings = mRtgiSettings;
+                            specSettings.SpecularEnabled = true;
+
+                            mRtgiRenderer.DispatchSpecularOnly(
+                                probeCmdList4.Get(),
+                                mDeferredLightingPass.GetSrvs().Albedo,
+                                mDeferredLightingPass.GetSrvs().Normal,
+                                mDeferredLightingPass.GetSrvs().Material,
+                                specSettings,
+                                specInvVP.m[0],
+                                specCurrVP.m[0],
+                                mNonJitteredViewMatrix.m[0],
+                                &camPos.x,
+                                mHosekResult.SunDirX, mHosekResult.SunDirY, mHosekResult.SunDirZ,
+                                giSunR, giSunG, giSunB,
+                                giSkyR, giSkyG, giSkyB,
+                                mGiPointLights,
+                                static_cast<uint32_t>(mNumCachedPointLights));
+
+                            mDeferredLightingPass.SetSpecularSrv(mRtgiRenderer.GetSpecularSrv(), mProbeSettings.SpecularIntensity * giInvPreExposure);
+                        }
+                        else
+                        {
+                            mDeferredLightingPass.SetSpecularSrv({}, 0.0f);
+                        }
                     }
                 }
                 else if (probesEnabled)
@@ -1818,7 +2123,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // the G-Buffer goes back to being a pixel-shader resource, so the compute
     // work overlaps the rest of the frame's shading rather than stalling the
     // transparent pass that draws it.
-    if (mParticleRenderer.IsInitialized() && !mParticleSystems.empty())
+    if (mParticleRenderer.IsInitialized() && mParticleRenderer.HasSystems())
     {
         PTERO_SCOPED_PASS_TIMER("Scene", "Particles (simulate)");
         mParticleRenderer.Dispatch(
@@ -1893,7 +2198,8 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             XMLoadFloat4x4(&mJitteredProjection),
             mCamera.GetViewMatrix(),
             mSceneWidth,
-            mSceneHeight);
+            mSceneHeight,
+            mFrameDeltaTimeMs * 0.001f);
     }
 
     // -----------------------------------------------------------------------
@@ -1955,6 +2261,21 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     if (!subsurfaceActive)
         mDeferredLightingPass.SetSubsurface(0, {});
 
+    // Virtual shadow map page requests, from the finished depth and normals. They reach
+    // the CPU a few frames from now; see VirtualShadowMapRenderer.
+    if (mVirtualShadowMap.IsActiveThisFrame() && mDeferredLightingPass.IsInitialized())
+    {
+        PTERO_SCOPED_PASS_TIMER("Shadows", "Virtual shadow map page marking");
+        mVirtualShadowMap.MarkRequests(
+            commandList,
+            mDepthSrvGpuHandle,
+            mDeferredLightingPass.GetSrvs().Normal,
+            mInvViewProjection,
+            mCamera.GetPosition(),
+            mSceneWidth,
+            mSceneHeight);
+    }
+
     if (mDeferredLightingPass.IsInitialized())
     {
         ID3D12DescriptorHeap* shaderVisibleHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
@@ -2008,8 +2329,11 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             rtScene.InstanceInfo = mRtgiRenderer.GetInstanceInfoSrv();
             rtScene.SunShadow = shadows.SunShadowSrv;
             rtScene.PointShadows = shadows.PointShadowSrv;
+            rtScene.VsmPageTable = shadows.VsmPageTable;
 
-            sunShadowTexture = shadows.SunShadowSrv.ptr != 0 ? mShadowMapRenderer.GetShadowTexture() : nullptr;
+            // The virtual shadow map's pool already rests in ALL_SHADER_RESOURCE.
+            sunShadowTexture = (shadows.SunShadowSrv.ptr != 0 && shadows.Vsm.Active == 0u)
+                ? mShadowMapRenderer.GetShadowTexture() : nullptr;
             if (sunShadowTexture)
             {
                 const auto toAll = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -2179,7 +2503,6 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         if (mDecalRenderer.IsInitialized() && mEntities != nullptr)
         {
             mDecalRenderer.Render(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
-            mDecalRenderer.RenderVegetationAreas(commandList, *mEntities, XMLoadFloat4x4(&mJitteredViewProjection));
         }
     }
 
@@ -2264,7 +2587,7 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     //     the ALLOW_UNORDERED_ACCESS the resolve needs). So the pass binds no
     //     depth at all and the shader tests the resolved depth itself.
     // -----------------------------------------------------------------------
-    if (mParticleRenderer.IsInitialized() && !mParticleSystems.empty())
+    if (mParticleRenderer.IsInitialized() && mParticleRenderer.HasSystems())
     {
         const bool manualDepthTest = mMsaaSettings.Enabled;
 
@@ -2578,6 +2901,19 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
 
                 mMotionVectorRenderer.EndExternalPass(commandList);
             }
+
+            // Virtualized meshes are skipped by the pass above; their vectors
+            // come from the clusters actually on screen this frame.
+            if (mVirtualGeometryRenderer.HasInstances()
+                && mMotionVectorRenderer.BeginExternalPass(commandList))
+            {
+                mVirtualGeometryRenderer.RenderMotionVectors(
+                    commandList,
+                    mNonJitteredViewProjection,
+                    mPreviousViewProjectionForRtgi,
+                    MotionVectorRenderer::OutputFormat);
+                mMotionVectorRenderer.EndExternalPass(commandList);
+            }
         }
 
         const XMFLOAT3 cameraRight = { mNonJitteredViewMatrix._11, mNonJitteredViewMatrix._21, mNonJitteredViewMatrix._31 };
@@ -2728,11 +3064,122 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
         commandList->SetDescriptorHeaps(1, sharedHeaps);
     }
 
+    const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
+
+    // -----------------------------------------------------------------------
+    // PASS 7.6 - DPLE, the Deterministic Photoreal Lighting Enhancer (optional)
+    // After AA/upscaling and before sharpening, bloom and the tonemapper: linear HDR at
+    // output resolution, where the Unreal plugin hooks in too (see DpleRenderer.h). It
+    // enhances whichever image sharpening would read next, in place, so none of the
+    // passes after it needs to know it ran.
+    // -----------------------------------------------------------------------
+    const bool dpleWillRun = !rtaoDebugViewActive
+        && mDpleSettings.Enabled
+        && !mDpleRenderer.HasInitFailed()
+        && mDeferredLightingPass.IsInitialized();
+    if (dpleWillRun)
+    {
+        // Same precedence sharpening uses to pick its input.
+        ID3D12Resource* dpleImage = mSceneColorTarget.Get();
+        if (upscalerOutputAvailable)
+            dpleImage = GetUpscalerOutputResource();
+        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+            dpleImage = mSmaaRenderer.GetOutputResource();
+        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+            dpleImage = mTaaRenderer.GetOutputResource();
+
+        PTERO_SCOPED_PASS_TIMER("Post", "DPLE");
+
+        // The G-Buffer and depth are read from compute, as in the SSR pass above.
+        D3D12_RESOURCE_BARRIER gbufferToCompute[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            gbufferToCompute[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, gbufferToCompute);
+
+        const D3D12_RESOURCE_STATES depthStateBeforeDple = mDepthBufferState;
+        if (mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+        {
+            const auto toAllShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(), mDepthBufferState, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &toAllShaderResource);
+            mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        }
+
+        DpleRenderer::FrameInputs dpleInputs;
+        dpleInputs.Image = dpleImage;
+        // TAA, SMAA-after-TAA and the upscalers all hand over an image with the jitter
+        // resolved out; raw scene colour carries it exactly like the G-Buffer. (SMAA
+        // without TAA reads scene colour, but nothing jitters then, so the flag is moot.)
+        dpleInputs.ImageIsJitterResolved = dpleImage != mSceneColorTarget.Get();
+
+        const GBufferSrvs& gbufferSrvs = mDeferredLightingPass.GetSrvs();
+        dpleInputs.DepthSrv = mDepthSrvGpuHandle;
+        dpleInputs.NormalSrv = gbufferSrvs.Normal;
+        dpleInputs.MaterialSrv = gbufferSrvs.Material;
+        dpleInputs.AlbedoSrv = gbufferSrvs.Albedo;
+        dpleInputs.GBufferWidth = mSceneWidth;
+        dpleInputs.GBufferHeight = mSceneHeight;
+
+        dpleInputs.ViewProjection = mJitteredViewProjection;
+        dpleInputs.ViewProjectionNoJitter = mNonJitteredViewProjection;
+        dpleInputs.ProjectionNoJitter = mNonJitteredProjectionMatrix;
+        dpleInputs.CameraPosition = mCamera.GetPosition();
+        dpleInputs.CameraForward = mCamera.GetForwardVector();
+        dpleInputs.JitterX = mCurrentCameraJitter[0];
+        dpleInputs.JitterY = mCurrentCameraJitter[1];
+
+        // The Hosek sun vector points from the sun into the scene; DPLE wants the way to
+        // the light. It fades out as the sun reaches the horizon (fully in by ~3 degrees),
+        // and is gone with time of day off or a zero-intensity sun - the contact shadows
+        // and micro-specular lobe then have nothing to key off and do nothing.
+        dpleInputs.SunDirection = { -mHosekResult.SunDirX, -mHosekResult.SunDirY, -mHosekResult.SunDirZ };
+        const bool sunLit = mTimeOfDaySettings.Enabled && mTimeOfDaySettings.SunIntensityLux > 0.0f;
+        dpleInputs.SunWeight = sunLit ? std::clamp(-mHosekResult.SunDirZ / 0.05f, 0.0f, 1.0f) : 0.0f;
+        dpleInputs.DeltaSeconds = mFrameDeltaTimeMs * 0.001f;
+
+        if (!mDpleRenderer.Dispatch(commandList, mDpleSettings, dpleInputs)
+            && mDpleRenderer.HasInitFailed() && !mDpleFailureReported)
+        {
+            const char* error = mDpleRenderer.GetLastErrorMessage();
+            PTERO_LOG_ERROR("Renderer", "DPLE could not start and stays off: %s", error ? error : "unknown error");
+            mDpleFailureReported = true;
+        }
+
+        D3D12_RESOURCE_BARRIER gbufferToPixel[3];
+        for (UINT i = 0; i < 3; ++i)
+        {
+            gbufferToPixel[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mDeferredLightingPass.GetGBufferResource(i),
+                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        commandList->ResourceBarrier(3, gbufferToPixel);
+
+        if (mDepthBufferState != depthStateBeforeDple)
+        {
+            const auto restoreDepth = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(), mDepthBufferState, depthStateBeforeDple);
+            commandList->ResourceBarrier(1, &restoreDepth);
+            mDepthBufferState = depthStateBeforeDple;
+        }
+
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+    else
+    {
+        mDpleRenderer.InvalidateHistory();
+    }
+
     // -----------------------------------------------------------------------
     // PASS 7.75 - Image sharpening (optional)
     // Runs after the selected AA/upscaling pass and before bloom/tonemapping.
     // -----------------------------------------------------------------------
-    const bool upscalerOutputAvailable = IsUpscalerOutputAvailable();
     // Sharpening an upscaled image sharpens whatever noise survived the upscale too. FSR
     // already runs its own RCAS, so the engine's pass would be a second one on top; after
     // DLSS it is kept, but no stronger than 0.5.
@@ -2785,37 +3232,156 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     }
 
     // -----------------------------------------------------------------------
-    // PASS 8 – Bloom (optional, physical mip-chain)
+    // PASS 8 – Bloom (optional: physical mip-chain, or FFT convolution)
     // Runs after AA/upscaling/sharpening so bloom operates on the current image.
     // -----------------------------------------------------------------------
-    if (!rtaoDebugViewActive && mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+    ID3D12Resource*             bloomInputResource = mSceneColorTarget.Get();
+    D3D12_CPU_DESCRIPTOR_HANDLE bloomInputSrv      = mSceneSrvCpuHandle;
+
+    if (imageSharpenWillApply)
     {
-        ID3D12Resource*             bloomInputResource = mSceneColorTarget.Get();
-        D3D12_CPU_DESCRIPTOR_HANDLE bloomInputSrv      = mSceneSrvCpuHandle;
+        bloomInputResource = mImageSharpenRenderer.GetOutputResource();
+        bloomInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
+    }
+    else if (upscalerOutputAvailable)
+    {
+        bloomInputResource = GetUpscalerOutputResource();
+        bloomInputSrv = GetUpscalerOutputCpuSrv();
+    }
+    else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
+    {
+        bloomInputResource = mSmaaRenderer.GetOutputResource();
+        bloomInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
+    }
+    else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
+    {
+        bloomInputResource = mTaaRenderer.GetOutputResource();
+        bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+    }
 
-        if (imageSharpenWillApply)
+    if (!rtaoDebugViewActive && IsBloomActive())
+    {
+        if (mBloomSettings.Method == BloomMethod::FftConvolution)
         {
-            bloomInputResource = mImageSharpenRenderer.GetOutputResource();
-            bloomInputSrv      = mImageSharpenRenderer.GetOutputCpuSrv();
+            PTERO_SCOPED_PASS_TIMER("Post", "Bloom (FFT)");
+            mFftBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
         }
-        else if (upscalerOutputAvailable)
+        else
         {
-            bloomInputResource = GetUpscalerOutputResource();
-            bloomInputSrv = GetUpscalerOutputCpuSrv();
-        }
-        else if (!upscalerWillEvaluate && mSmaaSettings.Enabled && mSmaaRenderer.IsInitialized())
-        {
-            bloomInputResource = mSmaaRenderer.GetOutputResource();
-            bloomInputSrv      = mSmaaRenderer.GetOutputCpuSrv();
-        }
-        else if (!upscalerWillEvaluate && mTaaSettings.Enabled && mTaaRenderer.IsInitialized())
-        {
-            bloomInputResource = mTaaRenderer.GetOutputResource();
-            bloomInputSrv      = mTaaRenderer.GetOutputCpuSrv();
+            PTERO_SCOPED_PASS_TIMER("Post", "Bloom");
+            mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
         }
 
-        PTERO_SCOPED_PASS_TIMER("Post", "Bloom");
-        mBloomRenderer.Apply(commandList, bloomInputResource, bloomInputSrv, mBloomSettings);
+        ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
+        commandList->SetDescriptorHeaps(1, sharedHeaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // PASS 8.5 – Lens flares (optional)
+    // On the bloomed image, still linear HDR and before exposure: ghosts and starbursts
+    // are light the lens adds, so the meter and the tonemapper must see them like any
+    // other light. Flares the sun and the brightest visible level lights.
+    // -----------------------------------------------------------------------
+    if (!rtaoDebugViewActive && IsLensFlareActive())
+    {
+        PTERO_SCOPED_PASS_TIMER("Post", "Lens flares");
+
+        LensFlareRenderer::FrameInputs flareInputs;
+        flareInputs.Input = IsBloomActive()
+            ? (mBloomSettings.Method == BloomMethod::FftConvolution
+                ? mFftBloomRenderer.GetOutputResource() : mBloomRenderer.GetOutputResource())
+            : bloomInputResource;
+        flareInputs.Depth = mSceneDepthTarget.Get();
+        flareInputs.DepthSrvFormat = SceneDepthSrvFormat;
+        flareInputs.ViewProjection = mNonJitteredViewProjection;
+        flareInputs.Projection = mNonJitteredProjectionMatrix;
+        flareInputs.DeltaSeconds = mFrameDeltaTimeMs * 0.001f;
+
+        // The sun: the Hosek vector points from the sun into the scene.
+        if (mTimeOfDaySettings.Enabled && mHosekResult.SunDirZ < 0.0f)
+        {
+            LensFlareRenderer::LightSource sun;
+            sun.IsSun = true;
+            sun.Direction = { -mHosekResult.SunDirX, -mHosekResult.SunDirY, -mHosekResult.SunDirZ };
+            // Fades in over the last few degrees above the horizon, like DPLE's sun weight.
+            const float horizonFade = std::clamp(-mHosekResult.SunDirZ / 0.05f, 0.0f, 1.0f);
+            sun.Illuminance = { mFrameSunColor.x * horizonFade, mFrameSunColor.y * horizonFade, mFrameSunColor.z * horizonFade };
+            sun.Key = 0x5u;
+            flareInputs.Lights.push_back(sun);
+        }
+
+        // Level lights (and particle proxy lights): the light each one throws on the lens,
+        // with the same distance falloff and emitter shapes the deferred pass shades with.
+        const XMFLOAT3 cameraPosition = mCamera.GetPosition();
+        for (int i = 0; i < mNumCachedPointLights; ++i)
+        {
+            const DeferredLightingPass::PointLightGpu& light = mCachedPointLights[i];
+            const XMFLOAT3 toCamera(cameraPosition.x - light.Position.x,
+                cameraPosition.y - light.Position.y, cameraPosition.z - light.Position.z);
+            const float distance = std::sqrt(toCamera.x * toCamera.x + toCamera.y * toCamera.y + toCamera.z * toCamera.z);
+            if (distance < 1.0e-3f)
+                continue;
+
+            float emitterExtent = (std::max)(light.SourceRadius, 1.0e-3f);
+            const LightType type = static_cast<LightType>(static_cast<int>(light.LightType));
+            if (type == LightType::Rect)
+                emitterExtent = (std::max)((std::min)(light.RectHalfWidth, light.RectHalfHeight), 1.0e-3f);
+            const float falloff = std::pow(std::sqrt(distance * distance + emitterExtent * emitterExtent),
+                -(std::max)(light.FalloffExponent, 0.001f));
+
+            // Only the camera's side of a spot cone or a rect panel reaches the lens.
+            const float facing = (light.Direction.x * toCamera.x + light.Direction.y * toCamera.y
+                + light.Direction.z * toCamera.z) / distance;
+            float shape = 1.0f;
+            if (type == LightType::Spot)
+            {
+                const float range = (std::max)(light.SpotCosInner - light.SpotCosOuter, 1.0e-4f);
+                const float t = std::clamp((facing - light.SpotCosOuter) / range, 0.0f, 1.0f);
+                shape = t * t * (3.0f - 2.0f * t);
+            }
+            else if (type == LightType::Rect)
+            {
+                shape = light.RectTwoSided > 0.5f ? std::fabs(facing) : (std::max)(facing, 0.0f);
+            }
+
+            const float scale = falloff * shape;
+            if (scale <= 0.0f)
+                continue;
+
+            LensFlareRenderer::LightSource source;
+            source.Position = light.Position;
+            source.Illuminance = { light.Color.x * scale, light.Color.y * scale, light.Color.z * scale };
+            source.SourceRadius = type == LightType::Rect
+                ? (std::max)(light.RectHalfWidth, light.RectHalfHeight)
+                : light.SourceRadius;
+            // Identity for the temporal visibility: the light's position to the centimetre.
+            const auto quantize = [](float v) { return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::floor(v * 100.0f))); };
+            std::uint32_t key = 2166136261u;
+            for (std::uint32_t part : { quantize(light.Position.x), quantize(light.Position.y), quantize(light.Position.z) })
+                key = (key ^ part) * 16777619u;
+            source.Key = key | 0x80000000u;
+            flareInputs.Lights.push_back(source);
+        }
+
+        // Depth is read from compute, as in the DPLE pass.
+        const D3D12_RESOURCE_STATES depthStateBeforeFlares = mDepthBufferState;
+        if (mDepthBufferState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+        {
+            const auto toAllShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(), mDepthBufferState, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            commandList->ResourceBarrier(1, &toAllShaderResource);
+            mDepthBufferState = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        }
+
+        mLensFlareRenderer.Apply(commandList, mLensFlareSettings, flareInputs);
+
+        if (mDepthBufferState != depthStateBeforeFlares)
+        {
+            const auto restoreDepth = CD3DX12_RESOURCE_BARRIER::Transition(
+                mSceneDepthTarget.Get(), mDepthBufferState, depthStateBeforeFlares);
+            commandList->ResourceBarrier(1, &restoreDepth);
+            mDepthBufferState = depthStateBeforeFlares;
+        }
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -2827,14 +3393,14 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
     // -----------------------------------------------------------------------
     if (!rtaoDebugViewActive && mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
     {
-        // Determine the source for the tonemapper: Bloom output → TAA output → raw scene colour.
+        // Determine the source for the tonemapper: bloom / lens flare output → TAA output → raw scene colour.
         ID3D12Resource*             agxInputResource = mSceneColorTarget.Get();
         D3D12_CPU_DESCRIPTOR_HANDLE agxInputSrv      = mSceneSrvCpuHandle;
 
-        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+        if (IsBloomStageActive())
         {
-            agxInputResource = mBloomRenderer.GetOutputResource();
-            agxInputSrv      = mBloomRenderer.GetOutputCpuSrv();
+            agxInputResource = GetBloomStageOutputResource();
+            agxInputSrv      = GetBloomStageOutputCpuSrv();
         }
         else if (imageSharpenWillApply)
         {
@@ -2857,11 +3423,46 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             agxInputSrv      = mTaaRenderer.GetOutputCpuSrv();
         }
 
+        // With the time of day driving exposure, its EV100 replaces the authored
+        // one for this frame - manual, and pinned, so neither the meter nor the
+        // authored clamp can pull against it. The stored settings are untouched,
+        // so turning the control off gives the authored exposure back. The trim
+        // (Exposure) and the grade still apply.
+        //
+        // With eye adaptation on, the meter runs in relative mode instead: it moves
+        // the exposure away from the time-of-day EV100 only as far as the view
+        // differs from an open outdoor one, inside the adaptation window.
+        AgxTonemapSettings agxSettings = mAgxSettings;
+        AutoExposure::RelativeTarget adaptation{};
+        const bool eyeAdaptation = mHosekResult.ControlsExposure && mTimeOfDaySettings.EyeAdaptation;
+        if (mHosekResult.ControlsExposure)
+        {
+            agxSettings.Ev100 = mHosekResult.Ev100;
+            if (eyeAdaptation)
+            {
+                agxSettings.ExposureMode = AgxExposureMode::AutoHistogram;
+                agxSettings.Ev100Min = (std::min)(mTimeOfDaySettings.AdaptationEv100Min, mTimeOfDaySettings.AdaptationEv100Max);
+                agxSettings.Ev100Max = (std::max)(mTimeOfDaySettings.AdaptationEv100Min, mTimeOfDaySettings.AdaptationEv100Max);
+                // Wide enough to meter a moonlit night without piling it into the bottom bin.
+                agxSettings.AutoExposureHistogramLogMin = (std::min)(agxSettings.AutoExposureHistogramLogMin, -14.0f);
+                adaptation.ReferenceEv = mHosekResult.Ev100;
+                adaptation.ReferenceLogLuminance = mHosekResult.AdaptationReferenceLogLuminance;
+                adaptation.Strength = mTimeOfDaySettings.AdaptationStrength;
+                adaptation.DeadZone = 1.0f;
+            }
+            else
+            {
+                agxSettings.ExposureMode = AgxExposureMode::Manual;
+                agxSettings.Ev100Min = mHosekResult.Ev100;
+                agxSettings.Ev100Max = mHosekResult.Ev100;
+            }
+        }
+
         // Meter the same HDR image the tonemapper is about to consume, before
         // it is tonemapped. The exposure the meter produces stays on the GPU;
         // the tonemapper reads it through this SRV.
         D3D12_CPU_DESCRIPTOR_HANDLE autoExposureSrv{};
-        if (mAgxSettings.ExposureMode == AgxExposureMode::AutoHistogram &&
+        if (agxSettings.ExposureMode == AgxExposureMode::AutoHistogram &&
             mAutoExposure.IsInitialized())
         {
             PTERO_SCOPED_PASS_TIMER("Post", "Auto exposure");
@@ -2869,15 +3470,16 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
                 commandList,
                 agxInputResource,
                 agxInputSrv,
-                mAgxSettings,
-                mFrameDeltaTimeMs * 0.001f);
+                agxSettings,
+                mFrameDeltaTimeMs * 0.001f,
+                eyeAdaptation ? &adaptation : nullptr);
 
             if (metered)
                 autoExposureSrv = mAutoExposure.GetExposureCpuSrv();
         }
 
         PTERO_SCOPED_PASS_TIMER("Post", "AgX tonemap");
-        mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, mAgxSettings, autoExposureSrv);
+        mAgxTonemapper.Apply(commandList, agxInputResource, agxInputSrv, agxSettings, autoExposureSrv);
 
         ID3D12DescriptorHeap* sharedHeaps[] = { DX12Context_GetSrvDescriptorHeap() };
         commandList->SetDescriptorHeaps(1, sharedHeaps);
@@ -2904,10 +3506,10 @@ void DX12SceneRenderer::Render(ID3D12GraphicsCommandList* commandList)
             caInputResource = mAgxTonemapper.GetOutputResource();
             caInputSrv      = mAgxTonemapper.GetOutputCpuSrv();
         }
-        else if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
+        else if (IsBloomStageActive())
         {
-            caInputResource = mBloomRenderer.GetOutputResource();
-            caInputSrv      = mBloomRenderer.GetOutputCpuSrv();
+            caInputResource = GetBloomStageOutputResource();
+            caInputSrv      = GetBloomStageOutputCpuSrv();
         }
         else if (imageSharpenWillApply)
         {
@@ -2990,6 +3592,7 @@ void DX12SceneRenderer::Shutdown()
 {
     mVideoLayer.Stop();
     mVideoLayer.ShutdownGpu();
+    mVirtualGeometryRenderer.Shutdown();
     mEntityMeshRenderer.Shutdown();
     mPointLightRenderer.Shutdown();
     mDecalRenderer.Shutdown();
@@ -3012,16 +3615,20 @@ void DX12SceneRenderer::Shutdown()
     mChromaticAberrationRenderer.Shutdown();
     mSsrRenderer.Shutdown();
     mSssrRenderer.Shutdown();
+    mDpleRenderer.Shutdown();
     mSubsurfaceRenderer.Shutdown();
     mTaaRenderer.Shutdown();
     mSmaaRenderer.Shutdown();
     mImageSharpenRenderer.Shutdown();
     mBloomRenderer.Shutdown();
+    mFftBloomRenderer.Shutdown();
+    mLensFlareRenderer.Shutdown();
     mRmlUiRenderer.Shutdown();
     mAgxTonemapper.Shutdown();
     mAutoExposure.Shutdown();
     mSkyRenderer.Shutdown();
     mShadowMapRenderer.Shutdown();
+    mVirtualShadowMap.Shutdown();
 
     if (mConstantBuffer && mMappedConstants != nullptr)
     {
@@ -3153,6 +3760,14 @@ bool DX12SceneRenderer::EnsureSceneTargetMatchesWindowSize()
         if (mBloomRenderer.IsInitialized())
         {
             mBloomRenderer.Initialize(outputWidth, outputHeight);
+        }
+        if (mFftBloomRenderer.IsInitialized())
+        {
+            mFftBloomRenderer.Initialize(outputWidth, outputHeight);
+        }
+        if (mLensFlareRenderer.IsInitialized())
+        {
+            mLensFlareRenderer.Initialize(outputWidth, outputHeight);
         }
 
         if (mImageSharpenRenderer.IsInitialized())
@@ -3388,6 +4003,14 @@ bool DX12SceneRenderer::ResizeSceneTargetsTo(UINT width, UINT height)
     if (mBloomRenderer.IsInitialized())
     {
         mBloomRenderer.Initialize(postProcessWidth, postProcessHeight);
+    }
+    if (mFftBloomRenderer.IsInitialized())
+    {
+        mFftBloomRenderer.Initialize(postProcessWidth, postProcessHeight);
+    }
+    if (mLensFlareRenderer.IsInitialized())
+    {
+        mLensFlareRenderer.Initialize(postProcessWidth, postProcessHeight);
     }
 
     if (mVolumetricFogRenderer.IsInitialized())
@@ -4534,20 +5157,24 @@ bool DX12SceneRenderer::StartGame(bool separateWindow)
     if (mGameHost.IsRunning() || IsGameIntroPlaying())
         return true;
 
-    if (mSkipGameIntro || !mVideoLayer.IsGpuInitialized())
-        return BeginGameAfterIntro(separateWindow);
+    // Intro videos disabled for now - the game starts straight away. Kept for later: remove
+    // this return and uncomment the block below to bring the logo intro back.
+    return BeginGameAfterIntro(separateWindow);
 
-    mGameIntroSeparateWindow = separateWindow;
-    mGameIntroSkipKeyWasDown = false;
-    if (!mVideoLayer.Play("Videos/logo_pterosoft", false, "Letterbox"))
-    {
-        PTERO_LOG_WARNING("Game", "Intro video Videos/logo_pterosoft could not be played; starting the game directly.");
-        return BeginGameAfterIntro(separateWindow);
-    }
-
-    PTERO_LOG_INFO("Game", "Intro: playing Videos/logo_pterosoft.");
-    mGameIntroStage = GameIntroStage::Pterosoft;
-    return true;
+    // if (mSkipGameIntro || !mVideoLayer.IsGpuInitialized())
+    //     return BeginGameAfterIntro(separateWindow);
+    //
+    // mGameIntroSeparateWindow = separateWindow;
+    // mGameIntroSkipKeyWasDown = false;
+    // if (!mVideoLayer.Play("Videos/logo_pterosoft", false, "Letterbox"))
+    // {
+    //     PTERO_LOG_WARNING("Game", "Intro video Videos/logo_pterosoft could not be played; starting the game directly.");
+    //     return BeginGameAfterIntro(separateWindow);
+    // }
+    //
+    // PTERO_LOG_INFO("Game", "Intro: playing Videos/logo_pterosoft.");
+    // mGameIntroStage = GameIntroStage::Pterosoft;
+    // return true;
 }
 
 void DX12SceneRenderer::UpdateGameIntro(float deltaTime)
@@ -4633,12 +5260,34 @@ bool DX12SceneRenderer::BeginGameAfterIntro(bool separateWindow)
     mEditorCameraPositionBeforePlay = mCamera.GetPosition();
     mEditorCameraRotationBeforePlay = mCamera.GetRotation();
 
-    GameCameraState initialCamera{};
-    initialCamera.PositionX = mEditorCameraPositionBeforePlay.x;
-    initialCamera.PositionY = mEditorCameraPositionBeforePlay.y;
-    initialCamera.PositionZ = mEditorCameraPositionBeforePlay.z;
-    initialCamera.Pitch = mEditorCameraRotationBeforePlay.x;
-    initialCamera.Yaw = mEditorCameraRotationBeforePlay.y;
+    mFovBeforePlay = mCamera.GetFovYRadians();
+
+    // Game Settings are read fresh every Play, so the window's edits apply without a
+    // restart. A broken file is reported and the defaults are used; it never blocks play.
+    {
+        std::string settingsError;
+        if (!mGameProjectSettings.Load(DataFiles::FindDataDirectory(), &settingsError))
+            PTERO_LOG_WARNING("Game", "%s", settingsError.c_str());
+    }
+
+    // The character collides with the level as it is at this moment.
+    {
+        const auto buildStart = std::chrono::steady_clock::now();
+        if (mEntities != nullptr)
+            mPlayerCollision.Build(*mEntities, &mTerrainRenderer);
+        else
+            mPlayerCollision.Clear();
+        const float buildMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+        PTERO_LOG_INFO("Game", "Player collision: %zu triangles, built in %.1f ms.",
+            mPlayerCollision.GetTriangleCount(), buildMs);
+    }
+
+    const GameCameraState initialCamera = ComputePlayerSpawn();
+    mMouseCaptureRequested = false;
+    mMouseCaptureSuspended = false;
+    mMouseCaptureEscapeWasDown = false;
+    mMouseCaptureClickWasDown = false;
+    mEditorStopKeyWasDown = true;
 
     mGameStopRequested = false;
     mFarkleKeys.fill(false);
@@ -4703,11 +5352,18 @@ bool DX12SceneRenderer::BeginGameAfterIntro(bool separateWindow)
         }
         return result;
     };
-    services.GetWinningScore = [](void* user) -> int {
-        return static_cast<DX12SceneRenderer*>(user)->mRmlUiRenderer.GetFarkleWinningScore();
-    };
     // The editor tests with its own HUD and menu; the shipped menus are the standalone's.
     services.Standalone = QtUi::IsStandaloneGame();
+    // The game module hands services.User back as the trace's user pointer.
+    services.TraceRay = [](void* user, const float origin[3], const float direction[3],
+                           float maxDistance, CharacterTraceHit* hit) -> bool {
+        auto* self = static_cast<DX12SceneRenderer*>(user);
+        return hit != nullptr && self->mPlayerCollision.Trace(origin, direction, maxDistance, *hit);
+    };
+    services.SetMouseCaptured = [](void* user, bool captured) {
+        static_cast<DX12SceneRenderer*>(user)->mMouseCaptureRequested = captured;
+    };
+    services.NativePlayerController = mGameProjectSettings.PlayerController == PlayerControllerKind::Native;
     // Before Start: the game loads its first menu there, and the menu needs its options.
     // A standalone game has had its settings applied since the level loaded (see
     // PrepareStandaloneGameSettings); beginning again would take those applied values as
@@ -4717,6 +5373,7 @@ bool DX12SceneRenderer::BeginGameAfterIntro(bool separateWindow)
         BeginGameSettings(services.Standalone);
     if (!mGameHost.Start(initialCamera, services))
     {
+        mPlayerCollision.Clear();
         EndGameSettings();
         return false;
     }
@@ -4747,6 +5404,9 @@ bool DX12SceneRenderer::BeginGameAfterIntro(bool separateWindow)
     // was when play was pressed even if the artist keeps editing the graph afterwards.
     mNodeGraphHost.SetUiRenderer(&mRmlUiRenderer);
     mNodeGraphHost.SetVideoLayer(&mVideoLayer);
+    // Before the level graph, so its On Game Start can already use the Character nodes.
+    if (!services.NativePlayerController)
+        StartPlayerController(initialCamera);
     if (mNodeGraphSource != nullptr)
     {
         // Entities added since the level was loaded have no id yet. Nothing in the graph
@@ -4783,15 +5443,22 @@ void DX12SceneRenderer::StopGame()
     if (QtUi::IsStandaloneGame())
     {
         if (mAudioManager) mAudioManager->StopAll();
+        ReleaseMouseCapture();
         mGameStopRequested = false;
         QtUi::CloseGameWindow();
         return;
     }
 
-    // Stop the graph first: On Game Stop is still allowed to touch the UI, and the UI
+    // Stop the graphs first: On Game Stop is still allowed to touch the UI, and the UI
     // outlives the game module.
+    mPlayerControllerRuntime.Stop();
     mNodeGraphRuntime.Stop();
     mGameHost.Stop();
+    mGraphCharacterActive = false;
+    mPlayerCollision.Clear();
+    mMouseCaptureRequested = false;
+    ReleaseMouseCapture();
+    mCamera.SetFovYRadians(mFovBeforePlay);
     EndGameSettings();
     mRmlUiRenderer.SetUiSoundCallback({});
     mRmlUiRenderer.CloseDocument();
@@ -4805,6 +5472,139 @@ void DX12SceneRenderer::StopGame()
     mGameStopRequested = false;
     mGameHasLastMousePosition = false;
     SetCameraTransform(mEditorCameraPositionBeforePlay, mEditorCameraRotationBeforePlay);
+}
+
+GameCameraState DX12SceneRenderer::ComputePlayerSpawn() const
+{
+    GameCameraState spawn{};
+    spawn.PositionX = mEditorCameraPositionBeforePlay.x;
+    spawn.PositionY = mEditorCameraPositionBeforePlay.y;
+    spawn.PositionZ = mEditorCameraPositionBeforePlay.z;
+    spawn.Pitch = mEditorCameraRotationBeforePlay.x;
+    spawn.Yaw = mEditorCameraRotationBeforePlay.y;
+
+    if (mEntities == nullptr)
+        return spawn;
+
+    for (const Entity& entity : *mEntities)
+    {
+        if (entity.Name != "PlayerStart" && entity.Name != "Player Start")
+            continue;
+
+        // The marker stands where the feet go. Its local +Y is the facing, which under
+        // ComposeRotation's Rz is camera yaw -Z: RotationZ(a) takes +Y to (-sin a, cos a).
+        // The controller may change the eye height later; the feet settle on the floor anyway.
+        const float eyeHeight = CharacterCameraSettings{}.EyeHeight;
+        spawn.PositionX = entity.Transform.Position.x;
+        spawn.PositionY = entity.Transform.Position.y;
+        spawn.PositionZ = entity.Transform.Position.z + eyeHeight;
+        spawn.Pitch = 0.0f;
+        spawn.Yaw = -entity.Transform.Rotation.z;
+        break;
+    }
+
+    return spawn;
+}
+
+void DX12SceneRenderer::StartPlayerController(const GameCameraState& spawn)
+{
+    mGraphCharacter = CharacterMovement{};
+    // Engine defaults until the controller graph configures it on Game Start.
+    mGraphCharacter.SetTrace(&PlayerCollision::TraceCallback, &mPlayerCollision);
+    mGraphCharacter.SpawnAtEye(spawn.PositionX, spawn.PositionY, spawn.PositionZ, spawn.Pitch, spawn.Yaw);
+    mGraphCharacterActive = true;
+
+    // A missing or broken controller file must not leave the player stranded: fall back
+    // to the built-in graph, which is what Game Settings exports in the first place.
+    NodeGraphDocument controller;
+    const std::string& relativePath = mGameProjectSettings.ControllerGraph;
+    std::string loadError = "no controller graph is selected";
+    const bool loaded = !relativePath.empty() &&
+        controller.LoadFromFile((DataFiles::FindDataDirectory() / relativePath).string(), &loadError);
+    if (!loaded)
+    {
+        PTERO_LOG_WARNING("Game", "Player controller: %s; using the built-in First Person Controller.",
+            loadError.c_str());
+        controller = NodeGraphTemplates::FirstPersonController();
+    }
+
+    mPlayerControllerRuntime.SetHost(&mNodeGraphHost);
+    mPlayerControllerRuntime.Start(controller);
+
+    const CharacterView view = mGraphCharacter.GetView();
+    mCamera.SetPosition(view.Position[0], view.Position[1], view.Position[2]);
+    mCamera.SetRotation(view.Pitch, view.Yaw);
+    ApplyGameFieldOfView(view.FieldOfView);
+}
+
+void DX12SceneRenderer::ApplyGameFieldOfView(float degrees)
+{
+    if (degrees <= 0.0f)
+        return;
+    constexpr float degreesToRadians = 0.017453292519943295f;
+    mCamera.SetFovYRadians(std::clamp(degrees, 5.0f, 170.0f) * degreesToRadians);
+}
+
+void DX12SceneRenderer::UpdateMouseCapture()
+{
+    mGameLookDeltaX = 0.0f;
+    mGameLookDeltaY = 0.0f;
+
+    const bool focused = QtUi::GameWindowHasFocus();
+
+    // Escape hands the cursor back (to reach the editor, or a menu the game has not
+    // opened); a click in the game view takes it again.
+    const bool escapeDown = focused && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+    if (escapeDown && !mMouseCaptureEscapeWasDown && mMouseCaptured)
+        mMouseCaptureSuspended = true;
+    mMouseCaptureEscapeWasDown = escapeDown;
+
+    const bool clickDown = QtUi::CameraInputAllowed() && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    if (clickDown && !mMouseCaptureClickWasDown)
+        mMouseCaptureSuspended = false;
+    mMouseCaptureClickWasDown = clickDown;
+
+    RECT rect{};
+    const HWND viewport = QtUi::ViewportHandle();
+    const bool wantCaptured = mMouseCaptureRequested && !mMouseCaptureSuspended && focused &&
+        viewport != nullptr && GetWindowRect(viewport, &rect) && rect.right > rect.left && rect.bottom > rect.top;
+    if (!wantCaptured)
+    {
+        ReleaseMouseCapture();
+        return;
+    }
+
+    const POINT center{ (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2 };
+    // Every frame, not just on capture: the view can move or resize under a held mouse.
+    ClipCursor(&rect);
+
+    if (!mMouseCaptured)
+    {
+        // The cursor was wherever the player left it; the first frame only centres it,
+        // otherwise the view would jump by that whole offset.
+        mMouseCaptured = true;
+        ShowCursor(FALSE);
+        SetCursorPos(center.x, center.y);
+        return;
+    }
+
+    POINT cursor{};
+    if (!GetCursorPos(&cursor))
+        return;
+    mGameLookDeltaX = static_cast<float>(cursor.x - center.x);
+    mGameLookDeltaY = static_cast<float>(cursor.y - center.y);
+    if (cursor.x != center.x || cursor.y != center.y)
+        SetCursorPos(center.x, center.y);
+}
+
+void DX12SceneRenderer::ReleaseMouseCapture()
+{
+    if (!mMouseCaptured)
+        return;
+
+    mMouseCaptured = false;
+    ClipCursor(nullptr);
+    ShowCursor(TRUE);
 }
 
 void DX12SceneRenderer::ToggleGame(bool separateWindow)
@@ -4874,9 +5674,11 @@ void DX12SceneRenderer::BuildGiPointLights()
         mCachedPointLights,
         static_cast<size_t>(lightCount) * sizeof(DeferredLightingPass::PointLightGpu));
 
+    // The GI passes work pre-exposed (see giPreExposure in Render), so their copy of
+    // the lights carries the same scale as their sun and sky.
     for (int i = 0; i < lightCount; ++i)
     {
-        const float scale = mPointLightGiScale[i];
+        const float scale = mPointLightGiScale[i] * mGiPreExposure;
         if (scale == 1.0f)
         {
             continue;
@@ -4972,15 +5774,33 @@ void DX12SceneRenderer::UpdateCamera()
 
 void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosition, bool lookActive)
 {
-    // Escape belongs to Farkle's pause menu. Closing its window ends the session.
+    // Escape releases the mouse (see UpdateMouseCapture). Closing the window ends the session.
     if (mGameStopRequested || QtUi::ConsumeGameCloseRequest())
     {
         StopGame();
         return;
     }
 
+    // Playing from the editor, the key under Escape (~ on a US keyboard) ends the session
+    // and hands back the editor. Looked up by scan code so it is that same physical key on
+    // every layout (^ on German, ² on French). The packaged game has no editor to return to.
+    if (!QtUi::IsStandaloneGame())
+    {
+        const UINT stopKey = MapVirtualKeyW(0x29, MAPVK_VSC_TO_VK);
+        const bool stopKeyDown = stopKey != 0 && QtUi::GameWindowHasFocus() && (GetAsyncKeyState(stopKey) & 0x8000) != 0;
+        const bool stopPressed = stopKeyDown && !mEditorStopKeyWasDown;
+        mEditorStopKeyWasDown = stopKeyDown;
+        if (stopPressed)
+        {
+            StopGame();
+            return;
+        }
+    }
+
     GameFrameContext frame{};
     frame.DeltaSeconds = deltaTime;
+
+    UpdateMouseCapture();
 
     // Same reasoning as the editor camera: polled keys must not drive the player while the
     // editor is in the background or a panel is taking text.
@@ -4990,15 +5810,24 @@ void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosi
     input.MoveBackward = keyboardOwned && (GetAsyncKeyState('S') & 0x8000) != 0;
     input.MoveLeft = keyboardOwned && (GetAsyncKeyState('A') & 0x8000) != 0;
     input.MoveRight = keyboardOwned && (GetAsyncKeyState('D') & 0x8000) != 0;
-    input.MoveUp = keyboardOwned && ((GetAsyncKeyState(VK_SPACE) & 0x8000) != 0 || (GetAsyncKeyState('E') & 0x8000) != 0);
-    input.MoveDown = keyboardOwned && ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 || (GetAsyncKeyState('Q') & 0x8000) != 0);
+    input.Jump = keyboardOwned && (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+    input.Crouch = keyboardOwned && ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 || (GetAsyncKeyState('C') & 0x8000) != 0);
     input.Sprint = keyboardOwned && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    input.LookActive = lookActive;
 
-    const float mouseX = static_cast<float>(mousePosition.x);
-    const float mouseY = static_cast<float>(mousePosition.y);
-    if (lookActive)
+    if (mMouseCaptured)
     {
+        input.LookActive = true;
+        input.LookDeltaX = mGameLookDeltaX;
+        input.LookDeltaY = mGameLookDeltaY;
+        mGameHasLastMousePosition = false;
+    }
+    else if (lookActive)
+    {
+        // With the mouse released, holding the right button still looks around - the
+        // editor's own fly-camera habit, and a way to look without grabbing the cursor.
+        const float mouseX = static_cast<float>(mousePosition.x);
+        const float mouseY = static_cast<float>(mousePosition.y);
+        input.LookActive = true;
         // Only report a delta once a starting position has been captured, otherwise the
         // first frame of a drag would snap the view by the whole screen offset.
         if (mGameHasLastMousePosition)
@@ -5016,6 +5845,10 @@ void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosi
         mGameHasLastMousePosition = false;
     }
 
+    // What the Node Graph's Get Look Input / Get Mouse Delta report this frame.
+    mGameLookDeltaX = input.LookDeltaX;
+    mGameLookDeltaY = input.LookDeltaY;
+
     GameCameraState cameraState{};
     const DirectX::XMFLOAT3 position = mCamera.GetPosition();
     const DirectX::XMFLOAT3 rotation = mCamera.GetRotation();
@@ -5029,14 +5862,31 @@ void DX12SceneRenderer::UpdateGameCamera(float deltaTime, const POINT& mousePosi
 
     mCamera.SetPosition(cameraState.PositionX, cameraState.PositionY, cameraState.PositionZ);
     mCamera.SetRotation(cameraState.Pitch, cameraState.Yaw);
+    ApplyGameFieldOfView(cameraState.FieldOfView);
 
     // Before the graph ticks, so On Video Finished fires in the frame the video ended.
     mVideoLayer.Update(deltaTime);
     mNodeGraphRuntime.Tick(deltaTime);
+    mPlayerControllerRuntime.Tick(deltaTime);
+
+    // After both graphs, so the input their On Tick added moves the character this frame.
+    // A camera a graph is holding (Set Camera, Move Camera To) wins over the character's.
+    if (mGraphCharacterActive)
+    {
+        mGraphCharacter.Update(deltaTime);
+        if (!mNodeGraphRuntime.IsCameraHeld() && !mPlayerControllerRuntime.IsCameraHeld())
+        {
+            const CharacterView view = mGraphCharacter.GetView();
+            mCamera.SetPosition(view.Position[0], view.Position[1], view.Position[2]);
+            mCamera.SetRotation(view.Pitch, view.Yaw);
+            ApplyGameFieldOfView(view.FieldOfView);
+        }
+    }
 
     // A Stop Game node only raises a flag; tearing the runtime down from inside its own
     // execution would destroy the state the current step is still walking.
-    if (mGameStopRequested || mNodeGraphRuntime.ConsumeStopRequest())
+    const bool controllerStop = mPlayerControllerRuntime.ConsumeStopRequest();
+    if (mGameStopRequested || mNodeGraphRuntime.ConsumeStopRequest() || controllerStop)
     {
         StopGame();
     }
@@ -5624,4 +6474,28 @@ void DX12SceneRenderer::NodeGraphUiHost::ToggleFullscreen()
 bool DX12SceneRenderer::NodeGraphUiHost::IsStandalone()
 {
     return QtUi::IsStandaloneGame();
+}
+
+CharacterMovement* DX12SceneRenderer::NodeGraphUiHost::GetPlayerCharacter()
+{
+    return mOwner.mGraphCharacterActive ? &mOwner.mGraphCharacter : nullptr;
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::GetMouseDelta(double& x, double& y)
+{
+    x = mOwner.mGameLookDeltaX;
+    y = mOwner.mGameLookDeltaY;
+}
+
+void DX12SceneRenderer::NodeGraphUiHost::SetMouseCaptured(bool captured)
+{
+    mOwner.mMouseCaptureRequested = captured;
+    // An explicit capture from the game overrides an earlier Escape.
+    if (captured)
+        mOwner.mMouseCaptureSuspended = false;
+}
+
+bool DX12SceneRenderer::NodeGraphUiHost::IsMouseCaptured()
+{
+    return mOwner.mMouseCaptured;
 }

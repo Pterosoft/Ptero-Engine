@@ -1,0 +1,69 @@
+Ptero Engine session log
+Started 2026-09-30 16:19:25
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-30_16-19-25.txt
+----------------------------------------------------------------------
+[16:19:25.389] [INFO ] [Log         ] Logging to disk started.
+[16:19:25.389] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-30_16-19-25.txt
+[16:19:25.389] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[16:19:34.119] [INFO ] [CVar        ] 397 cvars registered. Type 'list' in the console to see them.
+[16:19:34.120] [INFO ] [Renderer    ] Renderer initialized.
+[16:19:34.354] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[16:19:35.788] [INFO ] [VirtualGeometry] Virtualized geometry ready (mesh shader rasterisation, up to 4 concurrent builds).
+[16:19:35.901] [INFO ] [Shadows     ] Virtual shadow map pool: 2048 pages (8192 x 4096 texels, 128 MB).
+[16:19:36.242] [INFO ] [Game        ] Saved player settings: Settings applied.
+[16:19:36.242] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_2', meshPath='Geometry/Sponza_Simple/Sponza.fbx.ptero', materialPath='Geometry/Sponza_Simple/Sponza.json'
+[16:19:36.374] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_2', vertices=161742, indices=786615, subMeshes=25
+[16:19:36.422] [INFO ] [Meshes      ] Entity constant buffer grown to 17 slots x 3 frames (13056 bytes).
+[16:19:36.423] [INFO ] [Meshes      ] Material constant buffer grown to 106 draws x 3 frames.
+[16:19:36.427] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e4910000..0x2e50776a0 (7763616 bytes), releasing in 4 frames (frame 1).
+[16:19:36.430] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e5390000..0x2e56902dc (3146460 bytes), releasing in 4 frames (frame 1).
+[16:19:36.430] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=0, lodIndex=0, vertexCount=161742, indexCount=786615, vbBytes=7763616, ibBytes=3146460
+[16:19:36.430] [DEBUG] [Meshes      ] First draw for entityIndex=0, entity='Geometry_2', lodIndex=0, vertexCount=161742, indexCount=786615, materialPath='Geometry/Sponza_Simple/Sponza.json', subMeshCount=25, draw[0]={materialId=0,indexStart=0,indexCount=17628}, draw[1]={materialId=1,indexStart=17628,indexCount=21264}, draw[2]={materialId=2,indexStart=38892,indexCount=63}, draw[3]={materialId=3,indexStart=38955,indexCount=8448}, draw[4]={materialId=4,indexStart=47403,indexCount=69624}, draw[5]={materialId=5,indexStart=117027,indexCount=54}, draw[6]={materialId=6,indexStart=117081,indexCount=94308}, draw[7]={materialId=7,indexStart=211389,indexCount=49500}, additionalSubMeshes=17, summedSubMeshIndices=786615, validSubMeshRanges=true
+[16:19:39.623] [ERROR] [Watchdog    ] Render thread has not completed frame 1 for 5.0 s. Everything above this line is what it did last.
+[16:19:39.783] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  nvGetCompilerInterface
+    #1  nvGetCompilerInterface
+    #2  nvGetCompilerInterface
+    #3  nvGetCompilerInterface
+    #4  nvGetCompilerInterface
+    #5  nvGetCompilerInterface
+    #6  nvGetCompilerInterface
+    #7  nvGetCompilerInterface
+    #8  nvGetCompilerInterface
+    #9  nvGetCompilerInterface
+    #10  nvGetCompilerInterface
+    #11  nvGetCompilerInterface
+    #12  nvGetCompilerInterface
+    #13  nvGetCompilerInterface
+    #14  nvGetCompilerInterface
+    #15  nvGetCompilerInterface
+    #16  OpenAdapter12
+    #17  NVDEV_Thunk
+    #18  NVDEV_Thunk
+    #19  NVDEV_Thunk
+    #20  NVDEV_Thunk
+    #21  OpenAdapter10
+    #22  NVAPI_Thunk
+    #23  SetDependencyInfo
+    #24  OpenAdapter10
+    #25  D3D12GetInterface
+    #26  D3D12GetInterface
+    #27  D3D12GetInterface
+    #28  D3D12GetInterface
+    #29  0x7ffdcbe83350
+    #30  0x7ffddbe71eea
+    #31  D3D12GetInterface
+    #32  D3D12GetInterface
+    #33  D3D12GetInterface
+    #34  DeferredLightingPass::CreateLightingPipeline  (DeferredLightingPass.cpp:1197)
+    #35  DeferredLightingPass::ResolveLight  (DeferredLightingPass.cpp:516)
+    #36  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:2195)
+    #37  RendererDX12_Render  (DX12RendererAPI.cpp:1968)
+    #38  PrepareInitialMainWindowFrame  (EditorMain.cpp:101)
+    #39  InitInstance  (EditorMain.cpp:474)
+    #40  wWinMain  (EditorMain.cpp:232)
+    #41  __scrt_common_main_seh  (exe_common.inl:288)
+    #42  BaseThreadInitThunk
+    #43  RtlUserThreadStart
+[16:19:47.274] [INFO ] [FSR         ] Frame generation swap chain installed.
+[16:19:47.288] [WARN ] [Watchdog    ] Render thread recovered after 12.7 s; resumed at frame 2.

@@ -17,6 +17,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <memory>
@@ -62,16 +63,30 @@ public:
         DXGI_FORMAT depthFormat,
         UINT msaaSampleCount = 1);
 
-    // Apply one stroke of the currently configured brush at the given
-    // world-space XY position. Marks the terrain dirty so the VB/IB gets
-    // rebuilt on the next SyncFromEntities / Render pass.  The optional
-    // `outStatusMessage` is populated with a short status text (e.g. for
-    // the editor to display in the status bar).  Returns false if no
-    // terrain exists at the picked position.
+    // Apply one frame's worth of the currently configured brush at the given
+    // world-space XY position.  Called every frame while the mouse is held;
+    // `deltaSeconds` scales the stroke so Strength means metres (or paint
+    // weight) per second regardless of frame rate.  Only the touched part of
+    // the mesh is re-uploaded; disk writes wait for EndBrushStroke.  The
+    // optional `outStatusMessage` receives a short status text.  Returns
+    // false if no terrain exists at the picked position.
     bool ApplyBrushAt(
         const DirectX::XMFLOAT2& worldXZ,
+        float deltaSeconds,
         std::string* outStatusMessage = nullptr);
 
+    // Finish the current stroke: write the edited heightmap DDS / splat map
+    // to disk once and let dependent systems (vegetation) catch up.
+    void EndBrushStroke(std::string* outStatusMessage = nullptr);
+
+    // Ray against every terrain surface (world space).  Returns the nearest
+    // hit within maxDistance.  Used to place the brush where the cursor
+    // actually touches the terrain rather than on the z = 0 grid.
+    bool Raycast(
+        const DirectX::XMFLOAT3& origin,
+        const DirectX::XMFLOAT3& direction,
+        float maxDistance,
+        DirectX::XMFLOAT3& outHit) const;
     // Recompute the GPU mesh from the CPU heightmap.  Called automatically
     // by Render() if anything flagged the terrain dirty; can also be called
     // explicitly after a brush stroke when you want to update immediately.
@@ -87,6 +102,14 @@ public:
     }
 
     bool IsWireframeEnabled() const { return mWireframeEnabled; }
+
+    // Camera data for adaptive tessellation; call before Render each frame.
+    // pixelScale = (viewport height / 2) / tan(fovY / 2).
+    void SetTessellationView(const DirectX::XMFLOAT3& cameraPosition, float pixelScale)
+    {
+        mCameraPosition = cameraPosition;
+        mTessPixelScale = pixelScale;
+    }
 
     void SetTextureMipLODBias(float bias)
     {
@@ -152,6 +175,19 @@ public:
     // change).
     void MarkTerrainDirty(std::size_t entityIndex);
 
+    // Paint layer `layer` over the whole patch and save the splat map.
+    void FillPaintLayer(std::size_t entityIndex, int layer);
+
+    // The editor is about to erase paint layer `layer`: drop its splat channel
+    // and shift the higher layers' channels down so every remaining layer keeps
+    // what was painted with it.  Saves the splat map.
+    void RemovePaintLayerChannel(std::size_t entityIndex, int layer);
+
+    // Throw away the in-memory heightmap (including unsaved brush edits) and
+    // reload it from disk on the next frame.  Used after the component's
+    // SculptedHeightmapPath is cleared to revert sculpting.
+    void ReloadTerrain(std::size_t entityIndex);
+
     const char* GetLastErrorMessage() const
     {
         return mLastError.empty() ? nullptr : mLastError.c_str();
@@ -185,66 +221,126 @@ private:
         // mesh vertex colour.  Same row-major layout as Samples.
         std::vector<DirectX::XMFLOAT4> LayerWeights;
         // Last build parameters; the renderer rebuilds if any of these
-        // change compared to the entity's current settings.
+        // change compared to the entity's current settings.  Recorded even
+        // when the build fails, so a bad heightmap is not re-decoded every
+        // frame until the artist changes something.
         int    BuiltWidth        = 0;
         int    BuiltHeight       = 0;
         float  BuiltWorldSize    = 0.0f;
         float  BuiltHeightScale  = 0.0f;
         float  BuiltHeightOffset = 0.0f;
         std::string BuiltHeightmapPath;
+        bool   BuiltWithLayers   = false;
         bool   Dirty             = false;
+        bool   LoadFailed        = false;
+
+        // CPU copy of the uploaded vertices (mesh resolution, which is capped
+        // below the heightmap resolution), so a brush stroke can patch the
+        // touched rows instead of rebuilding a million vertices a frame.
+        std::vector<TerrainVertex> MeshVertices;
+        int    MeshWidth  = 0;
+        int    MeshHeight = 0;
+        // Heightmap samples edited since the last upload.
+        TerrainGeometry::GridRect DirtySamples;
+        // Edits not yet written to disk; flushed by EndBrushStroke.
+        bool   PendingHeightSave = false;
+        bool   PendingSplatSave  = false;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> VertexUpload;
         Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> IndexUpload;
         D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         std::uint32_t IndexCount = 0;
     };
-
     // Constant buffer layout – 256-byte aligned to match the rest of the engine.
     struct alignas(256) TerrainConstants
     {
         DirectX::XMFLOAT4X4 MVP;
         DirectX::XMFLOAT4X4 Model;
-        std::byte Padding[128]{};
+        DirectX::XMFLOAT3   CameraPositionWS = { 0.f, 0.f, 0.f };
+        float               TessPixelScale   = 1000.f;
+        std::byte Padding[112]{};
     };
     static_assert(sizeof(TerrainConstants) == 256);
 
-    // Material CB layout – 256-byte aligned, mirrors Terrain.hlsl b1.
-    // Layout must match the HLSL cbuffer field-for-field (HLSL 16-byte
-    // register packing rules).
+    // Material CB layout – mirrors Terrain.hlsl b1 field-for-field (HLSL
+    // 16-byte register packing rules): a 64-byte header, then one 128-byte
+    // block per paint layer.
+    struct TerrainLayerConstants
+    {
+        DirectX::XMFLOAT4 BaseTint           = { 1.f, 1.f, 1.f, 1.f };
+        DirectX::XMFLOAT2 UvTiling           = { 1.f, 1.f };
+        DirectX::XMFLOAT2 UvOffset           = { 0.f, 0.f };
+        float             UvRotationSin      = 0.0f;
+        float             UvRotationCos      = 1.0f;
+        float             TileSize           = 4.0f;    // metres per repeat
+        float             NormalScale        = 1.0f;
+        float             Roughness          = 0.9f;
+        float             Metallic           = 0.0f;
+        float             AoStrength         = 1.0f;
+        float             Specular           = 0.5f;
+        int               HasBaseMap         = 0;
+        int               HasNormalMap       = 0;
+        int               HasRoughnessMap    = 0;
+        int               HasMetallicMap     = 0;
+        int               HasAoMap           = 0;
+        int               HasPackedMaterialMap = 0;
+        int               HasHeightMap       = 0;
+        int               FlipNormalGreen    = 0;
+        float             DisplacementScale  = 0.0f;    // 0 = this layer does not displace
+        float             DisplacementMidLevel = 0.5f;
+        float             _Pad0[2]           = {};
+        float             _Pad1[4]           = {};
+    };
+    static_assert(sizeof(TerrainLayerConstants) == 128);
+
     struct alignas(256) TerrainMaterial
     {
-        DirectX::XMFLOAT4 BaseTint          = { 1.f, 1.f, 1.f, 1.f };
-        float             Metallic           = 0.0f;
-        float             Roughness          = 0.9f;
-        float             AoStrength         = 1.0f;
-        int               LayerCount         = 0;   // 0 = legacy single-material
-        DirectX::XMFLOAT4 LayerTileScale     = { 16.f, 16.f, 16.f, 16.f };
-        DirectX::XMINT4   LayerHasTex        = { 0, 0, 0, 0 };
-        DirectX::XMFLOAT4 LayerTint[4]       = {
-            { 1.f, 1.f, 1.f, 1.f }, { 1.f, 1.f, 1.f, 1.f },
-            { 1.f, 1.f, 1.f, 1.f }, { 1.f, 1.f, 1.f, 1.f } };
-        int               HasBaseMap         = 0;
-        int               UseVertexColour    = 0;
-        // Reflectivity; 0.5 is neutral. Takes the first of the two padding words so the
-        // 16-byte register row the shader expects is unchanged.
-        float             Specular           = 0.5f;
-        int               _Pad0              = 0;
-        std::byte         Padding[112]{};
+        int               LayerCount         = 1;
+        int               UseSplat           = 0;   // 0 = one implicit layer (terrain material)
+        int               BreakUpTiling      = 0;
+        int               UseTessellation    = 0;
+        int               HeightBlend        = 0;
+        float             HeightBlendSharpness = 0.6f;
+        float             MaxDisplacement    = 0.0f;
+        float             _HeaderPad0        = 0.0f;
+        float             TessMaxFactor      = 16.0f;
+        float             TessTargetPixels   = 8.0f;
+        float             TessFadeDistance   = 60.0f;
+        float             _HeaderPad1        = 0.0f;
+        float             _HeaderPad2[4]     = {};
+        TerrainLayerConstants Layers[kTerrainMaxLayers];
     };
-    static_assert(sizeof(TerrainMaterial) == 256);
+    static_assert(offsetof(TerrainMaterial, Layers) == 64);
+    static_assert(sizeof(TerrainMaterial) == 768);
 
+    // Everything the terrain uses from its material JSON (same keys as meshes).
     struct TerrainMaterialInfo
     {
         std::string BaseColorTexturePath;
+        std::string NormalTexturePath;
+        std::string RoughnessTexturePath;
+        std::string MetallicTexturePath;
+        std::string PackedMaterialTexturePath;   // "metallicRoughness", or "orm" when that is empty
+        bool        PackedMaterialIsOrm = false; // channel layout of the above: ORM rather than RMA
+        std::string AoTexturePath;
+        std::string HeightTexturePath;
         DirectX::XMFLOAT4 BaseTint = { 0.78f, 0.48f, 0.16f, 1.0f };
         float Metallic = 0.0f;
         float Roughness = 0.9f;
         float Specular = 0.5f;
         float AoStrength = 1.0f;
+        float NormalScale = 1.0f;
+        bool  FlipNormalGreen = false;
+        DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
+        DirectX::XMFLOAT2 UvOffset = { 0.0f, 0.0f };
+        float UvRotationDegrees = 0.0f;
+        bool  UseTessellation = false;
+        float TessMaxFactor = 16.0f;
+        float TessTargetPixels = 8.0f;
+        float TessFadeDistance = 60.0f;
+        float DisplacementScale = 0.05f;
+        float DisplacementMidLevel = 0.5f;
     };
 
     bool CreatePipeline(
@@ -257,11 +353,52 @@ private:
     bool EnsureConstantBuffer(std::size_t requiredCount);
     bool EnsureMaterialConstantBuffer(std::size_t requiredCount);
     TerrainMaterialInfo ResolveTerrainMaterial(const std::string& materialPath) const;
+    const TerrainMaterialInfo& GetCachedTerrainMaterial(const std::string& materialPath);
     bool EnsureGpuMesh(
         ID3D12GraphicsCommandList* commandList,
         std::size_t entityIndex,
         const Entity& entity,
         TerrainGpuState& state);
+
+    // Record a copy of `data` into `destination` through a staging buffer
+    // that is retired once the frame completes.
+    bool UploadToBuffer(
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12Resource* destination,
+        UINT64 destinationOffset,
+        const void* data,
+        UINT64 byteSize,
+        D3D12_RESOURCE_STATES steadyState,
+        bool destinationIsFresh);
+
+    // Re-upload the vertex rows a brush stroke touched since the last frame.
+    bool UploadDirtyRegion(
+        ID3D12GraphicsCommandList* commandList,
+        const Entity& entity,
+        TerrainGpuState& state);
+
+    // Keep a replaced GPU resource alive until every frame that may still
+    // reference it has retired (see EntityMeshRenderer::RetireBuffer).
+    void RetireResource(Microsoft::WRL::ComPtr<ID3D12Resource> resource);
+    void RetireGpuMesh(TerrainGpuState& state);
+    void ReleaseExpiredResources();
+
+    static constexpr std::size_t kFramesInFlight = 3;
+    std::size_t mFrameSlot = 0;
+
+    struct RetiredResource
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Resource;
+        int FramesRemaining = 0;
+    };
+    std::vector<RetiredResource> mRetiredResources;
+
+    // Parsed terrain material JSON, keyed by path.  Parsing it per terrain
+    // per frame opened and read the file on the render thread every frame.
+    // Flushed by MarkTerrainDirty and periodically, so edits to the file
+    // still show up.
+    std::unordered_map<std::string, TerrainMaterialInfo> mMaterialCache;
+    std::uint64_t mFrameCounter = 0;
 
     // Worker that actually creates the GPU resources; EnsureGpuMesh wraps
     // it so the dirty flag is always cleared on failure.
@@ -270,6 +407,10 @@ private:
         std::size_t entityIndex,
         const Entity& entity,
         TerrainGpuState& state);
+
+    // Load (or reload) the CPU heightmap for a state; false with outError set
+    // if the source cannot be read or does not match the component.
+    bool EnsureSamplesLoaded(const TerrainComponent& tc, TerrainGpuState& state, std::string& outError);
 
     std::vector<Entity>* mEntities = nullptr;
     std::unordered_map<std::size_t, TerrainGpuState> mGpuStates;
@@ -296,6 +437,13 @@ private:
     DX12Shader mPixelShader;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;
+    // Tessellated variant, used for terrains whose material enables it.
+    DX12Shader mTessVertexShader;
+    DX12Shader mHullShader;
+    DX12Shader mDomainShader;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessPipelineState;
+    DirectX::XMFLOAT3 mCameraPosition{};
+    float mTessPixelScale = 1000.0f;
 
     bool        mPipelineReady    = false;
     DXGI_FORMAT mAlbedoFormat     = DXGI_FORMAT_UNKNOWN;

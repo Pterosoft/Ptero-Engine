@@ -28,15 +28,22 @@ namespace Packaging
     {
         const std::wstring folderLower = ToLower(topLevelFolderName);
 
+        // Unreal source packages are import sources wherever they sit: the game only reads
+        // the .ptero/.dds/.json converted from them.
+        if (HasExtension(fileName, L".uasset") || HasExtension(fileName, L".umap") ||
+            HasExtension(fileName, L".uexp") || HasExtension(fileName, L".ubulk"))
+            return false;
+
         if (folderLower == L"textures")
             return HasExtension(fileName, L".dds");
 
-        // Mesh folders keep their materials (.json) and cooked textures (.dds) beside the
+        // Mesh folders keep their materials (.material, or .json from older imports) and cooked textures (.dds) beside the
         // cooked mesh - Geometry/MET_Table/M_MET_Table.json points at
         // Geometry/MET_Table/Textures/*.dds - so all three ship. Source art (.fbx, .png,
         // .tga, .spp, ...) stays behind.
         if (folderLower == L"geometry")
-            return HasExtension(fileName, L".ptero") || HasExtension(fileName, L".dds") || HasExtension(fileName, L".json");
+            return HasExtension(fileName, L".ptero") || HasExtension(fileName, L".dds") ||
+                   HasExtension(fileName, L".material") || HasExtension(fileName, L".json");
 
         // UI, and every other included folder, ship unfiltered.
         return true;

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ReleaseGame.h"
+#include "GameProjectSettings.h"
 
 #include "System/PackageFormat.h"
 #include "System/PackagingKeyObfuscation.h"
@@ -592,7 +593,11 @@ namespace ReleaseGame
     {
         static const std::vector<std::wstring> folders = {
             L"Textures", L"Geometry", L"Audio", L"UI", L"Levels", L"Fonts",
-            L"Materials", L"MultiMaterials", L"Shaders", L"Icons", L"Media", L"Videos",
+            L"Materials", L"MultiMaterials", L"Particles", L"Shaders", L"Icons", L"Media", L"Videos",
+            // Lens prescriptions the lens flares trace through.
+            L"LensFlares",
+            // Game Settings and player controller graphs (Windows > Game Settings...).
+            L"Game",
         };
         return folders;
     }
@@ -655,6 +660,20 @@ namespace ReleaseGame
         {
             log("Error: " + error);
             return false;
+        }
+
+        // The launcher opens Game Settings' StartupLevel; without one the built game could
+        // only show an error, so refuse here where it can still be fixed.
+        {
+            GameProjectSettings settings;
+            settings.Load(dataDirectory);
+            if (settings.StartupLevel.empty() || !fs::exists(dataDirectory / fs::path(settings.StartupLevel)))
+            {
+                log("Error: no valid Startup Level. Set one in Windows > Game Settings and Save (currently: '" +
+                    settings.StartupLevel + "').");
+                return false;
+            }
+            log("Startup level: " + settings.StartupLevel);
         }
 
         if (options.BuildPackages)

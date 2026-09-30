@@ -1,0 +1,128 @@
+Ptero Engine session log
+Started 2026-09-30 15:57:01
+File    K:\Ptero-Engine\Logs\Ptero_2026-09-30_15-57-01.txt
+----------------------------------------------------------------------
+[15:57:01.968] [INFO ] [Log         ] Logging to disk started.
+[15:57:01.968] [INFO ] [Log         ] K:\Ptero-Engine\Logs\Ptero_2026-09-30_15-57-01.txt
+[15:57:01.968] [INFO ] [Renderer    ] RendererDX12_Initialize starting.
+[15:57:07.140] [INFO ] [CVar        ] 384 cvars registered. Type 'list' in the console to see them.
+[15:57:07.140] [INFO ] [Renderer    ] Renderer initialized.
+[15:57:07.351] [INFO ] [FSR         ] FidelityFX API loaded from K:\Ptero-Engine\Binaries.
+[15:57:07.388] [INFO ] [VirtualGeometry] Virtualized geometry ready (mesh shader rasterisation, up to 4 concurrent builds).
+[16:10:50.154] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_2', meshPath='Geometry/Mastaba/SM_Mastaba_Exterior.fbx.ptero', materialPath='MultiMaterials/SM_Mastaba_Exterior.json'
+[16:10:50.165] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_2', vertices=11997, indices=36309, subMeshes=4
+[16:10:50.165] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_I', meshPath='Geometry/Mastaba/SM_Mastaba_Interior.fbx.ptero', materialPath='Geometry/Mastaba/SM_Mastaba_Interior.json'
+[16:10:50.168] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_I', vertices=3698, indices=11334, subMeshes=5
+[16:10:50.168] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.171] [DEBUG] [Renderer    ] Attempting mesh load for entity='Geometry_3', meshPath='Geometry/Candle/SM_Candle04_3.fbx.ptero', materialPath='Geometry/Candle/Candle.material'
+[16:10:50.171] [DEBUG] [Renderer    ] Mesh load succeeded for entity='Geometry_3', vertices=715, indices=3651, subMeshes=1
+[16:10:50.185] [INFO ] [Meshes      ] Shadow-pass constant buffer grown to 28 slots x 3 frames.
+[16:10:50.185] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0xa160000..0xa1ec970 (575856 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.187] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e4230000..0x2e4253754 (145236 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.187] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=0, vertexCount=11997, indexCount=36309, vbBytes=575856, ibBytes=145236
+[16:10:50.187] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e2580000..0x2e25ab560 (177504 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.188] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e25b0000..0x2e25bb118 (45336 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.188] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=0, vertexCount=3698, indexCount=11334, vbBytes=177504, ibBytes=45336
+[16:10:50.188] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e25c5000..0x2e25cd610 (34320 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.189] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e43da000..0x2e43dd90c (14604 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.189] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=3, lodIndex=0, vertexCount=715, indexCount=3651, vbBytes=34320, ibBytes=14604
+[16:10:50.208] [INFO ] [Meshes      ] Entity constant buffer grown to 28 slots x 3 frames (21504 bytes).
+[16:10:50.209] [INFO ] [Meshes      ] Material constant buffer grown to 103 draws x 3 frames.
+[16:10:50.209] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e4330000..0x2e4387390 (357264 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.209] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2eb560000..0x2eb571b74 (72564 bytes), releasing in 4 frames (frame 50653).
+[16:10:50.210] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=1, lodIndex=1, vertexCount=7443, indexCount=18141, vbBytes=357264, ibBytes=72564
+[16:10:50.210] [DEBUG] [Meshes      ] First draw for entityIndex=1, entity='Geometry_2', lodIndex=1, vertexCount=7443, indexCount=18141, materialPath='MultiMaterials/SM_Mastaba_Exterior.json', subMeshCount=4, draw[0]={materialId=0,indexStart=0,indexCount=2937}, draw[1]={materialId=1,indexStart=2937,indexCount=11127}, draw[2]={materialId=2,indexStart=14064,indexCount=3357}, draw[3]={materialId=3,indexStart=17421,indexCount=720}, summedSubMeshIndices=18141, validSubMeshRanges=true
+[16:10:53.846] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2eb5a0000..0x2eb5baca0 (109728 bytes), releasing in 4 frames (frame 50653).
+[16:10:53.847] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e25da000..0x2e25df8c8 (22728 bytes), releasing in 4 frames (frame 50653).
+[16:10:53.847] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=2, lodIndex=1, vertexCount=2286, indexCount=5682, vbBytes=109728, ibBytes=22728
+[16:10:53.847] [DEBUG] [Meshes      ] First draw for entityIndex=2, entity='Geometry_I', lodIndex=1, vertexCount=2286, indexCount=5682, materialPath='Geometry/Mastaba/SM_Mastaba_Interior.json', subMeshCount=5, draw[0]={materialId=0,indexStart=0,indexCount=1200}, draw[1]={materialId=1,indexStart=1200,indexCount=1743}, draw[2]={materialId=2,indexStart=2943,indexCount=345}, draw[3]={materialId=3,indexStart=3288,indexCount=156}, draw[4]={materialId=4,indexStart=3444,indexCount=2238}, summedSubMeshIndices=5682, validSubMeshRanges=true
+[16:10:55.494] [ERROR] [Watchdog    ] Render thread has not completed frame 50653 for 5.1 s. Everything above this line is what it did last.
+[16:10:55.875] [ERROR] [Watchdog    ] Render thread call stack:
+    #0  NtReadFile
+    #1  ReadFile
+    #2  fread_nolock_s
+    #3  read
+    #4  fgetc_nolock
+    #5  fread_nolock_s
+    #6  fread_s
+    #7  fread
+    #8  std::basic_filebuf<char,std::char_traits<char> >::xsgetn  (__msvc_filebuf.hpp:525)
+    #9  std::basic_istream<char,std::char_traits<char> >::read
+    #10  DataFiles::ReadBytes  (DataFiles.cpp:265)
+    #11  TextureManager::LoadDDS  (TextureManager.cpp:232)
+    #12  EntityMeshRenderer::BindSubMaterial  (EntityMeshRenderer.cpp:621)
+    #13  `EntityMeshRenderer::Render'::`43'::<lambda_1>::operator()  (EntityMeshRenderer.cpp:357)
+    #14  EntityMeshRenderer::Render  (EntityMeshRenderer.cpp:404)
+    #15  DX12SceneRenderer::Render  (DX12SceneRenderer.cpp:1223)
+    #16  RendererDX12_Render  (DX12RendererAPI.cpp:1968)
+    #17  wWinMain  (EditorMain.cpp:293)
+    #18  __scrt_common_main_seh  (exe_common.inl:288)
+    #19  BaseThreadInitThunk
+    #20  RtlUserThreadStart
+[16:10:57.671] [DEBUG] [Meshes      ] First draw for entityIndex=3, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:10:57.728] [DEBUG] [Meshes      ] First draw for entityIndex=5, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:10:57.729] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2eb5c5000..0x2eb5c9890 (18576 bytes), releasing in 4 frames (frame 50653).
+[16:10:57.729] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x1bdfd000..0x1bdfec80 (7296 bytes), releasing in 4 frames (frame 50653).
+[16:10:57.729] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=7, lodIndex=1, vertexCount=387, indexCount=1824, vbBytes=18576, ibBytes=7296
+[16:10:57.729] [DEBUG] [Meshes      ] First draw for entityIndex=7, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.729] [DEBUG] [Meshes      ] First draw for entityIndex=9, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=11, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=13, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=15, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=17, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=19, entity='Geometry_3', lodIndex=1, vertexCount=387, indexCount=1824, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=1824}, summedSubMeshIndices=1824, validSubMeshRanges=true
+[16:10:57.730] [DEBUG] [Meshes      ] First draw for entityIndex=21, entity='Geometry_3', lodIndex=0, vertexCount=715, indexCount=3651, materialPath='Geometry/Candle/Candle.material', subMeshCount=1, draw[0]={materialId=0,indexStart=0,indexCount=3651}, summedSubMeshIndices=3651, validSubMeshRanges=true
+[16:10:59.841] [INFO ] [Renderer    ] Subsurface scattering initialised at 1521x845 (ray-traced path available).
+[16:11:00.217] [INFO ] [VirtualGeometry] Loaded cluster hierarchy for a 12,103-triangle mesh: 424 clusters over 7 levels (22,690 triangles in all levels), 0.00 s.
+[16:11:00.220] [INFO ] [VirtualGeometry] Geometry pools rebuilt: 1 meshes, 424 clusters, 0.8 MB.
+[16:11:00.444] [WARN ] [Watchdog    ] Render thread recovered after 10.0 s; resumed at frame 50654.
+[16:11:00.976] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0xa160000..0xa1ec970 (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e4230000..0x2e4253754 (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e2580000..0x2e25ab560 (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e25b0000..0x2e25bb118 (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e25c5000..0x2e25cd610 (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e43da000..0x2e43dd90c (frame 50657).
+[16:11:00.977] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e4330000..0x2e4387390 (frame 50657).
+[16:11:00.978] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2eb560000..0x2eb571b74 (frame 50657).
+[16:11:00.978] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2eb5a0000..0x2eb5baca0 (frame 50657).
+[16:11:00.978] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e25da000..0x2e25df8c8 (frame 50657).
+[16:11:00.979] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2eb5c5000..0x2eb5c9890 (frame 50657).
+[16:11:00.979] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x1bdfd000..0x1bdfec80 (frame 50657).
+[16:11:15.838] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x1b980000..0x1ba0c970 (575856 bytes), releasing in 4 frames (frame 51360).
+[16:11:15.838] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e4200000..0x2e4223754 (145236 bytes), releasing in 4 frames (frame 51360).
+[16:11:15.838] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2e42d0000..0x2e4327390 (357264 bytes), releasing in 4 frames (frame 51360).
+[16:11:15.838] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2eb540000..0x2eb551b74 (72564 bytes), releasing in 4 frames (frame 51360).
+[16:11:15.927] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x1b980000..0x1ba0c970 (frame 51364).
+[16:11:15.927] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e4200000..0x2e4223754 (frame 51364).
+[16:11:15.927] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2e42d0000..0x2e4327390 (frame 51364).
+[16:11:15.928] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2eb540000..0x2eb551b74 (frame 51364).
+[16:11:18.237] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2eb580000..0x2eb59aca0 (109728 bytes), releasing in 4 frames (frame 51480).
+[16:11:18.237] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e25d4000..0x2e25d98c8 (22728 bytes), releasing in 4 frames (frame 51480).
+[16:11:18.237] [DEBUG] [Meshes      ] Retiring evicted mesh vertex buffer at GPU VA 0x2eb5c0000..0x2eb5c4890 (18576 bytes), releasing in 4 frames (frame 51480).
+[16:11:18.237] [DEBUG] [Meshes      ] Retiring evicted mesh index buffer at GPU VA 0x2e43de000..0x2e43dfc80 (7296 bytes), releasing in 4 frames (frame 51480).
+[16:11:18.306] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2eb580000..0x2eb59aca0 (frame 51484).
+[16:11:18.306] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e25d4000..0x2e25d98c8 (frame 51484).
+[16:11:18.306] [DEBUG] [Meshes      ] Releasing evicted mesh vertex buffer at GPU VA 0x2eb5c0000..0x2eb5c4890 (frame 51484).
+[16:11:18.306] [DEBUG] [Meshes      ] Releasing evicted mesh index buffer at GPU VA 0x2e43de000..0x2e43dfc80 (frame 51484).
+[16:11:26.872] [DEBUG] [Meshes      ] Retiring mesh vertex staging buffer at GPU VA 0x2e43da000..0x2e43de890 (18576 bytes), releasing in 4 frames (frame 51937).
+[16:11:26.872] [DEBUG] [Meshes      ] Retiring mesh index staging buffer at GPU VA 0x2e25c5000..0x2e25c6c80 (7296 bytes), releasing in 4 frames (frame 51937).
+[16:11:26.872] [DEBUG] [Meshes      ] Uploaded GPU mesh for entityIndex=9, lodIndex=1, vertexCount=387, indexCount=1824, vbBytes=18576, ibBytes=7296
+[16:11:26.935] [DEBUG] [Meshes      ] Releasing mesh vertex staging buffer at GPU VA 0x2e43da000..0x2e43de890 (frame 51941).
+[16:11:26.935] [DEBUG] [Meshes      ] Releasing mesh index staging buffer at GPU VA 0x2e25c5000..0x2e25c6c80 (frame 51941).

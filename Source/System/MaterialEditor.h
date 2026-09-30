@@ -17,7 +17,11 @@ enum class MaterialTextureSlot
     AmbientOcclusion,
     Emissive,
     Height,
-    Opacity
+    Opacity,
+    // Unreal-style packed map: R = ambient occlusion, G = roughness, B = metallic.
+    // The engine's own packed slot (MetallicRoughness) is R = roughness, G = metallic,
+    // B = AO; this one is read with the channels swapped so ORM exports load unchanged.
+    OcclusionRoughnessMetallic
 };
 
 // How a particle sprite is composited into the scene colour target.
@@ -41,6 +45,7 @@ struct MaterialTextureSet
     std::string EmissiveTexturePath;
     std::string HeightTexturePath;
     std::string OpacityTexturePath;
+    std::string OcclusionRoughnessMetallicTexturePath;
 
     std::string& GetTexturePath(MaterialTextureSlot textureSlot);
     const std::string& GetTexturePath(MaterialTextureSlot textureSlot) const;
@@ -92,6 +97,23 @@ struct MaterialDefinition
     // the map's brightest value so the relief starts at the surface instead of half a
     // volume below it, which otherwise turns the offset into a uniform slab shift.
     float HeightReference = 1.0f;
+
+    // --- Tessellation + displacement -------------------------------------------
+    // Subdivides the surface on the GPU and pushes the new vertices along the normal by
+    // the Height texture, so the relief is real geometry with a real silhouette rather
+    // than the parallax illusion. Works on meshes and terrain. Subdivision is adaptive:
+    // each edge is split until its pieces are about TessellationTargetPixels long on
+    // screen, capped at TessellationMaxFactor, and falls back to none past
+    // TessellationFadeDistance.
+    bool UseTessellation = false;
+    float TessellationMaxFactor = 16.0f;       // 1..64 pieces per edge
+    float TessellationTargetPixels = 8.0f;     // on-screen length of one tessellated edge
+    float TessellationFadeDistance = 60.0f;    // metres; 0 = no fade
+    // Metres between the Height texture's black and white. The surface moves by
+    // (height - DisplacementMidLevel) * DisplacementScale along its normal, so a mid
+    // level of 0.5 keeps the average surface where the polygon was.
+    float DisplacementScale = 0.05f;
+    float DisplacementMidLevel = 0.5f;
 
     // --- Subsurface scattering ------------------------------------------------
     // Light that enters the surface, scatters inside it and leaves somewhere else:

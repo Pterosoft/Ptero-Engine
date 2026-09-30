@@ -25,7 +25,12 @@
 #include "SubsurfaceSettings.h"
 #include "ChromaticAberrationSettings.h"
 #include "BloomSettings.h"
+#include "LensFlareSettings.h"
+
+class LensFlareRenderer;
 #include "PointShadowSettings.h"
+#include "VirtualShadowMapSettings.h"
+#include "DpleSettings.h"
 #include "AudioManager.h"
 
 // G-Buffer and GI debug texture handles passed to the View menu visualizer.
@@ -79,7 +84,13 @@ void RenderEditorMainMenu(
     VolumetricFogSettings* volumetricFogSettings,
     VolumetricCloudSettings* volumetricCloudSettings,
     BloomSettings* bloomSettings,
+    LensFlareSettings* lensFlareSettings,
+    const LensFlareRenderer* lensFlareRenderer,
     PointShadowSettings* pointShadowSettings,
+    VirtualShadowMapSettings* virtualShadowMapSettings,
+    const char* virtualShadowMapStatus,
+    DpleSettings* dpleSettings,
+    const char* dpleErrorMessage,
     const GBufferDebugTextureIds* gbufferTextureIds,
     AudioManager* audioManager,
     CompileShadersCommandFn compileShadersCommand,

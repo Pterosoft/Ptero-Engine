@@ -23,6 +23,39 @@ struct RtGISettings
     // Improves direct-light transport in GI at the cost of extra ray work.
     bool NextEventEstimation = true;
 
+    // Answers next-event visibility at a bounce hit from the virtual shadow map
+    // where it holds a page fine enough, and traces the shadow ray only where it
+    // does not. The map already exists for direct lighting, so a lookup is far
+    // cheaper than a ray, and it sees what the raster shadows see - alpha-tested
+    // foliage included. Needs the virtual shadow map to be active.
+    bool VsmVisibility = true;
+
+    // Coarsest shadow-map texel, in metres, trusted at a bounce hit. A coarse
+    // page leaks light through anything about as thin as its texels - a wall
+    // between a sunlit exterior and a room - so hits that only coarse pages
+    // cover trace a ray instead.
+    float VsmMaxTexelSize = 0.04f;
+
+    // ── Acceleration structure detail ─────────────────────────────────────
+    // Meshes that have a virtualized-geometry cluster DAG are ray traced
+    // against a static cut through it rather than their full source triangles.
+    // GI is low frequency, so the lost detail does not show; the BLAS, its
+    // build and the hit-shading geometry pool all shrink with the cut.
+    bool VirtualGeometryBlas = true;
+
+    // Simplification error, in metres, of the cut used for the nearest tier.
+    // Keep it under a centimetre: the primary GI ray re-finds its origin on
+    // the traced surface within max(1 cm, 1% of the distance).
+    float BlasLodError = 0.005f;
+
+    // Distance, in metres, at which the second tier starts. Each tier starts
+    // four times further out than the one before and allows four times the
+    // error. Range [1 .. 200].
+    float BlasTierDistance = 15.0f;
+
+    // Number of distance tiers. 1 = one cut for every distance. Range [1..3].
+    int BlasTierCount = 3;
+
     // ── ReSTIR temporal resampling ─────────────────────────────────────────
     // Reuses GI path samples from previous frames via reservoir resampling.
     bool TemporalReuseEnabled = false;

@@ -60,7 +60,7 @@
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -79,7 +79,7 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

@@ -17,10 +17,12 @@
 #include "DX12ShaderCompiler.h"
 #include "RadianceProbeSettings.h"
 #include "MsaaSettings.h"
+#include "VirtualShadowMapConstants.h"
 
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -117,6 +119,16 @@ public:
         UINT                        width,
         UINT                        height) const;
 
+    // Bind the G-Buffer RTs and scene depth again, part-way through the
+    // geometry pass, without clearing anything or changing resource states:
+    // for a pass that interrupts the geometry pass with compute work (the
+    // virtualized-geometry occlusion pass reads the depth drawn so far).
+    void RebindGeometryTargets(
+        ID3D12GraphicsCommandList* commandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneDsvHandle,
+        UINT                        width,
+        UINT                        height) const;
+
     // Transition G-Buffer RTs back to shader-resource state.
     // Call this after all geometry draw calls are finished.
     void EndGeometryPass(ID3D12GraphicsCommandList* commandList) const;
@@ -135,11 +147,18 @@ public:
         const DirectX::XMFLOAT4X4& invViewProj,
         const DirectX::XMFLOAT3&   cameraPosition);
 
-    // Upload shadow map parameters.
+    // Upload shadow map parameters. Turns the virtual shadow map off.
     void SetShadowData(
         const DirectX::XMFLOAT4X4& lightViewProjection,
         float                       shadowMapSize,
         D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvHandle);
+
+    // Shadow the sun with the virtual shadow map instead (VirtualShadowMapRenderer):
+    // the pool takes the sun shadow map's slot (t4) and the page table binds at t11.
+    void SetVirtualShadowMap(
+        const VsmGpuConstants&      constants,
+        D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+        D3D12_GPU_DESCRIPTOR_HANDLE poolSrvHandle);
 
     // Supply the DXR GI accumulation texture SRV and an intensity multiplier.
     // Call with handle={} and intensity=0.0f to disable GI contribution.
@@ -201,6 +220,10 @@ public:
         int                         PointShadowLightCount = 0;
         D3D12_GPU_DESCRIPTOR_HANDLE PointShadowSrv{};
         DirectX::XMFLOAT4X4         PointFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+        // Virtual shadow map: when Vsm.Enabled, SunShadowSrv is its page pool, which
+        // rests in ALL_SHADER_RESOURCE.
+        VsmGpuConstants             Vsm{};
+        D3D12_GPU_VIRTUAL_ADDRESS   VsmPageTable = 0;
     };
     const ShadowSnapshot& GetShadowSnapshot() const { return mCpuShadows; }
 
@@ -298,19 +321,13 @@ private:
         float               PointShadowMapSize;
         float               PointShadowBias;
         DirectX::XMFLOAT4X4 PointShadowFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+        VsmGpuConstants     Vsm{};
     };
 
     struct alignas(256) ProbeConstants
     {
-        uint32_t ProbeGridX = 0;
-        uint32_t ProbeGridY = 0;
-        uint32_t ProbeGridZ = 0;
-        float    ProbeSpacing = 1.0f;
-        float    ProbeOriginX = 0.0f;
-        float    ProbeOriginY = 0.0f;
-        float    ProbeOriginZ = 0.0f;
-        float    Pad0 = 0.0f;
-        std::byte Padding[224]{};
+        RadianceProbeFieldGpu Field{};
+        std::byte Padding[256 - sizeof(RadianceProbeFieldGpu)]{};
     };
     static_assert(sizeof(ProbeConstants) == 256);
 
@@ -366,20 +383,52 @@ private:
     ShadowSnapshot    mCpuShadows{};
 
     // Constant buffers.
+    //
+    // The mMapped*CB pointers the setters write through are CPU-side mirrors,
+    // not GPU memory. ResolveLight() snapshots all four into a fresh slot of a
+    // ring and binds that slot. They used to be single mapped copies, and with
+    // three frames in flight every setter overwrote constants that up to two
+    // earlier frames were still shading with: while the camera moved, the
+    // inverse view-projection and the probe-grid origin tore between frames,
+    // so pixels looked up the wrong probes - often ones buried in walls - and
+    // flashed black.
+    //
+    // More slots than frames in flight, because the pass can be recorded
+    // more than once per frame.
+    static constexpr UINT kCbRingSlots = 8;
+    // Advanced by ResolveLight(), which is const: the ring cursor is
+    // bookkeeping, not part of the pass's observable state.
+    mutable UINT mCbRingSlot = 0;
+
     Microsoft::WRL::ComPtr<ID3D12Resource> mCameraCB;
+    std::byte*                              mGpuCameraCB = nullptr;
+    std::unique_ptr<CameraConstants>        mCameraMirror;
     CameraConstants*                        mMappedCameraCB  = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mLightingCB;
+    std::byte*                              mGpuLightingCB = nullptr;
+    std::unique_ptr<LightingConstants>      mLightingMirror;
     LightingConstants*                      mMappedLightingCB = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mShadowCB;
+    std::byte*                              mGpuShadowCB = nullptr;
+    std::unique_ptr<ShadowConstants>        mShadowMirror;
     ShadowConstants*                        mMappedShadowCB   = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mProbeCB;
+    std::byte*                              mGpuProbeCB = nullptr;
+    std::unique_ptr<ProbeConstants>         mProbeMirror;
     ProbeConstants*                         mMappedProbeCB    = nullptr;
 
-    // Shadow SRV from last SetShadowData() call.
+    // One ring slot's stride for a constant block: its size rounded up to the
+    // 256-byte CBV alignment.
+    template <typename T>
+    static constexpr UINT64 CbStride() { return (sizeof(T) + 255ull) & ~255ull; }
+
+    // Shadow SRV from last SetShadowData() / SetVirtualShadowMap() call.
     D3D12_GPU_DESCRIPTOR_HANDLE mShadowSrvHandle{};
+    // Virtual shadow map page table (t11), or 0.
+    D3D12_GPU_VIRTUAL_ADDRESS   mVsmPageTable = 0;
 
     // GI SRV and intensity from last SetGiSrv() call.
     // Handle is zero-initialised; zero ptr means no GI contribution.

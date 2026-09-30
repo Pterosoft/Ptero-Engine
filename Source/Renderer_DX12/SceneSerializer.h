@@ -8,16 +8,19 @@
 #include "DlssSettings.h"
 #include "FsrSettings.h"
 #include "RadianceCascadesSettings.h"
+#include "RadianceProbeSettings.h"
 #include "RtGISettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
 #include "SubsurfaceSettings.h"
+#include "DpleSettings.h"
 #include "ChromaticAberrationSettings.h"
 #include "AgxTonemapSettings.h"
 #include "VolumetricFogSettings.h"
 #include "VolumetricCloudSettings.h"
 #include "BloomSettings.h"
+#include "LensFlareSettings.h"
 
 #include "System/NodeGraphDocument.h"
 
@@ -40,15 +43,18 @@ struct Scene
     GlobalIlluminationMode* GlobalIllumination = nullptr;
     RtGISettings* Rtgi = nullptr;
     RadianceCascadesSettings* RadianceCascades = nullptr;
+    RadianceProbeSettings* RadianceProbes = nullptr;
     RtAOSettings* Rtao = nullptr;
     GtaoSettings* Gtao = nullptr;
     SsrSettings* Ssr = nullptr;
     SubsurfaceSettings* Subsurface = nullptr;
+    DpleSettings* Dple = nullptr;
     ChromaticAberrationSettings* ChromaticAberration = nullptr;
     AgxTonemapSettings* Agx = nullptr;
     VolumetricFogSettings* VolumetricFog = nullptr;
     VolumetricCloudSettings* VolumetricCloud = nullptr;
     BloomSettings* Bloom = nullptr;
+    LensFlareSettings* LensFlare = nullptr;
     // The level's visual script. Saved inline under "NodeGraph"; a level may instead
     // carry a path there, which is how a graph shared between levels is referenced.
     NodeGraphDocument* NodeGraph = nullptr;

@@ -10,6 +10,7 @@
 // Probe SH decoding, shared with deferred shading so both read the grid the
 // probe renderer writes with one definition of the packing.
 #include "RadianceProbeCommon.hlsli"
+#include "VirtualShadowMap.hlsli"
 
 // Matches DeferredLightingPass::kMaxPointLights, which is the engine-wide cap:
 // with a slot per scene light the fog can never run out and silently drop one.
@@ -59,12 +60,11 @@ cbuffer FogConstants : register(b0)
     float    _FogPad4;
 
     uint     gNumPointLights;
-    uint     gProbeGridX;
-    uint     gProbeGridY;
-    uint     gProbeGridZ;
+    uint     _FogProbePad0;
+    uint     _FogProbePad1;
+    uint     _FogProbePad2;
 
-    float3   gProbeOrigin;
-    float    gProbeSpacing;
+    PteroProbeField gProbeField;
 
     float    gPointShadowMapSize;
     float    gPointShadowBias;
@@ -76,6 +76,10 @@ cbuffer FogConstants : register(b0)
 
     float4x4 gViewProjInv;
     float4x4 gCurrViewProj;
+
+    // The virtual shadow map; when LocalEnabled, local lights' shadows come from it
+    // instead of the cubemap atlas.
+    PteroVsmConstants gFogVsm;
 };
 
 float3 ReconstructWorldPosition(float2 uv, float depth)

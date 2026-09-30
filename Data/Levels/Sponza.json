@@ -1,9 +1,19 @@
 {
     "AgxTonemapSettings": {
+        "AutoExposureGreyPoint": 0.18000000715255737,
+        "AutoExposureHighPercent": 0.8999999761581421,
+        "AutoExposureHistogramLogMax": 6.0,
+        "AutoExposureHistogramLogMin": -10.0,
+        "AutoExposureLowPercent": 0.10000000149011612,
+        "AutoExposureMeteringMask": 0.5,
+        "AutoExposureSpeedDown": 1.0,
+        "AutoExposureSpeedUp": 3.0,
         "Enabled": true,
-        "Ev100Max": 16.0,
-        "Ev100Min": -2.4600000381469727,
+        "Ev100": -4.0,
+        "Ev100Max": -2.0,
+        "Ev100Min": -5.791999816894531,
         "Exposure": 0.0,
+        "ExposureMode": 1,
         "Global": {
             "Contrast": {
                 "Blue": 0.0,
@@ -157,28 +167,83 @@
     },
     "BloomSettings": {
         "Enabled": true,
-        "Intensity": 0.029999999329447746,
+        "Intensity": 0.04800000041723251,
         "Knee": 0.3499999940395355,
         "MipLevels": 6,
         "Radius": 1.0,
-        "Threshold": 0.8999999761581421
+        "Threshold": 1.100000023841858
     },
     "CameraPosition": {
-        "X": 0.997766375541687,
-        "Y": -0.8704469799995422,
-        "Z": 0.23119458556175232
+        "X": 3.0444602966308594,
+        "Y": -1.2777938842773438,
+        "Z": 0.3002803325653076
     },
     "CameraRotation": {
-        "X": 0.10002298653125763,
-        "Y": 23.555065155029297,
+        "X": 0.0750233456492424,
+        "Y": 29.874967575073242,
         "Z": 0.0
+    },
+    "ChromaticAberrationSettings": {
+        "CenterX": 0.5,
+        "CenterY": 0.5,
+        "Enabled": true,
+        "Falloff": 2.0,
+        "SampleCount": 6,
+        "Strength": 2.0
     },
     "DlssSettings": {
         "Enabled": false,
         "Mode": 2
     },
+    "DpleSettings": {
+        "AOBias": 0.019999999552965164,
+        "AOPower": 1.0018999576568604,
+        "BroadAOIntensity": 0.11999999731779099,
+        "BroadAORadius": 1.2000000476837158,
+        "ContactAOIntensity": 0.30000001192092896,
+        "ContactAORadius": 0.25,
+        "ContactShadowIntensity": 0.75,
+        "ContactShadowLength": 0.30000001192092896,
+        "ContactShadowSteps": 10,
+        "ContactShadowThickness": 0.019999999552965164,
+        "DetailMotionSuppression": 0.0,
+        "DirectLightWeight": 1.0,
+        "DisocclusionDepthTolerance": 0.05000000074505806,
+        "EnableAmbientOcclusion": true,
+        "EnableContactShadows": true,
+        "EnableDetailEnhancement": true,
+        "EnableMaterialResponse": true,
+        "EnableMicroSpecular": true,
+        "EnableSpatialDenoise": true,
+        "EnableTemporalReconstruction": true,
+        "Enabled": true,
+        "FineDetailStrength": 1.0,
+        "FoliageAOScale": 0.6000000238418579,
+        "FoliageSaturation": 0.15000000596046448,
+        "HistoryWeightMoving": 0.7200000286102295,
+        "HistoryWeightStable": 0.9200000166893005,
+        "IndirectFractionMax": 0.8500000238418579,
+        "IndirectFractionMin": 0.15000000596046448,
+        "MaxCombinedAO": 0.44999998807907104,
+        "MaxLuminanceChange": 0.15000000596046448,
+        "MicroAOIntensity": 0.18000000715255737,
+        "MicroAORadius": 0.05999999865889549,
+        "MicroSpecularDetailScale": 4.0,
+        "MicroSpecularRoughnessMax": 0.8500000238418579,
+        "MicroSpecularStrength": 4.0,
+        "NeighborhoodClampScale": 1.25,
+        "SkinAOScale": 0.44999998807907104,
+        "SkinWarmth": 0.25,
+        "SpatialDenoiseRadius": 2,
+        "SpecularOcclusionStrength": 1.0,
+        "StructureStrength": 0.18000000715255737,
+        "WetResponseStrength": 0.20000000298023224,
+        "WetRoughnessThreshold": 0.18000000715255737,
+        "WorkingResolutionDivisor": 2
+    },
     "Entities": [
         {
+            "Id": 576645463829539,
             "MeshComponent": {
                 "DebugForcedLod": -1,
                 "LodUsageScale": 1.0,
@@ -186,27 +251,35 @@
                 "MeshPath": "Geometry/Sponza_Simple/Sponza.fbx.ptero"
             },
             "NameComponent": {
-                "Name": "Sponza"
+                "Name": "Geometry_2"
             },
             "TransformComponent": {
                 "Position": {
-                    "x": -0.3247927129268646,
-                    "y": -0.9071812629699707,
-                    "z": 0.09902766346931458
+                    "x": -0.25012922286987305,
+                    "y": -1.3665136098861694,
+                    "z": 0.0
                 },
                 "Rotation": {
                     "x": 0.0,
-                    "y": 3.1415927410125732,
+                    "y": 0.0,
                     "z": 0.0
                 },
                 "Scale": {
-                    "x": 1.0,
-                    "y": 1.0,
-                    "z": 1.0
+                    "x": 10.0,
+                    "y": 10.0,
+                    "z": 10.0
                 }
             }
         }
     ],
+    "FormatVersion": 2,
+    "FsrSettings": {
+        "Enabled": false,
+        "FrameGeneration": false,
+        "Mode": 1,
+        "Sharpening": true,
+        "Sharpness": 0.5
+    },
     "GTAOSettings": {
         "DebugView": 0,
         "DenoisePasses": 2,
@@ -222,6 +295,922 @@
         "ThinOccluderCompensation": 0.0
     },
     "GlobalIlluminationMode": 1,
+    "NodeGraph": {
+        "Comments": [
+            {
+                "Color": 7020319,
+                "Height": 420.0,
+                "Id": 1,
+                "Text": "Start: capture the mouse for looking (Set Control Settings > Capture mouse) and remember the field of view the zoom returns to",
+                "Width": 1240.0,
+                "X": -40.0,
+                "Y": -80.0
+            },
+            {
+                "Color": 1853996,
+                "Height": 761.5663580246921,
+                "Id": 4,
+                "Text": "Character settings: edit the values on these nodes to tune movement, camera and controls",
+                "Width": 1205.2391975308642,
+                "X": 560.0,
+                "Y": -1000.0
+            },
+            {
+                "Color": 3106448,
+                "Height": 1527.0061728395062,
+                "Id": 13,
+                "Text": "Every frame: WASD moves and the mouse looks. Crouch (Ctrl / C) and sprint (Shift) are held here unless Set Control Settings makes them toggles - the key presses below handle those",
+                "Width": 1838.070987654321,
+                "X": -40.0,
+                "Y": 420.0
+            },
+            {
+                "Color": 1853996,
+                "Height": 300.0,
+                "Id": 39,
+                "Text": "Jump: press to jump, release early for a shorter hop",
+                "Width": 640.0,
+                "X": -40.0,
+                "Y": 2020.0
+            },
+            {
+                "Color": 4205146,
+                "Height": 660.0,
+                "Id": 44,
+                "Text": "Crouch and sprint toggles: only when Set Control Settings makes them toggles",
+                "Width": 1240.0,
+                "X": -40.0,
+                "Y": 2420.0
+            },
+            {
+                "Color": 3025490,
+                "Height": 420.0,
+                "Id": 58,
+                "Text": "Camera properties at runtime: hold the right mouse button to zoom to half the field of view",
+                "Width": 940.0,
+                "X": -40.0,
+                "Y": 3220.0
+            }
+        ],
+        "Connections": [
+            {
+                "FromNode": 43,
+                "FromPort": 1,
+                "ToNode": 45,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 1,
+                "FromPort": 0,
+                "ToNode": 2,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 1,
+                "FromPort": 2,
+                "ToNode": 9,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 11,
+                "FromPort": 2,
+                "ToNode": 17,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 0,
+                "FromPort": 0,
+                "ToNode": 1,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 20,
+                "FromPort": 0,
+                "ToNode": 19,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 1,
+                "FromPort": 1,
+                "ToNode": 6,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 2,
+                "FromPort": 0,
+                "ToNode": 3,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 56,
+                "FromPort": 0,
+                "ToNode": 57,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 5,
+                "FromPort": 0,
+                "ToNode": 6,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 3,
+                "FromPort": 0,
+                "ToNode": 4,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 6,
+                "FromPort": 0,
+                "ToNode": 7,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 42,
+                "FromPort": 0,
+                "ToNode": 41,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 30,
+                "FromPort": 0,
+                "ToNode": 31,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 8,
+                "FromPort": 0,
+                "ToNode": 9,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 10,
+                "FromPort": 0,
+                "ToNode": 11,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 30,
+                "FromPort": 1,
+                "ToNode": 33,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 28,
+                "FromPort": 0,
+                "ToNode": 27,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 17,
+                "FromPort": 1,
+                "ToNode": 19,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 11,
+                "FromPort": 0,
+                "ToNode": 12,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 11,
+                "FromPort": 3,
+                "ToNode": 25,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 11,
+                "FromPort": 1,
+                "ToNode": 15,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 13,
+                "FromPort": 0,
+                "ToNode": 12,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 25,
+                "FromPort": 0,
+                "ToNode": 30,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 14,
+                "FromPort": 0,
+                "ToNode": 12,
+                "ToPort": 2
+            },
+            {
+                "FromNode": 13,
+                "FromPort": 0,
+                "ToNode": 29,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 16,
+                "FromPort": 0,
+                "ToNode": 15,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 16,
+                "FromPort": 1,
+                "ToNode": 15,
+                "ToPort": 2
+            },
+            {
+                "FromNode": 18,
+                "FromPort": 0,
+                "ToNode": 17,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 19,
+                "FromPort": 0,
+                "ToNode": 23,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 19,
+                "FromPort": 1,
+                "ToNode": 24,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 21,
+                "FromPort": 0,
+                "ToNode": 20,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 22,
+                "FromPort": 0,
+                "ToNode": 20,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 26,
+                "FromPort": 0,
+                "ToNode": 25,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 25,
+                "FromPort": 1,
+                "ToNode": 27,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 29,
+                "FromPort": 0,
+                "ToNode": 30,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 39,
+                "FromPort": 0,
+                "ToNode": 41,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 32,
+                "FromPort": 0,
+                "ToNode": 31,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 52,
+                "FromPort": 0,
+                "ToNode": 53,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 43,
+                "FromPort": 0,
+                "ToNode": 44,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 33,
+                "FromPort": 0,
+                "ToNode": 34,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 35,
+                "FromPort": 0,
+                "ToNode": 36,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 37,
+                "FromPort": 0,
+                "ToNode": 38,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 40,
+                "FromPort": 0,
+                "ToNode": 41,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 50,
+                "FromPort": 0,
+                "ToNode": 49,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 41,
+                "FromPort": 0,
+                "ToNode": 43,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 55,
+                "FromPort": 0,
+                "ToNode": 54,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 46,
+                "FromPort": 0,
+                "ToNode": 47,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 48,
+                "FromPort": 0,
+                "ToNode": 47,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 47,
+                "FromPort": 0,
+                "ToNode": 49,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 51,
+                "FromPort": 0,
+                "ToNode": 50,
+                "ToPort": 0
+            },
+            {
+                "FromNode": 54,
+                "FromPort": 0,
+                "ToNode": 53,
+                "ToPort": 1
+            },
+            {
+                "FromNode": 55,
+                "FromPort": 0,
+                "ToNode": 57,
+                "ToPort": 1
+            }
+        ],
+        "Name": "First Person Controller",
+        "Nodes": [
+            {
+                "Id": 0,
+                "Type": "Event.GameStart",
+                "X": 0.0,
+                "Y": 0.0
+            },
+            {
+                "Id": 1,
+                "Type": "Flow.Sequence",
+                "X": 300.0,
+                "Y": 0.0
+            },
+            {
+                "Id": 2,
+                "Params": {
+                    "Acceleration": "45",
+                    "Air Control": "0.35",
+                    "Braking": "30",
+                    "Capsule Radius": "0.35",
+                    "Coyote Time": "0.12",
+                    "Crouch Speed": "2",
+                    "Crouched Height": "1.1",
+                    "Gravity": "15",
+                    "Jump Buffer Time": "0.12",
+                    "Jump Release Damping": "0.5",
+                    "Jump Velocity": "5.2",
+                    "Kill Depth": "500",
+                    "Max Fall Speed": "50",
+                    "Max Jump Count": "1",
+                    "Max Slope": "50",
+                    "Sprint Speed": "7",
+                    "Standing Height": "1.8",
+                    "Step Height": "0.4",
+                    "Walk Speed": "4"
+                },
+                "Type": "Character.SetMovementSettings",
+                "X": 600.0,
+                "Y": -920.0
+            },
+            {
+                "Id": 3,
+                "Params": {
+                    "Blend Speed": "12",
+                    "Crouched Eye Height": "0.95",
+                    "Eye Height": "1.65",
+                    "Field of View": "70",
+                    "Head Bob Amount": "0.03",
+                    "Head Bob Frequency": "0.9",
+                    "Landing Dip": "0.012",
+                    "Landing Dip Max": "0.18",
+                    "Max Pitch": "88",
+                    "Min Pitch": "-88",
+                    "Sprint FOV Boost": "6"
+                },
+                "Type": "Character.SetCameraSettings",
+                "X": 969.7704118084134,
+                "Y": -920.0
+            },
+            {
+                "Id": 4,
+                "Params": {
+                    "Capture Mouse": "true",
+                    "Crouch Toggle": "false",
+                    "Invert Y": "false",
+                    "Mouse Sensitivity": "0.12",
+                    "Sprint Toggle": "false"
+                },
+                "Type": "Character.SetControlSettings",
+                "X": 1333.0289185147083,
+                "Y": -919.0697278425546
+            },
+            {
+                "Id": 5,
+                "Params": {
+                    "Property": "Capture Mouse"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 300.0,
+                "Y": 180.0
+            },
+            {
+                "Id": 6,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 600.0,
+                "Y": 0.0
+            },
+            {
+                "Id": 7,
+                "Params": {
+                    "Captured": "true"
+                },
+                "Type": "Input.SetMouseCaptured",
+                "X": 900.0,
+                "Y": 0.0
+            },
+            {
+                "Id": 8,
+                "Params": {
+                    "Property": "Field of View"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 600.0,
+                "Y": 260.0
+            },
+            {
+                "Id": 9,
+                "Params": {
+                    "Variable": "DefaultFieldOfView"
+                },
+                "Type": "Variable.Set",
+                "X": 900.0,
+                "Y": 180.0
+            },
+            {
+                "Id": 10,
+                "Type": "Event.Tick",
+                "X": 0.0,
+                "Y": 500.0
+            },
+            {
+                "Id": 11,
+                "Type": "Flow.Sequence",
+                "X": 300.0,
+                "Y": 500.0
+            },
+            {
+                "Id": 12,
+                "Params": {
+                    "Forward": "0",
+                    "Right": "0"
+                },
+                "Type": "Character.AddMovementInput",
+                "X": 900.0,
+                "Y": 500.0
+            },
+            {
+                "Id": 13,
+                "Params": {
+                    "Negative": "S",
+                    "Positive": "W"
+                },
+                "Type": "Input.GetAxis",
+                "X": 600.0,
+                "Y": 620.0
+            },
+            {
+                "Id": 14,
+                "Params": {
+                    "Negative": "A",
+                    "Positive": "D"
+                },
+                "Type": "Input.GetAxis",
+                "X": 600.0,
+                "Y": 760.0
+            },
+            {
+                "Id": 15,
+                "Params": {
+                    "Look Up": "0",
+                    "Turn": "0"
+                },
+                "Type": "Character.AddLookInput",
+                "X": 900.0,
+                "Y": 920.0
+            },
+            {
+                "Id": 16,
+                "Type": "Input.GetLookInput",
+                "X": 600.0,
+                "Y": 1000.0
+            },
+            {
+                "Id": 17,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 600.0,
+                "Y": 1140.0
+            },
+            {
+                "Id": 18,
+                "Params": {
+                    "Property": "Crouch Toggle"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 300.0,
+                "Y": 1280.0
+            },
+            {
+                "Id": 19,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 900.0,
+                "Y": 1180.0
+            },
+            {
+                "Id": 20,
+                "Type": "Logic.Or",
+                "X": 600.0,
+                "Y": 1340.0
+            },
+            {
+                "Id": 21,
+                "Params": {
+                    "Key": "Ctrl"
+                },
+                "Type": "Input.IsKeyDown",
+                "X": 300.0,
+                "Y": 1400.0
+            },
+            {
+                "Id": 22,
+                "Params": {
+                    "Key": "C"
+                },
+                "Type": "Input.IsKeyDown",
+                "X": 300.0,
+                "Y": 1500.0
+            },
+            {
+                "Id": 23,
+                "Type": "Character.Crouch",
+                "X": 1200.0,
+                "Y": 1140.0
+            },
+            {
+                "Id": 24,
+                "Type": "Character.UnCrouch",
+                "X": 1200.0,
+                "Y": 1260.0
+            },
+            {
+                "Id": 25,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 600.0,
+                "Y": 1600.0
+            },
+            {
+                "Id": 26,
+                "Params": {
+                    "Property": "Sprint Toggle"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 300.0,
+                "Y": 1740.0
+            },
+            {
+                "Id": 27,
+                "Params": {
+                    "Sprinting": "true"
+                },
+                "Type": "Character.SetSprinting",
+                "X": 900.0,
+                "Y": 1800.0
+            },
+            {
+                "Id": 28,
+                "Params": {
+                    "Key": "Shift"
+                },
+                "Type": "Input.IsKeyDown",
+                "X": 600.0,
+                "Y": 1860.0
+            },
+            {
+                "Id": 29,
+                "Params": {
+                    "A": "0",
+                    "B": "0",
+                    "Operator": ">"
+                },
+                "Type": "Logic.Compare",
+                "X": 900.0,
+                "Y": 1560.0
+            },
+            {
+                "Id": 30,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 1200.0,
+                "Y": 1480.0
+            },
+            {
+                "Id": 31,
+                "Params": {
+                    "Sprinting": "true"
+                },
+                "Type": "Character.SetSprinting",
+                "X": 1500.0,
+                "Y": 1440.0
+            },
+            {
+                "Id": 32,
+                "Params": {
+                    "Variable": "SprintToggled"
+                },
+                "Type": "Variable.Get",
+                "X": 1200.0,
+                "Y": 1640.0
+            },
+            {
+                "Id": 33,
+                "Params": {
+                    "Value": "false",
+                    "Variable": "SprintToggled"
+                },
+                "Type": "Variable.Set",
+                "X": 1500.0,
+                "Y": 1580.0
+            },
+            {
+                "Id": 34,
+                "Params": {
+                    "Sprinting": "false"
+                },
+                "Type": "Character.SetSprinting",
+                "X": 1500.0,
+                "Y": 1720.0
+            },
+            {
+                "Id": 35,
+                "Params": {
+                    "Key": "Space"
+                },
+                "Type": "Event.KeyPressed",
+                "X": 0.0,
+                "Y": 2100.0
+            },
+            {
+                "Id": 36,
+                "Type": "Character.Jump",
+                "X": 300.0,
+                "Y": 2100.0
+            },
+            {
+                "Id": 37,
+                "Params": {
+                    "Key": "Space"
+                },
+                "Type": "Event.KeyReleased",
+                "X": 0.0,
+                "Y": 2220.0
+            },
+            {
+                "Id": 38,
+                "Type": "Character.StopJumping",
+                "X": 300.0,
+                "Y": 2220.0
+            },
+            {
+                "Id": 39,
+                "Params": {
+                    "Key": "Ctrl"
+                },
+                "Type": "Event.KeyPressed",
+                "X": 0.0,
+                "Y": 2500.0
+            },
+            {
+                "Id": 40,
+                "Params": {
+                    "Key": "C"
+                },
+                "Type": "Event.KeyPressed",
+                "X": 0.0,
+                "Y": 2620.0
+            },
+            {
+                "Id": 41,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 300.0,
+                "Y": 2500.0
+            },
+            {
+                "Id": 42,
+                "Params": {
+                    "Property": "Crouch Toggle"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 0.0,
+                "Y": 2740.0
+            },
+            {
+                "Id": 43,
+                "Type": "Flow.FlipFlop",
+                "X": 600.0,
+                "Y": 2500.0
+            },
+            {
+                "Id": 44,
+                "Type": "Character.Crouch",
+                "X": 900.0,
+                "Y": 2480.0
+            },
+            {
+                "Id": 45,
+                "Type": "Character.UnCrouch",
+                "X": 900.0,
+                "Y": 2600.0
+            },
+            {
+                "Id": 46,
+                "Params": {
+                    "Key": "Shift"
+                },
+                "Type": "Event.KeyPressed",
+                "X": 0.0,
+                "Y": 2880.0
+            },
+            {
+                "Id": 47,
+                "Params": {
+                    "Condition": "false"
+                },
+                "Type": "Flow.Branch",
+                "X": 300.0,
+                "Y": 2880.0
+            },
+            {
+                "Id": 48,
+                "Params": {
+                    "Property": "Sprint Toggle"
+                },
+                "Type": "Character.GetCameraProperty",
+                "X": 0.0,
+                "Y": 3000.0
+            },
+            {
+                "Id": 49,
+                "Params": {
+                    "Variable": "SprintToggled"
+                },
+                "Type": "Variable.Set",
+                "X": 900.0,
+                "Y": 2880.0
+            },
+            {
+                "Id": 50,
+                "Type": "Logic.Not",
+                "X": 600.0,
+                "Y": 2980.0
+            },
+            {
+                "Id": 51,
+                "Params": {
+                    "Variable": "SprintToggled"
+                },
+                "Type": "Variable.Get",
+                "X": 300.0,
+                "Y": 3020.0
+            },
+            {
+                "Id": 52,
+                "Params": {
+                    "Key": "Right Mouse"
+                },
+                "Type": "Event.KeyPressed",
+                "X": 0.0,
+                "Y": 3300.0
+            },
+            {
+                "Id": 53,
+                "Params": {
+                    "Property": "Field of View",
+                    "Value": "70"
+                },
+                "Type": "Character.SetCameraProperty",
+                "X": 600.0,
+                "Y": 3300.0
+            },
+            {
+                "Id": 54,
+                "Params": {
+                    "A": "0",
+                    "B": "0.5"
+                },
+                "Type": "Math.Multiply",
+                "X": 300.0,
+                "Y": 3400.0
+            },
+            {
+                "Id": 55,
+                "Params": {
+                    "Variable": "DefaultFieldOfView"
+                },
+                "Type": "Variable.Get",
+                "X": 0.0,
+                "Y": 3420.0
+            },
+            {
+                "Id": 56,
+                "Params": {
+                    "Key": "Right Mouse"
+                },
+                "Type": "Event.KeyReleased",
+                "X": 0.0,
+                "Y": 3520.0
+            },
+            {
+                "Id": 57,
+                "Params": {
+                    "Property": "Field of View",
+                    "Value": "70"
+                },
+                "Type": "Character.SetCameraProperty",
+                "X": 600.0,
+                "Y": 3520.0
+            }
+        ],
+        "PteroNodeGraph": 1,
+        "Variables": [
+            {
+                "Default": "70",
+                "Name": "DefaultFieldOfView",
+                "Type": "float"
+            },
+            {
+                "Default": "false",
+                "Name": "SprintToggled",
+                "Type": "bool"
+            }
+        ]
+    },
     "RadianceCascadesSettings": {
         "CascadeCount": 4,
         "ColorBleedingStrength": 1.0,
@@ -244,6 +1233,22 @@
         "SparseProbeTableCapacity": 65536,
         "SpatialFilterStrength": 1.0
     },
+    "RadianceProbeSettings": {
+        "Enabled": true,
+        "FollowCamera": true,
+        "GiIntensity": 16.0,
+        "GridX": 32,
+        "GridY": 32,
+        "GridZ": 32,
+        "OriginX": 0.0,
+        "OriginY": 0.0,
+        "OriginZ": 2.0,
+        "RaysPerProbe": 64,
+        "Spacing": 0.5,
+        "SpecularEnabled": true,
+        "SpecularIntensity": 0.25,
+        "UpdateBlend": 0.009999999776482582
+    },
     "RtAOSettings": {
         "AOPower": 1.5,
         "DebugView": 0,
@@ -255,18 +1260,28 @@
     },
     "RtGISettings": {
         "AccumulationBlend": 1.0,
-        "ColorLeakIntensity": 2.5299999713897705,
+        "ColorLeakIntensity": 2.0,
         "DebugView": 0,
-        "Enabled": true,
-        "GiIntensity": 4.0,
-        "MaxBounces": 2,
+        "DepthThreshold": 0.10000000149011612,
+        "Enabled": false,
+        "GiIntensity": 5.0,
+        "MaxBounces": 4,
+        "MaxHistoryLength": 10,
         "NextEventEstimation": true,
+        "NormalThreshold": 0.5,
         "NrdAtrousIterations": 5,
         "NrdDisocclusionThreshold": 0.20000000298023224,
-        "NrdMaxAccumulationTime": 0.3499999940395355,
+        "NrdMaxAccumulationTime": 1.1776599884033203,
         "NrdSharpenAmount": 0.3499999940395355,
         "RadianceClamp": 10.300000190734863,
         "RaysPerPixel": 1,
+        "SpatialRadius": 20.0,
+        "SpatialReuseEnabled": false,
+        "SpatialSamples": 4,
+        "SpecularEnabled": true,
+        "SpecularIntensity": 0.10000000149011612,
+        "SpecularRoughnessThreshold": 0.6000000238418579,
+        "TemporalReuseEnabled": false,
         "UseNrdDenoiser": true
     },
     "SMAASettings": {
@@ -283,21 +1298,53 @@
         "TextureMipLODBias": -3.0,
         "TextureSharpeningEnabled": false
     },
+    "SsrSettings": {
+        "DebugView": 0,
+        "EdgeFadeStart": 0.8500000238418579,
+        "Enabled": false,
+        "Intensity": 1.0,
+        "MaxDistance": 60.0,
+        "MaxRoughness": 0.6000000238418579,
+        "MaxSteps": 48,
+        "RefineSteps": 6,
+        "SssrDepthThickness": 0.014999999664723873,
+        "SssrMaxTraversalIntersections": 128,
+        "SssrMinTraversalOccupancy": 4,
+        "SssrMostDetailedMip": 0,
+        "SssrSamplesPerQuad": 1,
+        "SssrTemporalStability": 0.699999988079071,
+        "SssrTemporalVarianceGuidedTracing": true,
+        "SssrTemporalVarianceThreshold": 0.0,
+        "StepGrowth": 1.0499999523162842,
+        "StepSize": 0.25,
+        "Technique": 1,
+        "Thickness": 0.5
+    },
+    "SubsurfaceSettings": {
+        "Enabled": true,
+        "FollowSurface": true,
+        "Mode": 0,
+        "Quality": 1,
+        "RtSamples": 12,
+        "Transmission": true,
+        "TransmissionIntensity": 1.0
+    },
     "TaaSettings": {
         "BlendFactor": 0.5,
         "Enabled": false,
         "JitterScale": 1.0
     },
     "TimeOfDaySettings": {
+        "Enabled": true,
         "GroundAlbedo": 0.10000000149011612,
-        "OverrideSkyColor": true,
-        "OverrideSunColor": false,
+        "OverrideSkyColor": false,
+        "OverrideSunColor": true,
         "SkyColorB": 1.0,
-        "SkyColorG": 0.44999998807907104,
-        "SkyColorR": 0.25,
-        "SkyIntensityLux": 25000.0,
-        "SunColorB": 0.800000011920929,
-        "SunColorG": 0.949999988079071,
+        "SkyColorG": 0.6549019813537598,
+        "SkyColorR": 0.529411792755127,
+        "SkyIntensityLux": 10000.0,
+        "SunColorB": 0.8784313797950745,
+        "SunColorG": 0.9254902005195618,
         "SunColorR": 1.0,
         "SunIntensityLux": 120000.0,
         "TimeOfDay": 12.0,
@@ -361,7 +1408,7 @@
         "ColorG": 1.0,
         "ColorR": 1.0,
         "DebugView": 0,
-        "Density": 0.21690000593662262,
+        "Density": 0.029999999329447746,
         "DepthSlices": 64,
         "EmissiveColorB": 1.0,
         "EmissiveColorG": 1.0,
@@ -369,8 +1416,10 @@
         "EmissiveIntensity": 0.0,
         "Enabled": true,
         "FroxelTileSize": 8,
+        "GiIntensity": 1.0,
         "HeightFalloff": 0.0,
         "MaxDistance": 100.0,
+        "ScatteringAlbedo": 0.8999999761581421,
         "StartDistance": 0.10000000149011612
     }
 }

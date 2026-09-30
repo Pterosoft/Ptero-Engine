@@ -2,6 +2,7 @@
 #include "System/DataFiles.h"
 
 #include "VegetationRenderer.h"
+#include "SubsurfaceScattering.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -308,6 +309,9 @@ void VegetationRenderer::Shutdown()
     mFlatLayers.clear();
 
     if (mMappedPassCb && mPassCb)         mPassCb->Unmap(0, nullptr);
+    if (mMappedPagePassCb && mPagePassCb) mPagePassCb->Unmap(0, nullptr);
+    mMappedPagePassCb = nullptr;
+    mPagePassCb.Reset();
     if (mMappedLayerCb && mLayerCb)       mLayerCb->Unmap(0, nullptr);
     if (mMappedCullCb && mCullCb)         mCullCb->Unmap(0, nullptr);
     if (mMappedInteractionCb && mInteractionCb) mInteractionCb->Unmap(0, nullptr);
@@ -688,6 +692,7 @@ void VegetationRenderer::PollScatterJobs()
                     range.MeshPath             = area.Layers[layerIndex].MeshPath;
                     range.MaterialPath         = area.Layers[layerIndex].MaterialPath;
                     range.BillboardTexturePath = area.Layers[layerIndex].BillboardTexturePath;
+                    range.AreaLayer            = static_cast<std::uint32_t>(layerIndex);
                     state.LayerRanges.push_back(std::move(range));
                 }
             }
@@ -718,6 +723,7 @@ void VegetationRenderer::Update(
 
     PollScatterJobs();
     ScheduleStaleScatters();
+    RefreshChangedMaterials(deltaSeconds);
 
     // Upload any scatter that finished, and make sure its meshes and materials
     // are resident before the layout is rebuilt around them.
@@ -736,7 +742,7 @@ void VegetationRenderer::Update(
             if (!range.MeshPath.empty())
                 EnsureSharedMesh(commandList, range.MeshPath);
             if (!range.MaterialPath.empty())
-                ResolveLayerMaterial(range.MaterialPath);
+                ResolveLayerMaterial(range.MaterialPath, range.MaterialId);
 
             if (!range.BillboardTexturePath.empty()
                 && mBillboardTextures.find(range.BillboardTexturePath) == mBillboardTextures.end())
@@ -988,38 +994,73 @@ bool VegetationRenderer::EnsureSharedMesh(
 }
 
 const VegetationRenderer::LayerMaterial& VegetationRenderer::ResolveLayerMaterial(
-    const std::string& materialPath)
+    const std::string& materialPath,
+    std::uint32_t      materialId)
 {
-    auto it = mMaterials.find(materialPath);
+    const std::string cacheKey = materialPath + "#" + std::to_string(materialId);
+    auto it = mMaterials.find(cacheKey);
     if (it != mMaterials.end() && it->second.Resolved)
         return it->second;
 
-    LayerMaterial& material = mMaterials[materialPath];
+    LayerMaterial& material = mMaterials[cacheKey];
     material.Resolved = true;
 
     const std::filesystem::path resolved = ResolveDataRelativePath(materialPath);
     if (resolved.empty())
         return material;
 
+    std::error_code writeTimeError;
+    material.File      = resolved;
+    material.WriteTime = std::filesystem::last_write_time(resolved, writeTimeError);
+
     DataFiles::InputFile stream(resolved);
     if (!stream)
         return material;
 
-    nlohmann::json json;
+    nlohmann::json file;
     try
     {
-        stream >> json;
+        stream >> file;
     }
     catch (const std::exception&)
     {
         return material;
     }
 
+    // A multi-material file - what the importers write for any mesh with more than
+    // one material slot, trees included - keeps its materials under subMaterials, one
+    // per slot. Reading the root of one found no textures, which is why a tree drew
+    // untextured. An id past the end falls back to the last entry.
+    const nlohmann::json* source = &file;
+    const auto subMaterialsIt = file.find("subMaterials");
+    if (subMaterialsIt != file.end() && subMaterialsIt->is_array() && !subMaterialsIt->empty())
+    {
+        const std::size_t index = (std::min)(static_cast<std::size_t>(materialId), subMaterialsIt->size() - 1);
+        source = &(*subMaterialsIt)[index];
+    }
+    const nlohmann::json& json = *source;
+
     material.AlphaCutoff     = json.value("alphaCutoff", 0.5f);
     material.MetallicFactor  = json.value("metallicFactor", 0.0f);
     material.RoughnessFactor = json.value("roughnessFactor", 1.0f);
     material.NormalScale     = json.value("normalScale", 1.0f);
     material.AoStrength      = json.value("ambientOcclusionStrength", 1.0f);
+    material.SpecularFactor  = json.value("specularFactor", 0.5f);
+
+    // Same keys and defaults EntityMeshRenderer reads. Unlike a mesh, a vegetation
+    // material's "transparent blend" does not rule scattering out: vegetation never
+    // blends, it alpha-tests, so every drawn pixel is opaque.
+    material.UseSubsurface          = json.value("useSubsurfaceScattering", false);
+    material.SubsurfaceRadiusMm     = json.value("subsurfaceRadiusMm", 3.0f);
+    material.SubsurfaceTranslucency = json.value("subsurfaceTranslucency", 0.8f);
+    const auto readFloat3 = [&](const char* key, XMFLOAT3& out)
+    {
+        const auto valueIt = json.find(key);
+        if (valueIt != json.end() && valueIt->is_array() && valueIt->size() >= 3)
+            out = XMFLOAT3((*valueIt)[0].get<float>(), (*valueIt)[1].get<float>(), (*valueIt)[2].get<float>());
+    };
+    readFloat3("subsurfaceColor", material.SubsurfaceColor);
+    readFloat3("subsurfaceFalloff", material.SubsurfaceFalloff);
 
     const auto tintIt = json.find("baseColorTint");
     if (tintIt != json.end() && tintIt->is_array() && tintIt->size() >= 4)
@@ -1047,16 +1088,28 @@ const VegetationRenderer::LayerMaterial& VegetationRenderer::ResolveLayerMateria
     };
 
     material.BaseColor = loadSlot("baseColor", TextureSemantic::Color);
+    material.Opacity   = loadSlot("opacity",   TextureSemantic::MaterialMask);
     material.Normal    = loadSlot("normal",    TextureSemantic::Normal);
     material.Ao        = loadSlot("ambientOcclusion", TextureSemantic::MaterialMask);
 
-    // A combined metallic-roughness map takes priority, matching how the rest
-    // of the engine reads these materials.
-    if (auto packed = loadSlot("metallicRoughness", TextureSemantic::MaterialMask))
+    // A combined map takes priority, matching how the rest of the engine reads these
+    // materials: the engine's RMA "metallicRoughness", else an Unreal-style "orm". It
+    // stands in for all three maps, AO included - the shader reads AO from its blue
+    // (RMA) or red (ORM) channel through the AO slot.
+    std::shared_ptr<GpuTexture> packed = loadSlot("metallicRoughness", TextureSemantic::MaterialMask);
+    int packedLayout = 1;
+    if (!packed)
     {
-        material.Metallic  = packed;
-        material.Roughness = packed;
-        material.HasPackedMaterialMap = true;
+        packed = loadSlot("orm", TextureSemantic::MaterialMask);
+        packedLayout = 2;
+    }
+
+    if (packed)
+    {
+        material.Metallic     = packed;
+        material.Roughness    = packed;
+        material.Ao           = packed;
+        material.PackedLayout = packedLayout;
     }
     else
     {
@@ -1104,10 +1157,13 @@ void VegetationRenderer::RebuildDrawLayout()
     for (auto& entry : mAreas)
     {
         AreaState& state = entry.second;
+        SplitRangesByMaterial(state);
 
         for (std::uint32_t layerIndex = 0; layerIndex < state.LayerRanges.size(); ++layerIndex)
         {
             LayerDrawRange& range = state.LayerRanges[layerIndex];
+            if (!range.PartsResolved)
+                continue;
 
             const auto meshIt = mSharedMeshes.find(range.MeshPath);
             if (meshIt == mSharedMeshes.end() || !meshIt->second.Ready || meshIt->second.Lods.empty())
@@ -1133,7 +1189,9 @@ void VegetationRenderer::RebuildDrawLayout()
             argSlot     += range.LodCount;
             visibleBase += range.InstanceCount * range.LodCount;
 
-            mTotalInstanceCount += range.InstanceCount;
+            // Counted once per plant: the other parts of it draw the same instances.
+            if (range.PrimaryPart)
+                mTotalInstanceCount += range.InstanceCount;
 
             mFlatLayers.push_back(FlatLayer{ entry.first, layerIndex });
         }
@@ -1143,6 +1201,126 @@ void VegetationRenderer::RebuildDrawLayout()
 
     EnsureCullResources(visibleBase, argSlot);
     EnsureConstantBuffers(mFlatLayers.size());
+}
+
+void VegetationRenderer::RefreshChangedMaterials(float deltaSeconds)
+{
+    // Two stat calls a second per material, like EntityMeshRenderer's watcher: enough
+    // to feel live after a save, cheap enough to leave running.
+    mMaterialCheckSeconds += deltaSeconds;
+    if (mMaterialCheckSeconds < 0.5f)
+        return;
+    mMaterialCheckSeconds = 0.0f;
+
+    for (auto& entry : mMaterials)
+    {
+        LayerMaterial& material = entry.second;
+        if (!material.Resolved || material.File.empty())
+            continue;
+
+        std::error_code writeTimeError;
+        const auto writeTime = std::filesystem::last_write_time(material.File, writeTimeError);
+        // Files inside a packed build have no time stamp; they cannot change anyway.
+        if (!writeTimeError && writeTime != material.WriteTime)
+            material = LayerMaterial{};
+    }
+}
+
+void VegetationRenderer::SplitRangesByMaterial(AreaState& state)
+{
+    std::vector<LayerDrawRange> ranges;
+    ranges.reserve(state.LayerRanges.size());
+
+    for (LayerDrawRange& range : state.LayerRanges)
+    {
+        const auto meshIt = mSharedMeshes.find(range.MeshPath);
+        if (range.PartsResolved || meshIt == mSharedMeshes.end()
+            || !meshIt->second.Ready || !meshIt->second.Asset)
+        {
+            ranges.push_back(std::move(range));
+            continue;
+        }
+
+        const Mesh& mesh = *meshIt->second.Asset;
+        const std::size_t lodCount = (std::min)(meshIt->second.Lods.size(), static_cast<std::size_t>(kMaxLodsPerLayer));
+
+        // Every material slot any LOD uses, in the order they first appear. A LOD
+        // without sub-meshes is all material 0.
+        std::vector<std::uint32_t> materialIds;
+        const auto addId = [&](std::uint32_t id)
+        {
+            if (std::find(materialIds.begin(), materialIds.end(), id) == materialIds.end())
+                materialIds.push_back(id);
+        };
+        for (std::size_t lod = 0; lod < lodCount; ++lod)
+        {
+            const MeshLod& lodData = mesh.GetLod(lod);
+            if (lodData.SubMeshes.empty())
+                addId(0);
+            for (const SubMesh& subMesh : lodData.SubMeshes)
+                addId(subMesh.materialId);
+        }
+        if (materialIds.empty())
+            materialIds.push_back(0);
+
+        // Each part culls and draws the same instances with its own slice of the index
+        // buffer and its own sub-material. Culling once per part costs a dispatch each
+        // but leaves the cull shader and its per-layer output untouched.
+        for (std::size_t part = 0; part < materialIds.size(); ++part)
+        {
+            LayerDrawRange partRange = range;
+            partRange.MaterialId    = materialIds[part];
+            partRange.PrimaryPart   = (part == 0);
+            partRange.PartsResolved = true;
+
+            for (std::size_t lod = 0; lod < lodCount; ++lod)
+            {
+                const MeshLod& lodData = mesh.GetLod(lod);
+                std::uint32_t start = 0;
+                std::uint32_t count = 0;
+
+                if (lodData.SubMeshes.empty())
+                {
+                    if (partRange.MaterialId == 0)
+                        count = meshIt->second.Lods[lod].IndexCount;
+                }
+                else
+                {
+                    // A slot is normally one sub-mesh. Several are merged when they are
+                    // contiguous; otherwise only the first is drawn, since one indirect
+                    // draw cannot skip another slot's indices in between.
+                    const SubMesh* firstSubMesh = nullptr;
+                    std::uint32_t spanStart = UINT32_MAX;
+                    std::uint32_t spanEnd   = 0;
+                    std::uint32_t total     = 0;
+                    for (const SubMesh& subMesh : lodData.SubMeshes)
+                    {
+                        if (subMesh.materialId != partRange.MaterialId || subMesh.indexCount == 0)
+                            continue;
+                        if (firstSubMesh == nullptr)
+                            firstSubMesh = &subMesh;
+                        spanStart = (std::min)(spanStart, subMesh.indexStart);
+                        spanEnd   = (std::max)(spanEnd, subMesh.indexStart + subMesh.indexCount);
+                        total    += subMesh.indexCount;
+                    }
+
+                    if (firstSubMesh != nullptr)
+                    {
+                        const bool contiguous = (spanEnd - spanStart == total);
+                        start = contiguous ? spanStart : firstSubMesh->indexStart;
+                        count = contiguous ? total : firstSubMesh->indexCount;
+                    }
+                }
+
+                partRange.LodIndexStart[lod] = start;
+                partRange.LodIndexCount[lod] = count;
+            }
+
+            ranges.push_back(std::move(partRange));
+        }
+    }
+
+    state.LayerRanges = std::move(ranges);
 }
 
 bool VegetationRenderer::EnsureCullResources(std::uint32_t visibleCapacity, std::uint32_t drawSlots)
@@ -1246,11 +1424,14 @@ void VegetationRenderer::RefreshIndirectArgTemplate()
 
             const bool isBillboard = range.HasBillboard && (lod == meshLodCount);
 
+            // The billboard stands in for the whole plant, so only the primary part
+            // draws it; the others keep the slot but draw nothing, so every part's
+            // instances still fall into the same LODs.
             args[slot].IndexCountPerInstance = isBillboard
-                ? kBillboardIndexCount
-                : ((lod < meshIt->second.Lods.size()) ? meshIt->second.Lods[lod].IndexCount : 0);
+                ? (range.PrimaryPart ? kBillboardIndexCount : 0u)
+                : range.LodIndexCount[lod];
             args[slot].InstanceCount         = 0;
-            args[slot].StartIndexLocation    = 0;
+            args[slot].StartIndexLocation    = isBillboard ? 0u : range.LodIndexStart[lod];
             args[slot].BaseVertexLocation    = 0;
             args[slot].StartInstanceLocation = 0;
         }
@@ -1374,7 +1555,12 @@ void VegetationRenderer::FillLayerConstants(
     outConstants.HasMetallicMap       = material.Metallic  ? 1 : 0;
     outConstants.HasRoughnessMap      = material.Roughness ? 1 : 0;
     outConstants.HasAoMap             = material.Ao        ? 1 : 0;
-    outConstants.HasPackedMaterialMap = material.HasPackedMaterialMap ? 1 : 0;
+    outConstants.HasPackedMaterialMap = material.PackedLayout;
+    outConstants.HasOpacityMap        = (material.Opacity && material.Opacity->IsValid()) ? 1 : 0;
+    outConstants.SpecularFactor       = material.SpecularFactor;
+    // Acquired by the colour pass itself (Render); the shadow pass runs before
+    // SubsurfaceProfiles::BeginFrame and does not write the G-Buffer anyway.
+    outConstants.SubsurfaceSlot       = 0;
     outConstants.BillboardHalfWidth   = mesh.BillboardHalfWidth * layer.BillboardScale;
     outConstants.BillboardHeight      = mesh.BillboardHeight    * layer.BillboardScale;
     outConstants.InstanceOffset       = 0;
@@ -1429,16 +1615,17 @@ void VegetationRenderer::CollectRayTracingBatches(
 
         const VegetationAreaComponent& area = *entity.VegetationArea;
 
-        for (std::size_t layerIndex = 0; layerIndex < state.LayerRanges.size(); ++layerIndex)
+        for (const LayerDrawRange& range : state.LayerRanges)
         {
-            if (layerIndex >= area.Layers.size())
+            // The traced batch is the whole mesh with its whole material file, so it
+            // is added once per plant rather than once per material part.
+            if (!range.PrimaryPart || range.AreaLayer >= area.Layers.size())
                 continue;
 
-            const VegetationLayer& layer = area.Layers[layerIndex];
+            const VegetationLayer& layer = area.Layers[range.AreaLayer];
             if (!layer.ContributeToRayTracing)
                 continue;
 
-            const LayerDrawRange& range = state.LayerRanges[layerIndex];
             if (range.InstanceCount == 0)
                 continue;
 
@@ -1801,7 +1988,7 @@ bool VegetationRenderer::CreateGraphicsPipeline(
         // and the startup shader cache warmup compiles every VSMain/PSMain at
         // 5.0.  Keeping to one space lets these shaders be precompiled with
         // everything else instead of stalling on first draw.
-        D3D12_ROOT_PARAMETER rootParams[10]{};
+        D3D12_ROOT_PARAMETER rootParams[11]{};
 
         rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
         rootParams[0].Descriptor.ShaderRegister = 0;
@@ -1840,6 +2027,20 @@ bool VegetationRenderer::CreateGraphicsPipeline(
                 ? D3D12_SHADER_VISIBILITY_VERTEX
                 : D3D12_SHADER_VISIBILITY_PIXEL;
         }
+
+        // Parameter 10, t8: the opacity mask. Appended rather than slotted in beside
+        // the other material textures so every existing parameter index stays put.
+        D3D12_DESCRIPTOR_RANGE opacityRange{};
+        opacityRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        opacityRange.NumDescriptors                    = 1;
+        opacityRange.BaseShaderRegister                = 8;
+        opacityRange.RegisterSpace                     = 0;
+        opacityRange.OffsetInDescriptorsFromTableStart = 0;
+
+        rootParams[10].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[10].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[10].DescriptorTable.pDescriptorRanges   = &opacityRange;
+        rootParams[10].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samplers[2]{};
 
@@ -2527,9 +2728,9 @@ void VegetationRenderer::DispatchCull(
         if (!entity.HasVegetationAreaComponent())
             continue;
         const VegetationAreaComponent& area = *entity.VegetationArea;
-        if (flat.LayerIndex >= area.Layers.size())
+        if (range.AreaLayer >= area.Layers.size())
             continue;
-        const VegetationLayer& layer = area.Layers[flat.LayerIndex];
+        const VegetationLayer& layer = area.Layers[range.AreaLayer];
 
         CullConstants& constants = mMappedCullCb[drawIndex];
         for (int i = 0; i < 6; ++i)
@@ -2663,11 +2864,11 @@ void VegetationRenderer::Render(
         if (!entity.HasVegetationAreaComponent())
             continue;
         const VegetationAreaComponent& area = *entity.VegetationArea;
-        if (flat.LayerIndex >= area.Layers.size())
+        if (range.AreaLayer >= area.Layers.size())
             continue;
-        const VegetationLayer& layer = area.Layers[flat.LayerIndex];
+        const VegetationLayer& layer = area.Layers[range.AreaLayer];
 
-        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath);
+        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath, range.MaterialId);
 
         // Written into LOD 0's slot, then copied into each LOD's own slot
         // below.  Every LOD needs a distinct slot because they differ by
@@ -2675,6 +2876,19 @@ void VegetationRenderer::Render(
         // execute.
         LayerConstants& constants = mMappedLayerCb[LayerCbSlot(kPassColour, drawIndex, 0)];
         FillLayerConstants(layer, material, meshIt->second, constants);
+
+        // Slots are handed out per frame, so a scattering material asks for its slot
+        // on every frame it draws. Render runs between BeginFrame and the subsurface
+        // pass, which is what makes this frame's acquisition count.
+        if (material.UseSubsurface)
+        {
+            SubsurfaceProfileDesc profile;
+            profile.Color        = material.SubsurfaceColor;
+            profile.Falloff      = material.SubsurfaceFalloff;
+            profile.RadiusMeters = (std::max)(material.SubsurfaceRadiusMm, 0.01f) * 0.001f;
+            profile.Translucency = material.SubsurfaceTranslucency;
+            constants.SubsurfaceSlot = SubsurfaceProfiles::Acquire(profile);
+        }
 
         commandList->SetGraphicsRootShaderResourceView(2, state.InstanceBuffer->GetGPUVirtualAddress());
         commandList->SetGraphicsRootShaderResourceView(3, mVisibleIndexBuffer->GetGPUVirtualAddress());
@@ -2690,6 +2904,7 @@ void VegetationRenderer::Render(
         bindTexture(6, material.Metallic);
         bindTexture(7, material.Roughness);
         bindTexture(8, material.Ao);
+        bindTexture(10, material.Opacity);
 
         const std::uint32_t meshLodCount = range.LodCount - (range.HasBillboard ? 1u : 0u);
 
@@ -2699,7 +2914,7 @@ void VegetationRenderer::Render(
                 break;
 
             const LodBuffers& buffers = meshIt->second.Lods[lod];
-            if (buffers.IndexCount == 0)
+            if (buffers.IndexCount == 0 || range.LodIndexCount[lod] == 0)
                 continue;
 
             const std::size_t slot = LayerCbSlot(kPassColour, drawIndex, lod);
@@ -2727,7 +2942,7 @@ void VegetationRenderer::Render(
         // The billboard LOD swaps in a different pipeline and the shared quad,
         // so it is issued after the mesh LODs to keep the PSO switch to one per
         // layer rather than one per LOD.
-        if (range.HasBillboard && mBillboardPipelineState)
+        if (range.HasBillboard && range.PrimaryPart && mBillboardPipelineState)
         {
             const auto billboardIt = mBillboardTextures.find(range.BillboardTexturePath);
             if (billboardIt != mBillboardTextures.end()
@@ -2819,13 +3034,18 @@ void VegetationRenderer::RenderMotionVectors(
         if (meshIt == mSharedMeshes.end() || !meshIt->second.Ready)
             continue;
 
-        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath);
+        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath, range.MaterialId);
 
         commandList->SetGraphicsRootShaderResourceView(2, state.InstanceBuffer->GetGPUVirtualAddress());
         commandList->SetGraphicsRootShaderResourceView(3, mVisibleIndexBuffer->GetGPUVirtualAddress());
         commandList->SetGraphicsRootDescriptorTable(
             4, (material.BaseColor && material.BaseColor->IsValid())
                 ? material.BaseColor->GpuHandle
+                : mFallbackGpuHandle);
+        // The alpha test reads the opacity mask when the material has one (t8).
+        commandList->SetGraphicsRootDescriptorTable(
+            10, (material.Opacity && material.Opacity->IsValid())
+                ? material.Opacity->GpuHandle
                 : mFallbackGpuHandle);
 
         // Mesh LODs only.  The billboard card is deliberately left out: at the
@@ -2840,7 +3060,7 @@ void VegetationRenderer::RenderMotionVectors(
                 break;
 
             const LodBuffers& buffers = meshIt->second.Lods[lod];
-            if (buffers.IndexCount == 0)
+            if (buffers.IndexCount == 0 || range.LodIndexCount[lod] == 0)
                 continue;
 
             // Copied from the colour pass's slot, which Render() filled earlier
@@ -2926,10 +3146,10 @@ void VegetationRenderer::RenderShadowDepth(
         if (!entity.HasVegetationAreaComponent())
             continue;
         const VegetationAreaComponent& area = *entity.VegetationArea;
-        if (flat.LayerIndex >= area.Layers.size() || !area.Layers[flat.LayerIndex].CastShadows)
+        if (range.AreaLayer >= area.Layers.size() || !area.Layers[range.AreaLayer].CastShadows)
             continue;
 
-        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath);
+        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath, range.MaterialId);
 
         commandList->SetGraphicsRootShaderResourceView(2, state.InstanceBuffer->GetGPUVirtualAddress());
         commandList->SetGraphicsRootShaderResourceView(3, mVisibleIndexBuffer->GetGPUVirtualAddress());
@@ -2937,18 +3157,23 @@ void VegetationRenderer::RenderShadowDepth(
             4, (material.BaseColor && material.BaseColor->IsValid())
                 ? material.BaseColor->GpuHandle
                 : mFallbackGpuHandle);
+        // The alpha test reads the opacity mask when the material has one (t8).
+        commandList->SetGraphicsRootDescriptorTable(
+            10, (material.Opacity && material.Opacity->IsValid())
+                ? material.Opacity->GpuHandle
+                : mFallbackGpuHandle);
 
         // Only the nearest LOD casts.  Shadows from a distant billboard are
         // not worth the draw, and the difference is invisible at range.
         const LodBuffers& buffers = meshIt->second.Lods[0];
-        if (buffers.IndexCount == 0)
+        if (buffers.IndexCount == 0 || range.LodIndexCount[0] == 0)
             continue;
 
         // The shadow pass owns its own constant slots.  It runs before the
         // colour pass, so it fills them itself rather than reusing anything the
         // colour pass will write later in the same command list.
         const std::size_t slot = LayerCbSlot(kPassShadow, drawIndex, 0);
-        FillLayerConstants(area.Layers[flat.LayerIndex], material, meshIt->second, mMappedLayerCb[slot]);
+        FillLayerConstants(area.Layers[range.AreaLayer], material, meshIt->second, mMappedLayerCb[slot]);
         mMappedLayerCb[slot].InstanceOffset = range.VisibleBase;
 
         commandList->SetGraphicsRootConstantBufferView(
@@ -2965,4 +3190,227 @@ void VegetationRenderer::RenderShadowDepth(
             nullptr,
             0);
     }
+}
+
+namespace
+{
+    // Whether any part of a world AABB can land inside a view (row-major view-projection).
+    bool BoxIntersectsView(const XMFLOAT3& boxMin, const XMFLOAT3& boxMax, const XMFLOAT4X4& viewProjection)
+    {
+        const XMMATRIX m = XMLoadFloat4x4(&viewProjection);
+        // Count, per clip plane, the corners outside it; all eight outside one plane culls.
+        int outside[6] = {};
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            const XMVECTOR p = XMVector4Transform(XMVectorSet(
+                (corner & 1) ? boxMax.x : boxMin.x,
+                (corner & 2) ? boxMax.y : boxMin.y,
+                (corner & 4) ? boxMax.z : boxMin.z, 1.0f), m);
+            XMFLOAT4 c;
+            XMStoreFloat4(&c, p);
+            outside[0] += c.x < -c.w;
+            outside[1] += c.x > c.w;
+            outside[2] += c.y < -c.w;
+            outside[3] += c.y > c.w;
+            outside[4] += c.z < 0.0f;
+            outside[5] += c.z > c.w;
+        }
+        for (int plane = 0; plane < 6; ++plane)
+        {
+            if (outside[plane] == 8)
+                return false;
+        }
+        return true;
+    }
+}
+
+void VegetationRenderer::RenderShadowDepthPages(
+    ID3D12GraphicsCommandList*         commandList,
+    const std::vector<ShadowPageView>& pages,
+    DXGI_FORMAT                        depthFormat)
+{
+    if (!mInitialized || commandList == nullptr || mFlatLayers.empty() || pages.empty() || mEntities == nullptr)
+        return;
+
+    if (!mShadowPipelineReady || mShadowDepthFormat != depthFormat)
+    {
+        if (!CreateShadowPipeline(depthFormat))
+            return;
+    }
+    if (!mVisibleIndexBuffer || !mIndirectArgBuffer || !mCommandSignature || !mMappedLayerCb)
+        return;
+
+    ID3D12DescriptorHeap* srvHeap = DX12Context_GetSrvDescriptorHeap();
+    if (srvHeap == nullptr)
+        return;
+
+    if (!mPagePassCb)
+    {
+        ID3D12Device* device = DX12Context_GetDevice();
+        const D3D12_RANGE readRange{ 0, 0 };
+        if (device == nullptr
+            || !CreateCommittedBuffer(device, sizeof(PassConstants) * kMaxShadowPages * kPageFramesInFlight,
+                   D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, mPagePassCb)
+            || FAILED(mPagePassCb->Map(0, &readRange, reinterpret_cast<void**>(&mMappedPagePassCb))))
+        {
+            mLastError = "VegetationRenderer: failed to create the shadow page constant buffer.";
+            mPagePassCb.Reset();
+            mMappedPagePassCb = nullptr;
+            return;
+        }
+    }
+
+    const std::size_t frameBase = static_cast<std::size_t>(mPagePassFrame++ % kPageFramesInFlight) * kMaxShadowPages;
+    const std::size_t pageCount = (std::min)(pages.size(), static_cast<std::size_t>(kMaxShadowPages));
+
+    // Wind, time and interaction exactly as the colour pass sees them; only the matrix
+    // differs per page.
+    PassConstants base{};
+    FillPassConstants(XMMatrixIdentity(), XMFLOAT3(0.0f, 0.0f, 0.0f), base);
+    for (std::size_t page = 0; page < pageCount; ++page)
+    {
+        mMappedPagePassCb[frameBase + page] = base;
+        mMappedPagePassCb[frameBase + page].ViewProj = pages[page].ViewProjectionTransposed;
+    }
+
+    // Per layer: what to bind, and which area bounds decide the pages it draws into.
+    struct LayerDraw
+    {
+        const AreaState*      State = nullptr;
+        const LayerDrawRange* Range = nullptr;
+        const LodBuffers*     Buffers = nullptr;
+        D3D12_GPU_DESCRIPTOR_HANDLE BaseColor{};
+        D3D12_GPU_DESCRIPTOR_HANDLE Opacity{};
+        std::size_t           LayerSlot = 0;
+        XMFLOAT3              BoundsMin{};
+        XMFLOAT3              BoundsMax{};
+    };
+    std::vector<LayerDraw> layerDraws;
+    layerDraws.reserve(mFlatLayers.size());
+
+    for (std::size_t drawIndex = 0; drawIndex < mFlatLayers.size(); ++drawIndex)
+    {
+        const FlatLayer& flat = mFlatLayers[drawIndex];
+        const auto areaIt = mAreas.find(flat.EntityIndex);
+        if (areaIt == mAreas.end() || flat.LayerIndex >= areaIt->second.LayerRanges.size())
+            continue;
+        const AreaState& state = areaIt->second;
+        const LayerDrawRange& range = state.LayerRanges[flat.LayerIndex];
+        if (range.InstanceCount == 0 || !state.InstanceBuffer)
+            continue;
+        const auto meshIt = mSharedMeshes.find(range.MeshPath);
+        if (meshIt == mSharedMeshes.end() || !meshIt->second.Ready)
+            continue;
+        if (flat.EntityIndex >= mEntities->size())
+            continue;
+        const Entity& entity = (*mEntities)[flat.EntityIndex];
+        if (!entity.HasVegetationAreaComponent())
+            continue;
+        const VegetationAreaComponent& area = *entity.VegetationArea;
+        if (range.AreaLayer >= area.Layers.size() || !area.Layers[range.AreaLayer].CastShadows)
+            continue;
+        const LodBuffers& buffers = meshIt->second.Lods[0];
+        if (buffers.IndexCount == 0 || range.LodIndexCount[0] == 0)
+            continue;
+
+        const LayerMaterial& material = ResolveLayerMaterial(range.MaterialPath, range.MaterialId);
+
+        LayerDraw draw;
+        draw.State = &state;
+        draw.Range = &range;
+        draw.Buffers = &buffers;
+        draw.BaseColor = (material.BaseColor && material.BaseColor->IsValid()) ? material.BaseColor->GpuHandle : mFallbackGpuHandle;
+        draw.Opacity = (material.Opacity && material.Opacity->IsValid()) ? material.Opacity->GpuHandle : mFallbackGpuHandle;
+        draw.LayerSlot = LayerCbSlot(kPassShadow, drawIndex, 0);
+        FillLayerConstants(area.Layers[range.AreaLayer], material, meshIt->second, mMappedLayerCb[draw.LayerSlot]);
+        mMappedLayerCb[draw.LayerSlot].InstanceOffset = range.VisibleBase;
+
+        VegetationScatter::ComputeWorldBounds(area, entity.Transform.Position, entity.Transform.Rotation,
+                                              draw.BoundsMin, draw.BoundsMax);
+        // Area bounds hold the roots; leave room for the plants themselves.
+        const float reach = meshIt->second.BoundingRadius * 2.0f;
+        draw.BoundsMin.x -= reach; draw.BoundsMin.y -= reach; draw.BoundsMin.z -= reach;
+        draw.BoundsMax.x += reach; draw.BoundsMax.y += reach; draw.BoundsMax.z += reach;
+        layerDraws.push_back(draw);
+    }
+    if (layerDraws.empty())
+        return;
+
+    commandList->SetDescriptorHeaps(1, &srvHeap);
+    commandList->SetGraphicsRootSignature(mGraphicsRootSignature.Get());
+    commandList->SetPipelineState(mShadowPipelineState.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->SetGraphicsRootDescriptorTable(9, mInteractionSrvGpu[mInteractionWriteIndex]);
+
+    for (std::size_t page = 0; page < pageCount; ++page)
+    {
+        const ShadowPageView& view = pages[page];
+        bool pageBound = false;
+        for (const LayerDraw& draw : layerDraws)
+        {
+            if (!BoxIntersectsView(draw.BoundsMin, draw.BoundsMax, view.ViewProjection))
+                continue;
+            if (!pageBound)
+            {
+                commandList->RSSetViewports(1, &view.Viewport);
+                commandList->RSSetScissorRects(1, &view.Scissor);
+                commandList->SetGraphicsRootConstantBufferView(
+                    0, mPagePassCb->GetGPUVirtualAddress() + (frameBase + page) * sizeof(PassConstants));
+                pageBound = true;
+            }
+
+            commandList->SetGraphicsRootShaderResourceView(2, draw.State->InstanceBuffer->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootShaderResourceView(3, mVisibleIndexBuffer->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootDescriptorTable(4, draw.BaseColor);
+            commandList->SetGraphicsRootDescriptorTable(10, draw.Opacity);
+            commandList->SetGraphicsRootConstantBufferView(
+                1, mLayerCb->GetGPUVirtualAddress() + draw.LayerSlot * sizeof(LayerConstants));
+            commandList->IASetVertexBuffers(0, 1, &draw.Buffers->VertexBufferView);
+            commandList->IASetIndexBuffer(&draw.Buffers->IndexBufferView);
+            commandList->ExecuteIndirect(
+                mCommandSignature.Get(),
+                1,
+                mIndirectArgBuffer.Get(),
+                static_cast<UINT64>(draw.Range->ArgSlot) * kDrawArgStride,
+                nullptr,
+                0);
+        }
+    }
+}
+
+std::uint64_t VegetationRenderer::GetShadowCasterSignature() const
+{
+    std::uint64_t hash = 14695981039346656037ull;
+    auto mix = [&hash](std::uint64_t value)
+    {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+
+    mix(mFlatLayers.size());
+    for (const FlatLayer& flat : mFlatLayers)
+    {
+        mix(flat.EntityIndex);
+        mix(flat.LayerIndex);
+        const auto areaIt = mAreas.find(flat.EntityIndex);
+        if (areaIt == mAreas.end() || flat.LayerIndex >= areaIt->second.LayerRanges.size())
+            continue;
+        const AreaState& state = areaIt->second;
+        const LayerDrawRange& range = state.LayerRanges[flat.LayerIndex];
+        mix(range.InstanceCount);
+        mix(reinterpret_cast<std::uintptr_t>(state.InstanceBuffer.Get()));
+
+        const auto meshIt = mSharedMeshes.find(range.MeshPath);
+        mix(meshIt != mSharedMeshes.end() && meshIt->second.Ready ? 1u : 0u);
+
+        const auto materialIt = mMaterials.find(range.MaterialPath + "#" + std::to_string(range.MaterialId));
+        if (materialIt != mMaterials.end())
+        {
+            const LayerMaterial& material = materialIt->second;
+            mix(material.BaseColor && material.BaseColor->IsValid() ? reinterpret_cast<std::uintptr_t>(material.BaseColor.get()) : 0u);
+            mix(material.Opacity && material.Opacity->IsValid() ? reinterpret_cast<std::uintptr_t>(material.Opacity.get()) : 0u);
+            mix(static_cast<std::uint64_t>(material.WriteTime.time_since_epoch().count()));
+        }
+    }
+    return hash;
 }

@@ -134,6 +134,10 @@ void MotionVectorRenderer::Render(
         {
             continue;
         }
+        if (mVirtualizedMask != nullptr && i < mVirtualizedMask->size() && ((*mVirtualizedMask)[i] & 1u) != 0)
+        {
+            continue;
+        }
 
         const Mesh* mesh = entity.Mesh->MeshAsset.get();
         if (!EnsureMesh(commandList, mesh))

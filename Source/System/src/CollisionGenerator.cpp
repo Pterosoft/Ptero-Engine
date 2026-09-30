@@ -296,6 +296,10 @@ bool CollisionGenerator::GenerateCollisions(const std::string& fbxOrPteroPath)
 
 	if (!std::filesystem::exists(pteroPath)) return false;
 
+	// Hulls are written into the file with the current version stamped on it, so the mesh
+	// they sit on has to be in the current frame first.
+	if (!FbxCompiler::EnsureCurrentPtero(pteroPath.string())) return false;
+
 	// Load mesh data
 	coacd::Mesh input;
 	if (!LoadPteroBaseVerticesAndIndices(pteroPath.string(), input.vertices, input.indices))

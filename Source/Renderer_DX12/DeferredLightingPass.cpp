@@ -142,6 +142,21 @@ void DeferredLightingPass::BeginGeometryPass(
     commandList->RSSetScissorRects(1, &sr);
 }
 
+void DeferredLightingPass::RebindGeometryTargets(
+    ID3D12GraphicsCommandList* commandList,
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneDsvHandle,
+    UINT                        width,
+    UINT                        height) const
+{
+    const auto* rtvHandles = mMsaaSettings.Enabled ? mMsaaRtvHandles : mRtvHandles;
+    commandList->OMSetRenderTargets(kGBufferCount, rtvHandles, FALSE, &sceneDsvHandle);
+
+    const D3D12_VIEWPORT vp = { 0,0, static_cast<float>(width), static_cast<float>(height), 0,1 };
+    const D3D12_RECT     sr = { 0,0, static_cast<LONG>(width),  static_cast<LONG>(height) };
+    commandList->RSSetViewports(1, &vp);
+    commandList->RSSetScissorRects(1, &sr);
+}
+
 void DeferredLightingPass::EndGeometryPass(
     ID3D12GraphicsCommandList* commandList) const
 {
@@ -273,21 +288,7 @@ void DeferredLightingPass::SetProbeSrv(
 
     ProbeConstants pc{};
     if (probeSrvHandle.ptr != 0 && settings != nullptr)
-    {
-        pc.ProbeGridX = static_cast<uint32_t>((std::max)(settings->GridX, 0));
-        pc.ProbeGridY = static_cast<uint32_t>((std::max)(settings->GridY, 0));
-        pc.ProbeGridZ = static_cast<uint32_t>((std::max)(settings->GridZ, 0));
-        pc.ProbeSpacing = settings->Spacing;
-
-        float ox = 0.0f;
-        float oy = 0.0f;
-        float oz = 0.0f;
-        ResolveProbeGridOrigin(*settings, cameraPosition.x, cameraPosition.y, cameraPosition.z, ox, oy, oz);
-
-        pc.ProbeOriginX = ox;
-        pc.ProbeOriginY = oy;
-        pc.ProbeOriginZ = oz;
-    }
+        pc.Field = ResolveProbeField(*settings, cameraPosition.x, cameraPosition.y, cameraPosition.z);
 
     std::memcpy(mMappedProbeCB, &pc, sizeof(pc));
 }
@@ -455,6 +456,34 @@ void DeferredLightingPass::SetShadowData(
     sc.PointShadowMapSize = mPointShadowMapSize;
     sc.PointShadowBias = mPointShadowBias;
     std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
+
+    mVsmPageTable = 0;
+    mCpuShadows.Vsm = VsmGpuConstants{};
+    mCpuShadows.VsmPageTable = 0;
+}
+
+void DeferredLightingPass::SetVirtualShadowMap(
+    const VsmGpuConstants&      constants,
+    D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+    D3D12_GPU_DESCRIPTOR_HANDLE poolSrvHandle)
+{
+    mShadowSrvHandle = poolSrvHandle;
+    mVsmPageTable = pageTable;
+
+    mCpuShadows.LightViewProj = XMFLOAT4X4{};
+    mCpuShadows.ShadowMapSize = 0.0f;
+    mCpuShadows.ShadowBias = 0.0f;
+    mCpuShadows.SunShadowSrv = poolSrvHandle;
+    mCpuShadows.Vsm = constants;
+    mCpuShadows.VsmPageTable = pageTable;
+
+    if (!mMappedShadowCB) return;
+
+    ShadowConstants sc{};
+    sc.PointShadowMapSize = mPointShadowMapSize;
+    sc.PointShadowBias = mPointShadowBias;
+    sc.Vsm = constants;
+    std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
 }
 
 void DeferredLightingPass::ResolveLight(
@@ -512,14 +541,21 @@ void DeferredLightingPass::ResolveLight(
     //  10 – SRV table: specular reflections (t8)
     //  11 – SRV table: point shadow map array (t9)
     //  12 – SRV table: radiance probes (t10)
-    if (mCameraCB)
-        commandList->SetGraphicsRootConstantBufferView(0, mCameraCB->GetGPUVirtualAddress());
-    if (mLightingCB)
-        commandList->SetGraphicsRootConstantBufferView(1, mLightingCB->GetGPUVirtualAddress());
-    if (mShadowCB)
-        commandList->SetGraphicsRootConstantBufferView(2, mShadowCB->GetGPUVirtualAddress());
-    if (mProbeCB)
-        commandList->SetGraphicsRootConstantBufferView(3, mProbeCB->GetGPUVirtualAddress());
+    // Snapshot the CPU mirrors into this recording's own ring slot; see
+    // kCbRingSlots in the header for why a GPU copy is never written twice.
+    mCbRingSlot = (mCbRingSlot + 1u) % kCbRingSlots;
+    const auto bindCb = [&](UINT rootIndex, ID3D12Resource* cb, std::byte* gpu, const void* mirror, size_t size, UINT64 stride)
+    {
+        if (!cb || !gpu || !mirror)
+            return;
+        const UINT64 offset = static_cast<UINT64>(mCbRingSlot) * stride;
+        std::memcpy(gpu + offset, mirror, size);
+        commandList->SetGraphicsRootConstantBufferView(rootIndex, cb->GetGPUVirtualAddress() + offset);
+    };
+    bindCb(0, mCameraCB.Get(),   mGpuCameraCB,   mMappedCameraCB,   sizeof(CameraConstants),   CbStride<CameraConstants>());
+    bindCb(1, mLightingCB.Get(), mGpuLightingCB, mMappedLightingCB, sizeof(LightingConstants), CbStride<LightingConstants>());
+    bindCb(2, mShadowCB.Get(),   mGpuShadowCB,   mMappedShadowCB,   sizeof(ShadowConstants),   CbStride<ShadowConstants>());
+    bindCb(3, mProbeCB.Get(),    mGpuProbeCB,    mMappedProbeCB,    sizeof(ProbeConstants),    CbStride<ProbeConstants>());
 
     // G-buffer SRVs (t0-t2): albedo, normal, material – contiguous since allocated in a loop.
     if (mSrvs.Albedo.ptr != 0)
@@ -558,6 +594,11 @@ void DeferredLightingPass::ResolveLight(
     if (subsurface)
         commandList->SetGraphicsRootConstantBufferView(13, mSubsurfaceConstants);
 
+    //  14 – SRV virtual shadow map page table (t11). Only read while the constants say
+    //       the map is on, but a root descriptor must always name something.
+    commandList->SetGraphicsRootShaderResourceView(14,
+        mVsmPageTable != 0 ? mVsmPageTable : mShadowCB->GetGPUVirtualAddress());
+
     // Draw a fullscreen triangle (3 vertices, no vertex buffer needed).
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 0, nullptr);
@@ -567,26 +608,19 @@ void DeferredLightingPass::ResolveLight(
 
 void DeferredLightingPass::Shutdown()
 {
-    if (mCameraCB && mMappedCameraCB)
-    {
-        mCameraCB->Unmap(0, nullptr);
-        mMappedCameraCB = nullptr;
-    }
-    if (mLightingCB && mMappedLightingCB)
-    {
-        mLightingCB->Unmap(0, nullptr);
-        mMappedLightingCB = nullptr;
-    }
-    if (mShadowCB && mMappedShadowCB)
-    {
-        mShadowCB->Unmap(0, nullptr);
-        mMappedShadowCB = nullptr;
-    }
-    if (mProbeCB && mMappedProbeCB)
-    {
-        mProbeCB->Unmap(0, nullptr);
-        mMappedProbeCB = nullptr;
-    }
+    if (mCameraCB && mGpuCameraCB)     mCameraCB->Unmap(0, nullptr);
+    if (mLightingCB && mGpuLightingCB) mLightingCB->Unmap(0, nullptr);
+    if (mShadowCB && mGpuShadowCB)     mShadowCB->Unmap(0, nullptr);
+    if (mProbeCB && mGpuProbeCB)       mProbeCB->Unmap(0, nullptr);
+    mGpuCameraCB = mGpuLightingCB = mGpuShadowCB = mGpuProbeCB = nullptr;
+    mMappedCameraCB = nullptr;
+    mMappedLightingCB = nullptr;
+    mMappedShadowCB = nullptr;
+    mMappedProbeCB = nullptr;
+    mCameraMirror.reset();
+    mLightingMirror.reset();
+    mShadowMirror.reset();
+    mProbeMirror.reset();
     mCameraCB.Reset();
     mLightingCB.Reset();
     mShadowCB.Reset();
@@ -864,10 +898,22 @@ bool DeferredLightingPass::CreateConstantBuffers()
         return SUCCEEDED(outCB->Map(0, nullptr, outMapped));
     };
 
-    if (!makeCB(sizeof(CameraConstants),  mCameraCB,  reinterpret_cast<void**>(&mMappedCameraCB),  L"DeferredLighting_CameraCB"))  return false;
-    if (!makeCB(sizeof(LightingConstants), mLightingCB, reinterpret_cast<void**>(&mMappedLightingCB), L"DeferredLighting_LightingCB")) return false;
-    if (!makeCB(sizeof(ShadowConstants),  mShadowCB,  reinterpret_cast<void**>(&mMappedShadowCB),  L"DeferredLighting_ShadowCB"))  return false;
-    if (!makeCB(sizeof(ProbeConstants),   mProbeCB,   reinterpret_cast<void**>(&mMappedProbeCB),   L"DeferredLighting_ProbeCB"))   return false;
+    // kCbRingSlots copies of each block; see the header.
+    if (!makeCB(CbStride<CameraConstants>()   * kCbRingSlots, mCameraCB,   reinterpret_cast<void**>(&mGpuCameraCB),   L"DeferredLighting_CameraCB"))   return false;
+    if (!makeCB(CbStride<LightingConstants>() * kCbRingSlots, mLightingCB, reinterpret_cast<void**>(&mGpuLightingCB), L"DeferredLighting_LightingCB")) return false;
+    if (!makeCB(CbStride<ShadowConstants>()   * kCbRingSlots, mShadowCB,   reinterpret_cast<void**>(&mGpuShadowCB),   L"DeferredLighting_ShadowCB"))   return false;
+    if (!makeCB(CbStride<ProbeConstants>()    * kCbRingSlots, mProbeCB,    reinterpret_cast<void**>(&mGpuProbeCB),    L"DeferredLighting_ProbeCB"))    return false;
+
+    // The setters read-modify-write these mirrors. Zero-filled, like the
+    // freshly created upload buffers they replace.
+    if (!mCameraMirror)   { mCameraMirror   = std::make_unique<CameraConstants>();   std::memset(mCameraMirror.get(),   0, sizeof(CameraConstants)); }
+    if (!mLightingMirror) { mLightingMirror = std::make_unique<LightingConstants>(); std::memset(mLightingMirror.get(), 0, sizeof(LightingConstants)); }
+    if (!mShadowMirror)   { mShadowMirror   = std::make_unique<ShadowConstants>();   std::memset(mShadowMirror.get(),   0, sizeof(ShadowConstants)); }
+    if (!mProbeMirror)    { mProbeMirror    = std::make_unique<ProbeConstants>();    std::memset(mProbeMirror.get(),    0, sizeof(ProbeConstants)); }
+    mMappedCameraCB   = mCameraMirror.get();
+    mMappedLightingCB = mLightingMirror.get();
+    mMappedShadowCB   = mShadowMirror.get();
+    mMappedProbeCB    = mProbeMirror.get();
     return true;
 }
 
@@ -909,7 +955,12 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     //  slot 11 – Descriptor table: point shadow map array t9
     //  slot 12 – Descriptor table: radiance probes t10
     //  slot 13 – CBV (b4) subsurface constants  (subsurface variant only)
-    D3D12_ROOT_PARAMETER rootParams[14]{};
+    //  slot 14 – SRV (t11) virtual shadow map page table (root descriptor)
+    D3D12_ROOT_PARAMETER rootParams[15]{};
+
+    rootParams[14].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParams[14].Descriptor.ShaderRegister = 11; // t11
+    rootParams[14].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0

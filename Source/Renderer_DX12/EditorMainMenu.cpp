@@ -3,6 +3,7 @@
 
 #include "Editor.h"
 #include "TimeOfDaySettings.h"
+#include "HosekWilkieSky.h"
 #include "..\System\MaterialEditor.h"
 #include "..\System\include\System\SystemAssetApi.h"
 
@@ -10,6 +11,12 @@
 #include "VideoImport.h"
 #include "VideoPlayerWindow.h"
 #include "ReleaseGame.h"
+#include "GameProjectSettings.h"
+#include "DataFolderWatcher.h"
+#include "System/NodeGraphTemplates.h"
+#include "System/CVar.h"
+#include "LensFlareOptics.h"
+#include "LensFlareRenderer.h"
 
 #include <commdlg.h>
 #include <shellapi.h>
@@ -22,7 +29,9 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -61,6 +70,251 @@ namespace
         QtUi::EndGroup();
         QtUi::PopID();
         return changed;
+    }
+
+    // ---- DPLE window --------------------------------------------------------------------
+    // The Deterministic Photoreal Lighting Enhancer gets a window of its own rather than a
+    // section in Graphics Settings: it is tuned by eye against a live viewport, so it wants
+    // something that can stay open beside the viewport while tuning.
+    bool gShowDpleWindow = false;
+    int gDplePresetSelection = static_cast<int>(DplePreset::Balanced);
+
+    // One "Reset" per section: tuning happens one section at a time, so undoing it should.
+    bool DpleSectionResetButton(const char* id)
+    {
+        const bool clicked = QtUi::Button(id);
+        QtUi::SetItemTooltip("Restores this section's factory values and leaves the other sections alone.");
+        return clicked;
+    }
+
+    void DrawDpleWindow(DpleSettings& settings, const char* errorMessage)
+    {
+        QtUi::SetNextWindowSize(UiVec2(460.0f, 0.0f), QtUiCond_FirstUseEver);
+        if (!QtUi::Begin("DPLE", &gShowDpleWindow, QtUiWindowFlags_AlwaysAutoResize))
+        {
+            QtUi::End();
+            return;
+        }
+
+        QtUi::Checkbox("Enable DPLE##dple", &settings.Enabled);
+        QtUi::SetItemTooltip(
+            "Deterministic Photoreal Lighting Enhancer. Re-presents lighting the renderer has already\n"
+            "resolved: multiscale AO on the indirect share only, sun contact shadows, a per-material\n"
+            "response and a micro-specular lobe. It is not a GI solver - it adds no bounce light.");
+
+        if (errorMessage != nullptr)
+        {
+            QtUi::TextColored(UiVec4(0.90f, 0.45f, 0.35f, 1.0f), "DPLE could not start: %s", errorMessage);
+        }
+
+        // ---- presets --------------------------------------------------------------
+        // Selecting a preset does nothing on its own; Apply commits it. That way a preset can
+        // be a starting point that is then edited without being silently reverted.
+        QtUi::SeparatorText("Presets");
+        const char* presetNames[] = { "Subtle", "Balanced", "Strong", "Performance" };
+        QtUi::SetNextItemWidth(160.0f);
+        QtUi::Combo("##dplepreset", &gDplePresetSelection, presetNames, static_cast<int>(std::size(presetNames)));
+        QtUi::SetItemTooltip(
+            "Subtle: ~half strength, contact grounding only.\n"
+            "Balanced: the documented starting values (= factory defaults).\n"
+            "Strong: deeper occlusion, detail enhancement on, full-resolution working buffers.\n"
+            "Performance: the Balanced look at quarter-resolution working buffers.");
+        QtUi::SameLine();
+        if (QtUi::Button("Apply Preset##dple"))
+        {
+            const int debugView = settings.DebugView;
+            settings = DpleSettings::MakePreset(static_cast<DplePreset>(
+                std::clamp(gDplePresetSelection, 0, static_cast<int>(DplePreset::Count) - 1)));
+            settings.DebugView = debugView;
+        }
+        QtUi::SameLine();
+        if (QtUi::Button("Reset To Factory Defaults##dple"))
+        {
+            const bool enabled = settings.Enabled;
+            const int debugView = settings.DebugView;
+            settings = DpleSettings{};
+            settings.Enabled = enabled;
+            settings.DebugView = debugView;
+        }
+        QtUi::SetItemTooltip("Every value back to the one compiled into the engine. Keeps DPLE on or off as it is.");
+
+        // ---- general -------------------------------------------------------------
+        QtUi::SeparatorText("General");
+        const char* resolutionNames[] = { "Full", "Half", "Third", "Quarter" };
+        int resolutionIndex = std::clamp(settings.WorkingResolutionDivisor, 1, 4) - 1;
+        if (QtUi::Combo("Working Resolution##dple", &resolutionIndex, resolutionNames, static_cast<int>(std::size(resolutionNames))))
+            settings.WorkingResolutionDivisor = resolutionIndex + 1;
+        QtUi::SetItemTooltip(
+            "Resolution of the AO, contact shadow, temporal and denoise passes, relative to the\n"
+            "output. The main performance lever. With an upscaler at 50%%, Half already equals the\n"
+            "render resolution. Full is what resolves pore- and weave-scale micro AO.");
+
+        const char* debugViewNames[] =
+        {
+            "Off",
+            "1 - Ambient Visibility",
+            "2 - Contact Shadows",
+            "3 - Indirect Fraction",
+            "4 - Material Class",
+            "5 - AO Radii (RGB)",
+            "6 - G-Buffer UV Mapping",
+            "7 - Specular Share",
+            "8 - Micro Specular Gain",
+        };
+        static_assert(std::size(debugViewNames) == static_cast<size_t>(DpleDebugView::Count), "debug view list out of date");
+        QtUi::Combo("Debug View##dple", &settings.DebugView, debugViewNames, static_cast<int>(std::size(debugViewNames)));
+        QtUi::SetItemTooltip(
+            "3: red = treated as indirect, green = direct.\n"
+            "4: grey default, red skin (subsurface profile), green foliage, blue = inferred wet,\n"
+            "   black = passed through (sky, glass, water and other forward surfaces).\n"
+            "6: red must ramp left to right and green top to bottom, reaching the edge.\n"
+            "8: green brightened, red darkened, flat grey = the term is doing nothing -\n"
+            "   then check 7: a near-black specular share means the material limits it.");
+
+        // Everything below only matters while DPLE runs.
+        QtUi::BeginDisabled(!settings.Enabled);
+
+        // ---- ambient occlusion ---------------------------------------------------------
+        if (QtUi::CollapsingHeader("Multiscale Ambient Occlusion", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dpleao"))
+                settings.ResetAmbientOcclusion();
+            QtUi::Checkbox("Enable##dpleao", &settings.EnableAmbientOcclusion);
+            QtUi::BeginDisabled(!settings.EnableAmbientOcclusion);
+            SliderFloatWithInput("Micro Radius##dpleao", &settings.MicroAORadius, 0.005f, 0.3f, "%.3f m", 0.005f, 0.02f);
+            QtUi::SetItemTooltip("Pore and weave scale. Needs Full working resolution to have anything to resolve.");
+            SliderFloatWithInput("Micro Intensity##dpleao", &settings.MicroAOIntensity, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            SliderFloatWithInput("Contact Radius##dpleao", &settings.ContactAORadius, 0.01f, 1.0f, "%.2f m", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Where objects meet each other and the ground.");
+            SliderFloatWithInput("Contact Intensity##dpleao", &settings.ContactAOIntensity, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            SliderFloatWithInput("Broad Radius##dpleao", &settings.BroadAORadius, 0.1f, 5.0f, "%.2f m", 0.05f, 0.5f);
+            QtUi::SetItemTooltip("Room and alcove scale.");
+            SliderFloatWithInput("Broad Intensity##dpleao", &settings.BroadAOIntensity, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            SliderFloatWithInput("Max Combined##dpleao", &settings.MaxCombinedAO, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Hard ceiling on how much the three radii together may darken the indirect term.\n"
+                                 "Without it three reasonable radii stack into crushed black creases.");
+            SliderFloatWithInput("Power##dpleao", &settings.AOPower, 0.1f, 3.0f, "%.2f", 0.05f, 0.25f);
+            QtUi::SetItemTooltip("Below 1 softens contact darkening, above 1 deepens it.");
+            SliderFloatWithInput("Bias##dpleao", &settings.AOBias, 0.0f, 0.2f, "%.3f", 0.005f, 0.02f);
+            QtUi::SetItemTooltip("Keeps flat and gently curved surfaces from occluding themselves.");
+            QtUi::EndDisabled();
+        }
+
+        // ---- contact shadows -----------------------------------------------------------
+        if (QtUi::CollapsingHeader("Contact Shadows", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dplecs"))
+                settings.ResetContactShadows();
+            QtUi::Checkbox("Enable##dplecs", &settings.EnableContactShadows);
+            QtUi::SetItemTooltip("Screen-space trace toward the sun. Needs Time of Day on with the sun above the horizon.");
+            QtUi::BeginDisabled(!settings.EnableContactShadows);
+            SliderFloatWithInput("Length##dplecs", &settings.ContactShadowLength, 0.01f, 2.0f, "%.2f m", 0.01f, 0.1f);
+            SliderIntWithInput("Steps##dplecs", &settings.ContactShadowSteps, 4, 32);
+            SliderFloatWithInput("Thickness##dplecs", &settings.ContactShadowThickness, 0.001f, 0.2f, "%.3f m", 0.001f, 0.01f);
+            QtUi::SetItemTooltip("How thick a depth-buffer occluder is assumed to be. Too small and thin geometry\n"
+                                 "stops casting; too large and everything behind a silhouette gets a false shadow.");
+            SliderFloatWithInput("Intensity##dplecs", &settings.ContactShadowIntensity, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::EndDisabled();
+        }
+
+        // ---- material response ---------------------------------------------------------
+        if (QtUi::CollapsingHeader("Material Response", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dplemat"))
+                settings.ResetMaterialResponse();
+            QtUi::Checkbox("Enable##dplemat", &settings.EnableMaterialResponse);
+            QtUi::BeginDisabled(!settings.EnableMaterialResponse);
+            SliderFloatWithInput("Skin AO Scale##dplemat", &settings.SkinAOScale, 0.0f, 2.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Surfaces with a subsurface-scattering profile. Skin does not take crunchy AO.");
+            SliderFloatWithInput("Skin Warmth##dplemat", &settings.SkinWarmth, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("How far occluded skin shifts toward red, standing in for shallow subsurface transport.");
+            SliderFloatWithInput("Foliage AO Scale##dplemat", &settings.FoliageAOScale, 0.0f, 2.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Contact and broad AO on vegetation layers with Translucency above zero.");
+            SliderFloatWithInput("Foliage Saturation##dplemat", &settings.FoliageSaturation, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Saturation lift in occluded foliage, standing in for light transmitted through leaves.");
+            SliderFloatWithInput("Wet Roughness Threshold##dplemat", &settings.WetRoughnessThreshold, 0.0f, 0.5f, "%.2f", 0.01f, 0.05f);
+            QtUi::SetItemTooltip("Smooth non-metals below this roughness are treated as wet. A heuristic: polished\n"
+                                 "marble reads as wet to it. 0 turns the inference off.");
+            SliderFloatWithInput("Wet Response##dplemat", &settings.WetResponseStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::EndDisabled();
+        }
+
+        // ---- micro specular ------------------------------------------------------------
+        if (QtUi::CollapsingHeader("Micro Specular", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dplespec"))
+                settings.ResetMicroSpecular();
+            QtUi::Checkbox("Enable##dplespec", &settings.EnableMicroSpecular);
+            QtUi::BeginDisabled(!settings.EnableMicroSpecular);
+            SliderFloatWithInput("Specular Occlusion##dplespec", &settings.SpecularOcclusionStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Occludes the specular share by the AO, narrowed by roughness and view angle.");
+            SliderFloatWithInput("Strength##dplespec", &settings.MicroSpecularStrength, 0.0f, 4.0f, "%.2f", 0.05f, 0.25f);
+            QtUi::SetItemTooltip("How far the albedo gradient tilts the normal before the sun's GGX lobe is re-evaluated.\n"
+                                 "Grain tilted toward the sun flares, grain tilted away goes dark. Needs the sun.");
+            SliderFloatWithInput("Detail Scale##dplespec", &settings.MicroSpecularDetailScale, 0.5f, 4.0f, "%.2f texels", 0.05f, 0.25f);
+            QtUi::SetItemTooltip("Gradient tap radius in G-Buffer texels. At 1 the signal mostly reads as speckle.");
+            SliderFloatWithInput("Roughness Max##dplespec", &settings.MicroSpecularRoughnessMax, 0.05f, 1.0f, "%.2f", 0.01f, 0.05f);
+            QtUi::SetItemTooltip("Grain fades out from here to fully rough. Weathered timber sits at 0.6-0.85.");
+            QtUi::EndDisabled();
+        }
+
+        // ---- indirect estimation -------------------------------------------------------
+        if (QtUi::CollapsingHeader("Indirect Estimation", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dpleind"))
+                settings.ResetIndirectEstimation();
+            QtUi::TextWrapped("AO darkens only the share of each pixel estimated to be indirect light, never direct sun.");
+            SliderFloatWithInput("Indirect Fraction Min##dpleind", &settings.IndirectFractionMin, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Share treated as indirect where the sun lights the pixel fully.");
+            SliderFloatWithInput("Indirect Fraction Max##dpleind", &settings.IndirectFractionMax, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Share treated as indirect where the pixel gets no direct sun.");
+            SliderFloatWithInput("Direct Light Weight##dpleind", &settings.DirectLightWeight, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("How strongly the sun's N.L and the contact shadows push the estimate toward direct.");
+        }
+
+        // ---- temporal ------------------------------------------------------------------
+        if (QtUi::CollapsingHeader("Temporal & Denoise", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dpletemp"))
+                settings.ResetTemporal();
+            QtUi::Checkbox("Temporal Reconstruction##dpletemp", &settings.EnableTemporalReconstruction);
+            QtUi::SetItemTooltip("Accumulates DPLE's own AO and contact shadows over frames. TAA/upscalers own the image.");
+            QtUi::BeginDisabled(!settings.EnableTemporalReconstruction);
+            SliderFloatWithInput("History Weight (Still)##dpletemp", &settings.HistoryWeightStable, 0.0f, 0.98f, "%.2f", 0.01f, 0.05f);
+            SliderFloatWithInput("History Weight (Moving)##dpletemp", &settings.HistoryWeightMoving, 0.0f, 0.98f, "%.2f", 0.01f, 0.05f);
+            QtUi::SetItemTooltip("Never above the still weight - history would be stickiest where reprojection is worst.");
+            SliderFloatWithInput("Disocclusion Tolerance##dpletemp", &settings.DisocclusionDepthTolerance, 0.005f, 0.5f, "%.3f", 0.005f, 0.02f);
+            QtUi::SetItemTooltip("Relative depth mismatch above which history is dropped outright.");
+            SliderFloatWithInput("Neighborhood Clamp##dpletemp", &settings.NeighborhoodClampScale, 0.5f, 4.0f, "%.2f", 0.05f, 0.25f);
+            QtUi::EndDisabled();
+            QtUi::Checkbox("Spatial Denoise##dpletemp", &settings.EnableSpatialDenoise);
+            QtUi::BeginDisabled(!settings.EnableSpatialDenoise);
+            SliderIntWithInput("Denoise Radius##dpletemp", &settings.SpatialDenoiseRadius, 0, 4);
+            QtUi::SetItemTooltip("Taps per side. Raise it if foliage still sparkles.");
+            QtUi::EndDisabled();
+        }
+
+        // ---- detail --------------------------------------------------------------------
+        if (QtUi::CollapsingHeader("Detail Enhancement", QtUiTreeNodeFlags_DefaultOpen))
+        {
+            if (DpleSectionResetButton("Reset##dpledet"))
+                settings.ResetDetailEnhancement();
+            QtUi::Checkbox("Enable##dpledet", &settings.EnableDetailEnhancement);
+            QtUi::SetItemTooltip("Re-amplifies the band TAA and the upscalers suppress. Judge it on a slow and a fast\n"
+                                 "pan, never on a still frame.");
+            QtUi::BeginDisabled(!settings.EnableDetailEnhancement);
+            SliderFloatWithInput("Fine Strength##dpledet", &settings.FineDetailStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
+            QtUi::SetItemTooltip("0.10 is the tested value; useful range roughly 0.05-0.25. Near 1 it is grain.");
+            SliderFloatWithInput("Structure Strength##dpledet", &settings.StructureStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
+            SliderFloatWithInput("Max Luminance Change##dpledet", &settings.MaxLuminanceChange, 0.0f, 1.0f, "%.2f", 0.01f, 0.05f);
+            QtUi::SetItemTooltip("Hard clamp on how far a pixel's luminance may move.");
+            SliderFloatWithInput("Motion Suppression##dpledet", &settings.DetailMotionSuppression, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+            QtUi::SetItemTooltip("Fades detail out while the camera turns (full at 60 deg/s). Camera-wide, not per pixel.");
+            QtUi::EndDisabled();
+        }
+
+        QtUi::EndDisabled();
+        QtUi::End();
     }
 
     // Keep the menu-specific UI state in this file so the renderer API stays focused on frame orchestration.
@@ -478,6 +732,229 @@ namespace
         QtUi::End();
     }
 
+    // ---- Game Settings -----------------------------------------------------------------
+    // The project's player setup: which controller runs the player - FirstPersonCharacter
+    // in Game.dll or a .nodegraph - and which graph. The character's values live in the
+    // controller itself. Edited on a copy and written to Data/Game/GameSettings.json by
+    // Save; a play session reads the file when it starts.
+    bool gShowGameSettingsWindow = false;
+    bool gGameSettingsLoaded = false;
+    bool gGameSettingsDirty = false;
+    GameProjectSettings gGameSettings;
+    std::string gGameSettingsStatus;
+
+    bool PromptForSaveFile(HWND owner, const char* title, const char* filter, const char* defaultExtension,
+                           const std::string& initialPath, std::string& outPath)
+    {
+        char buffer[MAX_PATH] = {};
+        strncpy_s(buffer, initialPath.c_str(), _TRUNCATE);
+        OPENFILENAMEA saveFileName{};
+        saveFileName.lStructSize = sizeof(saveFileName);
+        saveFileName.hwndOwner = owner;
+        saveFileName.lpstrFilter = filter;
+        saveFileName.lpstrFile = buffer;
+        saveFileName.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        saveFileName.lpstrTitle = title;
+        saveFileName.lpstrDefExt = defaultExtension;
+        saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        if (!QtUi::SaveFileName(&saveFileName))
+            return false;
+        outPath = buffer;
+        return true;
+    }
+
+    // Data-relative with forward slashes, or empty when `path` is outside Data - where a
+    // packaged game could never read it.
+    std::string DataRelativePath(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        const std::filesystem::path data = std::filesystem::weakly_canonical(GetProjectDataDirectoryCached(), error);
+        const std::filesystem::path file = std::filesystem::weakly_canonical(path, error);
+        const std::filesystem::path relative = file.lexically_relative(data);
+        if (relative.empty() || *relative.begin() == "..")
+            return std::string();
+        return relative.generic_string();
+    }
+
+    void LoadGameSettingsForEditing()
+    {
+        std::string error;
+        gGameSettingsStatus.clear();
+        if (!gGameSettings.Load(GetProjectDataDirectoryCached(), &error))
+            gGameSettingsStatus = error;
+        gGameSettingsLoaded = true;
+        gGameSettingsDirty = false;
+    }
+
+    void DrawGameSettingsWindow(const std::string& currentLevelPath)
+    {
+        if (!gShowGameSettingsWindow)
+            return;
+
+        if (!gGameSettingsLoaded)
+            LoadGameSettingsForEditing();
+
+        QtUi::SetNextWindowSize(UiVec2(560.0f, 480.0f), QtUiCond_FirstUseEver);
+        if (!QtUi::Begin("Game Settings", &gShowGameSettingsWindow))
+        {
+            QtUi::End();
+            return;
+        }
+
+        QtUi::SeparatorText("Player Controller");
+        QtUi::TextWrapped(
+            "Who drives the first-person character. A Node Graph controller also holds all of the "
+            "character's movement, camera and control values, on its Set Movement / Camera / Control "
+            "Settings nodes. The C++ controller sets them in FirstPersonCharacter::ConfigureCharacter.");
+
+        const bool native = gGameSettings.PlayerController == PlayerControllerKind::Native;
+        if (QtUi::RadioButton("C++ (Game.dll, FirstPersonCharacter)", native) && !native)
+        {
+            gGameSettings.PlayerController = PlayerControllerKind::Native;
+            gGameSettingsDirty = true;
+        }
+        if (QtUi::RadioButton("Node Graph (.nodegraph)", !native) && native)
+        {
+            gGameSettings.PlayerController = PlayerControllerKind::NodeGraph;
+            gGameSettingsDirty = true;
+        }
+
+        QtUi::TextWrapped("Controller graph: %s", gGameSettings.ControllerGraph.empty()
+            ? "(none - the built-in First Person Controller is used)"
+            : gGameSettings.ControllerGraph.c_str());
+
+        const std::filesystem::path controllerDirectory =
+            GameProjectSettings::DefaultControllerDirectory(GetProjectDataDirectoryCached());
+
+        if (QtUi::Button("Choose .nodegraph..."))
+        {
+            std::string path;
+            if (PromptForOpenFile(GetActiveWindow(), "Select Player Controller Graph",
+                "Node Graph\0*.nodegraph\0All Files\0*.*\0", path))
+            {
+                const std::string relative = DataRelativePath(path);
+                if (relative.empty())
+                {
+                    gGameSettingsStatus = "The controller graph must be inside the Data folder, or the packaged "
+                                          "game cannot load it. Copy it into Data/Game/Controllers first.";
+                }
+                else
+                {
+                    gGameSettings.ControllerGraph = relative;
+                    gGameSettingsDirty = true;
+                    gGameSettingsStatus.clear();
+                }
+            }
+        }
+        QtUi::SameLine();
+        if (QtUi::Button("Export Node Graph Controller..."))
+        {
+            std::error_code ignored;
+            std::filesystem::create_directories(controllerDirectory, ignored);
+            std::string path;
+            if (PromptForSaveFile(GetActiveWindow(), "Export Player Controller Graph",
+                "Node Graph\0*.nodegraph\0", "nodegraph",
+                (controllerDirectory / "FirstPersonController.nodegraph").string(), path))
+            {
+                std::string error;
+                if (!NodeGraphTemplates::FirstPersonController().SaveToFile(path, &error))
+                {
+                    gGameSettingsStatus = error;
+                }
+                else
+                {
+                    const std::string relative = DataRelativePath(path);
+                    if (!relative.empty())
+                    {
+                        gGameSettings.ControllerGraph = relative;
+                        gGameSettingsDirty = true;
+                    }
+                    gGameSettingsStatus = "Exported the First Person Controller to " + path +
+                        (relative.empty() ? ". It is outside Data, so it was not selected."
+                                          : ". Select Node Graph above and Save to play with it.");
+                }
+            }
+        }
+        QtUi::SetItemTooltip(
+            "Writes the node version of the C++ controller - its settings nodes, movement, look, jump, "
+            "crouch, sprint, and a right-mouse zoom - as a starting point for your own.");
+        if (!gGameSettings.ControllerGraph.empty())
+        {
+            QtUi::SameLine();
+            if (QtUi::Button("Clear"))
+            {
+                gGameSettings.ControllerGraph.clear();
+                gGameSettingsDirty = true;
+            }
+        }
+        QtUi::TextDisabled(
+            "Edit a controller in Windows > Node Graph: File > Load Graph, then File > Export Graph back to "
+            "the same file. Loading replaces the level's graph in that window, so export that first if the "
+            "level has one.");
+
+        QtUi::SeparatorText("Startup Level");
+        QtUi::TextWrapped("Level the packaged game opens with: %s", gGameSettings.StartupLevel.empty()
+            ? "(not set - Build Game needs one)"
+            : gGameSettings.StartupLevel.c_str());
+        const std::string openLevel = currentLevelPath.empty() ? std::string() : DataRelativePath(currentLevelPath);
+        QtUi::BeginDisabled(openLevel.empty());
+        if (QtUi::Button("Use Open Level"))
+        {
+            gGameSettings.StartupLevel = openLevel;
+            gGameSettingsDirty = true;
+        }
+        QtUi::EndDisabled();
+        QtUi::SameLine();
+        if (QtUi::Button("Choose Level..."))
+        {
+            std::string path;
+            if (PromptForOpenFile(GetActiveWindow(), "Select Startup Level",
+                "Levels\0*.level;*.json\0All Files\0*.*\0", path))
+            {
+                const std::string relative = DataRelativePath(path);
+                if (relative.empty())
+                {
+                    gGameSettingsStatus = "The startup level must be inside the Data folder.";
+                }
+                else
+                {
+                    gGameSettings.StartupLevel = relative;
+                    gGameSettingsDirty = true;
+                    gGameSettingsStatus.clear();
+                }
+            }
+        }
+        QtUi::TextDisabled("Playing in the editor always runs the level that is open.");
+
+        QtUi::TextDisabled(
+            "The player spawns at an entity named \"PlayerStart\" (feet at its position, facing its local +Y), "
+            "or at the editor camera when the level has none.");
+
+        QtUi::Separator();
+        if (QtUi::Button(gGameSettingsDirty ? "Save *" : "Save"))
+        {
+            std::string error;
+            if (gGameSettings.Save(GetProjectDataDirectoryCached(), &error))
+            {
+                gGameSettingsDirty = false;
+                gGameSettingsStatus = "Saved " + GameProjectSettings::FilePath(GetProjectDataDirectoryCached()).string() +
+                    ". Applies from the next Play.";
+            }
+            else
+            {
+                gGameSettingsStatus = error;
+            }
+        }
+        QtUi::SameLine();
+        if (QtUi::Button("Revert"))
+            LoadGameSettingsForEditing();
+
+        if (!gGameSettingsStatus.empty())
+            QtUi::TextWrapped("%s", gGameSettingsStatus.c_str());
+
+        QtUi::End();
+    }
+
     void StartShaderCompileCommand(const CompileShadersCommandFn compileShadersCommand)
     {
         if (compileShadersCommand == nullptr)
@@ -604,6 +1081,32 @@ namespace
         }
         QtUi::SliderFloat("Fade Distance", &materialDefinition.ParallaxFadeDistance, 0.0f, 300.0f, "%.1f m");
         QtUi::SetItemTooltip("Parallax fades out past this distance so far surfaces skip the march. 0 disables the fade.");
+        QtUi::EndDisabled();
+
+        QtUi::SeparatorText("Tessellation & Displacement");
+
+        QtUi::Checkbox("Tessellation", &materialDefinition.UseTessellation);
+        QtUi::SetItemTooltip("Subdivides the surface on the GPU and moves the new vertices along the "
+                             "normal by the Height / Displacement texture - real geometry with a real "
+                             "silhouette. Works on meshes and terrain.");
+        if (materialDefinition.UseTessellation && !hasHeightTexture)
+        {
+            QtUi::TextDisabled("Assign a Height / Displacement texture below to see any effect.");
+        }
+
+        QtUi::BeginDisabled(!materialDefinition.UseTessellation);
+        QtUi::SliderFloat("Displacement (m)", &materialDefinition.DisplacementScale, 0.0f, 2.0f, "%.3f m");
+        QtUi::SetItemTooltip("World distance between the texture's black and white.");
+        QtUi::SliderFloat("Mid Level", &materialDefinition.DisplacementMidLevel, 0.0f, 1.0f, "%.2f");
+        QtUi::SetItemTooltip("Height value that stays on the original surface. 0.5 keeps the average "
+                             "surface in place; 0 only pushes outward.");
+        QtUi::SliderFloat("Max Subdivision", &materialDefinition.TessellationMaxFactor, 1.0f, 64.0f, "%.0f");
+        QtUi::SetItemTooltip("Upper limit on how many pieces one edge is split into.");
+        QtUi::SliderFloat("Target Edge (px)", &materialDefinition.TessellationTargetPixels, 2.0f, 64.0f, "%.0f px");
+        QtUi::SetItemTooltip("Edges are split until each piece is about this long on screen. Smaller is "
+                             "finer and more expensive.");
+        QtUi::SliderFloat("Tess Fade Distance", &materialDefinition.TessellationFadeDistance, 0.0f, 500.0f, "%.0f m");
+        QtUi::SetItemTooltip("Subdivision tapers off to none at this distance. 0 disables the fade.");
         QtUi::EndDisabled();
     }
 
@@ -735,7 +1238,7 @@ namespace
         openFileName.lStructSize = sizeof(openFileName);
         openFileName.hwndOwner = ownerWindowHandle;
         openFileName.lpstrTitle = "Open Scene";
-        openFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        openFileName.lpstrFilter = "Level\0*.level;*.json\0Level (.level)\0*.level\0Legacy JSON Level (.json)\0*.json\0All Files\0*.*\0";
         openFileName.lpstrFile = sceneFileBuffer;
         openFileName.nMaxFile = sceneFileBufferSize;
         openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
@@ -748,11 +1251,11 @@ namespace
         saveFileName.lStructSize = sizeof(saveFileName);
         saveFileName.hwndOwner = ownerWindowHandle;
         saveFileName.lpstrTitle = "Save Scene";
-        saveFileName.lpstrFilter = "Scene JSON\0*.json\0All Files\0*.*\0";
+        saveFileName.lpstrFilter = "Level (.level)\0*.level\0Legacy JSON Level (.json)\0*.json\0All Files\0*.*\0";
         saveFileName.lpstrFile = sceneFileBuffer;
         saveFileName.nMaxFile = sceneFileBufferSize;
         saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-        saveFileName.lpstrDefExt = "json";
+        saveFileName.lpstrDefExt = "level";
         return QtUi::SaveFileName(&saveFileName) == TRUE;
     }
 
@@ -876,7 +1379,12 @@ namespace
         }
 
         MeshComponent& meshComponent = *selectedEntity->Mesh;
-        QtUi::TextWrapped("Selected Entity: %s", selectedEntity->Name.c_str());
+        const std::size_t selectedCount = editorInstance->GetSelectedEntities().size();
+        if (selectedCount > 1)
+            QtUi::TextWrapped("Selected Entity: %s (+%zu more - Assign applies to every selected mesh)",
+                              selectedEntity->Name.c_str(), selectedCount - 1);
+        else
+            QtUi::TextWrapped("Selected Entity: %s", selectedEntity->Name.c_str());
         QtUi::TextWrapped("Assigned Material: %s", meshComponent.MaterialPath.empty() ? "(none)" : meshComponent.MaterialPath.c_str());
 
         const std::optional<std::string> currentAssignmentPath = BuildDataRelativeAssetPath(currentMaterialPath);
@@ -925,13 +1433,15 @@ namespace
                 savedCurrentMaterial = gMaterialEditor.SaveCurrentMaterial();
             }
 
-            if (savedCurrentMaterial)
+            if (savedCurrentMaterial && editorInstance != nullptr)
             {
-                meshComponent.MaterialPath = *currentAssignmentPath;
-                if (editorInstance != nullptr)
+                // Every selected mesh takes the material, not only the one shown above.
+                for (Entity* entity : editorInstance->GetSelectedEntities())
                 {
-                    editorInstance->MarkSceneDirty();
+                    if (entity->Mesh.has_value())
+                        entity->Mesh->MaterialPath = *currentAssignmentPath;
                 }
+                editorInstance->MarkSceneDirty();
             }
         }
         QtUi::EndDisabled();
@@ -956,6 +1466,9 @@ namespace
     using SystemImportTextureToDataFn = decltype(&System_ImportTextureToData);
     using SystemGenerateMeshLodsFn = decltype(&System_GenerateMeshLods);
     using SystemGenerateCollisionsFn = decltype(&System_GenerateCollisions);
+    using SystemImportUnrealAssetToDataFn = decltype(&System_ImportUnrealAssetToData);
+    using SystemGetUnrealAssetInfoFn = decltype(&System_GetUnrealAssetInfo);
+    using SystemIsUnrealImportAvailableFn = decltype(&System_IsUnrealImportAvailable);
 
     void InvalidateEditorMeshAssets(void* editor, const std::string& relativeGeometryPath);
 
@@ -1333,6 +1846,82 @@ namespace
         return generateCollisions(fbxOrPteroPath, statusMessage, statusMessageCapacity);
     }
 
+    bool ImportUnrealAssetIntoDataFromSystem(
+        const char* sourceUassetPath,
+        const char* targetDirectoryRelativeToData,
+        char* statusMessage,
+        const int statusMessageCapacity)
+    {
+        if (statusMessage != nullptr && statusMessageCapacity > 0)
+        {
+            statusMessage[0] = '\0';
+        }
+
+        HMODULE systemModule = EnsureSystemModuleLoaded(statusMessage, statusMessageCapacity);
+        if (systemModule == nullptr)
+        {
+            return false;
+        }
+
+        const auto importUnreal = reinterpret_cast<SystemImportUnrealAssetToDataFn>(GetProcAddress(systemModule, "System_ImportUnrealAssetToData"));
+        if (importUnreal == nullptr)
+        {
+            if (statusMessage != nullptr && statusMessageCapacity > 0)
+            {
+                _snprintf_s(
+                    statusMessage,
+                    static_cast<size_t>(statusMessageCapacity),
+                    _TRUNCATE,
+                    "System.dll is missing the System_ImportUnrealAssetToData export. Win32 error: %lu",
+                    GetLastError());
+            }
+
+            return false;
+        }
+
+        return importUnreal(sourceUassetPath, targetDirectoryRelativeToData, statusMessage, statusMessageCapacity);
+    }
+
+    // Header-only look at a .uasset: its class, and whether it is importable and still
+    // lacks an up-to-date converted file. Thread-safe.
+    bool GetUnrealAssetInfoFromSystem(const std::filesystem::path& uassetPath, std::string& assetClass, bool& importable, bool& alreadyImported)
+    {
+        HMODULE systemModule = EnsureSystemModuleLoaded(nullptr, 0);
+        const auto getInfo = systemModule != nullptr
+            ? reinterpret_cast<SystemGetUnrealAssetInfoFn>(GetProcAddress(systemModule, "System_GetUnrealAssetInfo"))
+            : nullptr;
+        if (getInfo == nullptr)
+        {
+            return false;
+        }
+
+        char className[128] = {};
+        importable = false;
+        alreadyImported = false;
+        const bool read = getInfo(uassetPath.string().c_str(), className, static_cast<int>(std::size(className)), &importable, &alreadyImported);
+        assetClass = className;
+        return read;
+    }
+
+    // Empty when Unreal assets can be imported on this machine, otherwise why not.
+    const std::string& UnrealImportUnavailableReason()
+    {
+        static const std::string reason = []
+        {
+            HMODULE systemModule = EnsureSystemModuleLoaded(nullptr, 0);
+            const auto isAvailable = systemModule != nullptr
+                ? reinterpret_cast<SystemIsUnrealImportAvailableFn>(GetProcAddress(systemModule, "System_IsUnrealImportAvailable"))
+                : nullptr;
+            char message[512] = {};
+            if (isAvailable == nullptr)
+            {
+                return std::string("System.dll does not support Unreal import.");
+            }
+            return isAvailable(message, static_cast<int>(std::size(message))) ? std::string{} : std::string(message);
+        }();
+        return reason;
+    }
+
     bool IsGeometryAssetPath(const std::string& relativePath)
     {
         const std::string extension = std::filesystem::path(relativePath).extension().string();
@@ -1423,6 +2012,7 @@ namespace
         Geometry,
         Texture,
         Video,
+        Unreal,
         Unsupported
     };
 
@@ -1434,6 +2024,11 @@ namespace
         if (_stricmp(extension.c_str(), ".fbx") == 0)
         {
             return ImportKind::Geometry;
+        }
+
+        if (_stricmp(extension.c_str(), ".uasset") == 0)
+        {
+            return ImportKind::Unreal;
         }
 
         for (const char* textureExtension : kTextureImportExtensions)
@@ -1457,6 +2052,60 @@ namespace
         return _stricmp(std::filesystem::path(relativePath).extension().string().c_str(), ".webm") == 0;
     }
 
+    // The Asset Browser icon for an entry, from Data/Icons/Editor. Levels and materials
+    // are mostly .json, so for those the top-level folder decides.
+    const char* GetAssetBrowserIcon(const AssetBrowserItem& item)
+    {
+        if (item.IsDirectory)
+            return "asset-folder";
+
+        const std::filesystem::path path(item.RelativePath);
+        const std::string extension = path.extension().string();
+        const auto is = [&extension](std::initializer_list<const char*> extensions)
+        {
+            for (const char* candidate : extensions)
+                if (_stricmp(extension.c_str(), candidate) == 0)
+                    return true;
+            return false;
+        };
+
+        if (IsGeometryAssetPath(item.RelativePath) || is({ ".obj", ".assbin" }))
+            return "geometry";
+        if (is({ ".png", ".jpg", ".jpeg", ".tga", ".dds", ".hdr", ".bmp", ".exr", ".tif", ".tiff", ".raw" }))
+            return "asset-texture";
+        if (is({ ".webm", ".mp4", ".mov", ".avi", ".mkv" }))
+            return "asset-video";
+        if (is({ ".wav", ".mp3", ".ogg", ".flac", ".bank" }))
+            return "asset-audio";
+        if (is({ ".level" }))
+            return "asset-level";
+        if (is({ ".material" }))
+            return "material-editor";
+        if (is({ ".particle" }))
+            return "particles";
+        if (is({ ".nodegraph" }))
+            return "node-graph";
+        if (is({ ".ttf", ".otf" }))
+            return "asset-font";
+        if (is({ ".rml" }))
+            return "ui-editor";
+        if (is({ ".style", ".rcss" }))
+            return "asset-style";
+        if (is({ ".hlsl", ".hlsli", ".h", ".cpp", ".py", ".cmd" }))
+            return "asset-code";
+        if (is({ ".json" }))
+        {
+            const std::string topFolder = path.begin() != path.end() ? path.begin()->string() : std::string{};
+            if (_stricmp(topFolder.c_str(), "Levels") == 0)
+                return "asset-level";
+            if (_stricmp(topFolder.c_str(), "Materials") == 0 || _stricmp(topFolder.c_str(), "MultiMaterials") == 0)
+                return "material-editor";
+        }
+        if (is({ ".json", ".xml", ".ini", ".txt", ".md", ".mtl" }))
+            return "asset-text";
+        return "asset-file";
+    }
+
     void OpenVideoInPlayer(const std::string& relativePath)
     {
         const std::filesystem::path videoPath = GetAbsoluteDataPath(relativePath);
@@ -1467,10 +2116,164 @@ namespace
                    : std::string("The Video Player window could not be started."));
     }
 
-    // The one Import command: geometry (FBX), textures and videos in a single multi-select,
-    // each routed to its importer by extension. Everything runs on a background thread
-    // behind the progress modal, since both texture compression and video conversion can
-    // take a while.
+    struct AssetImportJob
+    {
+        std::string SourcePath;
+        // Data-relative folder the converted files go to. Sources already inside Data are
+        // converted next to themselves whatever it says.
+        std::string TargetFolder;
+    };
+
+    // Runs a batch of imports on a background thread behind the progress modal; each file
+    // is routed to its importer by extension.
+    bool StartAssetImport(std::vector<AssetImportJob> jobs)
+    {
+        if (gAssetImport.Running.load())
+        {
+            SetAssetBrowserStatus(false, "An import is already in progress.");
+            return false;
+        }
+        if (jobs.empty())
+        {
+            return false;
+        }
+
+        // Videos are written by path rather than through System.dll, so they need the
+        // absolute target, resolved here on the UI thread where the Data cache lives.
+        std::vector<std::filesystem::path> targetDirectories;
+        for (const AssetImportJob& job : jobs)
+        {
+            targetDirectories.push_back(GetAbsoluteDataPath(job.TargetFolder));
+        }
+
+        // Reset progress state and launch the background import thread.
+        {
+            std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+            gAssetImport.Log.clear();
+            gAssetImport.CurrentFile.clear();
+        }
+        gAssetImport.Total.store(static_cast<int>(jobs.size()));
+        gAssetImport.Done.store(0);
+        gAssetImport.CurrentFraction.store(0.0f);
+        gAssetImport.Cancel.store(false);
+        gAssetImport.Running.store(true);
+
+        std::thread([jobs = std::move(jobs), targetDirectories = std::move(targetDirectories)]()
+        {
+            // .uasset imports run side by side (System.dll caps the texture encodes they
+            // share); FBX, texture and video imports go through state that is not
+            // thread-safe - System's shared AssetManager, the video progress fraction - so
+            // those take turns.
+            std::atomic<std::size_t> nextJob{ 0 };
+            std::mutex serialImports;
+            auto worker = [&]()
+            {
+                for (std::size_t jobIndex = nextJob.fetch_add(1); jobIndex < jobs.size(); jobIndex = nextJob.fetch_add(1))
+                {
+                    const std::string& sourcePath = jobs[jobIndex].SourcePath;
+                    const std::string& targetFolder = jobs[jobIndex].TargetFolder;
+                    const std::filesystem::path& targetDirectory = targetDirectories[jobIndex];
+                    const std::string fileName = std::filesystem::path(sourcePath).filename().string();
+                    {
+                        std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                        gAssetImport.CurrentFile = fileName;
+                    }
+                    gAssetImport.CurrentFraction.store(0.0f);
+
+                    bool ok = false;
+                    std::string statusText;
+                    std::unique_lock<std::mutex> serial(serialImports, std::defer_lock);
+                    if (ClassifyImportPath(sourcePath) != ImportKind::Unreal)
+                    {
+                        serial.lock();
+                    }
+                    if (gAssetImport.Cancel.load())
+                    {
+                        statusText = "skipped (import cancelled)";
+                    }
+                    else
+                    {
+                        char statusMsg[1024] = {};
+                        switch (ClassifyImportPath(sourcePath))
+                        {
+                        case ImportKind::Geometry:
+                            ok = ImportFbxIntoDataFromSystem(
+                                sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
+                            statusText = statusMsg;
+                            break;
+                        case ImportKind::Texture:
+                            ok = ImportTextureIntoDataFromSystem(
+                                sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
+                            statusText = statusMsg;
+                            break;
+                        case ImportKind::Unreal:
+                            ok = ImportUnrealAssetIntoDataFromSystem(
+                                sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
+                            statusText = statusMsg;
+                            break;
+                        case ImportKind::Video:
+                        {
+                            std::wstring outputPath;
+                            ok = VideoImport::ImportIntoDirectory(
+                                std::filesystem::path(sourcePath).wstring(),
+                                targetDirectory.wstring(),
+                                outputPath,
+                                statusText,
+                                [](float fraction) { gAssetImport.CurrentFraction.store(fraction); },
+                                &gAssetImport.Cancel);
+                            break;
+                        }
+                        case ImportKind::Unsupported:
+                            statusText = "unsupported file type";
+                            break;
+                        }
+                    }
+
+                    std::string logLine = ok
+                        ? (std::string("OK  ") + fileName + (statusText.empty() ? "" : ": " + statusText))
+                        : (std::string("ERR ") + fileName + ": " + statusText);
+
+                    if (ok)
+                    {
+                        // Only flagged here: the cache belongs to the UI thread, which may be
+                        // iterating it right now. RefreshAssetBrowserState picks the flag up.
+                        gAssetImport.CacheDirty.store(true);
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                        gAssetImport.Log.push_back(std::move(logLine));
+                    }
+                    gAssetImport.Done.fetch_add(1);
+                }
+            };
+
+            const std::size_t workerCount = (std::min<std::size_t>)(jobs.size(), 3);
+            std::vector<std::thread> workers;
+            for (std::size_t index = 1; index < workerCount; ++index)
+            {
+                workers.emplace_back(worker);
+            }
+            worker();
+            for (std::thread& thread : workers)
+            {
+                thread.join();
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
+                gAssetImport.CurrentFile.clear();
+            }
+            gAssetImport.Running.store(false);
+        }).detach();
+
+        return true;
+    }
+
+    // The one Import command: geometry (FBX), Unreal .uasset files, textures and videos in a
+    // single multi-select, each routed to its importer by extension. Everything runs on a
+    // background thread behind the progress modal, since both texture compression and video
+    // conversion can take a while.
     bool PromptForAndImportAssets(HWND windowHandle, const std::string& targetFolderRelativePath)
     {
         if (gAssetImport.Running.load())
@@ -1494,8 +2297,9 @@ namespace
             filter += pattern;
             filter.push_back('\0');
         };
-        addFilter("All Supported Assets", "*.fbx;" + texturePattern + ";" + videoPattern);
+        addFilter("All Supported Assets", "*.fbx;*.uasset;" + texturePattern + ";" + videoPattern);
         addFilter("Geometry (*.fbx)", "*.fbx");
+        addFilter("Unreal Engine 5 assets (*.uasset)", "*.uasset");
         addFilter("Textures", texturePattern);
         addFilter("Videos (converted to WebM)", videoPattern);
         addFilter("All Files", "*.*");
@@ -1506,6 +2310,9 @@ namespace
         constexpr DWORD kMultiSelectBufferSize = 65536;
         std::vector<char> fileBuffer(kMultiSelectBufferSize, '\0');
 
+        // Start browsing in the folder being imported into.
+        const std::string initialDirectory = GetAbsoluteDataPath(targetFolderRelativePath).string();
+
         OPENFILENAMEA openFileName{};
         openFileName.lStructSize  = sizeof(openFileName);
         openFileName.hwndOwner    = windowHandle;
@@ -1513,6 +2320,7 @@ namespace
         openFileName.lpstrFile    = fileBuffer.data();
         openFileName.nMaxFile     = kMultiSelectBufferSize;
         openFileName.lpstrTitle   = "Import Assets";
+        openFileName.lpstrInitialDir = initialDirectory.empty() ? nullptr : initialDirectory.c_str();
         openFileName.Flags        = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
 
         if (!QtUi::OpenFileName(&openFileName))
@@ -1549,98 +2357,239 @@ namespace
             return false;
         }
 
-        // Videos are written by path rather than through System.dll, so they need the
-        // absolute target, resolved here on the UI thread where the Data cache lives.
-        const std::filesystem::path targetDirectory = GetAbsoluteDataPath(targetFolderRelativePath);
-
-        // Reset progress state and launch the background import thread.
+        std::vector<AssetImportJob> jobs;
+        for (const std::string& sourcePath : sourcePaths)
         {
-            std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
-            gAssetImport.Log.clear();
-            gAssetImport.CurrentFile.clear();
+            jobs.push_back({ sourcePath, targetFolderRelativePath });
         }
-        gAssetImport.Total.store(static_cast<int>(sourcePaths.size()));
-        gAssetImport.Done.store(0);
-        gAssetImport.CurrentFraction.store(0.0f);
-        gAssetImport.Cancel.store(false);
-        gAssetImport.Running.store(true);
+        return StartAssetImport(std::move(jobs));
+    }
 
-        std::thread([paths = std::move(sourcePaths), targetFolder = targetFolderRelativePath, targetDirectory]()
+    // -----------------------------------------------------------------------
+    // "New files detected" - files that appear in Data from outside the editor are offered
+    // for import in a bottom-right notification, as Unreal's content browser does.
+    // -----------------------------------------------------------------------
+
+    // Folders whose files are used as they are, never converted.
+    bool IsInPassThroughFolder(const std::filesystem::path& dataDirectory, const std::filesystem::path& file)
+    {
+        static const char* const kFolders[] = { "UI", "Icons", "Styles", "Fonts", "Shaders", "Levels", "Audio", "fmod_project", "Game" };
+        const std::filesystem::path relative = file.lexically_relative(dataDirectory);
+        if (relative.empty() || relative.begin() == relative.end())
         {
-            for (const std::string& sourcePath : paths)
+            return true;
+        }
+        const std::string top = relative.begin()->string();
+        for (const char* folder : kFolders)
+        {
+            if (_stricmp(top.c_str(), folder) == 0)
             {
-                const std::string fileName = std::filesystem::path(sourcePath).filename().string();
-                {
-                    std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
-                    gAssetImport.CurrentFile = fileName;
-                }
-                gAssetImport.CurrentFraction.store(0.0f);
-
-                bool ok = false;
-                std::string statusText;
-                if (gAssetImport.Cancel.load())
-                {
-                    statusText = "skipped (import cancelled)";
-                }
-                else
-                {
-                    char statusMsg[512] = {};
-                    switch (ClassifyImportPath(sourcePath))
-                    {
-                    case ImportKind::Geometry:
-                        ok = ImportFbxIntoDataFromSystem(
-                            sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
-                        statusText = statusMsg;
-                        break;
-                    case ImportKind::Texture:
-                        ok = ImportTextureIntoDataFromSystem(
-                            sourcePath.c_str(), targetFolder.c_str(), statusMsg, static_cast<int>(std::size(statusMsg)));
-                        statusText = statusMsg;
-                        break;
-                    case ImportKind::Video:
-                    {
-                        std::wstring outputPath;
-                        ok = VideoImport::ImportIntoDirectory(
-                            std::filesystem::path(sourcePath).wstring(),
-                            targetDirectory.wstring(),
-                            outputPath,
-                            statusText,
-                            [](float fraction) { gAssetImport.CurrentFraction.store(fraction); },
-                            &gAssetImport.Cancel);
-                        break;
-                    }
-                    case ImportKind::Unsupported:
-                        statusText = "unsupported file type";
-                        break;
-                    }
-                }
-
-                std::string logLine = ok
-                    ? (std::string("OK  ") + fileName + (statusText.empty() ? "" : ": " + statusText))
-                    : (std::string("ERR ") + fileName + ": " + statusText);
-
-                if (ok)
-                {
-                    // Only flagged here: the cache belongs to the UI thread, which may be
-                    // iterating it right now. RefreshAssetBrowserState picks the flag up.
-                    gAssetImport.CacheDirty.store(true);
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
-                    gAssetImport.Log.push_back(std::move(logLine));
-                }
-                gAssetImport.Done.fetch_add(1);
+                return true;
             }
+        }
+        return false;
+    }
 
+    // True when a file that appeared in Data still needs converting. Runs on the watcher
+    // thread; everything it touches is either immutable or thread-safe.
+    bool ClassifyNewDataFile(const std::filesystem::path& dataDirectory, const std::filesystem::path& file, std::string& kind)
+    {
+        const std::string name = file.filename().string();
+        if (name.empty() || name[0] == '~' || name[0] == '.')
+        {
+            return false;
+        }
+
+        std::error_code ec;
+        const auto hasFreshOutput = [&](const std::filesystem::path& output)
+        {
+            return std::filesystem::exists(output, ec) && std::filesystem::last_write_time(output, ec) >= std::filesystem::last_write_time(file, ec);
+        };
+        std::filesystem::path sibling = file;
+
+        switch (ClassifyImportPath(file.string()))
+        {
+        case ImportKind::Unreal:
+        {
+            bool importable = false;
+            bool imported = false;
+            if (!GetUnrealAssetInfoFromSystem(file, kind, importable, imported))
             {
-                std::lock_guard<std::mutex> lock(gAssetImport.LogMutex);
-                gAssetImport.CurrentFile.clear();
+                return false;
             }
-            gAssetImport.Running.store(false);
-        }).detach();
+            return importable && !imported;
+        }
+        case ImportKind::Geometry:
+            kind = "FBX";
+            return !IsInPassThroughFolder(dataDirectory, file) && !hasFreshOutput(file.string() + ".ptero");
+        case ImportKind::Texture:
+            kind = "Texture";
+            if (_stricmp(file.extension().string().c_str(), ".dds") == 0 || IsInPassThroughFolder(dataDirectory, file))
+            {
+                return false;
+            }
+            // Imported beside the source, or into Data/Textures (the default target).
+            return !std::filesystem::exists(sibling.replace_extension(".dds"), ec) &&
+                !std::filesystem::exists(dataDirectory / "Textures" / (file.stem().string() + ".dds"), ec);
+        case ImportKind::Video:
+            kind = "Video";
+            if (_stricmp(file.extension().string().c_str(), ".webm") == 0 || IsInPassThroughFolder(dataDirectory, file))
+            {
+                return false;
+            }
+            return !std::filesystem::exists(sibling.replace_extension(".webm"), ec);
+        default:
+            return false;
+        }
+    }
 
-        return true;
+    std::vector<DataFolderWatcher::DetectedFile> gNewDataFiles;
+    bool gNewDataFilesNeedRecheck = false;
+    bool gImportWasRunning = false;
+
+    std::string DescribeNewDataFiles(const std::filesystem::path& dataDirectory)
+    {
+        // Where they are: the deepest folder containing all of them.
+        std::filesystem::path common = gNewDataFiles.front().Path.parent_path();
+        for (const DataFolderWatcher::DetectedFile& file : gNewDataFiles)
+        {
+            while (!common.empty() && file.Path.parent_path().lexically_relative(common).string().rfind("..", 0) == 0)
+            {
+                common = common.parent_path();
+            }
+        }
+        const std::string folder = NormalizeRelativeDataPath(common.lexically_relative(dataDirectory));
+
+        std::map<std::string, int> counts;
+        for (const DataFolderWatcher::DetectedFile& file : gNewDataFiles)
+        {
+            const std::string& kind = file.Kind;
+            const char* label = kind == "StaticMesh" ? "static mesh"
+                : (kind == "Material" || kind == "MaterialInstanceConstant") ? "material"
+                : (kind == "Texture2D" || kind == "TextureCube" || kind == "Texture") ? "texture"
+                : kind == "FBX" ? "FBX model"
+                : kind == "Video" ? "video"
+                : "file";
+            ++counts[label];
+        }
+        std::string summary;
+        for (const auto& [label, count] : counts)
+        {
+            summary += (summary.empty() ? "" : ", ") + std::to_string(count) + " " + label +
+                (count == 1 ? "" : (std::string(label) == "static mesh" ? "es" : "s"));
+        }
+
+        const std::size_t total = gNewDataFiles.size();
+        std::string text = std::to_string(total) + (total == 1 ? " new file" : " new files") +
+            (folder.empty() ? std::string(" in Data") : " in Data/" + folder) + ": " + summary + ".";
+
+        const bool hasUnreal = std::any_of(gNewDataFiles.begin(), gNewDataFiles.end(), [](const DataFolderWatcher::DetectedFile& file)
+        {
+            return ClassifyImportPath(file.Path.string()) == ImportKind::Unreal;
+        });
+        if (hasUnreal && !UnrealImportUnavailableReason().empty())
+        {
+            text += "\n\n" + UnrealImportUnavailableReason();
+        }
+        return text;
+    }
+
+    // Called every frame: runs the Data watcher and shows the notification while
+    // detected files wait for an answer.
+    void UpdateNewDataFilesNotification()
+    {
+        const std::filesystem::path& dataDirectory = GetProjectDataDirectoryCached();
+        if (dataDirectory.empty())
+        {
+            return;
+        }
+        DataFolderWatcher::Start(dataDirectory, [dataDirectory](const std::filesystem::path& file, std::string& kind)
+        {
+            return ClassifyNewDataFile(dataDirectory, file, kind);
+        });
+
+        if (DataFolderWatcher::ConsumeChanged())
+        {
+            InvalidateAssetBrowserDirectoryCache();
+        }
+
+        // An import writes into Data itself; hold the question until it finishes, then
+        // drop whatever it converted.
+        const bool importRunning = gAssetImport.Running.load();
+        if (gImportWasRunning && !importRunning)
+        {
+            gNewDataFilesNeedRecheck = true;
+        }
+        gImportWasRunning = importRunning;
+        if (importRunning)
+        {
+            return;
+        }
+
+        for (DataFolderWatcher::DetectedFile& detected : DataFolderWatcher::TakeDetectedFiles())
+        {
+            const bool known = std::any_of(gNewDataFiles.begin(), gNewDataFiles.end(), [&](const DataFolderWatcher::DetectedFile& file)
+            {
+                return _wcsicmp(file.Path.lexically_normal().c_str(), detected.Path.lexically_normal().c_str()) == 0;
+            });
+            if (!known)
+            {
+                gNewDataFiles.push_back(std::move(detected));
+            }
+        }
+
+        if (gNewDataFilesNeedRecheck)
+        {
+            gNewDataFilesNeedRecheck = false;
+            gNewDataFiles.erase(std::remove_if(gNewDataFiles.begin(), gNewDataFiles.end(), [&](const DataFolderWatcher::DetectedFile& file)
+            {
+                std::string kind;
+                return !ClassifyNewDataFile(dataDirectory, file.Path, kind);
+            }), gNewDataFiles.end());
+        }
+
+        if (gNewDataFiles.empty())
+        {
+            return;
+        }
+
+        const std::string text = DescribeNewDataFiles(dataDirectory);
+        const int choice = QtUi::Notification("NewDataFiles", "New files detected", text.c_str(), "Import", "Don't Import");
+        if (choice == 1)
+        {
+            // Meshes first: each pulls in and converts its materials' textures in parallel,
+            // so the textures queued after them are mostly already up to date.
+            auto priority = [](const DataFolderWatcher::DetectedFile& file)
+            {
+                if (file.Kind == "StaticMesh" || file.Kind == "FBX") return 0;
+                if (file.Kind == "Material" || file.Kind == "MaterialInstanceConstant") return 1;
+                return 2;
+            };
+            std::stable_sort(gNewDataFiles.begin(), gNewDataFiles.end(), [&](const auto& a, const auto& b) { return priority(a) < priority(b); });
+
+            std::vector<AssetImportJob> jobs;
+            for (const DataFolderWatcher::DetectedFile& file : gNewDataFiles)
+            {
+                // Converted in place, next to the file that arrived.
+                jobs.push_back({ file.Path.string(), NormalizeRelativeDataPath(file.Path.parent_path().lexically_relative(dataDirectory)) });
+            }
+            if (StartAssetImport(std::move(jobs)))
+            {
+                gShowAssetBrowserWindow = true;   // the progress modal lives there
+                gSelectedFolderRelativePath = NormalizeRelativeDataPath(gNewDataFiles.front().Path.parent_path().lexically_relative(dataDirectory));
+                gNewDataFiles.clear();
+            }
+        }
+        else if (choice == 2 || choice == 3)
+        {
+            std::vector<std::filesystem::path> declined;
+            for (const DataFolderWatcher::DetectedFile& file : gNewDataFiles)
+            {
+                declined.push_back(file.Path);
+            }
+            DataFolderWatcher::Ignore(declined);
+            gNewDataFiles.clear();
+        }
     }
 
     void CopySelectedAssetToClipboard()
@@ -1856,6 +2805,7 @@ namespace
             | (childFolders.empty() ? QtUiTreeNodeFlags_Leaf : 0)
             | (gSelectedFolderRelativePath == folderRelativePath ? QtUiTreeNodeFlags_Selected : 0);
 
+        QtUi::SetNextItemIcon("asset-folder");
         const bool isOpen = QtUi::TreeNodeEx(folderRelativePath.empty() ? "DataRoot" : folderRelativePath.c_str(), nodeFlags, "%s", folderPath.string().c_str());
         if (QtUi::IsItemClicked())
         {
@@ -1929,7 +2879,13 @@ void RenderEditorMainMenu(
     VolumetricFogSettings* volumetricFogSettings,
     VolumetricCloudSettings* volumetricCloudSettings,
     BloomSettings* bloomSettings,
+    LensFlareSettings* lensFlareSettings,
+    const LensFlareRenderer* lensFlareRenderer,
     PointShadowSettings* pointShadowSettings,
+    VirtualShadowMapSettings* virtualShadowMapSettings,
+    const char* virtualShadowMapStatus,
+    DpleSettings* dpleSettings,
+    const char* dpleErrorMessage,
     const GBufferDebugTextureIds* gbufferTextureIds,
     AudioManager* audioManager,
     CompileShadersCommandFn compileShadersCommand,
@@ -1939,6 +2895,8 @@ void RenderEditorMainMenu(
     UNREFERENCED_PARAMETER(statisticsText);
 
     Editor* editorInstance = static_cast<Editor*>(editor);
+
+    UpdateNewDataFilesNotification();
 
     if (QtUi::BeginMainMenuBar())
     {
@@ -1960,6 +2918,46 @@ void RenderEditorMainMenu(
                 // loader directly and could discard an edited level silently,
                 // while Ctrl+O - the same command - asked.
                 editorInstance->OpenScene(windowHandle);
+            }
+
+            QtUi::SetNextItemIcon("recent");
+            if (editorInstance != nullptr && QtUi::BeginMenu("Recent Levels", !sceneLoading))
+            {
+                // Copied: opening a level reorders the list, and a missing file leaves it.
+                const std::vector<std::string> recentLevels = editorInstance->GetRecentLevels();
+                if (recentLevels.empty())
+                {
+                    QtUi::MenuItem("No recent levels", nullptr, false, false);
+                }
+
+                const std::filesystem::path& dataDirectory = GetProjectDataDirectoryCached();
+                for (const std::string& levelPath : recentLevels)
+                {
+                    // Data-relative where possible, which is how levels are thought of.
+                    std::string shown = levelPath;
+                    std::error_code relativeError;
+                    const std::filesystem::path relativePath = dataDirectory.empty()
+                        ? std::filesystem::path{}
+                        : std::filesystem::relative(std::filesystem::path(levelPath), dataDirectory, relativeError);
+                    if (!relativeError && !relativePath.empty() && *relativePath.begin() != "..")
+                    {
+                        shown = relativePath.generic_string();
+                    }
+
+                    QtUi::SetNextItemIcon("asset-level");
+                    if (QtUi::MenuItem((shown + "##recent:" + levelPath).c_str()))
+                    {
+                        editorInstance->OpenRecentLevel(windowHandle, levelPath);
+                    }
+                }
+
+                QtUi::Separator();
+                if (QtUi::MenuItem("Clear Recent Levels", nullptr, false, !recentLevels.empty()))
+                {
+                    editorInstance->ClearRecentLevels();
+                }
+
+                QtUi::EndMenu();
             }
 
             QtUi::SetNextItemIcon("save");
@@ -2050,6 +3048,41 @@ void RenderEditorMainMenu(
             if (QtUi::MenuItem("G-Buffer / RT Debug..."))
                 gShowGBufferDebugWindow = true;
 
+            // Virtualized geometry debug view. Written through the vg.* cvars,
+            // which point at the renderer's live settings, so this menu, the
+            // Console and the Mesh panel always show the same state.
+            const CVar::Var* vgDebugView = CVar::Find("vg.debugview");
+            const CVar::Var* vgFreeze = CVar::Find("vg.freeze");
+            const CVar::Var* vgAll = CVar::Find("vg.all");
+            if (vgDebugView != nullptr && vgDebugView->IntValue != nullptr
+                && QtUi::BeginMenu("Virtual Geometry"))
+            {
+                if (vgAll != nullptr && vgAll->BoolValue != nullptr)
+                {
+                    if (QtUi::MenuItem("Virtualize All Meshes", nullptr, *vgAll->BoolValue))
+                        *vgAll->BoolValue = !*vgAll->BoolValue;
+                    QtUi::Separator();
+                }
+
+                // The colours replace only what the virtualized path draws.
+                QtUi::MenuItem("Debug view (virtualized meshes only):", nullptr, false, false);
+                const char* modes[] = { "Off", "Clusters", "Instances", "LOD (DAG Level)" };
+                for (int mode = 0; mode < static_cast<int>(std::size(modes)); ++mode)
+                {
+                    if (QtUi::MenuItem(modes[mode], nullptr, *vgDebugView->IntValue == mode))
+                        *vgDebugView->IntValue = mode;
+                }
+
+                if (vgFreeze != nullptr && vgFreeze->BoolValue != nullptr)
+                {
+                    QtUi::Separator();
+                    if (QtUi::MenuItem("Freeze Culling", nullptr, *vgFreeze->BoolValue))
+                        *vgFreeze->BoolValue = !*vgFreeze->BoolValue;
+                }
+
+                QtUi::EndMenu();
+            }
+
             QtUi::EndMenu();
         }
 
@@ -2095,6 +3128,12 @@ void RenderEditorMainMenu(
             {
                 gShowMaterialEditorWindow = true;
                 RefreshMaterialNameBuffer();
+            }
+
+            QtUi::SetNextItemIcon("particles");
+            if (editorInstance != nullptr && QtUi::MenuItem("Particle Editor..."))
+            {
+                editorInstance->OpenParticleEditor();
             }
 
             QtUi::SetNextItemIcon("node-graph");
@@ -2162,6 +3201,23 @@ void RenderEditorMainMenu(
             if (QtUi::MenuItem("Graphics Settings..."))
             {
                 gShowGraphicsSettingsWindow = true;
+            }
+
+            // Its own window rather than a section of Graphics Settings: DPLE is tuned by
+            // eye, so it wants a window that can sit beside the viewport while tuning.
+            QtUi::SetNextItemIcon("dple");
+            if (QtUi::MenuItem("DPLE..."))
+            {
+                gShowDpleWindow = true;
+            }
+
+            QtUi::SetNextItemIcon("settings");
+            if (QtUi::MenuItem("Game Settings..."))
+            {
+                gShowGameSettingsWindow = true;
+                // Re-read on every open, so a file edited by hand or by another tool shows up.
+                if (!gGameSettingsDirty)
+                    gGameSettingsLoaded = false;
             }
 
             QtUi::EndMenu();
@@ -2294,6 +3350,20 @@ void RenderEditorMainMenu(
         int minutes = static_cast<int>((timeOfDaySettings->TimeOfDay - hours) * 60.0f);
         QtUi::Text("  %02d:%02d", hours, minutes);
         SliderFloatWithInput("Time Of Day", &timeOfDaySettings->TimeOfDay, 0.0f, 23.99f, "%.2f h", 0.05f, 1.0f);
+        SliderFloatWithInput("Latitude##timeofday", &timeOfDaySettings->Latitude, -89.0f, 89.0f, "%.1f deg", 0.5f, 5.0f);
+        QtUi::SetItemTooltip("Degrees north. The sun rises due east at 06:00, sets due west at 18:00 "
+                             "and stands at 90 minus this at noon. 30 gives the 60 degree noon sun.");
+        SliderFloatWithInput("North Offset##timeofday", &timeOfDaySettings->NorthOffset, -180.0f, 180.0f, "%.0f deg", 1.0f, 15.0f);
+        QtUi::SetItemTooltip("Turns the sun path, moon and stars about the vertical. At 0 the sun "
+                             "rises toward +X and stands toward -Y at noon.");
+
+        // What the hour currently resolves to, so the exposure curve and the
+        // sun/moon handover can be read rather than guessed at.
+        const HosekWilkieResult todState = EvaluateHosekWilkie(*timeOfDaySettings);
+        QtUi::Text("  Sun %.1f deg, moon %.1f deg - lit by the %s",
+            todState.SolarElevationRad * (180.0f / 3.14159265f),
+            todState.MoonElevationRad * (180.0f / 3.14159265f),
+            todState.KeyLightIsMoon ? "moon" : "sun");
 
         QtUi::Spacing();
         QtUi::SeparatorText("Atmosphere");
@@ -2351,6 +3421,100 @@ void RenderEditorMainMenu(
             }
         }
 
+        // ---- Night ------------------------------------------------------
+        QtUi::Spacing();
+        QtUi::SeparatorText("Night");
+
+        SliderFloatWithInput("Night Sky Intensity (lux)", &timeOfDaySettings->NightSkyIntensityLux,
+            0.0f, 2000.0f, "%.1f lx", 1.0f, 10.0f);
+        QtUi::SetItemTooltip("Sky ambient once the sun is 12 degrees down. The daylight sky fades "
+                             "into this through twilight. A game value, not starlight's real fraction of a lux.");
+        {
+            float nightCol[3] = { timeOfDaySettings->NightSkyColorR,
+                                  timeOfDaySettings->NightSkyColorG,
+                                  timeOfDaySettings->NightSkyColorB };
+            if (QtUi::ColorEdit3("Night Sky Color", nightCol, QtUiColorEditFlags_Float | QtUiColorEditFlags_HDR))
+            {
+                timeOfDaySettings->NightSkyColorR = nightCol[0];
+                timeOfDaySettings->NightSkyColorG = nightCol[1];
+                timeOfDaySettings->NightSkyColorB = nightCol[2];
+            }
+        }
+
+        QtUi::Checkbox("Moon##timeofday", &timeOfDaySettings->MoonEnabled);
+        QtUi::SetItemTooltip("The moon takes over as the directional light, with shadows, once the sun is down.");
+        QtUi::BeginDisabled(!timeOfDaySettings->MoonEnabled);
+        SliderFloatWithInput("Moon Phase##timeofday", &timeOfDaySettings->MoonPhase, 0.0f, 1.0f, "%.2f", 0.01f, 0.125f);
+        QtUi::SetItemTooltip("0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = last quarter.\n"
+                             "Also places the moon: a full moon rises at sunset and sets at sunrise.");
+        SliderFloatWithInput("Moon Intensity (lux)", &timeOfDaySettings->MoonIntensityLux,
+            0.0f, 5000.0f, "%.0f lx", 5.0f, 50.0f);
+        QtUi::SetItemTooltip("Full-moon illuminance, scaled down by the phase. A game value; the real "
+                             "full moon is about 0.25 lx.");
+        {
+            float moonCol[3] = { timeOfDaySettings->MoonColorR,
+                                 timeOfDaySettings->MoonColorG,
+                                 timeOfDaySettings->MoonColorB };
+            if (QtUi::ColorEdit3("Moon Color", moonCol, QtUiColorEditFlags_Float | QtUiColorEditFlags_HDR))
+            {
+                timeOfDaySettings->MoonColorR = moonCol[0];
+                timeOfDaySettings->MoonColorG = moonCol[1];
+                timeOfDaySettings->MoonColorB = moonCol[2];
+            }
+        }
+        SliderFloatWithInput("Moon Size##timeofday", &timeOfDaySettings->MoonSize, 0.1f, 5.0f, "%.2f", 0.05f, 0.5f);
+        QtUi::EndDisabled();
+
+        QtUi::Checkbox("Stars##timeofday", &timeOfDaySettings->StarsEnabled);
+        QtUi::BeginDisabled(!timeOfDaySettings->StarsEnabled);
+        SliderFloatWithInput("Star Intensity##timeofday", &timeOfDaySettings->StarIntensity, 0.0f, 10.0f, "%.2f", 0.05f, 0.5f);
+        {
+            const char* starFields[] = { "Procedural", "Star Map", "Both" };
+            int starField = std::clamp(timeOfDaySettings->StarField, 0, 2);
+            if (QtUi::Combo("Star Field##timeofday", &starField, starFields, 3))
+                timeOfDaySettings->StarField = starField;
+            QtUi::SetItemTooltip("Procedural: sharp twinkling stars and a noise Milky Way.\n"
+                                 "Star Map: the real sky from Textures/Sky/2k_stars_milky_way.dds, soft up close.\n"
+                                 "Both: the map for the Milky Way and faint background, procedural stars on top.");
+        }
+        QtUi::EndDisabled();
+
+        // ---- Exposure ---------------------------------------------------
+        QtUi::Spacing();
+        QtUi::SeparatorText("Exposure");
+
+        QtUi::Checkbox("Time of Day Controls Exposure##timeofday", &timeOfDaySettings->ControlExposure);
+        QtUi::SetItemTooltip("Replaces the AgX EV100 with one that follows the sun: Day with the sun "
+                             "25 degrees up or more, Sunset with it on the horizon, Night from 12 degrees "
+                             "below. The AgX exposure trim and grade still apply.");
+        QtUi::BeginDisabled(!timeOfDaySettings->ControlExposure);
+        SliderFloatWithInput("Day EV100##timeofday", &timeOfDaySettings->DayEv100, -16.0f, 16.0f, "%.2f", 0.05f, 0.5f);
+        QtUi::SetItemTooltip("-2 is the Desert level's noon exposure. Higher is darker.");
+        SliderFloatWithInput("Sunset EV100##timeofday", &timeOfDaySettings->SunsetEv100, -16.0f, 16.0f, "%.2f", 0.05f, 0.5f);
+        SliderFloatWithInput("Night EV100##timeofday", &timeOfDaySettings->NightEv100, -16.0f, 16.0f, "%.2f", 0.05f, 0.5f);
+
+        QtUi::Checkbox("Eye Adaptation##timeofday", &timeOfDaySettings->EyeAdaptation);
+        QtUi::SetItemTooltip("Shifts the exposure by how much brighter or darker the view is than an open "
+                             "outdoor one at this hour: a torch-lit interior at night stops down, a dark "
+                             "interior by day opens up, and outdoors stays on the curve above. Differences "
+                             "under a stop are ignored. Speed is the AgX auto-exposure speed.");
+        QtUi::BeginDisabled(!timeOfDaySettings->EyeAdaptation);
+        SliderFloatWithInput("Adaptation Strength##timeofday", &timeOfDaySettings->AdaptationStrength, 0.0f, 1.0f, "%.2f", 0.05f, 0.25f);
+        SliderFloatWithInput("EV100 Min##timeofday", &timeOfDaySettings->AdaptationEv100Min, -16.0f, 16.0f, "%.2f", 0.05f, 0.5f);
+        QtUi::SetItemTooltip("Brightest exposure adaptation may reach (lower EV = brighter): how far a dark interior opens up.");
+        SliderFloatWithInput("EV100 Max##timeofday", &timeOfDaySettings->AdaptationEv100Max, -16.0f, 16.0f, "%.2f", 0.05f, 0.5f);
+        QtUi::SetItemTooltip("Darkest exposure adaptation may reach (higher EV = darker): how far a bright interior stops down.");
+        if (timeOfDaySettings->AdaptationEv100Min > (std::min)((std::min)(timeOfDaySettings->DayEv100, timeOfDaySettings->SunsetEv100), timeOfDaySettings->NightEv100)
+            || timeOfDaySettings->AdaptationEv100Max < (std::max)((std::max)(timeOfDaySettings->DayEv100, timeOfDaySettings->SunsetEv100), timeOfDaySettings->NightEv100))
+        {
+            QtUi::TextWrapped("The range does not cover the Day/Sunset/Night EV100s, so the curve itself is clamped outdoors.");
+        }
+        QtUi::EndDisabled();
+        QtUi::EndDisabled();
+        QtUi::Text("  Now: EV100 %.2f, GI pre-exposure x%.1f", todState.Ev100, todState.PreExposure);
+        QtUi::SetItemTooltip("RTGI and the radiance probes trace at daylight brightness scaled by the "
+                             "pre-exposure and divide it back out, so night GI keeps its precision.");
+
         QtUi::EndDisabled();
 
         // ---- Wind -------------------------------------------------------
@@ -2401,6 +3565,11 @@ void RenderEditorMainMenu(
         QtUi::End();
     }
 
+    if (gShowDpleWindow && dpleSettings != nullptr)
+    {
+        DrawDpleWindow(*dpleSettings, dpleErrorMessage);
+    }
+
     if (gShowGraphicsSettingsWindow)
     {
         const TaaSettings defaultTaaSettings{};
@@ -2414,6 +3583,7 @@ void RenderEditorMainMenu(
         const AgxTonemapSettings defaultAgxSettings{};
         const VolumetricFogSettings defaultVolumetricFogSettings{};
         const PointShadowSettings defaultPointShadowSettings{};
+        const VirtualShadowMapSettings defaultVirtualShadowMapSettings{};
         QtUi::Begin("Graphics Settings", &gShowGraphicsSettingsWindow, QtUiWindowFlags_AlwaysAutoResize);
 
         if (viewDistanceMeters != nullptr)
@@ -2751,6 +3921,42 @@ void RenderEditorMainMenu(
                     QtUi::SetItemTooltip("Maximum indirect bounce depth for GI rays.");
                     QtUi::Checkbox("Next Event Estimation##rtgi", &rtgiSettings->NextEventEstimation);
                     QtUi::SetItemTooltip("Trace a shadow ray from the secondary hit toward the sun to explicitly estimate direct lighting in the GI path.");
+                    if (rtgiSettings->NextEventEstimation)
+                    {
+                        QtUi::Checkbox("Shadow Map Visibility##rtgi", &rtgiSettings->VsmVisibility);
+                        QtUi::SetItemTooltip(
+                            "Answer next-event visibility from the virtual shadow map where it holds a fine enough page,\n"
+                            "and trace a shadow ray only where it does not. Cheaper per light, and matches the raster\n"
+                            "shadows (alpha-tested foliage included). Needs the virtual shadow map to be on.");
+                        if (rtgiSettings->VsmVisibility)
+                        {
+                            SliderFloatWithInput("Max Shadow Texel##rtgi", &rtgiSettings->VsmMaxTexelSize, 0.005f, 0.25f, "%.3f m", 0.001f, 0.01f);
+                            QtUi::SetItemTooltip(
+                                "Coarsest shadow-map texel trusted at a bounce hit. Coarse pages leak light through walls\n"
+                                "about as thick as a texel, so hits only coarse pages cover trace a ray instead.\n"
+                                "Lower = fewer leaks, more rays.");
+                        }
+                    }
+
+                    // --- Acceleration structure ---
+                    QtUi::Separator();
+                    QtUi::TextDisabled("Acceleration Structure");
+
+                    QtUi::Checkbox("Virtual Geometry BLAS##rtgi", &rtgiSettings->VirtualGeometryBlas);
+                    QtUi::SetItemTooltip(
+                        "Ray trace virtualized meshes against a simplified cut through their cluster hierarchy\n"
+                        "instead of every source triangle. Smaller BLASes, faster builds, less VRAM.");
+                    if (rtgiSettings->VirtualGeometryBlas)
+                    {
+                        SliderFloatWithInput("Near Error##rtgi_blas", &rtgiSettings->BlasLodError, 0.0f, 0.02f, "%.4f m", 0.0005f, 0.002f);
+                        QtUi::SetItemTooltip(
+                            "Simplification error of the nearest tier. Keep it under 1 cm: GI rays re-find their\n"
+                            "origin on the traced surface within that tolerance near the camera.");
+                        SliderFloatWithInput("Tier Distance##rtgi_blas", &rtgiSettings->BlasTierDistance, 1.0f, 200.0f, "%.1f m");
+                        QtUi::SetItemTooltip("Where the second tier starts. Each tier starts 4x further out and allows 4x the error.");
+                        SliderIntWithInput("Tiers##rtgi_blas", &rtgiSettings->BlasTierCount, 1, 3);
+                        QtUi::SetItemTooltip("Detail tiers by distance from the camera. 1 = one cut at every distance.");
+                    }
 
                     // --- Firefly suppression ---
                     QtUi::Separator();
@@ -2785,7 +3991,7 @@ void RenderEditorMainMenu(
                     QtUi::Separator();
                     QtUi::TextDisabled("Output");
 
-                    SliderFloatWithInput("GI Intensity##rtgi", &rtgiSettings->GiIntensity, 0.0f, 4.0f, "%.2f");
+                    SliderFloatWithInput("GI Intensity##rtgi", &rtgiSettings->GiIntensity, 0.0f, 16.0f, "%.2f");
                     QtUi::SetItemTooltip("Multiplier applied to the RTGI output before compositing. 1.0 = physically correct.");
                     SliderFloatWithInput("Color Leak Intensity##rtgi", &rtgiSettings->ColorLeakIntensity, 0.0f, 16.0f, "%.2f");
                     QtUi::SetItemTooltip("Boosts bounced material tinting for stronger color bleed. 1.0 = physically based transport.");
@@ -2800,7 +4006,7 @@ void RenderEditorMainMenu(
                     {
                         SliderFloatWithInput("Roughness Threshold##rtgi", &rtgiSettings->SpecularRoughnessThreshold, 0.0f, 1.0f, "%.2f");
                         QtUi::SetItemTooltip("Surfaces with perceptual roughness above this value skip the specular ray.");
-                        SliderFloatWithInput("Specular Intensity##rtgi", &rtgiSettings->SpecularIntensity, 0.0f, 4.0f, "%.2f");
+                        SliderFloatWithInput("Specular Intensity##rtgi", &rtgiSettings->SpecularIntensity, 0.0f, 16.0f, "%.2f");
                         QtUi::SetItemTooltip("Intensity multiplier for ray-traced specular reflections.");
                     }
 
@@ -2823,8 +4029,9 @@ void RenderEditorMainMenu(
                         "Diag: Flat White",
                         "Diag: Deterministic Probe",
                         "Diag: NEE Sun Visibility",
+                        "Diag: NEE Shadow Map Coverage",
                     };
-                    const int debugModeValues[] = { 0, 1, 2, 3, 10, 11, 12, 13, 14, 15 };
+                    const int debugModeValues[] = { 0, 1, 2, 3, 10, 11, 12, 13, 14, 15, 16 };
 
                     int debugModeIndex = 0;
                     for (int i = 0; i < static_cast<int>(std::size(debugModeValues)); ++i)
@@ -2858,7 +4065,10 @@ void RenderEditorMainMenu(
                         "shadow map at each visible surface: green both lit, RED shadow\n"
                         "map lit but the ray is blocked (a ray-tracing-only blocker), blue\n"
                         "ray reaches the sun but the shadow map is dark, grey both\n"
-                        "shadowed, black faces away from the sun.");
+                        "shadowed, black faces away from the sun.\n\n"
+                        "NEE Shadow Map Coverage fires one ray along the normal and shows\n"
+                        "who answers sun visibility at its hit: green / red the shadow map\n"
+                        "(lit / shadowed), BLUE no page fine enough, so a ray is traced.");
                 }
             }
         }
@@ -2968,8 +4178,15 @@ void RenderEditorMainMenu(
                     SliderIntWithInput("Grid Y##probe", &probeSettings->GridY, 1, 64);
                     SliderIntWithInput("Grid Z##probe", &probeSettings->GridZ, 1, 64);
                     SliderFloatWithInput("Spacing (m)##probe", &probeSettings->Spacing, 0.5f, 10.0f, "%.2f");
+                    QtUi::SetItemTooltip("Distance between probes in the finest cascade. Each further cascade doubles it.");
                     QtUi::Checkbox("Follow Camera##probe", &probeSettings->FollowCamera);
                     QtUi::SetItemTooltip("Snaps the probe grid origin to the camera position each frame.");
+                    if (probeSettings->FollowCamera)
+                    {
+                        SliderIntWithInput("Cascades##probe", &probeSettings->CascadeCount, 1, kMaxRadianceProbeCascades);
+                        QtUi::SetItemTooltip("Nested grids around the camera, each with twice the spacing and reach of the one inside it. "
+                                             "GI blends from one into the next instead of ending at the edge of a single grid.");
+                    }
 
                     if (!probeSettings->FollowCamera)
                     {
@@ -2984,6 +4201,16 @@ void RenderEditorMainMenu(
                     SliderIntWithInput("Rays Per Probe##probe", &probeSettings->RaysPerProbe, 16, 512);
                     SliderFloatWithInput("Update Blend##probe", &probeSettings->UpdateBlend, 0.01f, 1.0f, "%.2f");
                     QtUi::SetItemTooltip("Blend factor between old and new probe SH each frame. Lower = more temporal accumulation.");
+
+                    QtUi::Separator();
+                    QtUi::TextDisabled("Output");
+
+                    SliderFloatWithInput("GI Intensity##probe", &probeSettings->GiIntensity, 0.0f, 16.0f, "%.2f");
+                    QtUi::SetItemTooltip("Multiplier applied to the probe diffuse GI before compositing. 1.0 = physically correct.");
+                    QtUi::Checkbox("Specular Reflections##probe", &probeSettings->SpecularEnabled);
+                    QtUi::SetItemTooltip("Ray-traced specular reflections alongside the probe GI. Uses the RTGI specular pass and its roughness threshold.");
+                    if (probeSettings->SpecularEnabled)
+                        SliderFloatWithInput("Specular Intensity##probe", &probeSettings->SpecularIntensity, 0.0f, 16.0f, "%.2f");
 
                     QtUi::Separator();
                     QtUi::TextDisabled("Debug");
@@ -3377,6 +4604,12 @@ void RenderEditorMainMenu(
                     QtUi::Separator();
                     QtUi::TextDisabled("Exposure");
 
+                    if (timeOfDaySettings != nullptr && timeOfDaySettings->Enabled && timeOfDaySettings->ControlExposure)
+                    {
+                        QtUi::TextWrapped("Time of Day is controlling the EV100 (Windows > Time of Day). "
+                                          "The mode and EV100 below are ignored while it does; the trim still applies.");
+                    }
+
                     {
                         const char* exposureModes[] = { "Manual", "Auto (Histogram)" };
                         int exposureMode = static_cast<int>(agxSettings->ExposureMode);
@@ -3703,13 +4936,172 @@ void RenderEditorMainMenu(
 
                 if (bloomSettings->Enabled)
                 {
+                    const char* bloomMethods[] = { "Mip Chain", "FFT Convolution" };
+                    int bloomMethod = static_cast<int>(bloomSettings->Method);
+                    if (QtUi::Combo("Method##bloom", &bloomMethod, bloomMethods, static_cast<int>(std::size(bloomMethods))))
+                        bloomSettings->Method = static_cast<BloomMethod>(bloomMethod);
+                    QtUi::SetItemTooltip("Mip Chain: the cheap downsample/upsample glow. FFT Convolution: every bright pixel is convolved with a full-frame glare kernel (sharp core, power-law halo, aperture diffraction spikes) in the frequency domain; costs more, looks like a real lens.");
+
                     QtUi::Separator();
                     SliderFloatWithInput("Intensity##bloom",  &bloomSettings->Intensity,  0.0f,  1.0f,  "%.3f", 0.005f, 0.05f);
                     SliderFloatWithInput("Threshold##bloom",  &bloomSettings->Threshold,  0.0f,  10.0f, "%.2f");
                     SliderFloatWithInput("Knee##bloom",       &bloomSettings->Knee,       0.0f,  2.0f,  "%.2f");
-                    SliderFloatWithInput("Radius##bloom",     &bloomSettings->Radius,     0.1f,  4.0f,  "%.2f");
-                    SliderIntWithInput("Mip Levels##bloom",   &bloomSettings->MipLevels,  2,     8);
+
+                    if (bloomSettings->Method == BloomMethod::MipChain)
+                    {
+                        SliderFloatWithInput("Radius##bloom",     &bloomSettings->Radius,     0.1f,  4.0f,  "%.2f");
+                        SliderIntWithInput("Mip Levels##bloom",   &bloomSettings->MipLevels,  2,     8);
+                    }
+                    else
+                    {
+                        const char* fftSizes[] = { "256", "512", "1024" };
+                        int fftSizeIndex = bloomSettings->FftResolution <= 256 ? 0 : (bloomSettings->FftResolution <= 512 ? 1 : 2);
+                        if (QtUi::Combo("FFT Resolution##bloom", &fftSizeIndex, fftSizes, static_cast<int>(std::size(fftSizes))))
+                            bloomSettings->FftResolution = 256 << fftSizeIndex;
+                        QtUi::SetItemTooltip("Side of the FFT grid. The frame is convolved at half of it (the rest is padding), so 512 blooms a 256-pixel-wide copy. Higher keeps small highlights sharper but costs about 4x per step.");
+                        SliderFloatWithInput("Kernel Size##bloom", &bloomSettings->FftKernelSize, 0.05f, 1.0f, "%.2f", 0.01f, 0.1f);
+                        QtUi::SetItemTooltip("How far the glare reaches, as a fraction of the frame width.");
+                        SliderFloatWithInput("Halo Strength##bloom", &bloomSettings->FftHaloStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+                        QtUi::SetItemTooltip("Share of the glare's energy in the wide halo; the rest stays in the sharp core.");
+                        SliderFloatWithInput("Halo Falloff##bloom", &bloomSettings->FftHaloFalloff, 0.5f, 6.0f, "%.2f", 0.05f, 0.25f);
+                        QtUi::SetItemTooltip("Power-law exponent of the halo. Higher = tighter.");
+                        SliderFloatWithInput("Streak Strength##bloom", &bloomSettings->FftStreakStrength, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+                        QtUi::SetItemTooltip("Aperture diffraction spikes baked into the kernel.");
+                        SliderIntWithInput("Aperture Blades##bloom", &bloomSettings->FftApertureBlades, 3, 16);
+                        QtUi::SetItemTooltip("An even blade count gives that many spikes, an odd one twice as many.");
+                        SliderFloatWithInput("Aperture Rotation##bloom", &bloomSettings->FftApertureRotation, 0.0f, 180.0f, "%.1f deg", 0.5f, 5.0f);
+                        SliderFloatWithInput("Chromatic Spread##bloom", &bloomSettings->FftChromaticSpread, 0.0f, 2.0f, "%.2f", 0.01f, 0.1f);
+                        QtUi::SetItemTooltip("Red glare reaches further than blue, as it does through a real lens.");
+                    }
                 }
+            }
+        }
+
+        if (lensFlareSettings != nullptr)
+        {
+            const LensFlareSettings defaultLensFlareSettings{};
+            if (QtUi::CollapsingHeader("Lens Flares", QtUiTreeNodeFlags_DefaultOpen))
+            {
+                LensFlareSettings& flare = *lensFlareSettings;
+                if (QtUi::Button("Revert All##lensflare"))
+                    flare = defaultLensFlareSettings;
+
+                QtUi::Checkbox("Enable Lens Flares", &flare.Enabled);
+                QtUi::SetItemTooltip("Physically based ghosts, ray traced every frame through a real lens prescription (Data/LensFlares/Lenses), plus an aperture-diffraction starburst, for the sun and the brightest visible level lights.");
+
+                if (flare.Enabled)
+                {
+                    if (QtUi::BeginCombo("Lens##lensflare", flare.Lens.c_str()))
+                    {
+                        for (const std::string& lensName : LensFlareOptics::ListLenses())
+                        {
+                            if (QtUi::Selectable(lensName.c_str(), lensName == flare.Lens))
+                                flare.Lens = lensName;
+                        }
+                        QtUi::EndCombo();
+                    }
+                    if (lensFlareRenderer != nullptr)
+                    {
+                        if (const char* lensError = lensFlareRenderer->GetLensError())
+                            QtUi::TextWrapped("%s", lensError);
+                        else if (lensFlareRenderer->IsInitialized())
+                            QtUi::TextDisabled("%d ghosts per light, %d light(s) flaring",
+                                lensFlareRenderer->GetGhostCount(), lensFlareRenderer->GetActiveLightCount());
+                        else
+                            QtUi::TextWrapped("Lens flares failed to start: %s",
+                                lensFlareRenderer->GetLastErrorMessage() ? lensFlareRenderer->GetLastErrorMessage() : "unknown error");
+                    }
+
+                    QtUi::Separator();
+                    SliderFloatWithInput("Intensity##lensflare", &flare.Intensity, 0.0f, 10.0f, "%.2f", 0.01f, 0.1f);
+                    QtUi::SetItemTooltip("Scales ghosts and starbursts together.");
+                    SliderFloatWithInput("Ghost Intensity##lensflare", &flare.GhostIntensity, 0.0f, 2000.0f, "%.0f", 1.0f, 25.0f);
+                    QtUi::SetItemTooltip("1 is the energy a real multi-coated lens reflects into its ghosts, which is very faint; games usually exaggerate it.");
+                    SliderFloatWithInput("F-Number##lensflare", &flare.FNumber, 0.0f, 32.0f, "%.1f", 0.1f, 1.0f);
+                    QtUi::SetItemTooltip("0 uses the lens file's own f-number. Stopping down makes the ghosts smaller and more clearly iris-shaped. The nikon-zoom lenses pass almost no light off axis at their stock f/22: open them up to f/8 or wider.");
+                    SliderIntWithInput("Aperture Blades##lensflare", &flare.ApertureBlades, 3, 16);
+                    SliderFloatWithInput("Aperture Rotation##lensflare", &flare.ApertureRotation, 0.0f, 180.0f, "%.1f deg", 0.5f, 5.0f);
+                    SliderFloatWithInput("Aperture Roundness##lensflare", &flare.ApertureRoundness, 0.0f, 1.0f, "%.2f", 0.01f, 0.1f);
+                    SliderIntWithInput("Max Ghosts##lensflare", &flare.MaxGhosts, 0, 256);
+                    QtUi::SetItemTooltip("The brightest ghosts of the lens are drawn, ranked once when the lens loads. Zoom lenses have hundreds.");
+                    SliderIntWithInput("Ray Grid##lensflare", &flare.RayGridSize, 8, 64);
+                    QtUi::SetItemTooltip("Rays per side of each ghost's grid. Higher resolves sharper caustics and costs quadratically.");
+                    SliderIntWithInput("Wavelengths##lensflare", &flare.Wavelengths, 1, 6);
+                    QtUi::SetItemTooltip("Wavelengths traced per ghost. 1 is monochrome; 3 and up give the coloured fringes from dispersion.");
+
+                    QtUi::Separator();
+                    QtUi::TextDisabled("Starburst");
+                    SliderFloatWithInput("Starburst Intensity##lensflare", &flare.StarburstIntensity, 0.0f, 10.0f, "%.2f", 0.01f, 0.1f);
+                    SliderFloatWithInput("Starburst Size##lensflare", &flare.StarburstSize, 0.02f, 1.5f, "%.2f", 0.01f, 0.05f);
+
+                    QtUi::Separator();
+                    QtUi::TextDisabled("Light Sources");
+                    QtUi::Checkbox("Sun##lensflare", &flare.SunFlares);
+                    QtUi::Checkbox("Level Lights##lensflare", &flare.LocalLightFlares);
+                    QtUi::SetItemTooltip("Point, spot and rect lights placed in the level, and particle lights.");
+                    SliderIntWithInput("Max Lights##lensflare", &flare.MaxLights, 1, 8);
+                    QtUi::SetItemTooltip("Most lights flaring at once, the sun included. The brightest visible ones win.");
+                    SliderFloatWithInput("Light Threshold##lensflare", &flare.LocalLightThreshold, 0.0f, 1.0f, "%.4f", 0.0005f, 0.01f);
+                    QtUi::SetItemTooltip("A level light flares only when the light it throws on the camera is at least this bright (the noon sun is about 1).");
+                    SliderFloatWithInput("Occlusion Tolerance##lensflare", &flare.OcclusionDepthTolerance, 0.0f, 2.0f, "%.2f m", 0.01f, 0.1f);
+                    QtUi::SetItemTooltip("A light this far behind the surface in front of it still counts as visible, so a bulb inside its own lamp mesh still flares.");
+                    QtUi::Checkbox("Clouds Dim Sun Flare##lensflare", &flare.SunCloudOcclusion);
+                    QtUi::SetItemTooltip("Dims the sun's flare when its disc is darker than expected - behind clouds or in fog.");
+                }
+            }
+        }
+
+        if (virtualShadowMapSettings != nullptr)
+        {
+            if (QtUi::CollapsingHeader("Virtual Shadow Maps", QtUiTreeNodeFlags_DefaultOpen))
+            {
+                VirtualShadowMapSettings& vsm = *virtualShadowMapSettings;
+                if (QtUi::Button("Revert All##vsm"))
+                    vsm = defaultVirtualShadowMapSettings;
+
+                QtUi::Checkbox("Enabled##vsm", &vsm.Enabled);
+                QtUi::SetItemTooltip("Shadow the sun with a virtual shadow map: a camera-centred clipmap of 16K pages, rendered only where the screen needs them and cached between frames. Off falls back to the single 2K sun shadow map and the point-light cubemaps.");
+                QtUi::Checkbox("Local Lights##vsm", &vsm.LocalLights);
+                QtUi::SetItemTooltip("Shadow point, spot and rect lights through the map as well: a paged, cached 4096x4096 cube per light (up to 16), instead of the cubemap atlas (4 lights).");
+                if (virtualShadowMapStatus != nullptr && virtualShadowMapStatus[0] != '\0')
+                    QtUi::TextWrapped("%s", virtualShadowMapStatus);
+
+                SliderFloatWithInput("Resolution Bias##vsm", &vsm.ResolutionLodBias, -2.0f, 3.0f, "%.2f", 0.05f, 0.25f);
+                QtUi::SetItemTooltip("Shifts the sun clipmap level each pixel reads. +1 halves the shadow resolution and quarters the pages it needs; -1 doubles it.");
+
+                SliderFloatWithInput("Light Resolution Bias##vsm", &vsm.LocalResolutionBias, -2.0f, 3.0f, "%.2f", 0.05f, 0.25f);
+                QtUi::SetItemTooltip("The same for the local lights' cube mips.");
+
+                SliderFloatWithInput("First Level Texel (m)##vsm", &vsm.FirstLevelTexelSize, 0.0005f, 0.05f, "%.4f", 0.0005f, 0.001f);
+                QtUi::SetItemTooltip("Texel size of the finest clipmap level, in metres. Each further level doubles it. Changing it drops the cache.");
+
+                SliderIntWithInput("Levels##vsm", &vsm.LevelCount, 1, 16);
+                QtUi::SetItemTooltip("Clipmap levels in use. Beyond the last one, surfaces receive no sun shadow.");
+
+                SliderIntWithInput("Pool Pages##vsm", &vsm.PhysicalPages, 256, 4096);
+                QtUi::SetItemTooltip("Physical 128x128 pages backing the map (2048 = 128 MB). Changing it rebuilds the pool.");
+
+                SliderIntWithInput("Pages Per Frame##vsm", &vsm.MaxPagesPerFrame, 8, 240);
+                QtUi::SetItemTooltip("Most pages rendered in one frame. Pages over the budget wait a frame, with coarser levels standing in.");
+
+                SliderFloatWithInput("Normal Offset##vsm", &vsm.NormalOffset, 0.0f, 4.0f, "%.2f", 0.05f, 0.25f);
+                QtUi::SetItemTooltip("Receiver offset along the normal, in texels of the level being read. Fights acne on curved surfaces.");
+
+                SliderFloatWithInput("Depth Bias##vsm", &vsm.ConstantBias, 0.0f, 8.0f, "%.2f", 0.05f, 0.25f);
+                QtUi::SetItemTooltip("Receiver depth bias, in texels of the level being read.");
+
+                SliderFloatWithInput("Slope Scaled Bias##vsm", &vsm.SlopeScaledDepthBias, 0.0f, 8.0f, "%.2f", 0.05f, 0.25f);
+                QtUi::SetItemTooltip("Rasterizer slope bias for the page render. Changing it drops the cache.");
+
+                SliderFloatWithInput("Rotation Threshold (deg)##vsm", &vsm.LightRotationThreshold, 0.0f, 2.0f, "%.3f", 0.01f, 0.05f);
+                QtUi::SetItemTooltip("A sun rotation smaller than this keeps the cached pages. Every step past it re-renders every page, spread over frames by the page budget.");
+
+                QtUi::Checkbox("Disable Caching##vsm", &vsm.DisableCaching);
+                QtUi::SetItemTooltip("Re-render every page in use every frame, for comparison with the cache.");
+
+                const char* vsmDebugModes[] = { "Lighting", "Clipmap Level", "Sun Visibility" };
+                QtUi::Combo("Debug View##vsm", &vsm.DebugView, vsmDebugModes, std::size(vsmDebugModes));
+                QtUi::SetItemTooltip("Clipmap Level tints each pixel by the level that shadows it (magenta = no page resident yet).");
             }
         }
 
@@ -3872,9 +5264,10 @@ void RenderEditorMainMenu(
                     drawTextureField("Metallic", MaterialTextureSlot::Metallic);
                     drawTextureField("Roughness", MaterialTextureSlot::Roughness);
                     drawTextureField("Metallic Roughness", MaterialTextureSlot::MetallicRoughness);
+                    drawTextureField("ORM (Occlusion R, Roughness G, Metallic B)", MaterialTextureSlot::OcclusionRoughnessMetallic);
                     drawTextureField("Ambient Occlusion", MaterialTextureSlot::AmbientOcclusion);
                     drawTextureField("Emissive", MaterialTextureSlot::Emissive);
-                    drawTextureField("Height", MaterialTextureSlot::Height);
+                    drawTextureField("Height / Displacement", MaterialTextureSlot::Height);
                     drawTextureField("Opacity", MaterialTextureSlot::Opacity);
 
                     QtUi::Separator();
@@ -4109,9 +5502,10 @@ void RenderEditorMainMenu(
                         drawSubTexField("Metallic", MaterialTextureSlot::Metallic);
                         drawSubTexField("Roughness", MaterialTextureSlot::Roughness);
                         drawSubTexField("Metallic Roughness", MaterialTextureSlot::MetallicRoughness);
+                        drawSubTexField("ORM (Occlusion R, Roughness G, Metallic B)", MaterialTextureSlot::OcclusionRoughnessMetallic);
                         drawSubTexField("Ambient Occlusion", MaterialTextureSlot::AmbientOcclusion);
                         drawSubTexField("Emissive", MaterialTextureSlot::Emissive);
-                        drawSubTexField("Height", MaterialTextureSlot::Height);
+                        drawSubTexField("Height / Displacement", MaterialTextureSlot::Height);
                         drawSubTexField("Opacity", MaterialTextureSlot::Opacity);
 
                         QtUi::PopID();
@@ -4478,8 +5872,13 @@ void RenderEditorMainMenu(
                 for (const AssetBrowserItem& item : items)
                 {
                     const bool itemIsVideo = !item.IsDirectory && IsVideoAssetPath(item.RelativePath);
-                    const char* itemTag = item.IsDirectory ? "[Folder] " : (itemIsVideo ? "[Video] " : "[File] ");
-                    const std::string itemLabel = std::string(itemTag) + item.Name;
+                    const std::string itemExtension = item.IsDirectory ? std::string{}
+                        : std::filesystem::path(item.RelativePath).extension().string();
+                    const bool itemIsParticleEffect = _stricmp(itemExtension.c_str(), ".particle") == 0;
+                    // The icon tells the asset type; the ## suffix keeps each row's
+                    // identity even if two entries would ever show the same name.
+                    const std::string itemLabel = item.Name + "##" + item.RelativePath;
+                    QtUi::SetNextItemIcon(GetAssetBrowserIcon(item));
                     if (QtUi::Selectable(itemLabel.c_str(), gSelectedAssetRelativePath == item.RelativePath))
                     {
                         gSelectedAssetRelativePath = item.RelativePath;
@@ -4494,6 +5893,10 @@ void RenderEditorMainMenu(
                         else if (itemIsVideo)
                         {
                             OpenVideoInPlayer(item.RelativePath);
+                        }
+                        else if (itemIsParticleEffect && editor != nullptr)
+                        {
+                            static_cast<Editor*>(editor)->OpenParticleEditor(item.RelativePath);
                         }
                     }
 
@@ -4511,11 +5914,25 @@ void RenderEditorMainMenu(
                             OpenVideoInPlayer(item.RelativePath);
                         }
 
+                        if (itemIsParticleEffect && editor != nullptr && QtUi::MenuItem("Edit Particle Effect"))
+                        {
+                            static_cast<Editor*>(editor)->OpenParticleEditor(item.RelativePath);
+                        }
+
                         if (item.IsDirectory && QtUi::MenuItem("Import Here..."))
                         {
                             SelectFolder(item.RelativePath);
                             PromptForAndImportAssets(windowHandle, item.RelativePath);
                             RefreshAssetBrowserState();
+                        }
+
+                        // Unreal assets dropped into Data convert in place (also offered by
+                        // the "New files detected" notification when they arrive).
+                        if (!item.IsDirectory && _stricmp(itemExtension.c_str(), ".uasset") == 0 &&
+                            QtUi::MenuItem(gAssetImport.Running.load() ? "Import (busy)" : "Import Unreal Asset"))
+                        {
+                            const std::filesystem::path source = GetAbsoluteDataPath(item.RelativePath);
+                            StartAssetImport({ { source.string(), NormalizeRelativeDataPath(std::filesystem::path(item.RelativePath).parent_path()) } });
                         }
 
                         if (QtUi::MenuItem("Rename"))
@@ -4582,8 +5999,74 @@ void RenderEditorMainMenu(
     {
         QtUi::Begin("About Ptero Editor", &gShowAboutWindow, QtUiWindowFlags_AlwaysAutoResize);
         QtUi::TextUnformatted("Ptero Editor");
-        QtUi::Separator();
-        QtUi::TextUnformatted("Interface: Qt Widgets | Rendering: DirectX 12");
+        QtUi::TextDisabled("Interface: Qt Widgets | Rendering: DirectX 12");
+        QtUi::TextUnformatted("Copyright \xC2\xA9 2026 Pterosoft Studio | All rights reserved");
+
+        // Everything under Source/SDKs that the build or the shaders actually use, plus the
+        // code ported or vendored from elsewhere. Folders nothing references any more
+        // (crest, ImGui, ImGuizmo, ISPCTextureCompressor, RTXGI, UnrealClouds) are left out.
+        // Keep in step with SDKs.md.
+        struct ThirdPartyEntry
+        {
+            const char* Name;
+            const char* Version;
+            const char* Author;
+            const char* UsedFor;
+        };
+        static const ThirdPartyEntry kThirdParty[] = {
+            { "Qt",                       "6.11.2",       "The Qt Company",        "Editor interface" },
+            { "QtNodes (nodeeditor)",     "",             "Dmitry Pinaev",         "Node Graph editor" },
+            { "RmlUi",                    "",             "The RmlUi Team",        "In-game UI" },
+            { "Lucide icons",             "0.469.0",      "Lucide Contributors",   "Editor icons" },
+            { "DirectX Shader Compiler",  "",             "Microsoft",             "Runtime HLSL compilation" },
+            { "DirectXTex",               "211",          "Microsoft",             "Texture import and DDS loading" },
+            { "NVIDIA NRD / NRI",         "4.17.3 / 179", "NVIDIA",                "Ray-traced GI and AO denoising" },
+            { "NVIDIA Streamline",        "2.11.1",       "NVIDIA",                "DLSS Super Resolution" },
+            { "NVIDIA RTXDI",             "",             "NVIDIA",                "Many-light sampling (shaders)" },
+            { "AMD FidelityFX SDK",       "2.3.0",        "AMD",                   "FSR upscaling and frame generation" },
+            { "AMD FidelityFX SSSR",      "1.3",          "AMD",                   "Screen-space reflections" },
+            { "Intel XeGTAO",             "1.02",         "Intel",                 "Ambient occlusion" },
+            { "SMAA",                     "",             "Jimenez et al.",        "Anti-aliasing" },
+            { "Separable SSS",            "1.0",          "Jorge Jimenez",         "Subsurface scattering" },
+            { "Hosek-Wilkie sky model",   "",             "Hosek and Wilkie",      "Analytic sky" },
+            { "water-shader",             "",             "tuxalin",               "Water shading" },
+            { "FMOD Studio API",          "2.03.13",      "Firelight Technologies", "Audio" },
+            { "Resonance Audio",          "",             "Google",                "Spatial audio (FMOD plugin)" },
+            { "libvpx",                   "1.17.0",       "The WebM Project",      "VP8/VP9 video decoding" },
+            { "libwebm",                  "1.0.0.32",     "The WebM Project",      "WebM container parsing" },
+            { "Opus",                     "1.5.2",        "Xiph.Org Foundation",   "Video soundtrack decoding" },
+            { "Autodesk FBX SDK",         "2020.3.9",     "Autodesk",              "FBX import" },
+            { "meshoptimizer",            "1.1",          "Arseny Kapoulkine",     "LOD generation and mesh optimisation" },
+            { "CoACD",                    "",             "Wei, Liu et al.",       "Collision generation" },
+            { "LZ4",                      "1.10.0",       "Yann Collet",           "Game package compression" },
+            { "libsodium",                "1.0.22",       "Frank Denis",           "Game package encryption" },
+            { "JSON for Modern C++",      "",             "Niels Lohmann",         "Levels and asset files" },
+        };
+
+        QtUi::SeparatorText("Third-party software");
+        QtUi::TextWrapped("Ptero Editor is built with the following software. Each remains the property of "
+            "its authors and is used under its own licence, which ships with it in Source/SDKs.");
+        if (QtUi::BeginTable("AboutThirdParty", 4, QtUiTableFlags_Borders | QtUiTableFlags_RowBg | QtUiTableFlags_SizingStretchProp))
+        {
+            QtUi::TableSetupColumn("Component");
+            QtUi::TableSetupColumn("Version");
+            QtUi::TableSetupColumn("By");
+            QtUi::TableSetupColumn("Used for");
+            QtUi::TableHeadersRow();
+            for (const ThirdPartyEntry& entry : kThirdParty)
+            {
+                QtUi::TableNextRow();
+                QtUi::TableSetColumnIndex(0);
+                QtUi::TextUnformatted(entry.Name);
+                QtUi::TableSetColumnIndex(1);
+                QtUi::TextDisabled("%s", entry.Version[0] != '\0' ? entry.Version : "-");
+                QtUi::TableSetColumnIndex(2);
+                QtUi::TextDisabled("%s", entry.Author);
+                QtUi::TableSetColumnIndex(3);
+                QtUi::TextUnformatted(entry.UsedFor);
+            }
+            QtUi::EndTable();
+        }
         QtUi::End();
     }
 
@@ -4717,4 +6200,5 @@ void RenderEditorMainMenu(
 
     DrawBuildGameWindow();
     DrawExtractPackageWindow();
+    DrawGameSettingsWindow(editorInstance != nullptr ? editorInstance->GetCurrentSceneFilePath() : std::string());
 }

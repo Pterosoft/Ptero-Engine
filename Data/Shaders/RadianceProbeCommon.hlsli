@@ -15,7 +15,9 @@
 #ifndef PTERO_RADIANCE_PROBE_COMMON_HLSLI
 #define PTERO_RADIANCE_PROBE_COMMON_HLSLI
 
-// L1 SH, 9 coefficients x RGB, packed into 7 float4s.
+// L2 SH, 9 coefficients x RGB, packed into 7 float4s. The 28th float,
+// c[6].w, is the probe's validity: 1 in open space, 0 once it has been found
+// inside geometry. See RadianceProbes_Update.hlsl.
 struct ProbeSH
 {
     float4 c[7];
@@ -55,6 +57,36 @@ float3 PteroEvaluateProbeSH(ProbeSH sh, float3 dir)
     return max(result, 0.0f);
 }
 
+// Irradiance over pi: the outgoing radiance of a white Lambertian surface, and
+// the quantity the RTGI accumulation buffer holds. Deferred shading multiplies
+// either by albedo, so both GI modes must hand it this and not raw irradiance -
+// the probes used to be pi times brighter than RTGI for the same lighting.
+float3 PteroEvaluateProbeDiffuse(ProbeSH sh, float3 normal)
+{
+    return PteroEvaluateProbeSH(sh, normal) * (1.0f / 3.14159265f);
+}
+
+// How far a probe can be trusted, in [0, 1]. Blended over frames, so it ramps
+// rather than switching.
+float PteroProbeValidity(ProbeSH sh)
+{
+    return saturate(sh.c[6].w);
+}
+
+// Weight for a probe seen from a surface: probes behind the surface are
+// almost certainly on the other side of it, in a different room, so they
+// fade out. The wrap keeps a little weight so a surface ringed by probes on
+// its back side still gets an answer (DDGI's backface term).
+float PteroProbeSurfaceWeight(float3 probePos, float3 surfacePos, float3 normal)
+{
+    const float3 toProbe = probePos - surfacePos;
+    const float lengthSq = dot(toProbe, toProbe);
+    if (lengthSq < 1e-8f)
+        return 1.0f;
+    const float wrap = (dot(toProbe * rsqrt(lengthSq), normal) + 1.0f) * 0.5f;
+    return wrap * wrap + 0.2f;
+}
+
 // Average radiance over the sphere, for a medium rather than a surface.
 //
 // A froxel has no normal to take a cosine against, so only the DC term is
@@ -67,21 +99,72 @@ float3 PteroEvaluateProbeAmbient(ProbeSH sh)
     return max(sh.c[0].xyz * (PTERO_PROBE_DC_BASIS / 3.14159265f), 0.0f);
 }
 
-// The eight probes surrounding a world position, with trilinear weights.
-// Weights always sum to 1, and positions outside the grid clamp to its border
-// rather than falling dark.
-struct PteroProbeGridTap
+// ─── The probe field ────────────────────────────────────────────────────────
+// Nested grids (cascades) of the same shape around the camera, each twice the
+// spacing of the one inside it. The SH buffer holds them back to back, cascade
+// 0 first. Mirrors RadianceProbeFieldGpu in RadianceProbeSettings.h.
+#define PTERO_PROBE_MAX_CASCADES 4
+
+struct PteroProbeField
 {
-    uint  Index[8];
-    float Weight[8];
+    uint3  GridSize;
+    uint   CascadeCount;           // 0 = no field
+    float4 Cascades[PTERO_PROBE_MAX_CASCADES]; // xyz = origin (min corner), w = spacing
 };
 
-PteroProbeGridTap PteroProbeGridLookup(uint3 gridSize, float3 origin, float spacing, float3 worldPos)
+bool PteroProbeFieldValid(PteroProbeField field)
+{
+    return field.CascadeCount > 0
+        && field.GridSize.x > 0 && field.GridSize.y > 0 && field.GridSize.z > 0
+        && field.Cascades[0].w > 0.0f;
+}
+
+// The eight probes of one cascade surrounding a world position, with
+// trilinear weights. Weights always sum to 1, and positions outside the grid
+// clamp to its border.
+//
+// EdgeFade says how far the caller should trust the answer: 1 well inside the
+// cascade, falling to 0 half a cell from its outer face and staying 0 beyond.
+// The clamp alone is not an answer out there. The grid follows the camera, so
+// its border is open space most of the time, and a building beyond it was lit
+// by probes standing in the sand outside - the sky-blue glow that filled an
+// interior once the camera backed far enough away. The border slab is also
+// where scrolling brings in probes with no history.
+//
+// The fade runs over a quarter of the grid, not a cell: this is where one
+// cascade hands over to the next, and a one-cell handover drew a hard line
+// across a wall wherever the two disagreed.
+struct PteroProbeGridTap
+{
+    uint   Index[8];
+    float  Weight[8];
+    float3 Position[8];
+    float  EdgeFade;
+};
+
+PteroProbeGridTap PteroProbeGridLookup(PteroProbeField field, uint cascade, float3 worldPos)
 {
     PteroProbeGridTap tap;
 
+    const uint3 gridSize = field.GridSize;
+    const float3 origin = field.Cascades[cascade].xyz;
+    const float spacing = max(field.Cascades[cascade].w, 1e-4f);
+    const uint cascadeBase = cascade * gridSize.x * gridSize.y * gridSize.z;
+
     float3 maxCoord = float3(gridSize) - 1.0f.xxx;
-    float3 coordF = clamp((worldPos - origin) / max(spacing, 1e-4f), 0.0f.xxx, maxCoord);
+    const float3 rawCoord = (worldPos - origin) / spacing;
+
+    // Cells between the point and the nearest outer face, over the width of
+    // the handover band. A one-probe-thick axis has no inside to fade toward,
+    // so it does not count.
+    const float3 fadeCells = max(maxCoord * 0.25f, 1.0f.xxx);
+    float3 edgeFade = saturate((min(rawCoord, maxCoord - rawCoord) - 0.5f) / fadeCells);
+    if (gridSize.x <= 1u) edgeFade.x = 1.0f;
+    if (gridSize.y <= 1u) edgeFade.y = 1.0f;
+    if (gridSize.z <= 1u) edgeFade.z = 1.0f;
+    tap.EdgeFade = min(edgeFade.x, min(edgeFade.y, edgeFade.z));
+
+    float3 coordF = clamp(rawCoord, 0.0f.xxx, maxCoord);
     float3 baseF = floor(coordF);
     float3 frac = saturate(coordF - baseF);
 
@@ -105,17 +188,30 @@ PteroProbeGridTap PteroProbeGridLookup(uint3 gridSize, float3 origin, float spac
             pick.y ? frac.y : (1.0f - frac.y),
             pick.z ? frac.z : (1.0f - frac.z));
 
-        tap.Index[corner] = coord.x + coord.y * rowStride + coord.z * sliceStride;
+        tap.Index[corner] = cascadeBase + coord.x + coord.y * rowStride + coord.z * sliceStride;
         tap.Weight[corner] = axisWeight.x * axisWeight.y * axisWeight.z;
+        tap.Position[corner] = origin + float3(coord) * spacing;
     }
 
     return tap;
 }
 
-// True when the grid parameters describe a probe field that can be sampled.
-bool PteroProbeGridValid(uint3 gridSize, float spacing)
-{
-    return gridSize.x > 0 && gridSize.y > 0 && gridSize.z > 0 && spacing > 0.0f;
-}
+// Walking the cascades. The finest cascade that reaches a point answers for
+// it in proportion to its EdgeFade; what it leaves is passed outward to the
+// next, and whatever the outermost leaves is no probe light at all. Callers
+// loop:
+//
+//     float remaining = 1;
+//     for (uint c = 0; c < field.CascadeCount && remaining > PTERO_PROBE_CASCADE_EPSILON; ++c)
+//     {
+//         tap = PteroProbeGridLookup(field, c, pos);
+//         if (tap.EdgeFade <= 0) continue;
+//         result += remaining * tap.EdgeFade * <sample tap>;
+//         remaining *= 1 - tap.EdgeFade;
+//     }
+//
+// The sampling itself stays with the caller: resource-typed parameters need
+// SM6 and the deferred lighting pass still compiles as ps_5_0.
+#define PTERO_PROBE_CASCADE_EPSILON 1e-3f
 
 #endif // PTERO_RADIANCE_PROBE_COMMON_HLSLI

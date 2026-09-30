@@ -74,7 +74,10 @@ cbuffer SceneLighting : register(b1)
     float  gPointShadowNormalOffset;
 };
 
-// Shadow constants – same layout as ShadowData in the old MeshEntity.hlsl.
+#include "VirtualShadowMap.hlsli"
+
+// Shadow constants – same layout as ShadowData in the old MeshEntity.hlsl, plus the sun's
+// virtual shadow map, which replaces gShadowMap's single map when gVsm.Enabled.
 cbuffer ShadowData : register(b2)
 {
     float4x4 gLightViewProj;
@@ -83,16 +86,12 @@ cbuffer ShadowData : register(b2)
     float    gPointShadowMapSize;
     float    gPointShadowBias;
     float4x4 gPointShadowFaceViewProj[24];
+    PteroVsmConstants gVsm;
 };
 
 cbuffer ProbeConstants : register(b3)
 {
-    uint   gProbeGridX;
-    uint   gProbeGridY;
-    uint   gProbeGridZ;
-    float  gProbeSpacing;
-    float3 gProbeOrigin;
-    float  _ProbePad0;
+    PteroProbeField gProbeField;
 };
 
 
@@ -103,13 +102,14 @@ Texture2D    gGBufferAlbedo   : register(t0); // RT0: albedo (RGB) + unused (A)
 Texture2D    gGBufferNormal   : register(t1); // RT1: oct normal (RG) + copied depth (B)
 Texture2D    gGBufferMaterial : register(t2); // RT2: roughness/metallic/AO
 Texture2D    gDepthBuffer     : register(t3); // scene depth, or resolved G-buffer depth when MSAA is active
-Texture2D    gShadowMap       : register(t4); // sun shadow map
+Texture2D    gShadowMap       : register(t4); // sun shadow map, or the virtual shadow map's page pool
 Texture2D    gGiAccumulation  : register(t5); // DXR GI accumulation buffer (RG11B10 HDR)
 Texture2D    gRtaoTexture     : register(t6); // DXR ambient occlusion (R16F)
 Texture3D    gVolumetricFog   : register(t7); // accumulated froxel fog (rgb=scattering, a=transmittance)
 Texture2D    gSpecularReflect : register(t8); // DXR specular reflections (RGBA16F)
 Texture2DArray gPointShadowMaps : register(t9);
 StructuredBuffer<ProbeSH> gRadianceProbes : register(t10);
+StructuredBuffer<uint>   gVsmPageTable    : register(t11); // virtual shadow map pages -> pool tiles
 
 SamplerState             gPointSampler   : register(s0); // point-clamp for G-buffer reads
 SamplerComparisonState   gShadowSampler  : register(s1); // PCF comparison sampler
@@ -257,6 +257,27 @@ float SampleShadowPCF(float3 worldPos)
     return shadow / 9.0f;
 }
 
+// Sun visibility from whichever map is active; 1 = fully lit. usedLevel is the virtual
+// shadow map level that answered, -1 when none did or the single map is in use.
+float SampleSunShadow(float3 worldPos, float3 N, out int usedLevel)
+{
+    usedLevel = -1;
+    // With the virtual map in use t4 is its pool, never the single map; a sun it does
+    // not cover is black (time of day off), so "lit" costs nothing.
+    [branch]
+    if (gVsm.Active != 0u)
+        return gVsm.Enabled != 0u
+            ? PteroVsmVisibility(gVsm, gVsmPageTable, gShadowMap, worldPos, N, gCameraPos, usedLevel)
+            : 1.0f;
+    return SampleShadowPCF(worldPos);
+}
+
+float SampleSunShadow(float3 worldPos, float3 N)
+{
+    int usedLevel;
+    return SampleSunShadow(worldPos, N, usedLevel);
+}
+
 float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
 {
     if (lightIndex < 0 || lightIndex >= MAX_POINT_LIGHTS)
@@ -267,6 +288,12 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
     int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
     if (shadowIndex < 0)
         return 1.0f;
+
+    // Virtual shadow map: the shadow index is the light's slot in it.
+    [branch]
+    if (gVsm.LocalEnabled != 0u)
+        return PteroVsmLocalVisibility(gVsm, gVsmPageTable, gShadowMap, (uint)shadowIndex, worldPos,
+                                       normalize(surfaceNormal), gCameraPos, 1.0f);
 
     float3 toPoint = worldPos - gPointLights[lightIndex].Position;
     float distanceToLight = length(toPoint);
@@ -386,21 +413,58 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
     return lerp(primaryVisibility, secondaryVisibility, seamBlend);
 }
 
-float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
+// One cascade's answer for a surface point, from a tap already looked up.
+float3 SampleRadianceProbeCascade(PteroProbeGridTap tap, float3 worldPos, float3 normal)
 {
-    const uint3 gridSize = uint3(gProbeGridX, gProbeGridY, gProbeGridZ);
-    if (!PteroProbeGridValid(gridSize, gProbeSpacing))
-        return float3(0.0f, 0.0f, 0.0f);
-
-    const PteroProbeGridTap tap = PteroProbeGridLookup(gridSize, gProbeOrigin, gProbeSpacing, worldPos);
-
-    float3 irradiance = float3(0.0f, 0.0f, 0.0f);
+    float3 weighted = float3(0.0f, 0.0f, 0.0f);
+    float3 plain = float3(0.0f, 0.0f, 0.0f);
+    float weightSum = 0.0f;
     [unroll]
     for (uint corner = 0; corner < 8; ++corner)
     {
-        irradiance += tap.Weight[corner] * PteroEvaluateProbeSH(gRadianceProbes[tap.Index[corner]], normal);
+        const ProbeSH sh = gRadianceProbes[tap.Index[corner]];
+        const float3 diffuse = PteroEvaluateProbeDiffuse(sh, normal);
+        // Probes buried in geometry and probes behind the surface drop out;
+        // the rest are renormalised so the result keeps its level.
+        const float w = tap.Weight[corner]
+                      * PteroProbeValidity(sh)
+                      * PteroProbeSurfaceWeight(tap.Position[corner], worldPos, normal);
+        weighted += w * diffuse;
+        weightSum += w;
+        plain += tap.Weight[corner] * diffuse;
     }
-    return irradiance;
+    // Every probe around this point is unusable: better the unweighted blend
+    // than a black hole.
+    return (weightSum > 1e-4f) ? (weighted / weightSum) : plain;
+}
+
+float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
+{
+    if (!PteroProbeFieldValid(gProbeField))
+        return float3(0.0f, 0.0f, 0.0f);
+
+    // Finest cascade first, handing over outward; see RadianceProbeCommon.
+    // Beyond the outermost the sky ambient carries the surface alone.
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    float remaining = 1.0f;
+    [loop]
+    for (uint cascade = 0; cascade < gProbeField.CascadeCount; ++cascade)
+    {
+        // Look up from a point pushed off the surface. At the surface itself
+        // the cell straddles the wall as often as not, and plain trilinear
+        // then pulls in the probes on the far side - light from the sunlit
+        // courtyard showing up on the inside of a shadowed arcade.
+        const float3 samplePos = worldPos + normal * (0.3f * gProbeField.Cascades[cascade].w);
+        const PteroProbeGridTap tap = PteroProbeGridLookup(gProbeField, cascade, samplePos);
+        if (tap.EdgeFade <= 0.0f)
+            continue;
+
+        result += remaining * tap.EdgeFade * SampleRadianceProbeCascade(tap, worldPos, normal);
+        remaining *= 1.0f - tap.EdgeFade;
+        if (remaining <= PTERO_PROBE_CASCADE_EPSILON)
+            break;
+    }
+    return result;
 }
 
 // -------------------------------------------------------------------------
@@ -468,6 +532,10 @@ float3 EvalBRDF(float3 L_in, float3 lightRadiance,
 // Returns -1 where the shadow map has nothing to say.
 float SunTransmissionThickness(float3 worldPos, float3 N)
 {
+    [branch]
+    if (gVsm.Active != 0u)
+        return gVsm.Enabled != 0u ? PteroVsmOccluderDistance(gVsm, gVsmPageTable, gShadowMap, worldPos, N, gCameraPos) : -1.0f;
+
     const float3 shrunkPos = worldPos - 0.005f * N;
     const float4 lightClip = mul(float4(shrunkPos, 1.0f), gLightViewProj);
     const float3 projCoords = lightClip.xyz / lightClip.w;
@@ -491,6 +559,10 @@ float PointTransmissionThickness(int lightIndex, float3 worldPos, float3 N)
     const int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
     if (shadowIndex < 0)
         return -1.0f;
+
+    [branch]
+    if (gVsm.LocalEnabled != 0u)
+        return PteroVsmLocalOccluderDistance(gVsm, gVsmPageTable, gShadowMap, (uint)shadowIndex, worldPos, N, gCameraPos);
 
     const float3 shrunkPos = worldPos - 0.005f * N;
     const float distanceToLight = length(shrunkPos - gPointLights[lightIndex].Position);
@@ -567,7 +639,7 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         float facing = saturate(dot(N, V));
         float fresnel = 0.04f + 0.96f * pow(1.0f - facing, 5.0f);
 
-        float shadowFactor = SampleShadowPCF(worldPos);
+        float shadowFactor = SampleSunShadow(worldPos, N);
         float3 L_sun = normalize(-gSunDirection);
         float sunFacing = saturate(dot(N, L_sun));
         float3 glassTint = lerp(float3(0.96f, 0.99f, 1.0f), saturate(albedo), glassOpacity * 0.18f);
@@ -642,9 +714,38 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     float3 sssTransmitted = float3(0.0f, 0.0f, 0.0f);
 #endif
 
-    float  shadowFactor = SampleShadowPCF(worldPos);
+    int    vsmLevel;
+    float  shadowFactor = SampleSunShadow(worldPos, N, vsmLevel);
+    [branch]
+    if (gVsm.Active != 0u && gVsm.DebugView != 0)
+    {
+        // 1: which clipmap level shadows the pixel (magenta = none resident), darkened
+        //    where it is in shadow. 2: the visibility alone.
+        const float3 debugColour = gVsm.DebugView == 1
+            ? PteroVsmLevelColour(vsmLevel) * (0.25f + 0.75f * shadowFactor)
+            : shadowFactor.xxx;
+        return float4(debugColour, 1.0f);
+    }
     float3 L_sun        = normalize(-gSunDirection);
     float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular, diffuseLit);
+
+    // Vegetation leaves and needles (the sign of the specular channel, SurfaceSpecular.hlsli)
+    // are thin cards, not closed surfaces. Lit one-sided, as below for everything else,
+    // every card facing away from the sun and sky was black, and a canopy is mostly such
+    // cards. Two changes stand in for a two-sided foliage model: sunlight that reaches the
+    // card from behind passes through it (here), and the sky is gathered from both sides
+    // without being tied to the sun's shadow (the ambient term below).
+    const bool foliage = PteroIsFoliageSurface(normalSample.w);
+    if (foliage)
+    {
+        // Fraction of back light a needle lets through, tinted by its own colour the way
+        // light leaving a leaf is. A rough value, not a measured one.
+        static const float kFoliageSunTransmission = 0.4f;
+        const float3 transmitted = albedo * (1.0f - metallic) * gSunColor * shadowFactor
+                                 * saturate(dot(-N, L_sun)) * kFoliageSunTransmission;
+        sunContrib += transmitted;
+        diffuseLit += transmitted;
+    }
 
 #if PTERO_SSS_OUTPUT
     [branch]
@@ -667,6 +768,16 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     // pitch-black even without GI enabled.
     float  skyWeight   = max(N.z, 0.0f);
     float  skyVis      = saturate(shadowFactor * 0.95f + 0.05f); // 5% in full shadow, 100% in sun
+    if (foliage)
+    {
+        // A thin card takes sky light through either face, so a sideways needle sees half
+        // the hemisphere rather than none of it.
+        skyWeight = saturate(0.5f + 0.5f * N.z);
+        // Inside a canopy nearly every needle is shaded from the sun by other needles, yet
+        // most still see open sky between them; the sun's shadow is a poor proxy there and
+        // at 5% left the whole crown black. AO still applies on top.
+        skyVis = lerp(0.5f, 1.0f, shadowFactor);
+    }
     float3 F0          = PteroComputeF0(albedo, metallic, specular);
     float3 ambientDiff = gSkyAmbient * skyWeight * skyVis * (1.0f - metallic) * albedo;
     float3 F_amb       = F0 + (max(float3(1,1,1) * (1.0f - roughness), F0) - F0)
@@ -685,10 +796,14 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     // ---- Point lights ----
     float3 pointSum = float3(0.0f, 0.0f, 0.0f);
     float pointShadowDebug = 1.0f;
-    [unroll]
-    for (int i = 0; i < MAX_POINT_LIGHTS; ++i)
+    // A real loop over the live lights, not an unroll of every slot: each iteration
+    // carries a whole virtual-shadow-map lookup, and sixteen inlined copies of it
+    // cost registers - and so occupancy - even for the slots nothing is in.
+    const int pointLightCount = min(gNumPointLights, MAX_POINT_LIGHTS);
+    [loop]
+    for (int i = 0; i < pointLightCount; ++i)
     {
-        float active = (i < gNumPointLights) ? 1.0f : 0.0f;
+        const float active = 1.0f;
 
         PteroResolvedLight shape = PteroResolveLightShape(gPointLights[i], worldPos);
         float3 lightPos = shape.Position;
@@ -721,9 +836,21 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         float  distanceFalloff = pow(PteroLightFalloffDistance(gPointLights[i], dist), -falloffExponent);
         float  falloff = rangeMask * distanceFalloff * shape.ShapeMask;
 
-        float pointShadow = SamplePointShadow(i, worldPos, N);
+        // The shadow lookup is by far the dearest part of a light, so it only runs
+        // where the light can reach the surface at all: inside its range and on the
+        // side facing it. EvalBRDF adds nothing for N.L <= 0, so skipping it there
+        // changes no pixel. In an interior every surface is in range of every nearby
+        // light, and this is what stops half of them paying for lights behind them.
+        const bool lightReaches = falloff > 0.0f && dot(N, L_pt) > 0.0f
+                                  && any(gPointLights[i].Color > 0.0f);
+        float pointShadow = 1.0f;
+        [branch]
+        if (lightReaches || gPointShadowDebugView > 0)
+            pointShadow = SamplePointShadow(i, worldPos, N);
         pointShadowDebug = min(pointShadowDebug, pointShadow);
-        pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular, diffuseLit);
+        [branch]
+        if (lightReaches)
+            pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular, diffuseLit);
 
 #if PTERO_SSS_OUTPUT
         [branch]
@@ -766,11 +893,13 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         // the diagnostic and show ordinary indirect light.
         const bool diagnosticView = gRtgiDebugView >= 10;
 
-        if (!diagnosticView && gProbeGridX > 0 && gProbeGridY > 0 && gProbeGridZ > 0)
+        if (!diagnosticView && gProbeField.CascadeCount > 0)
         {
+            // Same units as the RTGI buffer (irradiance / pi), and no pass-local
+            // grading: the x2 and 1.35 saturation that used to sit here
+            // compensated for leaks in the probe gather, and on top of the
+            // missing 1/pi made probe GI roughly six times RTGI's.
             giDiffuseIrradiance = SampleRadianceProbeIrradiance(worldPos, N);
-            float probeLuma = dot(giDiffuseIrradiance, float3(0.2126f, 0.7152f, 0.0722f));
-            giDiffuseIrradiance = lerp(probeLuma.xxx, giDiffuseIrradiance, 1.35f) * 2.0f;
         }
         else
             giDiffuseIrradiance = gGiAccumulation.Load(int3(pixel, 0)).rgb;

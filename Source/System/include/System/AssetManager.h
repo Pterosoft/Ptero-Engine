@@ -17,6 +17,12 @@ public:
         const std::string& sourceTexturePath,
         const std::string& targetDirectoryRelativeToData = {},
         std::string* importedTexturePath = nullptr);
+    // Imports an Unreal Engine 5 .uasset (static mesh, texture or material). Assets already
+    // inside Data are converted in place; others land in targetDirectoryRelativeToData.
+    bool ImportUnrealAssetToDataDirectory(
+        const std::string& sourceUassetPath,
+        const std::string& targetDirectoryRelativeToData = {},
+        std::string* summary = nullptr);
     std::shared_ptr<Mesh> GetMesh(const std::string& fbxFilePath);
 
     const std::string& GetLastErrorMessage() const

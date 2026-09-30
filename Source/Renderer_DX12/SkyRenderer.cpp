@@ -2,8 +2,13 @@
 #include "SkyRenderer.h"
 
 #include "d3dx12.h"
+#include "System/DataFiles.h"
+#include "System/PteroLog.h"
 
+#include <algorithm>
+#include <filesystem>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -12,12 +17,45 @@ using namespace DirectX;
 extern "C"
 {
     ID3D12Device* __stdcall DX12Context_GetDevice();
+    ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
 }
 
 // Solar angular radius ≈ 0.265° → half-angle cos ≈ cos(0.00463 rad).
 // We double it for a slightly more visible disc in the editor viewport.
 static constexpr float kSunDiscHalfAngleDeg = 0.8f;
 static constexpr float kSunDiscHalfAngleRad = kSunDiscHalfAngleDeg * (3.14159265f / 180.0f);
+
+// The moon is drawn at about the same inflated size as the sun, scaled by
+// TimeOfDaySettings::MoonSize.
+static constexpr float kMoonDiscHalfAngleDeg = 0.9f;
+static constexpr float kMoonDiscHalfAngleRad = kMoonDiscHalfAngleDeg * (3.14159265f / 180.0f);
+
+void SkyRenderer::LoadTextures()
+{
+    mTexturesRequested = true;
+
+    // NASA's LROC map for the moon (public domain), Solar System Scope's sun and
+    // star map (CC BY 4.0). All equirectangular.
+    static constexpr const char* kFiles[kSkyTextureCount] =
+    {
+        "Textures/Sky/lroc_color_2k.dds",
+        "Textures/Sky/2k_sun.dds",
+        "Textures/Sky/2k_stars_milky_way.dds",
+    };
+
+    const std::filesystem::path dataDirectory = DataFiles::FindDataDirectory();
+    for (int i = 0; i < kSkyTextureCount; ++i)
+    {
+        const std::string path = (dataDirectory / kFiles[i]).lexically_normal().string();
+        mTextures[i] = mTextureManager.LoadDDS(path, TextureSemantic::Color);
+        if (!mTextures[i] || !mTextures[i]->IsValid())
+        {
+            mTextures[i].reset();
+            PTERO_LOG_WARNING("Renderer", "Sky texture unavailable, using the procedural fallback: %s",
+                mTextureManager.LastError().c_str());
+        }
+    }
+}
 
 bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
 {
@@ -46,17 +84,48 @@ bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
             return false;
         }
 
-        // ---- root signature: single inline CBV at b0 ----
-        D3D12_ROOT_PARAMETER param{};
-        param.ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        param.Descriptor.ShaderRegister = 0;
-        param.Descriptor.RegisterSpace  = 0;
-        param.ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        // ---- root signature ----
+        // [0] inline CBV b0
+        // [1..3] one SRV each: t0 moon, t1 sun, t2 star map. Separate tables, not
+        // one range, because TextureManager places each texture wherever the shared
+        // heap has room. Version 1.0 descriptors are volatile, so a table whose
+        // texture failed to load may point anywhere as long as the shader does not
+        // read it - the constants tell it not to.
+        D3D12_DESCRIPTOR_RANGE ranges[kSkyTextureCount]{};
+        D3D12_ROOT_PARAMETER params[1 + kSkyTextureCount]{};
+        params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].Descriptor.RegisterSpace  = 0;
+        params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+        for (UINT i = 0; i < kSkyTextureCount; ++i)
+        {
+            ranges[i].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            ranges[i].NumDescriptors                    = 1;
+            ranges[i].BaseShaderRegister                = i;
+            ranges[i].RegisterSpace                     = 0;
+            ranges[i].OffsetInDescriptorsFromTableStart = 0;
+            params[1 + i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            params[1 + i].DescriptorTable.NumDescriptorRanges = 1;
+            params[1 + i].DescriptorTable.pDescriptorRanges   = &ranges[i];
+            params[1 + i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        }
+
+        // Trilinear, wrapping in longitude, clamped at the poles.
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister   = 0;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-        rsDesc.NumParameters = 1;
-        rsDesc.pParameters   = &param;
-        rsDesc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        rsDesc.NumParameters     = 1 + kSkyTextureCount;
+        rsDesc.pParameters       = params;
+        rsDesc.NumStaticSamplers = 1;
+        rsDesc.pStaticSamplers   = &sampler;
+        rsDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ComPtr<ID3DBlob> blob, errors;
         DX12_THROW_IF_FAILED(D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errors));
@@ -105,14 +174,15 @@ bool SkyRenderer::Initialize(DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
         DX12_THROW_IF_FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState)));
 
         // ---- constant buffer (persistently mapped upload heap) ----
-        const UINT64 cbSize = (sizeof(SkyConstants) + 255ull) & ~255ull;
+        mCbStride = (sizeof(SkyConstants) + 255ull) & ~255ull;
+        mFrameSlot = 0;
         D3D12_HEAP_PROPERTIES uploadHeap{};
         uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
         uploadHeap.CreationNodeMask = 1;
         uploadHeap.VisibleNodeMask  = 1;
         D3D12_RESOURCE_DESC cbDesc{};
         cbDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-        cbDesc.Width            = cbSize;
+        cbDesc.Width            = mCbStride * kFramesInFlight;
         cbDesc.Height           = 1;
         cbDesc.DepthOrArraySize = 1;
         cbDesc.MipLevels        = 1;
@@ -142,6 +212,10 @@ void SkyRenderer::Shutdown()
     mConstantBuffer.Reset();
     mPipelineState.Reset();
     mRootSignature.Reset();
+    for (auto& texture : mTextures)
+        texture.reset();
+    mTextureManager.Shutdown();
+    mTexturesRequested = false;
     mIsInitialized = false;
 }
 
@@ -152,81 +226,113 @@ void SkyRenderer::Render(
     const DirectX::XMMATRIX&   projectionMatrix,
     const DirectX::XMMATRIX&   viewMatrix,
     UINT                       viewportWidth,
-    UINT                       viewportHeight)
+    UINT                       viewportHeight,
+    float                      deltaSeconds)
 {
+    UNREFERENCED_PARAMETER(viewportWidth);
     if (!mIsInitialized || !commandList) return;
 
-    // Scale Hosek-Wilkie sky/sun colours by the user-specified lux values,
-    // mapped to a display-friendly [0,1] HDR scale factor.
-    // We normalise so that the reference sky intensity (20 000 lx) maps to ~1.0.
-    constexpr float kRefSkyLux = 20000.0f;
-    constexpr float kRefSunLux = 100000.0f;
+    if (!mTexturesRequested)
+        LoadTextures();
 
-    // Resolve sky colour (Hosek or override).
-    float skyR, skyG, skyB;
-    if (settings.OverrideSkyColor)
+    // The ambient is already lux-scaled and already blends day into night, so the
+    // zenith is simply that. The horizon keeps the old daylight treatment - a
+    // warmer, slightly desaturated zenith - and turns a slightly paler blue as
+    // the daylight goes.
+    const float skyScale = (std::max)(settings.SkyIntensityLux, 0.0f) / kTimeOfDayRefSkyLux;
+    const float daylight = hosekResult.DaylightWeight;
+    const XMFLOAT3 zenith(hosekResult.AmbientR, hosekResult.AmbientG, hosekResult.AmbientB);
+    const XMFLOAT3 dayHorizon(
+        zenith.x * 1.2f + 0.05f * skyScale * daylight,
+        zenith.y * 1.1f + 0.03f * skyScale * daylight,
+        zenith.z * 0.8f + 0.02f * skyScale * daylight);
+    const XMFLOAT3 nightHorizon(zenith.x * 1.15f, zenith.y * 1.15f, zenith.z * 1.05f);
+    const XMFLOAT3 horizon(
+        nightHorizon.x + (dayHorizon.x - nightHorizon.x) * daylight,
+        nightHorizon.y + (dayHorizon.y - nightHorizon.y) * daylight,
+        nightHorizon.z + (dayHorizon.z - nightHorizon.z) * daylight);
+
+    // An orange band low on the horizon around the sun while it is within a few
+    // degrees of setting, peaking just after it has gone under.
+    const float elevDeg = hosekResult.SolarElevationRad * (180.0f / 3.14159265f);
+    const auto smooth = [](float e0, float e1, float x)
     {
-        skyR = settings.SkyColorR;
-        skyG = settings.SkyColorG;
-        skyB = settings.SkyColorB;
-    }
-    else
-    {
-        skyR = hosekResult.SkyR;
-        skyG = hosekResult.SkyG;
-        skyB = hosekResult.SkyB;
-    }
-    const float skyScale = settings.SkyIntensityLux / kRefSkyLux;
-    skyR *= skyScale; skyG *= skyScale; skyB *= skyScale;
+        const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    const float glow = smooth(-10.0f, -1.0f, elevDeg) * (1.0f - smooth(2.0f, 12.0f, elevDeg)) * skyScale * 0.12f;
 
-    // Horizon colour is a warmer, slightly desaturated version of the zenith.
-    const float hR = skyR * 1.2f + 0.05f * skyScale;
-    const float hG = skyG * 1.1f + 0.03f * skyScale;
-    const float hB = skyB * 0.8f + 0.02f * skyScale;
-
-    // Resolve sun colour.
-    float sunR, sunG, sunB;
-    if (settings.OverrideSunColor)
-    {
-        sunR = settings.SunColorR;
-        sunG = settings.SunColorG;
-        sunB = settings.SunColorB;
-    }
-    else
-    {
-        sunR = hosekResult.SunR;
-        sunG = hosekResult.SunG;
-        sunB = hosekResult.SunB;
-    }
-    const float sunScale = settings.SunIntensityLux / kRefSunLux;
-    sunR *= sunScale; sunG *= sunScale; sunB *= sunScale;
-
-    // HosekWilkieResult stores the incoming light direction (from sun toward the scene).
-    // The sky pass needs the opposite direction so the sun disc appears where the sun is.
-    const XMVECTOR sunWorldDir = XMVectorSet(
-        -hosekResult.SunDirX, -hosekResult.SunDirY, -hosekResult.SunDirZ, 0.0f);
-    const XMVECTOR sunViewDir = XMVector3TransformNormal(sunWorldDir, viewMatrix);
-    XMFLOAT3 sunVS;
-    XMStoreFloat3(&sunVS, XMVector3Normalize(sunViewDir));
-
-    // Build inverse projection for ray reconstruction in the PS.
+    // Build inverse projection for ray reconstruction in the PS, and the inverse
+    // view to take the ray into world space, where the sun, moon and stars live.
     XMFLOAT4X4 invProjF;
     XMStoreFloat4x4(&invProjF, XMMatrixTranspose(XMMatrixInverse(nullptr, projectionMatrix)));
+    XMFLOAT4X4 invViewF;
+    XMStoreFloat4x4(&invViewF, XMMatrixTranspose(XMMatrixInverse(nullptr, viewMatrix)));
 
-    // Fill the constant buffer.
+    // One pixel's angular size, so the stars and the disc edges stay a pixel or
+    // so wide at any field of view instead of aliasing or smearing.
+    XMFLOAT4X4 projF;
+    XMStoreFloat4x4(&projF, projectionMatrix);
+    const float pixelAngle = 2.0f / ((std::max)(std::fabs(projF._22), 1e-4f) * static_cast<float>((std::max)(viewportHeight, 1u)));
+
+    mTimeSeconds = std::fmod(mTimeSeconds + (std::max)(deltaSeconds, 0.0f), 3600.0f);
+
+    // Fill this frame's slot of the constant buffer ring.
     SkyConstants cb{};
-    cb.SkyZenithColor       = { skyR,  skyG,  skyB  };
-    cb.SkyHorizonColor      = { hR, hG, hB };
-    cb.SunDirectionVS       = sunVS;
-    cb.SunColor             = { sunR, sunG, sunB };
-    cb.SunDiscHalfAngleCos  = std::cos(kSunDiscHalfAngleRad);
     cb.InvProj              = invProjF;
-    std::memcpy(mMappedCb, &cb, sizeof(cb));
+    cb.InvView              = invViewF;
+    cb.SkyZenithColor       = zenith;
+    cb.PixelAngle           = pixelAngle;
+    cb.SkyHorizonColor      = horizon;
+    cb.TimeSeconds          = mTimeSeconds;
+    cb.SunDirection         = { -hosekResult.SolarDirX, -hosekResult.SolarDirY, -hosekResult.SolarDirZ };
+    cb.SunDiscHalfAngleCos  = std::cos(kSunDiscHalfAngleRad);
+    cb.SunColor             = { hosekResult.SunDiscR, hosekResult.SunDiscG, hosekResult.SunDiscB };
+    cb.MoonDiscSin          = std::sin(kMoonDiscHalfAngleRad * std::clamp(settings.MoonSize, 0.1f, 10.0f));
+    cb.MoonDirection        = { -hosekResult.MoonDirX, -hosekResult.MoonDirY, -hosekResult.MoonDirZ };
+    cb.StarVisibility       = hosekResult.StarVisibility;
+    cb.MoonColor            = { hosekResult.MoonDiscR, hosekResult.MoonDiscG, hosekResult.MoonDiscB };
+    cb.StarRadiance         = hosekResult.StarRadiance;
+    cb.TwilightGlowColor    = { 1.0f * glow, 0.42f * glow, 0.15f * glow };
+    // A faint glow around the moon, as much as its lit face and the dark allow.
+    cb.MoonHalo             = hosekResult.MoonIllumination * (1.0f - daylight) * 0.02f;
+    for (int row = 0; row < 3; ++row)
+    {
+        cb.StarRotation[row] = XMFLOAT4(
+            hosekResult.StarRotation[row * 3 + 0],
+            hosekResult.StarRotation[row * 3 + 1],
+            hosekResult.StarRotation[row * 3 + 2],
+            0.0f);
+    }
+
+    cb.MoonTextureOn = mTextures[kMoonTexture] ? 1.0f : 0.0f;
+    cb.SunTextureOn  = mTextures[kSunTexture] ? 1.0f : 0.0f;
+
+    // Star field mode; without the map everything falls back to procedural.
+    const int starField = mTextures[kStarTexture] ? std::clamp(settings.StarField, 0, 2) : 0;
+    cb.StarMapGain            = starField == 1 ? 1.0f : (starField == 2 ? 0.6f : 0.0f);
+    cb.ProceduralStarGain     = starField == 1 ? 0.0f : 1.0f;
+    cb.ProceduralMilkyWayGain = starField == 0 ? 1.0f : 0.0f;
+
+    mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+    const UINT64 cbOffset = mCbStride * mFrameSlot;
+    std::memcpy(static_cast<std::byte*>(mMappedCb) + cbOffset, &cb, sizeof(cb));
 
     // Draw.
     commandList->SetGraphicsRootSignature(mRootSignature.Get());
     commandList->SetPipelineState(mPipelineState.Get());
-    commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
+
+    // The textures live in the shared heap. A missing one still needs its table
+    // set; it points at the heap start and is never read (see the root signature).
+    ID3D12DescriptorHeap* sharedHeap = DX12Context_GetSrvDescriptorHeap();
+    if (sharedHeap)
+    {
+        commandList->SetDescriptorHeaps(1, &sharedHeap);
+        const D3D12_GPU_DESCRIPTOR_HANDLE placeholder = sharedHeap->GetGPUDescriptorHandleForHeapStart();
+        for (UINT i = 0; i < kSkyTextureCount; ++i)
+            commandList->SetGraphicsRootDescriptorTable(1 + i, mTextures[i] ? mTextures[i]->GpuHandle : placeholder);
+    }
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->DrawInstanced(3, 1, 0, 0); // fullscreen triangle
 }

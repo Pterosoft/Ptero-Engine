@@ -25,6 +25,8 @@
 #include "System/PackagedDataApi.h"
 #include "System/PackagingKeyObfuscation.h"
 
+#include "nlohmann/json.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -78,6 +80,8 @@ namespace
     bool gIsClosing = false;
     HWND gMainWindowHandle = nullptr;
     std::wstring gWindowTitle = L"Ptero Game";
+    // The start level, relative to Data: Game Settings' StartupLevel ("Levels/House.json").
+    std::wstring gLevelPath;
 
     const wchar_t* kWindowClassName = L"PteroGameLauncherWindowClass";
 
@@ -346,13 +350,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     // Decrypt the level once up front: a key that does not match the archives would
     // otherwise only surface as a pile of "missing asset" errors deep inside the renderer.
     {
-        constexpr const char* kLevel = "Levels/Farkle.json";
-        const long long levelSize = PteroData_FileSize(kLevel);
-        std::vector<unsigned char> levelBytes(levelSize > 0 ? static_cast<size_t>(levelSize) : 0);
-        if (levelSize < 0 || !PteroData_ReadFile(kLevel, levelBytes.data(), levelBytes.size()))
+        // Game Settings (editor: Windows > Game Settings) names the level to open.
+        std::string level;
+        const char* kSettings = "Game/GameSettings.json";
+        const long long settingsSize = PteroData_FileSize(kSettings);
+        if (settingsSize > 0)
         {
-            ReportFatalError(L"The game content is missing or damaged (Content\\Levels.ppak could not be read). "
-                L"Rebuild the game with Release > Build Game in the editor.");
+            std::string text(static_cast<size_t>(settingsSize), '\0');
+            if (PteroData_ReadFile(kSettings, text.data(), text.size()))
+            {
+                const nlohmann::json settings = nlohmann::json::parse(text, nullptr, false);
+                if (settings.is_object())
+                    level = settings.value("StartupLevel", std::string());
+            }
+        }
+        if (level.empty())
+        {
+            ReportFatalError(L"No startup level is set. In the editor, open Windows > Game Settings, "
+                L"pick a Startup Level, Save, and rebuild the game with Release > Build Game.");
+            return 1;
+        }
+        gLevelPath = std::filesystem::path(level).wstring();
+
+        const long long levelSize = PteroData_FileSize(level.c_str());
+        std::vector<unsigned char> levelBytes(levelSize > 0 ? static_cast<size_t>(levelSize) : 0);
+        if (levelSize < 0 || !PteroData_ReadFile(level.c_str(), levelBytes.data(), levelBytes.size()))
+        {
+            const std::wstring wideLevel(level.begin(), level.end());
+            ReportFatalError(L"The startup level " + wideLevel + L" is missing or damaged in the game content. "
+                L"Check that its folder is packaged, and rebuild the game with Release > Build Game in the editor.");
             return 1;
         }
     }
@@ -407,7 +433,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         return 1;
     }
 
-    const fs::path levelPath = exeDirectory / L"Data" / L"Levels" / L"Farkle.json";
+    const fs::path levelPath = exeDirectory / L"Data" / gLevelPath;
     configureStandaloneGame(levelPath.c_str());
 
     if (!gRendererInitialize(hWnd))

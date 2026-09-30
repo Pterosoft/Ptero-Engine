@@ -15,8 +15,15 @@ K:\Ptero-Engine\Source\System\src\FbxCompiler.cpp;K:\Ptero-Engine\Source\System\
 K:\Ptero-Engine\Source\System\src\NodeGraphCatalog.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphCatalog.obj
 K:\Ptero-Engine\Source\System\src\NodeGraphDocument.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphDocument.obj
 K:\Ptero-Engine\Source\System\src\NodeGraphRuntime.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphRuntime.obj
+K:\Ptero-Engine\Source\System\src\NodeGraphTemplates.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\NodeGraphTemplates.obj
 K:\Ptero-Engine\Source\System\src\SystemAssetApi.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\SystemAssetApi.obj
 K:\Ptero-Engine\Source\System\src\TextureImporter.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\TextureImporter.obj
+K:\Ptero-Engine\Source\System\src\UnrealAssetImporter.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealAssetImporter.obj
+K:\Ptero-Engine\Source\System\src\Unreal\UnrealPackage.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealPackage.obj
+K:\Ptero-Engine\Source\System\src\Unreal\UnrealOodle.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealOodle.obj
+K:\Ptero-Engine\Source\System\src\Unreal\UnrealTexture.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealTexture.obj
+K:\Ptero-Engine\Source\System\src\Unreal\UnrealStaticMesh.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealStaticMesh.obj
+K:\Ptero-Engine\Source\System\src\Unreal\UnrealMaterial.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\UnrealMaterial.obj
 K:\Ptero-Engine\Source\SDKs\DirectXTex\DirectXTex\BC.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\BC.obj
 K:\Ptero-Engine\Source\SDKs\DirectXTex\DirectXTex\BC4BC5.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\BC4BC5.obj
 K:\Ptero-Engine\Source\SDKs\DirectXTex\DirectXTex\BC6HBC7.cpp;K:\Ptero-Engine\Source\System\System\x64\Debug\BC6HBC7.obj

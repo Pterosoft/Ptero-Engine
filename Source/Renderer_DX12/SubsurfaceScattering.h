@@ -120,6 +120,9 @@ struct SubsurfaceGpuConstants
     uint32_t            HasSunShadow;
     uint32_t            HasPointShadows;
     float               ShadowPad[2];
+    // The virtual shadow map; when Active, the sun shadow SRV is its pool, which also
+    // holds the local lights' shadows.
+    VsmGpuConstants     Vsm;
 };
 static_assert(offsetof(SubsurfaceGpuConstants, Kernel) == 512);
 static_assert(offsetof(SubsurfaceGpuConstants, ViewProj) == 6912);
@@ -130,7 +133,8 @@ static_assert(offsetof(SubsurfaceGpuConstants, Lights) == 7168);
 static_assert(offsetof(SubsurfaceGpuConstants, LightViewProj) == 8704);
 static_assert(offsetof(SubsurfaceGpuConstants, PointFaceViewProj) == 8784);
 static_assert(offsetof(SubsurfaceGpuConstants, HasSunShadow) == 10320);
-static_assert(sizeof(SubsurfaceGpuConstants) == 10336, "Must match Subsurface.hlsli");
+static_assert(offsetof(SubsurfaceGpuConstants, Vsm) == 10336);
+static_assert(sizeof(SubsurfaceGpuConstants) == 11216, "Must match Subsurface.hlsli");
 
 // Builds one profile's separable kernel exactly as the SDK does: taps spread over
 // [-range, range] with a quadratic distribution, weighted by the sum-of-Gaussians skin
@@ -195,6 +199,8 @@ public:
         // from compute (ALL_SHADER_RESOURCE) for the duration of Apply().
         D3D12_GPU_DESCRIPTOR_HANDLE SunShadow{};
         D3D12_GPU_DESCRIPTOR_HANDLE PointShadows{};
+        // The virtual shadow map's page table, when SunShadow is its pool.
+        D3D12_GPU_VIRTUAL_ADDRESS   VsmPageTable = 0;
     };
 
     // Scatters the diffuse target and composites it into the scene colour, which must be

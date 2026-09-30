@@ -1,5 +1,6 @@
 #pragma once
 
+#include "System/CharacterMovement.h"
 #include "System/NodeGraphDocument.h"
 
 #include <cstdint>
@@ -99,6 +100,17 @@ public:
     virtual bool PollUiClick(std::string& elementId) = 0;
     virtual void ToggleFullscreen() = 0;
     virtual bool IsStandalone() = 0;
+
+    // The player character, when the host runs it for a Node Graph controller (Game
+    // Settings > Player Controller). Null with the C++ controller, whose character lives
+    // inside Game.dll - the Character nodes then report that and do nothing. The host
+    // steps the character after the graphs have ticked, so input added on Tick moves it
+    // in the same frame.
+    virtual CharacterMovement* GetPlayerCharacter() = 0;
+    // Mouse movement this frame in pixels (+X right, +Y down); zero while not captured.
+    virtual void GetMouseDelta(double& x, double& y) = 0;
+    virtual void SetMouseCaptured(bool captured) = 0;
+    virtual bool IsMouseCaptured() = 0;
 };
 
 // One value flowing along a data connection. Graphs are loosely typed on purpose - a
@@ -168,6 +180,10 @@ public:
 
     float GetPlayTimeSeconds() const { return static_cast<float>(mPlayTimeSeconds); }
 
+    // True while Set Camera / Move Camera To hold the camera. The host checks this before
+    // putting the player character's view on screen, so a scripted camera shot wins.
+    bool IsCameraHeld() const { return mCameraHeld; }
+
 private:
     struct NodeState
     {
@@ -213,6 +229,9 @@ private:
     // Fires one node that is an entry point, with a fresh step budget and depth.
     void FireEntry(int nodeIndex, int outPortIndex);
     void FireInputEvents();
+    void FireCharacterEvents();
+    void ExecuteCharacterNode(int nodeIndex);
+    NodeGraphValue EvaluateCharacterOutput(int nodeIndex, int outPortIndex);
     void AdvanceTweens(float deltaSeconds);
     void UpdatePlaylist();
     void PlayNextPlaylistTrack();
@@ -279,6 +298,14 @@ private:
     // each frame before the graph runs.
     bool mCameraHeld = false;
     NodeGraphCameraPose mCameraPose;
+
+    // The character's landing and jump counters as of the last tick. The character only
+    // counts; each runtime compares against what it saw, so a level graph and a player
+    // controller graph can both react to the same landing.
+    std::uint32_t mCharacterLandedSeen = 0;
+    std::uint32_t mCharacterJumpedSeen = 0;
+    // Said once per session, not once per frame, when Character nodes run without one.
+    bool mReportedNoCharacter = false;
 
     // Play Music Playlist. Lives on the runtime rather than a node: there is one music
     // channel, and whichever node last started music owns it.

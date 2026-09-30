@@ -306,6 +306,11 @@ void VolumetricFogRenderer::Dispatch(
     cmdList->SetComputeRootDescriptorTable(2, mLightingUavGpu);
     cmdList->SetComputeRootDescriptorTable(3, probeSrv);
     cmdList->SetComputeRootDescriptorTable(4, pointShadowSrv);
+    // Virtual shadow map pool (t3) and page table (t4): only read when the constants
+    // say it is on, so the scene depth (also a Texture2D) and the constants stand in.
+    const bool vsm = inputs.Vsm != nullptr && inputs.VsmPageTable != 0 && inputs.VsmPoolSrv.ptr != 0;
+    cmdList->SetComputeRootDescriptorTable(5, vsm ? inputs.VsmPoolSrv : sceneDepthSrv);
+    cmdList->SetComputeRootShaderResourceView(6, vsm ? inputs.VsmPageTable : constantsAddress);
     cmdList->Dispatch(
         (mFroxelWidth + kInjectGroupX - 1) / kInjectGroupX,
         (mFroxelHeight + kInjectGroupY - 1) / kInjectGroupY,
@@ -351,7 +356,8 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     // cubemap atlas. Four single-descriptor tables rather than one range: the
     // handles are allocated by four different owners out of the shared heap and
     // are nowhere near each other in it.
-    D3D12_DESCRIPTOR_RANGE injectRanges[4]{};
+    // Then t3, the virtual shadow map pool (table), and t4, its page table (root SRV).
+    D3D12_DESCRIPTOR_RANGE injectRanges[5]{};
     injectRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[0].NumDescriptors = 1;
     injectRanges[0].BaseShaderRegister = 0;
@@ -364,21 +370,27 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     injectRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[3].NumDescriptors = 1;
     injectRanges[3].BaseShaderRegister = 2;
+    injectRanges[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[4].NumDescriptors = 1;
+    injectRanges[4].BaseShaderRegister = 3;
 
-    D3D12_ROOT_PARAMETER injectParams[5]{};
+    D3D12_ROOT_PARAMETER injectParams[7]{};
     injectParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     injectParams[0].Descriptor.ShaderRegister = 0;
     injectParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (UINT i = 0; i < 4; ++i)
+    for (UINT i = 0; i < 5; ++i)
     {
         injectParams[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         injectParams[i + 1].DescriptorTable.NumDescriptorRanges = 1;
         injectParams[i + 1].DescriptorTable.pDescriptorRanges = &injectRanges[i];
         injectParams[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
+    injectParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    injectParams[6].Descriptor.ShaderRegister = 4;
+    injectParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC injectDesc{};
-    injectDesc.NumParameters = 5;
+    injectDesc.NumParameters = 7;
     injectDesc.pParameters = injectParams;
     injectDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
@@ -610,7 +622,7 @@ void VolumetricFogRenderer::UploadConstants(
     constants.BaseHeight = settings.BaseHeight;
     constants.HeightFalloff = maxf(0.0f, settings.HeightFalloff);
     constants.ScatteringAlbedo = std::clamp(settings.ScatteringAlbedo, 0.0f, 1.0f);
-    constants.GiIntensity = maxf(0.0f, settings.GiIntensity);
+    constants.GiIntensity = maxf(0.0f, settings.GiIntensity) * maxf(0.0f, inputs.ProbeInvPreExposure);
 
     constants.FogColor[0] = settings.ColorR;
     constants.FogColor[1] = settings.ColorG;
@@ -648,19 +660,11 @@ void VolumetricFogRenderer::UploadConstants(
         constants.PointLights[i] = inputs.PointLights[i];
     }
 
-    // Zeroed grid dimensions are what the shader tests before it touches the
+    // A zero cascade count is what the shader tests before it touches the
     // probe buffer, so a frame without a grid never reads the stand-in
     // descriptor bound in its place.
     if (inputs.ProbeSrv.ptr != 0 && constants.GiIntensity > 0.0f)
-    {
-        constants.ProbeGridX = inputs.ProbeGridX;
-        constants.ProbeGridY = inputs.ProbeGridY;
-        constants.ProbeGridZ = inputs.ProbeGridZ;
-        constants.ProbeSpacing = inputs.ProbeSpacing;
-        constants.ProbeOrigin[0] = inputs.ProbeOrigin[0];
-        constants.ProbeOrigin[1] = inputs.ProbeOrigin[1];
-        constants.ProbeOrigin[2] = inputs.ProbeOrigin[2];
-    }
+        constants.ProbeField = inputs.ProbeField;
 
     if (inputs.PointShadowSrv.ptr != 0
         && inputs.PointShadowFaceViewProj != nullptr
@@ -683,6 +687,10 @@ void VolumetricFogRenderer::UploadConstants(
         std::memcpy(constants.ViewProjInv, inputs.ViewProjInv, sizeof(constants.ViewProjInv));
     if (inputs.CurrViewProj != nullptr)
         std::memcpy(constants.CurrViewProj, inputs.CurrViewProj, sizeof(constants.CurrViewProj));
+
+    // Left zeroed (LocalEnabled = 0) without a map, which keeps the cubemap path.
+    if (inputs.Vsm != nullptr && inputs.VsmPageTable != 0 && inputs.VsmPoolSrv.ptr != 0)
+        constants.Vsm = *inputs.Vsm;
 
     std::memcpy(mMappedConstants + mFrameSlot, &constants, sizeof(constants));
 

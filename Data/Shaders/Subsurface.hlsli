@@ -19,6 +19,7 @@
 #define PTERO_SUBSURFACE_HLSLI
 
 #include "LightShapes.hlsli"
+#include "VirtualShadowMap.hlsli"
 
 #ifndef PTERO_SSS_CB_REGISTER
 #define PTERO_SSS_CB_REGISTER b0
@@ -85,6 +86,8 @@ cbuffer SubsurfaceConstants : register(PTERO_SSS_CB_REGISTER)
     uint     gSssHasSunShadow;
     uint     gSssHasPointShadows;
     float2   _SssShadowPad;
+    // When Enabled, gSssSunShadowMap is the sun's virtual shadow map pool.
+    PteroVsmConstants gSssVsm;
 };
 
 bool PteroSssSlotActive(uint slot)

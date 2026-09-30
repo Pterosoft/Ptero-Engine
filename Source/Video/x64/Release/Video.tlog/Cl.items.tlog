@@ -7,6 +7,7 @@ K:\Ptero-Engine\Source\Video\VideoPlayerWindow.cpp;K:\Ptero-Engine\Source\Video\
 K:\Ptero-Engine\Source\Video\VideoTexture.cpp;K:\Ptero-Engine\Source\Video\x64\Release\VideoTexture.obj
 K:\Ptero-Engine\Source\Video\VpxDecoder.cpp;K:\Ptero-Engine\Source\Video\x64\Release\VpxDecoder.obj
 K:\Ptero-Engine\Source\Video\WebmDemuxer.cpp;K:\Ptero-Engine\Source\Video\x64\Release\WebmDemuxer.obj
+K:\Ptero-Engine\Source\System\src\DataFiles.cpp;K:\Ptero-Engine\Source\Video\x64\Release\DataFiles.obj
 K:\Ptero-Engine\Source\SDKs\libwebm-libwebm-1.0.0.32\mkvparser\mkvparser.cc;K:\Ptero-Engine\Source\Video\x64\Release\mkvparser.obj
 K:\Ptero-Engine\Source\SDKs\opus-1.5.2\celt\bands.c;K:\Ptero-Engine\Source\Video\x64\Release\bands.obj
 K:\Ptero-Engine\Source\SDKs\opus-1.5.2\celt\celt.c;K:\Ptero-Engine\Source\Video\x64\Release\celt.obj

@@ -183,14 +183,15 @@ bool AgxTonemapper::CreatePipeline()
     DX12_THROW_IF_FAILED(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&mPipelineState)));
 
     // Constant buffer (persistently mapped)
-    const UINT64 cbSize = (sizeof(AgxCbData) + 255ull) & ~255ull;
+    mCbStride = (sizeof(AgxCbData) + 255ull) & ~255ull;
+    mFrameSlot = 0;
     D3D12_HEAP_PROPERTIES uploadHeap{};
     uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
     uploadHeap.CreationNodeMask = 1;
     uploadHeap.VisibleNodeMask  = 1;
     D3D12_RESOURCE_DESC cbDesc{};
     cbDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-    cbDesc.Width            = cbSize;
+    cbDesc.Width            = mCbStride * kFramesInFlight;
     cbDesc.Height           = 1;
     cbDesc.DepthOrArraySize = 1;
     cbDesc.MipLevels        = 1;
@@ -282,7 +283,9 @@ void AgxTonemapper::Apply(
 
     ID3D12Device* device = DX12Context_GetDevice();
 
-    // Update constant buffer.
+    // Update this frame's slot of the constant buffer ring.
+    mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+    const UINT64 cbOffset = mCbStride * mFrameSlot;
     if (mMappedCb)
     {
         AgxCbData cb{};
@@ -328,7 +331,7 @@ void AgxTonemapper::Apply(
 
         cb.FrameWidth = mWidth;
         cb.FrameHeight = mHeight;
-        std::memcpy(mMappedCb, &cb, sizeof(cb));
+        std::memcpy(static_cast<std::byte*>(mMappedCb) + cbOffset, &cb, sizeof(cb));
     }
 
     // Copy input SRV into slot 0 of the private heap.
@@ -377,7 +380,7 @@ void AgxTonemapper::Apply(
     commandList->SetComputeRootSignature(mRootSignature.Get());
     commandList->SetPipelineState(mPipelineState.Get());
 
-    commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
 
     D3D12_GPU_DESCRIPTOR_HANDLE gpuBase = mComputeHeap->GetGPUDescriptorHandleForHeapStart();
     commandList->SetComputeRootDescriptorTable(1, gpuBase); // t0

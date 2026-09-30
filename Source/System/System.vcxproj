@@ -178,10 +178,18 @@
     <ClInclude Include="include\System\NodeGraphDocument.h" />
     <ClInclude Include="include\System\NodeGraphEditor.h" />
     <ClInclude Include="include\System\NodeGraphRuntime.h" />
+    <ClInclude Include="include\System\NodeGraphTemplates.h" />
+    <ClInclude Include="include\System\CharacterMovement.h" />
     <ClInclude Include="include\System\PteroLog.h" />
     <ClInclude Include="include\System\PteroMeshFormat.h" />
     <ClInclude Include="include\System\SystemAssetApi.h" />
     <ClInclude Include="include\System\TextureImporter.h" />
+    <ClInclude Include="include\System\UnrealAssetImporter.h" />
+    <ClInclude Include="src\Unreal\UnrealPackage.h" />
+    <ClInclude Include="src\Unreal\UnrealOodle.h" />
+    <ClInclude Include="src\Unreal\UnrealTexture.h" />
+    <ClInclude Include="src\Unreal\UnrealStaticMesh.h" />
+    <ClInclude Include="src\Unreal\UnrealMaterial.h" />
     <ClInclude Include="MaterialEditor.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="resource.h" />
@@ -228,8 +236,17 @@
     <ClCompile Include="src\NodeGraphRuntime.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\NodeGraphTemplates.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\SystemAssetApi.cpp" />
     <ClCompile Include="src\TextureImporter.cpp" />
+    <ClCompile Include="src\UnrealAssetImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Unreal\UnrealPackage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Unreal\UnrealOodle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Unreal\UnrealTexture.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Unreal\UnrealStaticMesh.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Unreal\UnrealMaterial.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <!-- DirectXTex source units -->
     <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

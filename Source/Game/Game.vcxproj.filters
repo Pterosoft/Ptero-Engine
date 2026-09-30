@@ -24,13 +24,13 @@
     <ClInclude Include="Game.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="FarkleConfig.h">
+    <ClInclude Include="FirstPersonCharacter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="GameAPI.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="GameCamera.h">
+    <ClInclude Include="..\System\include\System\CharacterMovement.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="pch.h">
@@ -44,7 +44,7 @@
     <ClCompile Include="Game.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="GameCamera.cpp">
+    <ClCompile Include="FirstPersonCharacter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="dllmain.cpp">

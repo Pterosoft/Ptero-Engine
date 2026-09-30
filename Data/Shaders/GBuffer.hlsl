@@ -6,6 +6,8 @@
 // Supplies the reflectivity knob's encoding; the deferred resolve, SSR and the ray-traced
 // specular pass all decode it from the same header.
 #include "SurfaceSpecular.hlsli"
+#include "Tessellation.hlsli"
+#include "TangentFrame.hlsli"
 
 cbuffer EntityConstants : register(b0)
 {
@@ -28,6 +30,8 @@ cbuffer MaterialConstants : register(b1)
     int    gHasRoughnessMap;
     int    gHasAoMap;
     int    gHasEmissiveMap;
+    // 0 = separate maps; 1 = one packed map, R = roughness, G = metallic, B = AO (RMA);
+    // 2 = one packed map, R = AO, G = roughness, B = metallic (ORM, Unreal's layout).
     int    gHasPackedMaterialMap;
     // Reflectivity, 0.5 = neutral. Scales the surface's normal-incidence reflectance, so
     // it is what gives a metal a specular response when the scene offers it nothing to
@@ -64,6 +68,15 @@ cbuffer MaterialConstants : register(b1)
     // never reach 1, so without this the whole surface sits half a volume deep and most
     // of the offset is a uniform slab shift instead of relief.
     float  gParallaxReferenceHeight;
+    // Tessellation + displacement (only read by the tessellated pipeline, HSMain/DSMain).
+    int    gUseTessellation;
+    float  gTessMaxFactor;
+    float  gTessTargetPixels;       // on-screen length of one tessellated edge
+    float  gTessFadeDistance;       // metres; 0 = no fade
+    float  gDisplacementScale;      // metres between black and white
+    float  gDisplacementMidLevel;   // height value that stays on the surface
+    float  gTessPixelScale;         // (viewport height / 2) / tan(fovY / 2)
+    float  _MatPad3;
 };
 
 cbuffer RainSurfaceConstants : register(b2)
@@ -143,62 +156,6 @@ float2 TransformUv(float2 uv)
     return rotated * gUvTiling + gUvOffset;
 }
 
-// Builds a tangent frame aligned with the UV layout, derived from screen-space
-// derivatives so no tangent vertex attribute is needed. Parallax only makes sense in
-// a UV-aligned frame: the height volume is addressed in texture space, so the marching
-// direction has to be expressed there too. Also reports how many world units one UV
-// unit spans along each axis; parallax only uses this to tell a usable UV
-// parameterisation from an unusable one. Meshes whose UVs are degenerate (a flat or
-// missing UV set gives zero derivatives) fall back to an arbitrary frame around N and
-// report a zero scale, which disables parallax.
-void BuildTangentFrame(
-    float3 worldPosition,
-    float2 uv,
-    float3 N,
-    out float3 T,
-    out float3 B,
-    out float2 worldUnitsPerUv)
-{
-    const float3 dpdx = ddx(worldPosition);
-    const float3 dpdy = ddy(worldPosition);
-    const float2 duvdx = ddx(uv);
-    const float2 duvdy = ddy(uv);
-
-    // Solve for the tangent vectors in the plane perpendicular to N.
-    const float3 dpdyPerp = cross(dpdy, N);
-    const float3 dpdxPerp = cross(N, dpdx);
-    float3 tangent   = dpdyPerp * duvdx.x + dpdxPerp * duvdy.x;
-    float3 bitangent = dpdyPerp * duvdx.y + dpdxPerp * duvdy.y;
-
-    // That solve leaves both vectors scaled by the UV determinant. Dividing it back out
-    // is what makes them real tangents: their lengths become world units per UV unit,
-    // which the parallax march needs to know, and the sign restores the right handedness
-    // on mirrored UV shells, where a plain normalize() leaves T and B flipped.
-    const float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
-
-    // The degeneracy test has to be relative. Both the determinant and the derivatives
-    // shrink with the pixel's footprint, so the absolute epsilon this used to compare
-    // against started rejecting perfectly good UVs once the camera came close enough to
-    // a high-resolution texture - which swapped the frame for an arbitrary one and sent
-    // the march off in a direction unrelated to the texture.
-    const float uvDerivativeScale = dot(duvdx, duvdx) + dot(duvdy, duvdy);
-    if (uvDerivativeScale <= 0.0f || abs(determinant) < 1e-8f * uvDerivativeScale)
-    {
-        const float3 up = (abs(N.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
-        T = normalize(cross(up, N));
-        B = cross(N, T);
-        worldUnitsPerUv = float2(0.0f, 0.0f);
-        return;
-    }
-
-    tangent   /= determinant;
-    bitangent /= determinant;
-
-    worldUnitsPerUv = max(float2(length(tangent), length(bitangent)), 1e-20f);
-    T = tangent   / worldUnitsPerUv.x;
-    B = bitangent / worldUnitsPerUv.y;
-}
-
 // Depth below the reference plane, so a height at or above the reference sits flush
 // with the polygon and only what is below it is carved in.
 float SampleSurfaceDepth(float2 uv, float2 uvDdx, float2 uvDdy)
@@ -257,6 +214,116 @@ PSInput VSMain(VSInput input)
     output.WorldNormal   = mul(float4(input.Normal,   0.0f), gModel).xyz;
     output.TexCoord      = input.TexCoord;
     output.Color         = input.Color;
+    return output;
+}
+
+// ---------------------------------------------------------------------------
+// Tessellated path (materials with Tessellation enabled and a height map).
+// VSMainTess -> HSMain -> fixed-function tessellator -> DSMain -> PSMain.
+// ---------------------------------------------------------------------------
+
+struct TessControlPoint
+{
+    float3 LocalPosition : POSITION;
+    float3 LocalNormal   : NORMAL;
+    float2 TexCoord      : TEXCOORD;
+    float4 Color         : COLOR;
+    float3 WorldPosition : WORLDPOS;
+    float4 ClipPosition  : CLIPPOS;
+};
+
+TessControlPoint VSMainTess(VSInput input)
+{
+    TessControlPoint output;
+    output.LocalPosition = input.Position;
+    output.LocalNormal   = input.Normal;
+    output.TexCoord      = input.TexCoord;
+    output.Color         = input.Color;
+    output.WorldPosition = mul(float4(input.Position, 1.0f), gModel).xyz;
+    output.ClipPosition  = mul(float4(input.Position, 1.0f), gMVP);
+    return output;
+}
+
+PteroTessPatchConstants HSConstants(InputPatch<TessControlPoint, 3> patch)
+{
+    PteroTessPatchConstants output;
+
+    const float slack = abs(gDisplacementScale) * 3.0f;
+    if (PteroTessPatchOutsideFrustum(patch[0].ClipPosition, patch[1].ClipPosition, patch[2].ClipPosition, slack))
+    {
+        // A zero factor discards the patch.
+        output.Edges[0] = output.Edges[1] = output.Edges[2] = 0.0f;
+        output.Inside = 0.0f;
+        output.DisplacementMip = 0.0f;
+        return output;
+    }
+
+    [unroll]
+    for (int edge = 0; edge < 3; ++edge)
+    {
+        output.Edges[edge] = PteroTessEdgeFactor(
+            patch[(edge + 1) % 3].WorldPosition, patch[(edge + 2) % 3].WorldPosition,
+            gCameraPositionWS, gTessPixelScale, gTessTargetPixels, gTessMaxFactor, gTessFadeDistance);
+    }
+    output.Inside = max(output.Edges[0], max(output.Edges[1], output.Edges[2]));
+
+    float heightWidth, heightHeight;
+    gHeightTexture.GetDimensions(heightWidth, heightHeight);
+    output.DisplacementMip = PteroDisplacementMip(
+        TransformUv(patch[0].TexCoord), TransformUv(patch[1].TexCoord), TransformUv(patch[2].TexCoord),
+        output.Inside, float2(heightWidth, heightHeight));
+    return output;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HSConstants")]
+[maxtessfactor(64.0)]
+TessControlPoint HSMain(InputPatch<TessControlPoint, 3> patch, uint pointId : SV_OutputControlPointID)
+{
+    return patch[pointId];
+}
+
+[domain("tri")]
+PSInput DSMain(
+    PteroTessPatchConstants patchConstants,
+    float3 barycentrics : SV_DomainLocation,
+    const OutputPatch<TessControlPoint, 3> patch)
+{
+    float3 localPosition = patch[0].LocalPosition * barycentrics.x
+                         + patch[1].LocalPosition * barycentrics.y
+                         + patch[2].LocalPosition * barycentrics.z;
+    const float3 localNormal = normalize(patch[0].LocalNormal * barycentrics.x
+                                       + patch[1].LocalNormal * barycentrics.y
+                                       + patch[2].LocalNormal * barycentrics.z);
+    const float2 texCoord = patch[0].TexCoord * barycentrics.x
+                          + patch[1].TexCoord * barycentrics.y
+                          + patch[2].TexCoord * barycentrics.z;
+    const float4 color = patch[0].Color * barycentrics.x
+                       + patch[1].Color * barycentrics.y
+                       + patch[2].Color * barycentrics.z;
+
+    // Displace in object space.  gDisplacementScale is in world metres, so divide by
+    // how long a unit object-space normal is in world space (exact for uniform scale).
+    if (gUseTessellation != 0 && gHasHeightMap != 0)
+    {
+        const float height = gHeightTexture.SampleLevel(
+            gLinearSampler, TransformUv(texCoord), patchConstants.DisplacementMip).r;
+        const float worldPerLocal = max(length(mul(float4(localNormal, 0.0f), gModel).xyz), 1e-6f);
+        localPosition += localNormal
+                       * ((height - gDisplacementMidLevel) * gDisplacementScale / worldPerLocal);
+    }
+
+    PSInput output;
+    output.Position      = mul(float4(localPosition, 1.0f), gMVP);
+    output.WorldPosition = mul(float4(localPosition, 1.0f), gModel).xyz;
+    // The interpolated normal is the undisplaced one; the normal map carries the
+    // displaced detail, which is what a displacement map's companion normal map is for.
+    output.WorldNormal   = mul(float4(localNormal, 0.0f), gModel).xyz;
+    output.TexCoord      = texCoord;
+    output.Color         = color;
     return output;
 }
 
@@ -383,15 +450,15 @@ PSOutput PSMain(PSInput input)
     float4 aoSample = gAoTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);
 
     float roughness = gHasRoughnessMap
-        ? (gHasPackedMaterialMap ? roughnessSample.r : roughnessSample.r) * gRoughnessFactor
+        ? (gHasPackedMaterialMap == 2 ? roughnessSample.g : roughnessSample.r) * gRoughnessFactor
         : gRoughnessFactor;
 
     float metallic = gHasMetallicMap
-        ? (gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
+        ? (gHasPackedMaterialMap == 2 ? metallicSample.b : gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
         : gMetallicFactor;
 
     float ao = gHasAoMap
-        ? lerp(1.0f, gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
+        ? lerp(1.0f, gHasPackedMaterialMap == 2 ? aoSample.r : gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
         : 1.0f;
 
     const float rainWetness = gRainWetnessIntensity * saturate(gRainEnabled) * ComputeRainWetnessMask(N);

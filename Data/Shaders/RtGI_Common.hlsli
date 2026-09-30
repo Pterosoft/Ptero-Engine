@@ -12,6 +12,8 @@
 // where a spot cone ends.
 #include "LightShapes.hlsli"
 #include "ShaderSafeMath.hlsli"
+// PteroVsmConstants, for next-event visibility from the shadow map (RtGI_Vsm.hlsli).
+#include "VirtualShadowMap.hlsli"
 
 // ─── Root signature (matches RtGlobalIllumination::CreateRootSignature) ───────
 // [0] CBV  b0  – RtGIConstants
@@ -70,6 +72,11 @@ cbuffer RtGIConstants : register(b0)
     float3 g_Pad5;
 
     PteroLightData g_PointLights[MAX_RTGI_POINT_LIGHTS];
+
+    float  g_VsmMaxTexelSize;   // coarsest shadow-map texel (metres) trusted at a bounce hit
+    int    g_VsmVisibility;     // 1 = ask the shadow map before tracing a shadow ray
+    float2 g_Pad6;
+    PteroVsmConstants g_Vsm;    // g_Vsm.Active == 0 when the map is not bound
 }
 
 // ─── GI Reservoir stored in the structured buffer ────────────────────────────

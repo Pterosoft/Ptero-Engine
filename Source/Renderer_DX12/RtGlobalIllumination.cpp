@@ -17,12 +17,16 @@
 #include "pch.h"
 #include "RtGlobalIllumination.h"
 #include "Components.h"
+#include "VirtualGeometryBuilder.h"
+#include "VirtualGeometryRenderer.h"
 #include "..\SDKs\DirectXTex\DirectXTex\DirectXTex.h"
 #include "System/DataFiles.h"
+#include "System/Udim.h"
 #include "System/PteroLog.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -60,6 +64,109 @@ namespace
     // Thread group size for all RTGI compute passes (matches [numthreads(8,8,1)] in HLSL).
     constexpr UINT kGroupSizeX = 8;
     constexpr UINT kGroupSizeY = 8;
+
+    // BLAS cuts through a virtualized mesh's cluster DAG are keyed by error in
+    // half-octave steps up from kCutErrorBase (mesh units), so instances whose
+    // scale and distance ask for about the same error share one BLAS, and a
+    // mesh can never collect more than kMaxCutStep + 1 of them.
+    constexpr float        kCutErrorBase = 1.0e-4f;
+    constexpr std::int16_t kMaxCutStep   = 60;
+
+    // The coarsest step whose error does not exceed `meshError`, or -1 when even
+    // the finest step is too coarse, in which case the source triangles are used.
+    std::int16_t CutStepForError(float meshError)
+    {
+        if (!(meshError >= kCutErrorBase))
+            return -1;
+        const float step = std::floor(std::log2(meshError / kCutErrorBase) * 2.0f);
+        return static_cast<std::int16_t>(std::clamp(step, 0.0f, static_cast<float>(kMaxCutStep)));
+    }
+
+    float CutStepError(std::int16_t step)
+    {
+        return kCutErrorBase * std::exp2(static_cast<float>(step) * 0.5f);
+    }
+
+    // A cut through the DAG as ordinary geometry: compacted vertices, triangles
+    // grouped by material slot, and the slot of each group.
+    struct CutGeometry
+    {
+        std::vector<Vertex>        Vertices;
+        std::vector<std::uint32_t> Indices;
+        struct Range { std::uint32_t StartPrimitive, PrimitiveCount, MaterialId, UdimTile; };
+        std::vector<Range>         Ranges;
+    };
+
+    // The view-independent cut at `error` (mesh units): every cluster whose own
+    // error is within it and whose parent's is not. The same test the GPU makes
+    // per view with a projected error, so the cut is crack-free for the same
+    // reason (VirtualGeometryBuilder.h).
+    bool ExtractCut(const VirtualGeometry::BuiltMesh& dag, const MeshLod& lod, float error, CutGeometry& out)
+    {
+        if (dag.SourceVertexCount != lod.Vertices.size())
+            return false;
+        const std::vector<VirtualGeometry::MaterialSlot> slots = VirtualGeometry::CollectMaterialSlots(lod);
+
+        // Sorted by ParentError: the clusters whose parent is too coarse are a suffix.
+        const auto first = std::upper_bound(dag.Clusters.begin(), dag.Clusters.end(), error,
+            [](float value, const VirtualGeometry::GpuCluster& cluster) { return value < cluster.ParentError; });
+
+        std::vector<std::vector<std::uint32_t>> slotCorners(slots.size());
+        for (auto it = first; it != dag.Clusters.end(); ++it)
+        {
+            const VirtualGeometry::GpuCluster& cluster = *it;
+            if (cluster.LodError > error)
+                continue;
+            const std::uint32_t vertexCount   = cluster.Packed & 0x7Fu;
+            const std::uint32_t triangleCount = (cluster.Packed >> 7) & 0x7Fu;
+            const std::uint32_t slot          = (cluster.Packed >> 20) & 0xFFFu;
+            if (slot >= slots.size()
+                || static_cast<std::size_t>(cluster.VertexOffset) + vertexCount > dag.ClusterVertices.size()
+                || static_cast<std::size_t>(cluster.TriangleOffset) + triangleCount > dag.ClusterTriangles.size())
+                return false;
+
+            std::vector<std::uint32_t>& corners = slotCorners[slot];
+            for (std::uint32_t t = 0; t < triangleCount; ++t)
+            {
+                const std::uint32_t packed = dag.ClusterTriangles[cluster.TriangleOffset + t];
+                for (std::uint32_t corner = 0; corner < 3; ++corner)
+                {
+                    const std::uint32_t local = (packed >> (corner * 8u)) & 0xFFu;
+                    if (local >= vertexCount)
+                        return false;
+                    corners.push_back(dag.ClusterVertices[cluster.VertexOffset + local]);
+                }
+            }
+        }
+
+        constexpr std::uint32_t kUnmapped = 0xFFFFFFFFu;
+        std::vector<std::uint32_t> remap(lod.Vertices.size(), kUnmapped);
+        for (std::size_t slot = 0; slot < slots.size(); ++slot)
+        {
+            const std::vector<std::uint32_t>& corners = slotCorners[slot];
+            if (corners.empty())
+                continue;
+            CutGeometry::Range range{};
+            range.StartPrimitive = static_cast<std::uint32_t>(out.Indices.size() / 3);
+            range.PrimitiveCount = static_cast<std::uint32_t>(corners.size() / 3);
+            range.MaterialId     = slots[slot].MaterialId;
+            range.UdimTile       = slots[slot].UdimTile;
+            for (std::uint32_t source : corners)
+            {
+                if (source >= remap.size())
+                    return false;
+                std::uint32_t& compact = remap[source];
+                if (compact == kUnmapped)
+                {
+                    compact = static_cast<std::uint32_t>(out.Vertices.size());
+                    out.Vertices.push_back(lod.Vertices[source]);
+                }
+                out.Indices.push_back(compact);
+            }
+            out.Ranges.push_back(range);
+        }
+        return !out.Indices.empty();
+    }
 
     // Allocate a shader-visible SRV/UAV descriptor from the shared heap.
     // Returns false and records an error on failure.
@@ -470,6 +577,8 @@ void RtGlobalIllumination::Shutdown()
     mConstantFrameSlot = 0;
     mSceneSignature = 0;
     mBlasCache.clear();
+    mEntityBlasTier.clear();
+    mVsmBound = false;
     mMaterialSlotCache.clear();
     mTextureAverageColorCache.clear();
     mMaterialTextureIndices.clear();
@@ -560,6 +669,8 @@ void RtGlobalIllumination::Dispatch(
         SetTable(cmdList, 7, mIndexSrvGpu);
         SetTable(cmdList, 8, mInstanceInfoSrvGpu);
         SetTable(cmdList, 9, mMaterialRangeSrvGpu);
+        SetTable(cmdList, 10, mBaseTextureTableGpu);
+        BindVirtualShadowMap(cmdList, 11, 12, gbufferNormalDepthSrv);
         cmdList->Dispatch(gx, gy, 1);
 
         UavBarrier(mReservoirBuffer[writeIdx].Get());
@@ -787,6 +898,88 @@ void RtGlobalIllumination::Dispatch(
         mOutputBufferInSrvState = true;
     }
 
+    DispatchSpecular(cmdList, gbufferAlbedoSrv, gbufferNormalDepthSrv, gbufferMaterialSrv, settings);
+
+    // Advance ping-pong index for next frame.
+    mReservoirWriteIdx = 1u - mReservoirWriteIdx;
+    ++mFrameIndex;
+}
+
+// -----------------------------------------------------------------------
+// Specular reflections
+// -----------------------------------------------------------------------
+
+// Specular on its own, for when the radiance probes supply diffuse GI.
+//
+// Probes replace the per-pixel diffuse passes, but have nothing to offer a
+// mirror-like surface: an L2 SH per few metres cannot hold a reflection. The
+// specular pass reads only the G-Buffer and the shared TLAS, never the
+// diffuse reservoirs, so it can run without them. It used to be reachable
+// only through Dispatch(), which is skipped whenever probes are the GI mode,
+// so reflections silently vanished the moment probes were switched on.
+void RtGlobalIllumination::DispatchSpecularOnly(
+    ID3D12GraphicsCommandList4*  cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+    const RtGISettings&          settings,
+    const float                  viewProjInv[16],
+    const float                  currViewProj[16],
+    const float                  worldToViewMatrix[16],
+    const float                  cameraPos[3],
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunR,    float sunG,    float sunB,
+    float skyR,    float skyG,    float skyB,
+    const DeferredLightingPass::PointLightGpu* pointLights,
+    uint32_t     numPointLights)
+{
+    // No temporal history is involved, so the current view-projection stands
+    // in for the previous one.
+    UploadConstants(settings, viewProjInv, currViewProj, currViewProj, worldToViewMatrix, cameraPos,
+        sunDirX, sunDirY, sunDirZ, sunR, sunG, sunB, skyR, skyG, skyB,
+        pointLights, numPointLights);
+
+    DispatchSpecular(cmdList, gbufferAlbedoSrv, gbufferNormalDepthSrv, gbufferMaterialSrv, settings);
+}
+
+void RtGlobalIllumination::SetVirtualShadowMap(
+    const VsmGpuConstants*      constants,
+    D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+    D3D12_GPU_DESCRIPTOR_HANDLE poolSrv)
+{
+    mVsmBound     = constants != nullptr && pageTable != 0 && poolSrv.ptr != 0;
+    mVsmConstants = mVsmBound ? *constants : VsmGpuConstants{};
+    mVsmPageTable = mVsmBound ? pageTable : 0;
+    mVsmPoolSrv   = mVsmBound ? poolSrv : D3D12_GPU_DESCRIPTOR_HANDLE{};
+}
+
+void RtGlobalIllumination::BindVirtualShadowMap(
+    ID3D12GraphicsCommandList4* cmdList, UINT poolParam, UINT pageTableParam,
+    D3D12_GPU_DESCRIPTOR_HANDLE fallbackTextureSrv)
+{
+    // Unbound, the shaders see Vsm.Active == 0 and never read either of these,
+    // but a parameter a shader declares must still name something valid - the
+    // same stand-ins the volumetric fog pass uses.
+    SetTable(cmdList, poolParam, mVsmBound ? mVsmPoolSrv : fallbackTextureSrv);
+    cmdList->SetComputeRootShaderResourceView(pageTableParam, mVsmBound ? mVsmPageTable : CurrentConstantAddress());
+}
+
+// Records the specular pass against constants already uploaded this frame.
+void RtGlobalIllumination::DispatchSpecular(
+    ID3D12GraphicsCommandList4*  cmdList,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferAlbedoSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferNormalDepthSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  gbufferMaterialSrv,
+    const RtGISettings&          settings)
+{
+    const UINT gx = (mWidth  + kGroupSizeX - 1) / kGroupSizeX;
+    const UINT gy = (mHeight + kGroupSizeY - 1) / kGroupSizeY;
+
+    auto UavBarrier = [&](ID3D12Resource* resource) {
+        auto b = CD3DX12_RESOURCE_BARRIER::UAV(resource);
+        cmdList->ResourceBarrier(1, &b);
+    };
+
     // ── Specular reflection pass ───────────────────────────────────────────
     // Keep the stable direct specular path active until the half-res NRD path is reintroduced safely.
     if (mTlasReady && settings.SpecularEnabled && mPSO_Specular && mRootSignatureSpecular)
@@ -815,6 +1008,7 @@ void RtGlobalIllumination::Dispatch(
         SetTable(cmdList, 9, mBaseTextureTableGpu);
         SetTable(cmdList, 10, mSpecularUavGpu);
         SetTable(cmdList, 11, mSpecularUavGpu); // dummy u1 bound to same slot
+        BindVirtualShadowMap(cmdList, 12, 13, gbufferNormalDepthSrv);
         cmdList->SetPipelineState(mPSO_Specular.Get());
         cmdList->Dispatch(gx, gy, 1);
         UavBarrier(mSpecularBuffer.Get());
@@ -838,9 +1032,6 @@ void RtGlobalIllumination::Dispatch(
         mSpecularBufferInSrvState = true;
     }
 
-    // Advance ping-pong index for next frame.
-    mReservoirWriteIdx = 1u - mReservoirWriteIdx;
-    ++mFrameIndex;
 }
 
 // -----------------------------------------------------------------------
@@ -863,7 +1054,11 @@ bool RtGlobalIllumination::CreateRootSignature()
     //  7  SRV table   t4  global index buffer  (uint32,          RayGen only)
     //  8  SRV table   t5  per-instance info    (GpuInstanceInfo, RayGen only)
     //  9  SRV table   t6  material ranges      (GpuMaterialRange, RayGen only)
-    D3D12_DESCRIPTOR_RANGE srvA{}, srvB{}, uavA{}, uavB{}, tlas{}, vb{}, ib{}, ii{}, mr{};
+    // 10  SRV table   t7..t38 base-color textures (RayGen only)
+    // 11  SRV table   t40 virtual shadow map pool   (RayGen only)
+    // 12  root SRV    t41 virtual shadow map page table (RayGen only)
+    //     static      s0  linear wrap sampler for them
+    D3D12_DESCRIPTOR_RANGE srvA{}, srvB{}, uavA{}, uavB{}, tlas{}, vb{}, ib{}, ii{}, mr{}, bt{}, vsmPool{};
     srvA.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  srvA.NumDescriptors = 1; srvA.BaseShaderRegister = 0;
     srvB.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  srvB.NumDescriptors = 1; srvB.BaseShaderRegister = 1;
     uavA.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;  uavA.NumDescriptors = 1; uavA.BaseShaderRegister = 0;
@@ -873,8 +1068,14 @@ bool RtGlobalIllumination::CreateRootSignature()
     ib.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  ib.NumDescriptors   = 1; ib.BaseShaderRegister   = 4;
     ii.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  ii.NumDescriptors   = 1; ii.BaseShaderRegister   = 5;
     mr.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  mr.NumDescriptors   = 1; mr.BaseShaderRegister   = 6;
+    // The same table the specular pass and the radiance probes sample, so a
+    // bounce off a textured surface takes its colour from the texture rather
+    // than from the flat base-colour factor - the probes already did, and GI
+    // looked different depending on which of the two was running.
+    bt.RangeType   = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;  bt.NumDescriptors   = kMaxRtMaterialTextures; bt.BaseShaderRegister = 7;
+    vsmPool.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; vsmPool.NumDescriptors = 1; vsmPool.BaseShaderRegister = 40;
 
-    D3D12_ROOT_PARAMETER params[10]{};
+    D3D12_ROOT_PARAMETER params[13]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -905,9 +1106,30 @@ bool RtGlobalIllumination::CreateRootSignature()
     params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[9].DescriptorTable = { 1, &mr };
     params[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[10].DescriptorTable = { 1, &bt };
+    params[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[11].DescriptorTable = { 1, &vsmPool };
+    params[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[12].Descriptor.ShaderRegister = 41;
+    params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 10;
+    rsDesc.NumParameters = 13;
     rsDesc.pParameters = params;
+    rsDesc.NumStaticSamplers = 1;
+    rsDesc.pStaticSamplers = &sampler;
     rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     ComPtr<ID3DBlob> serialized, errors;
@@ -1059,11 +1281,13 @@ bool RtGlobalIllumination::CreateSpecularRootSignature()
     //  [9]  SRV  t8..t263 – base-color textures table
     // [10]  UAV  u0  – specular output
     // [11]  UAV  u1  – dummy (u1 declared in shader; bind same slot)
+    // [12]  SRV  t40 – virtual shadow map pool
+    // [13]  root SRV t41 – virtual shadow map page table
 
     ID3D12Device* device = DX12Context_GetDevice();
     if (!device) return false;
 
-    D3D12_DESCRIPTOR_RANGE r[11]{};
+    D3D12_DESCRIPTOR_RANGE r[12]{};
     r[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t0 albedo
     r[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t1 normalDepth
     r[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t2 TLAS
@@ -1075,21 +1299,25 @@ bool RtGlobalIllumination::CreateSpecularRootSignature()
     r[8] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, RtGlobalIllumination::kMaxRtMaterialTextures, 8, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t8..t263 base color
     r[9] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // u0 specular out
     r[10] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // u1 dummy
+    r[11] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 40, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // t40 VSM pool
 
-    D3D12_ROOT_PARAMETER p[12]{};
+    D3D12_ROOT_PARAMETER p[14]{};
     p[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_CBV;
     p[0].Descriptor.ShaderRegister = 0;
     p[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
-    for (int i = 1; i <= 11; ++i)
+    for (int i = 1; i <= 12; ++i)
     {
         p[i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         p[i].DescriptorTable.NumDescriptorRanges = 1;
         p[i].DescriptorTable.pDescriptorRanges   = &r[i - 1];
         p[i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
     }
+    p[13].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;   // t41 VSM page table
+    p[13].Descriptor.ShaderRegister = 41;
+    p[13].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
-    rsDesc.NumParameters = 12;
+    rsDesc.NumParameters = 14;
     rsDesc.pParameters   = p;
     rsDesc.NumStaticSamplers = 1;
     D3D12_STATIC_SAMPLER_DESC sampler{};
@@ -1479,6 +1707,9 @@ void RtGlobalIllumination::UploadConstants(
         std::memcpy(cb.PointLights, pointLights,
             static_cast<size_t>(cb.NumPointLights) * sizeof(DeferredLightingPass::PointLightGpu));
     }
+    cb.VsmMaxTexelSize = s.VsmMaxTexelSize;
+    cb.VsmVisibility   = (s.VsmVisibility && mVsmBound) ? 1 : 0;
+    cb.Vsm             = mVsmConstants;
     // Advance to the next block before writing, so this frame's constants land
     // somewhere the GPU is not still reading from an earlier frame.
     mConstantFrameSlot = (mConstantFrameSlot + 1u) % kFramesInFlight;
@@ -1544,7 +1775,8 @@ bool RtGlobalIllumination::CreateUploadBuf(ID3D12Device* dev, UINT64 size,
 // exactly why a static scene can reuse last frame's.
 std::uint64_t RtGlobalIllumination::ComputeSceneSignature(
     const std::vector<Entity>& entities,
-    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches) const
+    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches,
+    const std::vector<std::int16_t>& cutSteps) const
 {
     // FNV-1a: no dependencies, good avalanche for the small mixed-type keys
     // here, and fast enough to run over every entity each frame.
@@ -1568,10 +1800,15 @@ std::uint64_t RtGlobalIllumination::ComputeSceneSignature(
 
     mix(entities.size());
 
-    for (const Entity& entity : entities)
+    for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex)
     {
+        const Entity& entity = entities[entityIndex];
         if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
             continue;
+
+        // Which BLAS the instance uses: it changes with the camera's distance,
+        // and when a cluster DAG finishes building.
+        mix(static_cast<std::uint16_t>(entityIndex < cutSteps.size() ? cutSteps[entityIndex] : -1));
 
         // The mesh pointer covers both which asset is used and whether it has
         // finished loading - a late async load swaps the pointer and correctly
@@ -1612,7 +1849,8 @@ std::uint64_t RtGlobalIllumination::ComputeSceneSignature(
 void RtGlobalIllumination::BuildTlas(
     ID3D12GraphicsCommandList4* cmdList,
     const std::vector<Entity>&  entities,
-    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches)
+    const std::vector<VegetationRenderer::RayTracingBatch>* vegetationBatches,
+    const BlasDetail* detail)
 {
     ID3D12Device* deviceRaw = DX12Context_GetDevice();
     if (!deviceRaw) return;
@@ -1620,6 +1858,71 @@ void RtGlobalIllumination::BuildTlas(
     // Need ID3D12Device5 for acceleration-structure APIs.
     ComPtr<ID3D12Device5> device;
     if (FAILED(deviceRaw->QueryInterface(IID_PPV_ARGS(&device)))) return;
+
+    // Which cut through its cluster DAG each virtualized instance is traced
+    // against: -1 (the source triangles) unless the mesh has a DAG. Decided
+    // before the unchanged-scene test, because a camera move across a tier
+    // boundary changes the TLAS without anything in the scene moving.
+    //
+    // Tiers by distance from the camera to the instance's bounds: tier k starts
+    // at TierDistance * 4^(k-1) and allows LodError * 4^k of simplification
+    // error. The error stays well inside the tolerance ComputePrimaryRayOrigin
+    // re-finds a G-Buffer point on the traced surface with - max(1 cm, 1% of the
+    // distance) - so primary GI rays still leave from the surface they traced.
+    std::vector<std::int16_t> cutSteps(entities.size(), -1);
+    std::vector<std::shared_ptr<const VirtualGeometry::BuiltMesh>> cutDags(entities.size());
+    if (detail != nullptr && detail->VirtualGeometry != nullptr)
+    {
+        using namespace DirectX;
+        if (mEntityBlasTier.size() != entities.size())
+            mEntityBlasTier.assign(entities.size(), 0);
+
+        const int tierCount = std::clamp(detail->TierCount, 1, 3);
+        const float tierDistance = std::max(detail->TierDistance, 0.01f);
+        const XMVECTOR camera = XMLoadFloat3(&detail->CameraPosition);
+
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex)
+        {
+            const Entity& entity = entities[entityIndex];
+            if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+                continue;
+
+            std::shared_ptr<const VirtualGeometry::BuiltMesh> dag =
+                detail->VirtualGeometry->FindBuiltMesh(entity.Mesh->MeshAsset.get());
+            if (!dag)
+                continue;
+
+            const XMFLOAT3& scale = entity.Transform.Scale;
+            const float maxScale = std::max({ std::abs(scale.x), std::abs(scale.y), std::abs(scale.z) });
+            if (maxScale <= 1e-6f)
+                continue;
+
+            const XMFLOAT4& bounds = dag->BoundsSphere;
+            const XMVECTOR center = XMVector3Transform(
+                XMVectorSet(bounds.x, bounds.y, bounds.z, 1.0f), entity.Transform.GetTransform());
+            const float distance = std::max(
+                XMVectorGetX(XMVector3Length(XMVectorSubtract(center, camera))) - bounds.w * maxScale, 0.0f);
+
+            // Hysteresis: a boundary is 10% further away to move out past it
+            // than to come back in.
+            const int previous = mEntityBlasTier[entityIndex];
+            int tier = 0;
+            float boundary = tierDistance;
+            for (int k = 1; k < tierCount; ++k, boundary *= 4.0f)
+            {
+                if (distance >= boundary * (previous >= k ? 0.9f : 1.1f))
+                    tier = k;
+            }
+            mEntityBlasTier[entityIndex] = static_cast<std::uint8_t>(tier);
+
+            const float worldError = std::max(detail->LodError, 0.0f) * std::exp2(2.0f * static_cast<float>(tier));
+            const std::int16_t step = CutStepForError(worldError / maxScale);
+            if (step < 0)
+                continue;
+            cutSteps[entityIndex] = step;
+            cutDags[entityIndex] = std::move(dag);
+        }
+    }
 
     // A TLAS describes only where instances are. If none of that has changed
     // since the last build, rebuilding produces a bit-identical structure at
@@ -1630,7 +1933,7 @@ void RtGlobalIllumination::BuildTlas(
     // itself, its SRV, and the geometry and material pools - persists across
     // frames, so there is nothing to re-establish on the skipped path.
     {
-        const std::uint64_t signature = ComputeSceneSignature(entities, vegetationBatches);
+        const std::uint64_t signature = ComputeSceneSignature(entities, vegetationBatches, cutSteps);
         if (signature == mSceneSignature && mSceneSignature != 0 && mTlas)
         {
             return;
@@ -1786,15 +2089,32 @@ void RtGlobalIllumination::BuildTlas(
     // key is built from cannot be recycled while the entry lives. Vegetation
     // passes null: its meshes belong to the vegetation layers, which outlive a
     // play session, so they are not part of the level swap that churns addresses.
+    //
+    // A key with a CutStep builds from a static cut through `dag` instead of the
+    // source triangles. A cut that cannot be extracted leaves an entry with no
+    // Result, so it is not retried every frame; the caller falls back to the
+    // source triangles.
     const auto ensureBlas = [&](const Mesh* mesh, const BlasKey& meshKey,
-                                const std::shared_ptr<const Mesh>& owner) -> bool
+                                const std::shared_ptr<const Mesh>& owner,
+                                const VirtualGeometry::BuiltMesh* dag) -> bool
     {
         if (mBlasCache.find(meshKey) != mBlasCache.end())
             return true;
 
         {
-            const auto& verts   = mesh->GetVertices();
-            const auto& indices = mesh->GetIndices();
+            CutGeometry cut;
+            if (meshKey.CutStep >= 0)
+            {
+                if (dag == nullptr || mesh->GetLods().empty()
+                    || !ExtractCut(*dag, mesh->GetLod(0), CutStepError(meshKey.CutStep), cut))
+                {
+                    mBlasCache[meshKey].MeshOwner = owner;
+                    return false;
+                }
+            }
+
+            const auto& verts   = meshKey.CutStep >= 0 ? cut.Vertices : mesh->GetVertices();
+            const auto& indices = meshKey.CutStep >= 0 ? cut.Indices  : mesh->GetIndices();
             if (verts.empty() || indices.empty()) return false;
 
             const UINT64 vbSize = verts.size()   * sizeof(Vertex);
@@ -1831,8 +2151,12 @@ void RtGlobalIllumination::BuildTlas(
 
             BlasEntry& e = mBlasCache[meshKey];
             e.MeshOwner = owner;
+            // Scratch is only read by the build, so it is retired through the ring
+            // with the uploads rather than kept for the life of the BLAS - which is
+            // what it used to be, costing about as much VRAM again as the BLAS.
+            ComPtr<ID3D12Resource> scratch;
             if (!CreateGpuBuffer(device.Get(), pre.ScratchDataSizeInBytes,
-                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, e.Scratch, L"RtGI_BlasScratch")) return false;
+                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON, scratch, L"RtGI_BlasScratch")) return false;
             if (!CreateGpuBuffer(device.Get(), pre.ResultDataMaxSizeInBytes,
                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, e.Result, L"RtGI_Blas")) return false;
@@ -1840,8 +2164,12 @@ void RtGlobalIllumination::BuildTlas(
             D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC bd{};
             bd.Inputs                           = inp;
             bd.DestAccelerationStructureData    = e.Result->GetGPUVirtualAddress();
-            bd.ScratchAccelerationStructureData = e.Scratch->GetGPUVirtualAddress();
+            bd.ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress();
             cmdList->BuildRaytracingAccelerationStructure(&bd, 0, nullptr);
+            mPendingReleases[mUploadRingIdx].push_back(std::move(scratch));
+
+            for (const CutGeometry::Range& range : cut.Ranges)
+                e.CutRanges.push_back({ range.StartPrimitive, range.PrimitiveCount, range.MaterialId, range.UdimTile });
 
             auto uavB = CD3DX12_RESOURCE_BARRIER::UAV(e.Result.Get());
             cmdList->ResourceBarrier(1, &uavB);
@@ -1873,17 +2201,57 @@ void RtGlobalIllumination::BuildTlas(
         return true;
     };
 
-    for (const Entity& entity : entities)
+    // One material range of an entity instance, filled from its material slot.
+    const auto appendMaterialRange = [&](const RtMaterialSlotInfo& slotInfo,
+                                         const std::string& baseColorPath, const std::string& opacityPath,
+                                         uint32_t startPrimitive, uint32_t primitiveCount)
     {
+        GpuMaterialRange range{};
+        range.startPrimitive = startPrimitive;
+        range.primitiveCount = primitiveCount;
+
+        const std::array<float, 3> avgBaseColor = getAverageTextureColor(baseColorPath);
+        range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
+        range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
+        range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
+        range.baseColorA = slotInfo.BaseColorTint[3];
+        range.opacityFactor = slotInfo.OpacityFactor;
+        range.alphaCutoff = slotInfo.AlphaCutoff;
+        range.baseColorTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, baseColorPath);
+        range.opacityTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, opacityPath);
+        range.flags = 0;
+        if (slotInfo.UseAlphaCutout) range.flags |= kRtMaterialFlagAlphaCutout;
+        if (slotInfo.DoubleSided)    range.flags |= kRtMaterialFlagDoubleSided;
+        mCpuMaterialRanges.push_back(range);
+    };
+
+    for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex)
+    {
+        const Entity& entity = entities[entityIndex];
         if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
             continue;
 
         const Mesh* mesh = entity.Mesh->MeshAsset.get();
-        const BlasKey meshKey{ mesh, false };
 
-        if (!ensureBlas(mesh, meshKey, entity.Mesh->MeshAsset)) continue;
-
-        const auto it = mBlasCache.find(meshKey);
+        // The cut this instance's distance asks for, else - no cluster DAG, or a
+        // cut that could not be extracted - the source triangles.
+        auto it = mBlasCache.end();
+        if (cutSteps[entityIndex] >= 0)
+        {
+            const BlasKey cutKey{ mesh, false, cutSteps[entityIndex] };
+            if (ensureBlas(mesh, cutKey, entity.Mesh->MeshAsset, cutDags[entityIndex].get()))
+            {
+                it = mBlasCache.find(cutKey);
+                if (it != mBlasCache.end() && !it->second.Result)
+                    it = mBlasCache.end();
+            }
+        }
+        if (it == mBlasCache.end())
+        {
+            const BlasKey meshKey{ mesh, false };
+            if (!ensureBlas(mesh, meshKey, entity.Mesh->MeshAsset, nullptr)) continue;
+            it = mBlasCache.find(meshKey);
+        }
         if (it == mBlasCache.end() || !it->second.Result) continue;
 
         // Record per-instance info so the RayGen shader can look up normals by instance index.
@@ -1895,54 +2263,52 @@ void RtGlobalIllumination::BuildTlas(
 
         const size_t materialRangeStart = mCpuMaterialRanges.size();
         const auto& subMeshes = mesh->GetSubMeshes();
-        if (!subMeshes.empty())
+        if (!it->second.CutRanges.empty())
+        {
+            // A cut groups its triangles by the virtualized mesh's material slots,
+            // UDIM tiles already split out, so each slot is one range.
+            for (const CutRange& cutRange : it->second.CutRanges)
+            {
+                const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(entity.Mesh->MaterialPath, cutRange.materialId);
+                const auto resolveTile = [&](const std::string& path)
+                {
+                    return (cutRange.udimTile != 0 && Udim::HasToken(path)) ? Udim::Resolve(path, cutRange.udimTile) : path;
+                };
+                appendMaterialRange(slotInfo, resolveTile(slotInfo.BaseColorPath), resolveTile(slotInfo.OpacityPath),
+                                    cutRange.startPrimitive, cutRange.primitiveCount);
+            }
+        }
+        else if (!subMeshes.empty())
         {
             for (const SubMesh& subMesh : subMeshes)
             {
                 if (subMesh.indexCount < 3)
                     continue;
 
-                GpuMaterialRange range{};
-                range.startPrimitive = subMesh.indexStart / 3u;
-                range.primitiveCount = subMesh.indexCount / 3u;
-
                 const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(entity.Mesh->MaterialPath, subMesh.materialId);
-                const std::array<float, 3> avgBaseColor = getAverageTextureColor(slotInfo.BaseColorPath);
-                range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
-                range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
-                range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
-                range.baseColorA = slotInfo.BaseColorTint[3];
-                range.opacityFactor = slotInfo.OpacityFactor;
-                range.alphaCutoff = slotInfo.AlphaCutoff;
-                range.baseColorTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.BaseColorPath);
-                range.opacityTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.OpacityPath);
-                range.flags = 0;
-                if (slotInfo.UseAlphaCutout) range.flags |= kRtMaterialFlagAlphaCutout;
-                if (slotInfo.DoubleSided)    range.flags |= kRtMaterialFlagDoubleSided;
-                mCpuMaterialRanges.push_back(range);
+
+                // A UDIM material gets one range per tile so each tile's triangles sample their own texture.
+                std::vector<SubMeshUdimTile> pieces;
+                const bool udim = (Udim::HasToken(slotInfo.BaseColorPath) || Udim::HasToken(slotInfo.OpacityPath))
+                    && !subMesh.udimTiles.empty();
+                if (udim)
+                    pieces = subMesh.udimTiles;
+                else
+                    pieces.push_back({ 0u, subMesh.indexStart, subMesh.indexCount });
+
+                for (const SubMeshUdimTile& piece : pieces)
+                {
+                    const std::string baseColorPath = udim ? Udim::Resolve(slotInfo.BaseColorPath, piece.tile) : slotInfo.BaseColorPath;
+                    const std::string opacityPath   = udim ? Udim::Resolve(slotInfo.OpacityPath, piece.tile) : slotInfo.OpacityPath;
+                    appendMaterialRange(slotInfo, baseColorPath, opacityPath, piece.indexStart / 3u, piece.indexCount / 3u);
+                }
             }
         }
 
         if (mCpuMaterialRanges.size() == materialRangeStart)
         {
-            GpuMaterialRange range{};
-            range.startPrimitive = 0;
-            range.primitiveCount = info.indexCount / 3u;
-
             const RtMaterialSlotInfo slotInfo = loadMaterialSlotInfo(entity.Mesh->MaterialPath, 0);
-            const std::array<float, 3> avgBaseColor = getAverageTextureColor(slotInfo.BaseColorPath);
-            range.baseColorR = slotInfo.BaseColorTint[0] * avgBaseColor[0];
-            range.baseColorG = slotInfo.BaseColorTint[1] * avgBaseColor[1];
-            range.baseColorB = slotInfo.BaseColorTint[2] * avgBaseColor[2];
-            range.baseColorA = slotInfo.BaseColorTint[3];
-            range.opacityFactor = slotInfo.OpacityFactor;
-            range.alphaCutoff = slotInfo.AlphaCutoff;
-            range.baseColorTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.BaseColorPath);
-            range.opacityTextureIndex = RegisterRtMaterialTexture(mTextureManager, mMaterialTextureIndices, mMaterialTextureCount, slotInfo.OpacityPath);
-            range.flags = 0;
-            if (slotInfo.UseAlphaCutout) range.flags |= kRtMaterialFlagAlphaCutout;
-            if (slotInfo.DoubleSided)    range.flags |= kRtMaterialFlagDoubleSided;
-            mCpuMaterialRanges.push_back(range);
+            appendMaterialRange(slotInfo, slotInfo.BaseColorPath, slotInfo.OpacityPath, 0, info.indexCount / 3u);
         }
 
         info.materialRangeOffset = static_cast<uint32_t>(materialRangeStart);
@@ -1980,7 +2346,7 @@ void RtGlobalIllumination::BuildTlas(
                 continue;
 
             const BlasKey meshKey{ batch.MeshAsset, false };
-            if (!ensureBlas(batch.MeshAsset, meshKey, nullptr)) continue;
+            if (!ensureBlas(batch.MeshAsset, meshKey, nullptr, nullptr)) continue;
 
             const auto blasIt = mBlasCache.find(meshKey);
             if (blasIt == mBlasCache.end() || !blasIt->second.Result) continue;

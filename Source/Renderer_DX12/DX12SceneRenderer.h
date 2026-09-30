@@ -12,6 +12,7 @@
 #include "ShadowMapRenderer.h"
 #include "PointShadowMapRenderer.h"
 #include "PointShadowSettings.h"
+#include "VirtualShadowMapRenderer.h"
 #include "DeferredLightingPass.h"
 #include "TimeOfDaySettings.h"
 #include "RtGlobalIllumination.h"
@@ -41,14 +42,19 @@
 #include "SsrRenderer.h"
 #include "SsrSettings.h"
 #include "SssrRenderer.h"
+#include "DpleRenderer.h"
 #include "SubsurfaceScattering.h"
 #include "SubsurfaceSettings.h"
 #include "BloomRenderer.h"
+#include "FftBloomRenderer.h"
+#include "LensFlareRenderer.h"
+#include "LensFlareSettings.h"
 #include "BloomSettings.h"
 #include "ImageSharpenRenderer.h"
 #include "SharpenSettings.h"
 #include "TerrainRenderer.h"
 #include "VegetationRenderer.h"
+#include "VirtualGeometryRenderer.h"
 #include "WindSettings.h"
 #include "WaterRenderer.h"
 #include "RendererTimingSnapshot.h"
@@ -59,6 +65,8 @@
 #include "FsrSettings.h"
 #include "MotionVectorRenderer.h"
 #include "GameHost.h"
+#include "GameProjectSettings.h"
+#include "PlayerCollision.h"
 #include "RmlUiRenderer.h"
 #include "System/NodeGraphRuntime.h"
 #include "VideoLayer.h"
@@ -270,8 +278,8 @@ public:
             return mChromaticAberrationRenderer.GetOutputTextureId();
         if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
             return mAgxTonemapper.GetOutputTextureId();
-        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
-            return mBloomRenderer.GetOutputTextureId();
+        if (IsBloomStageActive())
+            return GetBloomStageOutputTextureId();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputTextureId();
         if (upscalerOutputAvailable)
@@ -297,8 +305,8 @@ public:
             return mChromaticAberrationRenderer.GetOutputGpuSrv();
         if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
             return mAgxTonemapper.GetOutputGpuSrv();
-        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
-            return mBloomRenderer.GetOutputGpuSrv();
+        if (IsBloomStageActive())
+            return GetBloomStageOutputGpuSrv();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputGpuSrv();
         if (upscalerOutputAvailable)
@@ -324,6 +332,8 @@ public:
 
     TimeOfDaySettings& GetTimeOfDaySettings() { return mTimeOfDaySettings; }
     const TimeOfDaySettings& GetTimeOfDaySettings() const { return mTimeOfDaySettings; }
+    // The time of day as last evaluated: light directions, exposure, and so on.
+    const HosekWilkieResult& GetTimeOfDayState() const { return mHosekResult; }
 
     GlobalIlluminationMode& GetGlobalIlluminationMode() { return mGlobalIlluminationMode; }
     const GlobalIlluminationMode& GetGlobalIlluminationMode() const { return mGlobalIlluminationMode; }
@@ -356,6 +366,13 @@ public:
     const SsrSettings& GetSsrSettings() const { return mSsrSettings; }
     SubsurfaceSettings& GetSubsurfaceSettings() { return mSubsurfaceSettings; }
     const SubsurfaceSettings& GetSubsurfaceSettings() const { return mSubsurfaceSettings; }
+    DpleSettings& GetDpleSettings() { return mDpleSettings; }
+    const DpleSettings& GetDpleSettings() const { return mDpleSettings; }
+    // Why DPLE is not running although it is enabled, or null when it is fine.
+    const char* GetDpleErrorMessage() const
+    {
+        return mDpleRenderer.HasInitFailed() ? mDpleRenderer.GetLastErrorMessage() : nullptr;
+    }
     // Whether the ray-traced subsurface path can run on this device (DXR 1.1), once the
     // pass has initialised; before that it reports true so the option stays selectable.
     bool IsSubsurfaceRayTracingSupported() const
@@ -369,8 +386,69 @@ public:
     BloomSettings& GetBloomSettings() { return mBloomSettings; }
     const BloomSettings& GetBloomSettings() const { return mBloomSettings; }
 
+    LensFlareSettings& GetLensFlareSettings() { return mLensFlareSettings; }
+    const LensFlareSettings& GetLensFlareSettings() const { return mLensFlareSettings; }
+    const LensFlareRenderer& GetLensFlareRenderer() const { return mLensFlareRenderer; }
+
+    // ---- The bloom stage ---------------------------------------------------
+    // Bloom (either method) and then the lens flare on top of it. Everything after the
+    // stage - auto exposure, AgX, chromatic aberration, display, screenshots - asks these
+    // for its input rather than naming a renderer, so the stage can change shape freely.
+    bool IsBloomActive() const
+    {
+        if (!mBloomSettings.Enabled)
+            return false;
+        return mBloomSettings.Method == BloomMethod::FftConvolution
+            ? mFftBloomRenderer.IsInitialized()
+            : mBloomRenderer.IsInitialized();
+    }
+
+    bool IsLensFlareActive() const
+    {
+        return mLensFlareSettings.Enabled && mLensFlareRenderer.IsInitialized();
+    }
+
+    bool IsBloomStageActive() const { return IsLensFlareActive() || IsBloomActive(); }
+
+    ID3D12Resource* GetBloomStageOutputResource() const
+    {
+        if (IsLensFlareActive())
+            return mLensFlareRenderer.GetOutputResource();
+        return mBloomSettings.Method == BloomMethod::FftConvolution
+            ? mFftBloomRenderer.GetOutputResource() : mBloomRenderer.GetOutputResource();
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE GetBloomStageOutputCpuSrv() const
+    {
+        if (IsLensFlareActive())
+            return mLensFlareRenderer.GetOutputCpuSrv();
+        return mBloomSettings.Method == BloomMethod::FftConvolution
+            ? mFftBloomRenderer.GetOutputCpuSrv() : mBloomRenderer.GetOutputCpuSrv();
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE GetBloomStageOutputGpuSrv() const
+    {
+        if (IsLensFlareActive())
+            return mLensFlareRenderer.GetOutputGpuSrv();
+        return mBloomSettings.Method == BloomMethod::FftConvolution
+            ? mFftBloomRenderer.GetOutputGpuSrv() : mBloomRenderer.GetOutputGpuSrv();
+    }
+
+    UiTextureID GetBloomStageOutputTextureId() const
+    {
+        if (IsLensFlareActive())
+            return mLensFlareRenderer.GetOutputTextureId();
+        return mBloomSettings.Method == BloomMethod::FftConvolution
+            ? mFftBloomRenderer.GetOutputTextureId() : mBloomRenderer.GetOutputTextureId();
+    }
+
     PointShadowSettings& GetPointShadowSettings() { return mPointShadowSettings; }
     const PointShadowSettings& GetPointShadowSettings() const { return mPointShadowSettings; }
+
+    VirtualShadowMapSettings& GetVirtualShadowMapSettings() { return mVirtualShadowMapSettings; }
+    const VirtualShadowMapSettings& GetVirtualShadowMapSettings() const { return mVirtualShadowMapSettings; }
+    const VirtualShadowMapRenderer::Statistics& GetVirtualShadowMapStatistics() const { return mVirtualShadowMap.GetStatistics(); }
+    bool IsVirtualShadowMapActive() const { return mVirtualShadowMap.IsActiveThisFrame(); }
 
     DlssSettings& GetDlssSettings() { return mDlssSettings; }
     const DlssSettings& GetDlssSettings() const { return mDlssSettings; }
@@ -404,8 +482,11 @@ public:
     const TerrainRenderer& GetTerrainRenderer() const { return mTerrainRenderer; }
     WaterRenderer& GetWaterRenderer() { return mWaterRenderer; }
     const WaterRenderer& GetWaterRenderer() const { return mWaterRenderer; }
+    EntityMeshRenderer& GetEntityMeshRenderer() { return mEntityMeshRenderer; }
     VegetationRenderer& GetVegetationRenderer() { return mVegetationRenderer; }
     const VegetationRenderer& GetVegetationRenderer() const { return mVegetationRenderer; }
+    VirtualGeometryRenderer& GetVirtualGeometryRenderer() { return mVirtualGeometryRenderer; }
+    const VirtualGeometryRenderer& GetVirtualGeometryRenderer() const { return mVirtualGeometryRenderer; }
 
     WindSettings& GetWindSettings() { return mWindSettings; }
     const WindSettings& GetWindSettings() const { return mWindSettings; }
@@ -607,8 +688,8 @@ public:
         // Return the final output texture based on which post-process is active
         if (mAgxSettings.Enabled && mAgxTonemapper.IsInitialized())
             return mAgxTonemapper.GetOutputResource();
-        if (mBloomSettings.Enabled && mBloomRenderer.IsInitialized())
-            return mBloomRenderer.GetOutputResource();
+        if (IsBloomStageActive())
+            return GetBloomStageOutputResource();
         if (imageSharpenOutputAvailable)
             return mImageSharpenRenderer.GetOutputResource();
         if (upscalerOutputAvailable)
@@ -644,6 +725,15 @@ private:
     void UpdateGameCamera(float deltaTime, const POINT& mousePosition, bool lookActive);
     void UpdateSceneConstants();
     float ComputeSceneBoundRadius() const;
+
+    // The point lights that get a shadow cubemap this frame, in cubemap order:
+    // the first kMaxShadowCastingPointLights shadow casters among the first
+    // DeferredLightingPass::kMaxPointLights lights. When outShadowIndexPerLight
+    // is given it receives, per light in gather order, its cubemap index or -1.
+    // One rule for the point-shadow pass and for the virtualized geometry
+    // culled into those cubemaps, which must agree on the order.
+    std::vector<PointShadowMapRenderer::ShadowedPointLight> GatherShadowedPointLights(
+        std::vector<int>* outShadowIndexPerLight) const;
     float GetMeshLocalRadius(const Mesh* mesh) const;
     bool IsSceneContentDirtyForTemporal();
 
@@ -726,6 +816,11 @@ private:
         void ToggleFullscreen() override;
         bool IsStandalone() override;
 
+        CharacterMovement* GetPlayerCharacter() override;
+        void GetMouseDelta(double& x, double& y) override;
+        void SetMouseCaptured(bool captured) override;
+        bool IsMouseCaptured() override;
+
     private:
         Entity* FindEntity(std::uint64_t entityId);
 
@@ -737,6 +832,45 @@ private:
     NodeGraphUiHost mNodeGraphHost{ *this };
     NodeGraphRuntime mNodeGraphRuntime;
     const NodeGraphDocument* mNodeGraphSource = nullptr;
+
+    // ---- Player (Game Settings) -------------------------------------------------
+    // Read from Data/Game/GameSettings.json when play starts, so edits in the Game
+    // Settings window apply from the next Play.
+    GameProjectSettings mGameProjectSettings;
+    // Static meshes and terrain, built at the start of each session for the character.
+    PlayerCollision mPlayerCollision;
+    // The player when Game Settings picks a Node Graph controller: the engine owns the
+    // character, the controller graph drives it through the Character nodes, and it is
+    // stepped after the graphs tick. With the C++ controller Game.dll owns the character
+    // and this stays inactive.
+    CharacterMovement mGraphCharacter;
+    bool mGraphCharacterActive = false;
+    NodeGraphRuntime mPlayerControllerRuntime;
+
+    // Where the player spawns: a "PlayerStart" entity if the level has one (its position
+    // is the feet, its Z rotation the facing), the editor camera otherwise.
+    GameCameraState ComputePlayerSpawn() const;
+    void StartPlayerController(const GameCameraState& spawn);
+    void ApplyGameFieldOfView(float degrees);
+
+    // Mouse look. The game asks for capture (Requested); Escape suspends it until the
+    // player clicks back into the game view, and it only takes effect while the game
+    // window has focus. While captured the cursor is hidden and re-centred every frame,
+    // and the offset from the centre is the frame's look delta.
+    void UpdateMouseCapture();
+    void ReleaseMouseCapture();
+    bool mMouseCaptureRequested = false;
+    bool mMouseCaptureSuspended = false;
+    bool mMouseCaptured = false;
+    bool mMouseCaptureEscapeWasDown = false;
+    bool mMouseCaptureClickWasDown = false;
+    // The ~ key that stops an editor play session, edge-detected. Starts as held so a key
+    // still down from before Play has to be released first.
+    bool mEditorStopKeyWasDown = true;
+    float mGameLookDeltaX = 0.0f;
+    float mGameLookDeltaY = 0.0f;
+    // The editor's lens, put back when the session ends.
+    float mFovBeforePlay = 0.0f;
 
     DirectX::XMFLOAT3 mEditorCameraPositionBeforePlay{};
     DirectX::XMFLOAT3 mEditorCameraRotationBeforePlay{};
@@ -757,7 +891,7 @@ private:
         DlssSettings Dlss; FsrSettings Fsr;
         GlobalIlluminationMode GiMode = GlobalIlluminationMode::Disabled;
         RtGISettings Rtgi; RadianceCascadesSettings Cascades;
-        VolumetricFogSettings Fog; PointShadowSettings PointShadows;
+        VolumetricFogSettings Fog; PointShadowSettings PointShadows; VirtualShadowMapSettings VirtualShadows;
         GtaoSettings Gtao; RtAOSettings Rtao; ChromaticAberrationSettings ChromaticAberration;
     };
     // Captures the baseline, fills the menus' hardware-dependent options and hooks
@@ -931,6 +1065,7 @@ private:
 
     // Procedurally scattered, GPU-culled vegetation (VegetationAreaComponent).
     VegetationRenderer mVegetationRenderer;
+    VirtualGeometryRenderer mVirtualGeometryRenderer;
 
     // Scene-wide wind, shared by vegetation bending and the rain simulation so
     // the two cannot disagree about which way the weather is blowing.
@@ -977,11 +1112,18 @@ private:
     SkyRenderer          mSkyRenderer;
     TimeOfDaySettings    mTimeOfDaySettings;
     HosekWilkieResult    mHosekResult{};
+    // This frame's GI pre-exposure (see HosekWilkieResult::PreExposure), for
+    // BuildGiPointLights, which runs after the locals it is derived from.
+    float                mGiPreExposure = 1.0f;
 
     // Shadow map renderer for the sun directional light.
     ShadowMapRenderer    mShadowMapRenderer;
     PointShadowMapRenderer mPointShadowMapRenderer;
     PointShadowSettings    mPointShadowSettings;
+    // The sun's virtual shadow map; the single map above is its fallback when it is
+    // off or failed to initialise.
+    VirtualShadowMapRenderer mVirtualShadowMap;
+    VirtualShadowMapSettings mVirtualShadowMapSettings;
 
     // Custom RTGI with ReSTIR-style temporal/spatial reservoir resampling.
     RtGlobalIllumination  mRtgiRenderer;
@@ -1009,12 +1151,20 @@ private:
     bool                 mSssrInitFailed = false;
     SubsurfaceScatteringRenderer mSubsurfaceRenderer;
     SubsurfaceSettings   mSubsurfaceSettings;
+    // Deterministic Photoreal Lighting Enhancer, between AA/upscaling and sharpening.
+    // Created on first use; a failed init is reported once and the pass stays off.
+    DpleRenderer         mDpleRenderer;
+    DpleSettings         mDpleSettings;
+    bool                 mDpleFailureReported = false;
     ChromaticAberrationRenderer  mChromaticAberrationRenderer;
     ChromaticAberrationSettings  mChromaticAberrationSettings;
 
     // Physical mip-chain bloom.
     BloomRenderer        mBloomRenderer;
+    FftBloomRenderer     mFftBloomRenderer;
     BloomSettings        mBloomSettings;
+    LensFlareRenderer    mLensFlareRenderer;
+    LensFlareSettings    mLensFlareSettings;
 
     // AgX tonemapper.
     AgxTonemapper        mAgxTonemapper;
@@ -1049,6 +1199,8 @@ private:
     // has not assigned shadow indices yet and the fog needs them to shadow its
     // shafts.
     bool                                mCachedPointLightAffectsFog[DeferredLightingPass::kMaxPointLights]{};
+    // Per-light multiplier on the fog's copy of each light (VolumetricFogIntensity).
+    float                               mCachedPointLightFogScale[DeferredLightingPass::kMaxPointLights]{};
 
     // The same lights weighted for indirect lighting only, so a particle
     // system's GI Contribution can tame a fire's bounce without dimming the
