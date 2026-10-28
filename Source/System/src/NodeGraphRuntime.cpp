@@ -307,6 +307,12 @@ void NodeGraphRuntime::Start(const NodeGraphDocument& document)
     mCameraHeld = false;
     mPlaylistActive = false;
     mPlaylistTrack = -1;
+    mReportedNoCharacter = false;
+
+    // Landings and jumps from before this session are not news.
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    mCharacterLandedSeen = character != nullptr ? character->GetLandedCount() : 0;
+    mCharacterJumpedSeen = character != nullptr ? character->GetJumpedCount() : 0;
 
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
@@ -343,6 +349,8 @@ void NodeGraphRuntime::Tick(float deltaSeconds)
     }
 
     FireInputEvents();
+    FireCharacterEvents();
+    FirePhysicsEvents();
 
     // Delays resume before this frame's tick events so a graph that delays by zero-ish
     // amounts stays in step with the frame it was scheduled from.
@@ -440,6 +448,198 @@ void NodeGraphRuntime::FireInputEvents()
             FireEntry(static_cast<int>(i), 0);
         }
     }
+}
+
+void NodeGraphRuntime::FireCharacterEvents()
+{
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        return;
+    }
+
+    // The character stepped after last frame's tick, so anything it did then is reported
+    // now. Several landings in one frame are one event: nothing can land twice visibly.
+    const bool jumped = character->GetJumpedCount() != mCharacterJumpedSeen;
+    const bool landed = character->GetLandedCount() != mCharacterLandedSeen;
+    mCharacterJumpedSeen = character->GetJumpedCount();
+    mCharacterLandedSeen = character->GetLandedCount();
+
+    if (jumped)
+    {
+        FireEvents("Event.CharacterJumped");
+    }
+
+    if (landed)
+    {
+        for (std::size_t i = 0; i < mNodes.size(); ++i)
+        {
+            if (mNodes[i].Data->TypeId != "Event.CharacterLanded")
+            {
+                continue;
+            }
+
+            mNodes[i].State.LastValue = NodeGraphValue::FromNumber(character->GetLastImpactSpeed());
+            FireEntry(static_cast<int>(i), 0);
+        }
+    }
+}
+
+void NodeGraphRuntime::ExecuteCharacterNode(int nodeIndex)
+{
+    RuntimeNode& node = mNodes[nodeIndex];
+    const std::string& typeId = node.Data->TypeId;
+    node.State.Success = false;
+
+    CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        if (!mReportedNoCharacter)
+        {
+            mReportedNoCharacter = true;
+            Log(std::string(node.Type->Caption) +
+                ": there is no player character to control. Character nodes need Game Settings > Player "
+                "Controller set to Node Graph; the C++ controller's character lives in Game.dll.");
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId == "Character.AddMovementInput")
+    {
+        character->AddMovementInput(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()));
+    }
+    else if (typeId == "Character.AddLookInput")
+    {
+        character->AddLookInput(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()));
+    }
+    else if (typeId == "Character.Jump")
+    {
+        character->Jump();
+    }
+    else if (typeId == "Character.StopJumping")
+    {
+        character->StopJumping();
+    }
+    else if (typeId == "Character.Crouch")
+    {
+        character->Crouch();
+    }
+    else if (typeId == "Character.UnCrouch")
+    {
+        character->UnCrouch();
+    }
+    else if (typeId == "Character.SetSprinting")
+    {
+        character->SetSprinting(ReadInput(nodeIndex, 1).AsBool());
+    }
+    else if (typeId == "Character.Teleport")
+    {
+        character->Teleport(
+            static_cast<float>(ReadInput(nodeIndex, 1).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 2).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 3).AsNumber()),
+            static_cast<float>(ReadInput(nodeIndex, 4).AsNumber() * kDegreesToRadians));
+    }
+    else if (typeId == "Character.SetMovementSettings" || typeId == "Character.SetCameraSettings" ||
+             typeId == "Character.SetControlSettings")
+    {
+        // Every parameter on the node body is one settings field, keyed by its name.
+        for (unsigned i = 0; i < node.Type->ParamCount; ++i)
+        {
+            const NodeGraphParam& param = node.Type->Params[i];
+            const CharacterSettingField* field = FindCharacterSettingField(param.Key);
+            if (field == nullptr)
+            {
+                continue;
+            }
+
+            const NodePinKind kind = param.Kind == NodeParamKind::Bool ? NodePinKind::Bool : NodePinKind::Number;
+            SetCharacterSetting(character->Settings, *field, ParamValue(nodeIndex, param.Key, kind).AsNumber());
+        }
+
+        // Configured on Game Start, the first frame should already show the new eye height
+        // and field of view rather than blend in from the defaults.
+        if (!character->HasUpdated())
+        {
+            character->SnapCameraToSettings();
+        }
+    }
+    else if (typeId == "Character.SetMovementProperty" || typeId == "Character.SetCameraProperty")
+    {
+        const std::string property = ParamValue(nodeIndex, "Property", NodePinKind::String).AsString();
+        if (const CharacterSettingField* field = FindCharacterSettingField(property.c_str()))
+        {
+            SetCharacterSetting(character->Settings, *field, ReadInput(nodeIndex, 1).AsNumber());
+            node.State.Success = true;
+        }
+        else
+        {
+            Log(std::string(node.Type->Caption) + ": unknown property '" + property + "'.");
+        }
+    }
+
+    if (typeId != "Character.SetMovementProperty" && typeId != "Character.SetCameraProperty")
+    {
+        node.State.Success = true;
+    }
+
+    FireExec(nodeIndex, 0);
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluateCharacterOutput(int nodeIndex, int outPortIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const std::string& typeId = node.Data->TypeId;
+
+    // Nodes with an exec input report the Success of their last run on their value pin.
+    if (node.Type->InputCount > 0 && node.Type->Inputs[0].Kind == NodePinKind::Exec)
+    {
+        return NodeGraphValue::FromBool(node.State.Success);
+    }
+
+    const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+    if (character == nullptr)
+    {
+        return typeId == "Character.GetState" && outPortIndex < 4 ? NodeGraphValue::FromBool(false)
+                                                                  : NodeGraphValue::FromNumber(0.0);
+    }
+
+    if (typeId == "Character.GetState")
+    {
+        switch (outPortIndex)
+        {
+        case 0: return NodeGraphValue::FromBool(character->IsGrounded());
+        case 1: return NodeGraphValue::FromBool(character->IsFalling());
+        case 2: return NodeGraphValue::FromBool(character->IsCrouching());
+        case 3: return NodeGraphValue::FromBool(character->IsSprinting());
+        case 4: return NodeGraphValue::FromNumber(character->GetHorizontalSpeed());
+        case 5: return NodeGraphValue::FromNumber(character->GetVelocity()[2]);
+        default: break;
+        }
+    }
+    else if (typeId == "Character.GetLocation")
+    {
+        if (outPortIndex >= 0 && outPortIndex < 3)
+        {
+            return NodeGraphValue::FromNumber(character->GetPosition()[outPortIndex]);
+        }
+    }
+    else if (typeId == "Character.GetMovementProperty" || typeId == "Character.GetCameraProperty")
+    {
+        const std::string property = ParamValue(nodeIndex, "Property", NodePinKind::String).AsString();
+        if (const CharacterSettingField* field = FindCharacterSettingField(property.c_str()))
+        {
+            return NodeGraphValue::FromNumber(GetCharacterSetting(character->Settings, *field));
+        }
+    }
+
+    return NodeGraphValue::FromNumber(0.0);
 }
 
 void NodeGraphRuntime::AdvanceTweens(float deltaSeconds)
@@ -703,6 +903,21 @@ void NodeGraphRuntime::BuildIndex()
             source.PortIndex = connection.FromPort;
             mDataSources[PortKey(toIt->second, connection.ToPort)] = source;
         }
+    }
+
+    // An exec output wired to several nodes runs them top to bottom as they sit on the
+    // canvas (left to right on a tie), so the order is the one the graph shows rather than
+    // the order the links happened to be drawn in.
+    for (auto& [port, targets] : mExecTargets)
+    {
+        std::stable_sort(targets.begin(), targets.end(), [this](const DataSource& a, const DataSource& b)
+        {
+            const NodeGraphNode& nodeA = *mNodes[a.NodeIndex].Data;
+            const NodeGraphNode& nodeB = *mNodes[b.NodeIndex].Data;
+            if (nodeA.Y != nodeB.Y)
+                return nodeA.Y < nodeB.Y;
+            return nodeA.X < nodeB.X;
+        });
     }
 }
 
@@ -987,6 +1202,29 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         return;
     }
 
+    if (typeId.compare(0, 10, "Character.") == 0)
+    {
+        ExecuteCharacterNode(nodeIndex);
+        return;
+    }
+
+    if (typeId.compare(0, 8, "Physics.") == 0)
+    {
+        ExecutePhysicsNode(nodeIndex);
+        return;
+    }
+
+    if (typeId == "Input.SetMouseCaptured")
+    {
+        if (mHost != nullptr)
+        {
+            mHost->SetMouseCaptured(ReadInput(nodeIndex, 1).AsBool());
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
     if (typeId == "Camera.Set" || typeId == "Camera.MoveTo" || typeId == "Camera.Release")
     {
         // Whichever camera node ran last owns the camera, so a move still in flight must
@@ -1090,6 +1328,51 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
             mPlaylistActive = false;
             mHost->StopMusic();
             state.Success = true;
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId.compare(0, 13, "Achievements.") == 0)
+    {
+        state.Success = false;
+        const std::string name = ReadInput(nodeIndex, 1).AsString();
+
+        if (mHost == nullptr)
+        {
+            Log("Achievement node ran with no host attached.");
+        }
+        else if (typeId == "Achievements.Unlock")
+        {
+            state.Success = mHost->UnlockAchievement(name);
+            if (!state.Success)
+                Log("Unlock Achievement: '" + name + "' could not be unlocked.");
+        }
+        else if (typeId == "Achievements.ShowProgress")
+        {
+            state.Success = mHost->ShowAchievementProgress(name,
+                static_cast<int>(ReadInput(nodeIndex, 2).AsNumber()), static_cast<int>(ReadInput(nodeIndex, 3).AsNumber()));
+        }
+        else if (typeId == "Achievements.Clear")
+        {
+            state.Success = mHost->ClearAchievement(name);
+        }
+        else if (typeId == "Achievements.SetStat")
+        {
+            state.Success = mHost->SetStat(name, static_cast<int>(std::lround(ReadInput(nodeIndex, 2).AsNumber())));
+            if (!state.Success)
+                Log("Set Stat: '" + name + "' is not a stat of this app, or it may only increase.");
+        }
+        else if (typeId == "Achievements.AddStat")
+        {
+            int value = 0;
+            mHost->GetStat(name, value);
+            value += static_cast<int>(std::lround(ReadInput(nodeIndex, 2).AsNumber()));
+            state.Success = mHost->SetStat(name, value);
+            state.ResultValues[0] = state.Success ? value : 0.0;
+            if (!state.Success)
+                Log("Add to Stat: '" + name + "' is not a stat of this app, or it may only increase.");
         }
 
         FireExec(nodeIndex, 0);
@@ -1402,6 +1685,205 @@ NodeGraphValue NodeGraphRuntime::EvaluateEntityOutput(int nodeIndex, int outPort
     return NodeGraphValue::FromNumber(0.0);
 }
 
+void NodeGraphRuntime::ExecutePhysicsNode(int nodeIndex)
+{
+    RuntimeNode& node = mNodes[nodeIndex];
+    NodeState& state = node.State;
+    const std::string& typeId = node.Data->TypeId;
+    state.Success = false;
+
+    if (mHost == nullptr)
+    {
+        Log("Physics node ran with no host attached.");
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId == "Physics.Raycast" || typeId == "Physics.RaycastFromCamera")
+    {
+        double origin[3]{};
+        double direction[3]{};
+        double distance = 0.0;
+        if (typeId == "Physics.Raycast")
+        {
+            for (int a = 0; a < 3; ++a)
+            {
+                origin[a] = ReadInput(nodeIndex, 1 + a).AsNumber();
+                direction[a] = ReadInput(nodeIndex, 4 + a).AsNumber();
+            }
+            distance = ReadInput(nodeIndex, 7).AsNumber();
+        }
+        else
+        {
+            // Same forward as Camera.LookPoint and the engine camera.
+            const NodeGraphCameraPose pose = CurrentCamera();
+            for (int a = 0; a < 3; ++a)
+                origin[a] = pose.Position[a];
+            direction[0] = std::sin(pose.Yaw) * std::cos(pose.Pitch);
+            direction[1] = std::cos(pose.Yaw) * std::cos(pose.Pitch);
+            direction[2] = std::sin(pose.Pitch);
+            distance = ReadInput(nodeIndex, 1).AsNumber();
+        }
+
+        NodeGraphRayHit hit;
+        state.Success = distance > 0.0 && mHost->Raycast(origin, direction, distance, hit);
+        state.ResultEntity = state.Success ? hit.EntityId : 0;
+        state.ResultValues[0] = state.Success ? hit.Distance : 0.0;
+        for (int a = 0; a < 3; ++a)
+        {
+            state.ResultValues[1 + a] = state.Success ? hit.Position[a] : 0.0;
+            state.ResultValues[4 + a] = state.Success ? hit.Normal[a] : 0.0;
+        }
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    // The rest act on one entity's rigid body with a vector, laid out like Move Entity By.
+    const std::uint64_t entity = ReadEntity(nodeIndex);
+    if (entity == 0)
+    {
+        Log(std::string(node.Type->Caption) + ": no entity chosen.");
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    double vector[3]{};
+    for (int a = 0; a < 3; ++a)
+        vector[a] = ReadInput(nodeIndex, 2 + a).AsNumber();
+
+    if (typeId == "Physics.AddImpulse")
+        state.Success = mHost->AddEntityImpulse(entity, vector);
+    else if (typeId == "Physics.AddForce")
+        state.Success = mHost->AddEntityForce(entity, vector);
+    else if (typeId == "Physics.SetVelocity")
+        state.Success = mHost->SetEntityVelocity(entity, vector);
+    else if (typeId == "Physics.SetAngularVelocity")
+    {
+        for (double& component : vector)
+            component *= kDegreesToRadians;
+        state.Success = mHost->SetEntityAngularVelocity(entity, vector);
+    }
+
+    if (!state.Success)
+    {
+        // The usual cause, and an easy one to miss: the entity was never given a Dynamic
+        // Rigid Body in its Properties.
+        Log(std::string(node.Type->Caption) + ": entity " + std::to_string(entity) +
+            " has no Dynamic Rigid Body (or physics is not running).");
+    }
+
+    FireExec(nodeIndex, 0);
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluatePhysicsOutput(int nodeIndex, int outPortIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const NodeState& state = node.State;
+    const std::string& typeId = node.Data->TypeId;
+
+    if (typeId == "Physics.Raycast" || typeId == "Physics.RaycastFromCamera")
+    {
+        // Then, Hit, Hit Entity, Distance, Hit X/Y/Z, Normal X/Y/Z.
+        switch (outPortIndex)
+        {
+        case 1: return NodeGraphValue::FromBool(state.Success);
+        case 2: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultEntity));
+        default:
+            if (outPortIndex >= 3 && outPortIndex <= 9)
+                return NodeGraphValue::FromNumber(state.ResultValues[outPortIndex - 3]);
+            return NodeGraphValue::FromNumber(0.0);
+        }
+    }
+
+    if (typeId == "Event.RigidBodyHit")
+    {
+        // Then, Entity, Other Entity, Hit Player, Impact Speed, Hit X/Y/Z.
+        switch (outPortIndex)
+        {
+        case 1: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultEntity));
+        case 2: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultOtherEntity));
+        case 3: return NodeGraphValue::FromBool(state.Flag);
+        default:
+            if (outPortIndex >= 4 && outPortIndex <= 7)
+                return NodeGraphValue::FromNumber(state.ResultValues[outPortIndex - 4]);
+            return NodeGraphValue::FromNumber(0.0);
+        }
+    }
+
+    if (typeId == "Physics.GetVelocity")
+    {
+        double velocity[3]{};
+        const std::uint64_t entity = ReadEntity(nodeIndex);
+        if (mHost == nullptr || entity == 0 || !mHost->GetEntityVelocity(entity, velocity))
+            return NodeGraphValue::FromNumber(0.0);
+        if (outPortIndex == 3)
+            return NodeGraphValue::FromNumber(
+                std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]));
+        return NodeGraphValue::FromNumber(outPortIndex >= 0 && outPortIndex < 3 ? velocity[outPortIndex] : 0.0);
+    }
+
+    // The vector nodes report the Success of their last run.
+    return NodeGraphValue::FromBool(state.Success);
+}
+
+void NodeGraphRuntime::FirePhysicsEvents()
+{
+    if (mHost == nullptr)
+        return;
+
+    // Physics stepped after last frame's tick, so its hits are this tick's events. A copy:
+    // the handlers run arbitrary graph logic while this walks the list.
+    const std::vector<NodeGraphPhysicsHit> hits = mHost->GetPhysicsHits();
+    if (hits.empty())
+        return;
+
+    for (std::size_t i = 0; i < mNodes.size(); ++i)
+    {
+        if (mNodes[i].Data->TypeId != "Event.RigidBodyHit")
+            continue;
+
+        const int nodeIndex = static_cast<int>(i);
+        const std::uint64_t watched = ReadEntity(nodeIndex);
+        const double minimumSpeed = ParamValue(nodeIndex, "Min Impact Speed", NodePinKind::Number).AsNumber();
+
+        for (const NodeGraphPhysicsHit& hit : hits)
+        {
+            if (hit.ImpactSpeed < minimumSpeed)
+                continue;
+
+            // With an entity chosen it is always reported as Entity, whichever side of the
+            // contact Jolt put it on; the other side is Other Entity.
+            std::uint64_t self = hit.EntityA;
+            std::uint64_t other = hit.EntityB;
+            if (watched != 0)
+            {
+                if (hit.EntityB == watched)
+                    std::swap(self, other);
+                else if (hit.EntityA != watched)
+                    continue;
+            }
+            else if (self == 0)
+            {
+                // The player is not an entity; keep the entity in front.
+                std::swap(self, other);
+            }
+
+            NodeState& state = mNodes[i].State;
+            state.ResultEntity = self;
+            state.ResultOtherEntity = other;
+            state.Flag = hit.PlayerInvolved;
+            state.ResultValues[0] = hit.ImpactSpeed;
+            for (int a = 0; a < 3; ++a)
+                state.ResultValues[1 + a] = hit.Position[a];
+            FireEntry(nodeIndex, 0);
+
+            // The graph may have stopped the game, which clears the nodes.
+            if (!mIsRunning || i >= mNodes.size())
+                return;
+        }
+    }
+}
+
 NodeGraphValue NodeGraphRuntime::ReadInput(int nodeIndex, int inPortIndex)
 {
     if (nodeIndex < 0 || static_cast<std::size_t>(nodeIndex) >= mNodes.size())
@@ -1695,9 +2177,60 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
         const int key = VirtualKeyFromName(ParamValue(nodeIndex, "Key", NodePinKind::String).AsString());
         result = NodeGraphValue::FromBool(key != 0 && mHost != nullptr && mHost->IsKeyDown(key));
     }
+    else if (typeId == "Input.GetAxis")
+    {
+        const int positive = VirtualKeyFromName(ParamValue(nodeIndex, "Positive", NodePinKind::String).AsString());
+        const int negative = VirtualKeyFromName(ParamValue(nodeIndex, "Negative", NodePinKind::String).AsString());
+        double value = 0.0;
+        if (mHost != nullptr)
+        {
+            if (positive != 0 && mHost->IsKeyDown(positive)) value += 1.0;
+            if (negative != 0 && mHost->IsKeyDown(negative)) value -= 1.0;
+        }
+        result = NodeGraphValue::FromNumber(value);
+    }
+    else if (typeId == "Input.GetLookInput" || typeId == "Input.GetMouseDelta")
+    {
+        double x = 0.0;
+        double y = 0.0;
+        if (mHost != nullptr)
+        {
+            mHost->GetMouseDelta(x, y);
+        }
+
+        if (typeId == "Input.GetLookInput")
+        {
+            // The player's own sensitivity and inversion, so a controller graph does not
+            // have to re-implement the options every game has.
+            const CharacterMovement* character = mHost != nullptr ? mHost->GetPlayerCharacter() : nullptr;
+            const CharacterControlSettings controls =
+                character != nullptr ? character->Settings.Controls : CharacterControlSettings{};
+            x *= controls.MouseSensitivity;
+            // Screen +Y is down: moving the mouse up looks up.
+            y *= -controls.MouseSensitivity * (controls.InvertY ? -1.0 : 1.0);
+        }
+
+        result = NodeGraphValue::FromNumber(outPortIndex == 0 ? x : y);
+    }
+    else if (typeId == "Input.IsMouseCaptured")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsMouseCaptured());
+    }
+    else if (typeId == "Event.CharacterLanded")
+    {
+        result = NodeGraphValue::FromNumber(node.State.LastValue.AsNumber());
+    }
+    else if (typeId.compare(0, 10, "Character.") == 0)
+    {
+        result = EvaluateCharacterOutput(nodeIndex, outPortIndex);
+    }
     else if (typeId.compare(0, 7, "Entity.") == 0)
     {
         result = EvaluateEntityOutput(nodeIndex, outPortIndex);
+    }
+    else if (typeId.compare(0, 8, "Physics.") == 0 || typeId == "Event.RigidBodyHit")
+    {
+        result = EvaluatePhysicsOutput(nodeIndex, outPortIndex);
     }
     else if (typeId == "Camera.Get")
     {
@@ -1745,6 +2278,28 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     else if (typeId == "Game.IsStandalone")
     {
         result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsStandalone());
+    }
+    else if (typeId == "Achievements.IsUnlocked")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsAchievementUnlocked(ReadInput(nodeIndex, 0).AsString()));
+    }
+    else if (typeId == "Achievements.GetStat")
+    {
+        int value = 0;
+        const bool found = mHost != nullptr && mHost->GetStat(ReadInput(nodeIndex, 0).AsString(), value);
+        result = outPortIndex == 1 ? NodeGraphValue::FromBool(found) : NodeGraphValue::FromNumber(found ? value : 0.0);
+    }
+    else if (typeId == "Achievements.IsSteamRunning")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsSteamRunning());
+    }
+    else if (typeId == "Achievements.AddStat" && outPortIndex == 2)
+    {
+        result = NodeGraphValue::FromNumber(node.State.ResultValues[0]);
+    }
+    else if (typeId.compare(0, 13, "Achievements.") == 0)
+    {
+        result = NodeGraphValue::FromBool(node.State.Success);
     }
 
     mEvaluationStack.pop_back();

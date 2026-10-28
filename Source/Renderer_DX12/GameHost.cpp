@@ -46,12 +46,12 @@ bool GameHost::LoadModule()
     }
 
     const std::uint32_t moduleApiVersion = mGetApiVersion();
-    if (moduleApiVersion != GameApiVersion)
+    if (moduleApiVersion < GameMinimumApiVersion || moduleApiVersion > GameApiVersion)
     {
         std::ostringstream errorBuilder;
         errorBuilder
             << "Game.dll reports API version " << moduleApiVersion
-            << " but the editor expects " << GameApiVersion
+            << " but the editor supports " << GameMinimumApiVersion << " to " << GameApiVersion
             << ". Rebuild the Game project.";
         mLastErrorMessage = errorBuilder.str();
         UnloadModule();
@@ -89,7 +89,7 @@ bool GameHost::Start(const GameCameraState& initialCamera, const GameServices& s
     if (!mStart(&initialCamera, &services))
     {
         mStop();
-        mLastErrorMessage = "Farkle could not start. Open Farkle.json and ensure Table and Dice1 through Dice6 (or Dice 1 through Dice 6) exist.";
+        mLastErrorMessage = "Game.dll refused to start (Game_Start returned false). Check the log for the reason.";
         UnloadModule();
         return false;
     }

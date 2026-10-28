@@ -1,4 +1,3 @@
-K:\Ptero-Engine\Source\Game\dllmain.cpp;K:\Ptero-Engine\Source\Game\x64\Release\dllmain.obj
-K:\Ptero-Engine\Source\Game\Game.cpp;K:\Ptero-Engine\Source\Game\x64\Release\Game.obj
-K:\Ptero-Engine\Source\Game\GameCamera.cpp;K:\Ptero-Engine\Source\Game\x64\Release\GameCamera.obj
-K:\Ptero-Engine\Source\Game\pch.cpp;K:\Ptero-Engine\Source\Game\x64\Release\pch.obj
+K:\Farkle\Source\Game\dllmain.cpp;K:\Farkle\Source\Game\x64\Release\dllmain.obj
+K:\Farkle\Source\Game\Game.cpp;K:\Farkle\Source\Game\x64\Release\Game.obj
+K:\Farkle\Source\Game\pch.cpp;K:\Farkle\Source\Game\x64\Release\pch.obj

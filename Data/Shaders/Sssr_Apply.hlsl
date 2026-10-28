@@ -21,6 +21,7 @@ Texture2D<float4> gGBufferNormal   : register(t2);   // .xy oct normal, .w specu
 Texture2D<float4> gGBufferMaterial : register(t3);   // .r roughness, .g metallic
 Texture2D<float4> gGBufferAlbedo   : register(t4);
 Texture2D<float>  gDepthBuffer     : register(t5);
+Texture2D<float4> gFallbackSpecular : register(t6);   // weighted voxel GI reflection, when gFallbackScale > 0
 
 RWTexture2D<float4> gOutput : register(u0);
 
@@ -69,9 +70,14 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
         const float3 radiance = max(gReflection.Load(load).rgb, 0.0f.xxx);
         reflection = radiance * EnvBrdfApprox(F0, roughness, NoV) * roughFade * gIntensity;
+
+        // The traced radiance already carries the fallback wherever rays missed, so the
+        // copy of it the deferred resolve added is taken back out here.
+        if (gFallbackScale > 0.0f)
+            reflection -= gFallbackSpecular.Load(load).rgb * (gFallbackScale * roughFade);
     }
 
-    float3 result = sceneColor + reflection;
+    float3 result = max(sceneColor + reflection, 0.0f.xxx);
     if (gDebugView != 0)
         result = reflection;   // 1 = denoised reflection alone, 2 = same with the denoiser off
 

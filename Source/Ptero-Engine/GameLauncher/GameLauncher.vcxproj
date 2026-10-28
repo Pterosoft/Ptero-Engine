@@ -60,13 +60,14 @@
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;..\..\SDKs\SteamWorkssdk\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>..\..\..\Binaries;..\..\SDKs\libsodium-1.0.22\bin\x64\Debug\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Audio.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\..\Binaries;..\..\SDKs\libsodium-1.0.22\bin\x64\Debug\v145\static;..\..\SDKs\SteamWorkssdk\redistributable_bin\win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Audio.lib;libsodium.lib;steam_api64.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>steam_api64.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -79,22 +80,28 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\Audio;..\..\System\include;..\..\SDKs;..\..\SDKs\lz4-1.10.0\lib;..\..\SDKs\libsodium-1.0.22\src\libsodium\include;..\..\SDKs\SteamWorkssdk\public;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>..\..\Audio\x64\Release;..\..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>Audio.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\Audio\x64\Release;..\..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;..\..\SDKs\SteamWorkssdk\redistributable_bin\win64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Audio.lib;libsodium.lib;steam_api64.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <DelayLoadDLLs>steam_api64.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="SteamSupport.cpp" />
+    <ClCompile Include="GameSplash.cpp" />
     <ClCompile Include="..\..\System\src\PackageFormat.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\..\SDKs\lz4-1.10.0\lib\lz4.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\..\SDKs\lz4-1.10.0\lib\lz4hc.c"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="SteamSupport.h" />
+    <ClInclude Include="PterosoftGameLicense.h" />
+    <ClInclude Include="GameSplash.h" />
     <ClInclude Include="..\..\System\include\System\PackageFormat.h" />
     <ClInclude Include="..\..\System\include\System\PackagedDataApi.h" />
     <ClInclude Include="..\..\System\include\System\PackagingKeyObfuscation.h" />

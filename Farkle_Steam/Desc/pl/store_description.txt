@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice przenosi klasyczną grę w kości do klimatycznej średniowiecznej karczmy.
+Rzucaj kośćmi, zdobywaj punkty i zdecyduj, jak bardzo chcesz kusić los. Każdy udany rzut stawia cię przed kolejnym wyborem: zachowaj punkty i graj bezpiecznie albo rzuć ponownie, ryzykując utratę wszystkiego, co zdobyłeś w tej turze.
+Zasady są proste. Decyzje – już nie.
+
+[IMAGE: roll.png]
+Każda tura zaczyna się od sześciu kości. Odkładaj punktujące kombinacje i rzucaj pozostałymi kośćmi, aby dalej powiększać wynik.
+Ale ryzyko zawsze czai się przy stole.
+Jeśli rzut nie da żadnej punktującej kości, robisz Farkle i tracisz wszystkie niezabezpieczone punkty z tej tury.
+Czasem najbezpieczniej jest przestać.
+Czasem kolejny rzut jest wart ryzyka.
+A czasem kości mają własne plany.
+
+[IMAGE: gameplay.png]
+Farkle opiera się na prostym systemie kuszenia losu, który nieustannie zmusza do wyboru między ryzykiem a nagrodą.
+Szybko poznasz zasady i skupisz się na tym, co najważniejsze:
+[list]
+[*]Rzucaj sześcioma kośćmi i szukaj punktujących kombinacji
+[*]Zatrzymuj punktujące kości i rzucaj pozostałymi
+[*]Kontynuuj turę, aby budować coraz wyższe wyniki
+[*]Zabezpiecz punkty, zanim je stracisz
+[*]Decyduj, kiedy potencjalna nagroda jest warta ryzyka
+[/list]
+Każdy rzut może odmienić przebieg gry.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice to coś więcej niż tradycyjny interfejs gry stołowej.
+Rozgrywka toczy się w szczegółowo odwzorowanej średniowiecznej karczmie 3D, zaprojektowanej tak, by każda partia przypominała prawdziwą grę w kości przy stole.
+Ciepłe światło, drewniane wnętrza, odgłosy karczmy i fizyczne kości tworzą wciągającą średniowieczną atmosferę. Ścieżka dźwiękowa zawiera również autentyczną muzykę średniowieczną pochodzącą z tamtej epoki – prawdziwą muzykę tamtych czasów, a nie wyłącznie współczesne kompozycje inspirowane średniowieczem.
+W połączeniu z klimatem karczmy i oprawą wizualną muzyka sprawia, że każda partia osadzona jest w żywym średniowiecznym świecie.
+
+[IMAGE: learn.png]
+Nie ma tu skomplikowanych systemów do zapamiętania ani opasłej księgi zasad.
+Farkle to gra o prawdopodobieństwie, podejmowaniu decyzji i wyczuciu, kiedy przestać.
+Ostrożny gracz może systematycznie budować wynik.
+Odważny gracz może zaryzykować wszystko dla jednej wielkiej tury.
+Żadna z tych strategii nie gwarantuje zwycięstwa.
+Czasem trzeba po prostu rzucić kośćmi.
+
+[IMAGE: features.png]
+[list]
+[*]Klasyczna rozgrywka w kości inspirowana Farkle
+[*]Mechanika kuszenia losu oparta na ryzyku i nagrodzie
+[*]W pełni renderowane kości 3D
+[*]Klimatyczna średniowieczna karczma
+[*]Proste zasady i rozgrywka, którą szybko opanujesz
+[*]Strategiczne decyzje w każdej turze
+[*]Idealna zarówno na krótkie sesje, jak i dłuższe partie
+[/list]
+Zajmij miejsce przy stole, weź kości do ręki i sprawdź, jak bardzo chcesz kusić los.

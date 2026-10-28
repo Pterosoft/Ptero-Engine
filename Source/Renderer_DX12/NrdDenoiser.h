@@ -1,7 +1,8 @@
 #pragma once
 // NrdDenoiser.h
 // Pure D3D12 wrapper around the NVIDIA Real-time Denoisers (NRD) library.
-// Uses RELAX_DIFFUSE to denoise one-bounce GI radiance produced by RtGI_RayGen.
+// Uses RELAX_DIFFUSE to denoise one-bounce GI radiance produced by RtGI_RayGen,
+// or RELAX_DIFFUSE_SPECULAR when the specular textures are given (the path tracer).
 //
 // Does NOT use the NRDIntegration.hpp helper (which requires NRI).
 // Manages its own shader-visible descriptor heap and pipelines built from
@@ -31,12 +32,20 @@ struct NrdInitTextures
     // NRD output (written by NRD as UAV, read by Composite as SRV)
     ID3D12Resource* outDiffRadiance = nullptr;     // OUT_DIFF_RADIANCE_HITDIST (R11G11B10F)
 
+    // Optional specular channel. Both set selects RELAX_DIFFUSE_SPECULAR.
+    ID3D12Resource* specRadianceHitDist = nullptr; // IN_SPEC_RADIANCE_HITDIST  (RGBA16F)
+    ID3D12Resource* outSpecRadiance     = nullptr; // OUT_SPEC_RADIANCE_HITDIST (RGBA16F)
+
     // Formats for descriptor creation
     DXGI_FORMAT diffRadianceHitDistFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
     DXGI_FORMAT motionVectorsFmt       = DXGI_FORMAT_R16G16_FLOAT;
     DXGI_FORMAT normalRoughnessFmt     = DXGI_FORMAT_R10G10B10A2_UNORM;
     DXGI_FORMAT viewZFmt               = DXGI_FORMAT_R32_FLOAT;
     DXGI_FORMAT outDiffRadianceFmt     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    DXGI_FORMAT specRadianceHitDistFmt = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    DXGI_FORMAT outSpecRadianceFmt     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    bool HasSpecular() const { return specRadianceHitDist != nullptr && outSpecRadiance != nullptr; }
 };
 
 // ----------------------------------------------------------------------------
@@ -66,10 +75,9 @@ public:
     // All external textures from NrdInitTextures must be in
     // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE on entry (they were
     // written as UAVs by RayGen and transitioned by the caller).
-    // They are left in D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE on exit.
-    //
-    // outDiffRadiance is in D3D12_RESOURCE_STATE_UNORDERED_ACCESS on entry
-    // and remains so on exit.
+    // (In practice callers leave them as UNORDERED_ACCESS, which is what the
+    // wrapper assumes.) Every external texture - inputs and outputs - is left in
+    // D3D12_RESOURCE_STATE_UNORDERED_ACCESS on exit.
     //
     // viewToClipMatrix / worldToViewMatrix: column-major, NON-jittered.
     void Denoise(
@@ -88,6 +96,10 @@ public:
     void SetMaxAccumulationTime(float seconds, float fps) { mMaxAccumTime = seconds; mFps = fps; }
     void SetAtrousIterations(int n) { mAtrousIterations = n; }
     void SetDisocclusionThreshold(float t) { mDisocclusionThreshold = t; }
+
+    // Replaces the built-in RELAX tuning (which is tuned for the RTGI one-bounce
+    // signal) with the caller's own, from the next Denoise() on.
+    void SetRelaxSettings(const nrd::RelaxSettings& settings) { mCustomRelax = settings; mHasCustomRelax = true; }
 
     const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
 
@@ -157,7 +169,7 @@ private:
     std::vector<D3D12_RESOURCE_STATES>   mPermStates;
     std::vector<D3D12_RESOURCE_STATES>   mTransStates;
     // Current state for external textures (indexed by kExt* constants).
-    D3D12_RESOURCE_STATES mExtStates[5] = {};
+    D3D12_RESOURCE_STATES mExtStates[7] = {};   // kExtCount, declared below
 
     // ------------ descriptor heaps ------------------------------------------
     // CPU-only heap: stores SRV+UAV for every managed resource (pools + external).
@@ -173,12 +185,20 @@ private:
     UINT mPermCount     = 0;
     UINT mTransCount    = 0;
 
-    static constexpr UINT kExtCount      = 5; // # of external textures
+    static constexpr UINT kExtCount      = 7; // # of external textures
     static constexpr UINT kExtDiffRadiance   = 0; // IN_DIFF_RADIANCE_HITDIST
     static constexpr UINT kExtMotionVec      = 1; // IN_MV
     static constexpr UINT kExtNormalRoughness= 2; // IN_NORMAL_ROUGHNESS
     static constexpr UINT kExtViewZ          = 3; // IN_VIEWZ
     static constexpr UINT kExtOutDiff        = 4; // OUT_DIFF_RADIANCE_HITDIST
+    static constexpr UINT kExtSpecRadiance   = 5; // IN_SPEC_RADIANCE_HITDIST  (DIFFUSE_SPECULAR only)
+    static constexpr UINT kExtOutSpec        = 6; // OUT_SPEC_RADIANCE_HITDIST (DIFFUSE_SPECULAR only)
+
+    static_assert(kExtCount == sizeof(mExtStates) / sizeof(mExtStates[0]), "mExtStates must hold every external texture");
+
+    // NRD resource type -> kExt* index, or kExtCount for one this wrapper does not bind.
+    static UINT ExternalIndex(nrd::ResourceType type);
+    ID3D12Resource* ExternalResource(UINT extIdx) const;
 
     // Shader-visible CBV/SRV/UAV heap for NRD dispatches.
     // Re-populated each frame using CopyDescriptors.
@@ -212,16 +232,29 @@ private:
     UINT                   mCbSlotCount = 0; // # of slots
 
     // Shader-visible heap offset that advances across dispatches within one frame.
-    // Reset to 0 at the start of each Denoise() call.
+    // Reset to the frame slot's base at the start of each Denoise() call.
     UINT mFrameHeapOffset = 0;
     // Monotonic per-frame dispatch index used for constant-buffer ring allocation.
     UINT mCbDispatchIndex = 0;
+
+    // The descriptor heap and the constant ring hold one region per frame in
+    // flight. A single region was rewritten from the start by every Denoise()
+    // while the GPU could still be running up to two earlier frames' NRD passes,
+    // which read their descriptors and constants from it - see
+    // three-frames-in-flight-upload-buffers.
+    static constexpr UINT kFramesInFlight = 3;
+    UINT mFrameSlot = 0;
+    UINT mSrvHeapCapacityPerFrame = 0;
 
     // ------------ denoiser settings ------------------------------------------
     float mMaxAccumTime          = 0.5f;  // seconds
     float mFps                   = 60.0f;
     float mDisocclusionThreshold = 0.01f;
     int   mAtrousIterations      = 5;
+
+    nrd::RelaxSettings mCustomRelax{};
+    bool               mHasCustomRelax = false;
+    bool               mSpecular       = false;   // RELAX_DIFFUSE_SPECULAR
 
     // ------------ cached from LibraryDesc ------------------------------------
     DXGI_FORMAT mNormalRoughnessFormat = DXGI_FORMAT_R8G8B8A8_UNORM;

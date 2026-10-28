@@ -1,0 +1,35 @@
+{
+   "appDescription": {
+      "message": "Web-automatizazioa gaitzeko osagarria. Web-luzapena mahaigainerako Power Automate 2.27 edo berriagoekin da bateragarria."
+   },
+   "appName": {
+      "message": "Microsoft Power Automate"
+   },
+   "consentAccept": {
+      "message": "Onartu"
+   },
+   "consentCollectedData1": {
+      "message": "Erabiltzen duzun web-orriaren URIa bilduko dugu mahaigainerako Power Automate-ren web-automatizazioaren gaitasunak gaitzeko."
+   },
+   "consentDecline": {
+      "message": "Baztertu"
+   },
+   "consentHeader": {
+      "message": "Microsoft Power Automate-ren pribatutasun-onarpena"
+   },
+   "consentParagraph1": {
+      "message": "Datu anonimoak biltzeko baimena ematen ez baduzu, web-automatizazioa ez da erabilgarri egongo."
+   },
+   "consentParagraph2": {
+      "message": "Hemen aurki ditzakezu biltzen ditugun datu anonimoei eta erabilerari buruzko xehetasunak "
+   },
+   "consentPrivacyLink": {
+      "message": "Pribatutasun-gidalerroak"
+   },
+   "consentQuestion": {
+      "message": "Microsoft Power Automate-ren web-luzapena nola erabiltzen duzun jakiteko, honako datu anonimo hauek bil ditzakegu?"
+   },
+   "consentUninstall": {
+      "message": "Microsoft Power Automate-ren web-luzapena desinstalatuko du aukera honek. Jarraitu nahi duzu?"
+   }
+}

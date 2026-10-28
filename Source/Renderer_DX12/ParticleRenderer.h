@@ -30,6 +30,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -44,13 +45,15 @@ struct ParticleSystemInstance
     ParticleSystemComponent Settings;
 
     // Emitter local space -> world. Rotation and translation from the entity
-    // transform; the global mesh scale is deliberately not applied, so a
-    // particle system's sizes stay in metres regardless of entity scale.
+    // transform. The entity's scale is not in it: the scene renderer folds it
+    // into Settings (sizes, shape, speeds) instead, so this stays rigid.
     DirectX::XMMATRIX EmitterToWorld = DirectX::XMMatrixIdentity();
     DirectX::XMFLOAT3 EmitterPosition{ 0.0f, 0.0f, 0.0f };
 
     // Entity name, used only for resource debug names.
     std::string DebugName;
+    // The owning entity's persistent Id (0 = none), handed on to the proxy light.
+    std::uint64_t EntityId = 0;
 };
 
 // A light a particle system asks the renderer to add to the scene this frame.
@@ -62,13 +65,22 @@ struct ParticleProxyLight
     float             Radius = 1.0f;
     DirectX::XMFLOAT3 Color{ 0.0f, 0.0f, 0.0f };
     float             InvRadiusSq = 1.0f;
+    // Color without the light style's flicker: what the reference path tracer
+    // accumulates, since an image that converges cannot follow a flame.
+    DirectX::XMFLOAT3 SteadyColor{ 0.0f, 0.0f, 0.0f };
     bool              CastShadows = false;
     bool              AffectVolumetricFog = true;
+    // Multiplier on the fog's copy of this light only.
+    float             VolumetricFogIntensity = 1.0f;
 
     // Multiplier applied to this light's colour for indirect lighting only, so
     // a fire can be dialled back in the GI without dimming the direct pool of
     // light it casts on the floor around it.
     float             GiContribution = 1.0f;
+
+    // The emitting entity's Id (0 = none), so the light keeps its identity - and its
+    // cached shadow - when systems before it come and go.
+    std::uint64_t     EntityId = 0;
 };
 
 // Everything the draw pass needs that comes from the frame rather than from a
@@ -143,7 +155,10 @@ public:
     // Also advances the style clock and recomputes the proxy lights, so the
     // scene renderer can read them straight afterwards while it assembles the
     // frame's light array - well before the simulation itself runs.
-    void SetSystems(const std::vector<ParticleSystemInstance>& systems, float deltaSeconds);
+    // Takes the list over rather than copying it: each instance carries a whole
+    // ParticleSystemComponent, strings and all, and this runs every frame.
+    void SetSystems(std::vector<ParticleSystemInstance>&& systems, float deltaSeconds);
+    bool HasSystems() const { return !mSystems.empty(); }
 
     // Proxy lights the active systems contribute this frame, in the order the
     // systems were supplied. Valid after SetSystems.
@@ -334,7 +349,16 @@ private:
         ResolvedMaterial                Material;
         std::filesystem::file_time_type LastWriteTime{};
         bool                            FileExists = false;
+        // When the file was last compared against disk; see kMaterialRevalidateInterval.
+        std::chrono::steady_clock::time_point LastCheckTime{};
     };
+
+    // Checking the material file costs two filesystem calls, and every system asks
+    // for its material every frame - ten candles were most of a half-millisecond of
+    // "Particle system sync". A cached entry is trusted this long before disk is
+    // asked again, the same interval the texture and mesh-material caches use, so a
+    // saved edit still shows up within a quarter second.
+    static constexpr std::chrono::milliseconds kMaterialRevalidateInterval{ 250 };
 
     // A GPU texture plus its descriptor, for sprite sheets loaded outside the
     // DDS path.

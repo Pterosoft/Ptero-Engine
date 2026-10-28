@@ -2,6 +2,7 @@
 #include "UiTypes.h"
 #include <cstddef>
 #include <string>
+#include <vector>
 #include <windows.h>
 #include <commdlg.h>
 
@@ -121,6 +122,8 @@ struct UiDrawList
     void AddTriangleFilled(UiVec2, UiVec2, UiVec2, UiU32);
     void AddCircle(UiVec2, float, UiU32, int = 0, float = 1);
     void AddCircleFilled(UiVec2, float, UiU32, int = 0);
+    // Top-left anchored, in the overlay's default font.
+    void AddText(UiVec2, UiU32, const char *);
     void AddPolyline(const UiVec2 *, int, UiU32, int, float);
     void AddImage(UiTextureID, UiVec2, UiVec2, UiVec2 = {0, 0}, UiVec2 = {1, 1}, UiU32 = 0xffffffff);
 };
@@ -185,7 +188,54 @@ bool KeyboardCameraInputAllowed();
 // Mouse-wheel notches banked over the scene viewport since the last call, positive when
 // scrolled away from the user. Reading drains the accumulator.
 float ConsumeViewportWheelDelta();
+// The same wheel, banked separately for the game UI (scrolling a list), so the camera
+// draining its notches every frame does not take them from the UI. Same sign and units.
+float ConsumeUiWheelDelta();
+// Banks wheel movement the host window received directly: a packaged game has no Qt to
+// deliver it. `angleDelta` is WM_MOUSEWHEEL's, 120 per notch.
+void AddWheelDelta(int angleDelta);
 void RegisterIcon(UiTextureID, const wchar_t *);
+// Editor styles: JSON documents with the .style extension in Data/Styles, described in
+// Data/Styles/README.md. The choice is remembered across sessions.
+struct StyleEntry
+{
+    std::string Name;        // "name" from the file, or the file name when it has none
+    std::string File;        // file name inside the styles folder
+    std::string Description;
+};
+// Every .style file in the styles folder; `rescan` reads the folder again.
+const std::vector<StyleEntry> &AvailableStyles(bool rescan = false);
+// Applies a style by file name inside the styles folder, or by absolute path. On failure
+// the current style stays and StyleError() says why.
+bool LoadStyle(const char *file);
+// Reads the active style's file again. The file is also watched, so saving it in a text
+// editor reapplies it on its own.
+bool ReloadStyle();
+const char *CurrentStyleFile();
+const char *StyleError();
+const char *StylesDirectory();
+// Copies the active style to "<name>.style", renames it inside, and switches to it.
+bool DuplicateStyle(const char *name);
+// A numeric metric of the active style, such as "toolButtonSize" or "iconSize".
+float StyleMetric(const char *token, float fallback);
+// Gives the next menu item, menu, button or selectable an icon: a file name without its
+// extension in the style's icon folder (Data/Icons/Editor unless the style says otherwise).
+void SetNextItemIcon(const char *icon);
+// Square icon-only button whose label becomes its tooltip. Like Button, it shows as
+// checked while a QtUiCol_Button color is pushed. Falls back to the label when the icon
+// file is missing.
+bool IconButton(const char *name, const char *icon);
+// A list of strings kept across editor sessions (the Qt settings store), such as the
+// recently opened levels. Empty when nothing was saved under `key`.
+std::vector<std::string> LoadSettingList(const char *key);
+void SaveSettingList(const char *key, const std::vector<std::string> &values);
+// A toast card in the editor window's bottom-right corner, like Unreal's "New files
+// detected" notification. Declare it every frame it should stay up; it hides on the first
+// frame it is not declared. Returns 1 when the primary button was clicked, 2 for the
+// secondary one, 3 when it was dismissed with its close button, otherwise 0. Buttons with
+// a null label are not shown. Never takes keyboard focus from the viewport.
+int Notification(const char *id, const char *title, const char *text, const char *primaryButton,
+                 const char *secondaryButton);
 struct TextureView
 {
     HWND Window;
@@ -285,6 +335,9 @@ void SeparatorText(const char *);
 void Text(const char *, ...);
 void TextWrapped(const char *, ...);
 void TextDisabled(const char *, ...);
+// TextDisabled that wraps at the window's width. For help paragraphs: an unwrapped one as
+// wide as its text widens the whole window, pushing SameLine items out of view.
+void TextDisabledWrapped(const char *, ...);
 void TextColored(UiVec4, const char *, ...);
 void BulletText(const char *, ...);
 void TextUnformatted(const char *, const char * = nullptr);

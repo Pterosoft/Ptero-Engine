@@ -4,7 +4,10 @@
 #include "d3dx12.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <iterator>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
@@ -35,6 +38,12 @@ namespace
     // Matches kPointShadowResourceFormat in PointShadowMapRenderer.h. Only used
     // to describe the null stand-in view, which is never sampled.
     constexpr DXGI_FORMAT kPointShadowSrvFormat = DXGI_FORMAT_R32_FLOAT;
+
+    // World-space GI volume. Must match PTERO_FOG_GI_DIM_* in VolumetricFogCommon.hlsli.
+    constexpr UINT kGiVolumeDims[3] = { 128, 128, 48 };
+    constexpr UINT kGiResolveGroup = 4;
+    // Screen pixels between splats per axis; a different one of each block every frame.
+    constexpr UINT kGiSplatStride = 4;
 
     struct FogGridDimensions
     {
@@ -248,6 +257,13 @@ void VolumetricFogRenderer::Shutdown()
 
     mLightingVolume.Reset();
     mIntegratedFog.Reset();
+    mGiVolume[0].Reset();
+    mGiVolume[1].Reset();
+    mGiAccum.Reset();
+    mGiSplatPipelineState.Reset();
+    mGiResolvePipelineState.Reset();
+    mGiVolumeRootSignature.Reset();
+    mGiVolumeHistoryValid = false;
     mConstantBuffer.Reset();
     mInjectPipelineState.Reset();
     mAccumulatePipelineState.Reset();
@@ -264,11 +280,46 @@ void VolumetricFogRenderer::Dispatch(
 {
     if (cmdList == nullptr || !mIsInitialized || !mConstantBuffer || !mLightingVolume || !mIntegratedFog)
         return;
+    // The injection lights from the clustered scene lights; without them it would read
+    // whatever its root descriptors were last left pointing at.
+    if (!inputs.LightClusters.IsValid())
+        return;
 
     // Advance before the upload so this frame writes a slot the GPU has finished
     // with. Dispatch runs exactly once per frame, and both dispatches below bind
     // the same slot, so the injection and accumulation passes always agree.
     mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+
+    // The world-space GI volume: used when the fog reads screen-space GI (no probe
+    // grid) and the settings ask for it. Its window is centred on the camera, in
+    // whole cells; a change of cell size starts it over.
+    mGiVolumeActive = settings.GiVolume
+        && settings.GiIntensity > 0.0f
+        && inputs.ProbeSrv.ptr == 0
+        && inputs.ScreenGiSrv.ptr != 0
+        && inputs.GBufferNormalSrv.ptr != 0
+        && inputs.CameraPos != nullptr
+        && EnsureGiVolume();
+    if (mGiVolumeActive)
+    {
+        const float cellSize = std::clamp(settings.GiVolumeCellSize, 0.1f, 8.0f);
+        if (cellSize != mGiVolumeCellSize)
+            mGiVolumeHistoryValid = false;
+        mGiVolumeCellSize = cellSize;
+        std::copy(std::begin(mGiVolumeOrigin), std::end(mGiVolumeOrigin), std::begin(mGiVolumePrevOrigin));
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const int cameraCell = static_cast<int>(std::floor(inputs.CameraPos[axis] / cellSize));
+            mGiVolumeOrigin[axis] = cameraCell - static_cast<int>(kGiVolumeDims[axis] / 2);
+        }
+        mGiVolumeWrite = 1u - mGiVolumeWrite;
+        ++mGiVolumeFrame;
+    }
+    else
+    {
+        // A frame without it leaves nothing to carry on from.
+        mGiVolumeHistoryValid = false;
+    }
 
     UploadConstants(settings, inputs);
 
@@ -299,6 +350,12 @@ void VolumetricFogRenderer::Dispatch(
     const D3D12_GPU_DESCRIPTOR_HANDLE pointShadowSrv =
         (inputs.PointShadowSrv.ptr != 0) ? inputs.PointShadowSrv : mNullShadowSrvGpu;
 
+    if (mGiVolumeActive)
+    {
+        UpdateGiVolume(cmdList, constantsAddress, sceneDepthSrv, inputs);
+        mGiVolumeHistoryValid = true;
+    }
+
     cmdList->SetComputeRootSignature(mInjectRootSignature.Get());
     cmdList->SetComputeRootConstantBufferView(0, constantsAddress);
     cmdList->SetPipelineState(mInjectPipelineState.Get());
@@ -306,6 +363,17 @@ void VolumetricFogRenderer::Dispatch(
     cmdList->SetComputeRootDescriptorTable(2, mLightingUavGpu);
     cmdList->SetComputeRootDescriptorTable(3, probeSrv);
     cmdList->SetComputeRootDescriptorTable(4, pointShadowSrv);
+    // Virtual shadow map pool (t3) and page table (t4): only read when the constants
+    // say it is on, so the scene depth (also a Texture2D) and the constants stand in.
+    const bool vsm = inputs.Vsm != nullptr && inputs.VsmPageTable != 0 && inputs.VsmPoolSrv.ptr != 0;
+    cmdList->SetComputeRootDescriptorTable(5, vsm ? inputs.VsmPoolSrv : sceneDepthSrv);
+    cmdList->SetComputeRootShaderResourceView(6, vsm ? inputs.VsmPageTable : constantsAddress);
+    // Screen-space GI (t5): only read when the constants say so; the scene depth,
+    // also a Texture2D, stands in otherwise.
+    cmdList->SetComputeRootDescriptorTable(7, inputs.ScreenGiSrv.ptr != 0 ? inputs.ScreenGiSrv : sceneDepthSrv);
+    // The GI volume (t6), or a null volume when it is not in use this frame.
+    cmdList->SetComputeRootDescriptorTable(8, mGiVolumeActive ? mGiVolumeSrvGpu[mGiVolumeWrite] : mNullVolumeSrvGpu);
+    LightClusterRenderer::BindCompute(cmdList, 9, inputs.LightClusters);
     cmdList->Dispatch(
         (mFroxelWidth + kInjectGroupX - 1) / kInjectGroupX,
         (mFroxelHeight + kInjectGroupY - 1) / kInjectGroupY,
@@ -351,7 +419,9 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     // cubemap atlas. Four single-descriptor tables rather than one range: the
     // handles are allocated by four different owners out of the shared heap and
     // are nowhere near each other in it.
-    D3D12_DESCRIPTOR_RANGE injectRanges[4]{};
+    // Then t3, the virtual shadow map pool (table), and t4, its page table (root SRV),
+    // t5, the screen-space GI (table), and t6, the world-space GI volume (table).
+    D3D12_DESCRIPTOR_RANGE injectRanges[7]{};
     injectRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[0].NumDescriptors = 1;
     injectRanges[0].BaseShaderRegister = 0;
@@ -364,22 +434,56 @@ bool VolumetricFogRenderer::CreateRootSignatures()
     injectRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     injectRanges[3].NumDescriptors = 1;
     injectRanges[3].BaseShaderRegister = 2;
+    injectRanges[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[4].NumDescriptors = 1;
+    injectRanges[4].BaseShaderRegister = 3;
+    injectRanges[5].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[5].NumDescriptors = 1;
+    injectRanges[5].BaseShaderRegister = 5;
+    injectRanges[6].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    injectRanges[6].NumDescriptors = 1;
+    injectRanges[6].BaseShaderRegister = 6;
 
-    D3D12_ROOT_PARAMETER injectParams[5]{};
+    // 9..: the scene's lights and their clustered lists (b0, t0..t3 in space 7).
+    D3D12_ROOT_PARAMETER injectParams[9 + LightClusterRenderer::kRootParameterCount]{};
     injectParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     injectParams[0].Descriptor.ShaderRegister = 0;
     injectParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (UINT i = 0; i < 4; ++i)
+    for (UINT i = 0; i < 5; ++i)
     {
         injectParams[i + 1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         injectParams[i + 1].DescriptorTable.NumDescriptorRanges = 1;
         injectParams[i + 1].DescriptorTable.pDescriptorRanges = &injectRanges[i];
         injectParams[i + 1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
+    injectParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    injectParams[6].Descriptor.ShaderRegister = 4;
+    injectParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    injectParams[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    injectParams[7].DescriptorTable.NumDescriptorRanges = 1;
+    injectParams[7].DescriptorTable.pDescriptorRanges = &injectRanges[5];
+    injectParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    injectParams[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    injectParams[8].DescriptorTable.NumDescriptorRanges = 1;
+    injectParams[8].DescriptorTable.pDescriptorRanges = &injectRanges[6];
+    injectParams[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    LightClusterRenderer::FillRootParameters(&injectParams[9], D3D12_SHADER_VISIBILITY_ALL);
+
+    // s0: trilinear and wrapping, for the toroidally addressed GI volume.
+    D3D12_STATIC_SAMPLER_DESC giVolumeSampler{};
+    giVolumeSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    giVolumeSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    giVolumeSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    giVolumeSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    giVolumeSampler.MaxLOD = D3D12_FLOAT32_MAX;
+    giVolumeSampler.ShaderRegister = 0;
+    giVolumeSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC injectDesc{};
-    injectDesc.NumParameters = 5;
+    injectDesc.NumParameters = static_cast<UINT>(std::size(injectParams));
     injectDesc.pParameters = injectParams;
+    injectDesc.NumStaticSamplers = 1;
+    injectDesc.pStaticSamplers = &giVolumeSampler;
     injectDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     ComPtr<ID3DBlob> blob;
@@ -425,6 +529,46 @@ bool VolumetricFogRenderer::CreateRootSignatures()
         return false;
     }
 
+    // GI volume: b0, t0 scene depth, t1 normal G-Buffer, t2 screen GI, u0 the splat
+    // buffer (root UAV), t3 last frame's volume, u1 this frame's.
+    D3D12_DESCRIPTOR_RANGE giRanges[5]{};
+    giRanges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    giRanges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    giRanges[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    giRanges[3] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+    giRanges[4] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+
+    D3D12_ROOT_PARAMETER giParams[7]{};
+    giParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    giParams[0].Descriptor.ShaderRegister = 0;
+    giParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    const int giTableParams[] = { 1, 2, 3, 5, 6 };
+    for (int i = 0; i < 5; ++i)
+    {
+        D3D12_ROOT_PARAMETER& param = giParams[giTableParams[i]];
+        param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        param.DescriptorTable.NumDescriptorRanges = 1;
+        param.DescriptorTable.pDescriptorRanges = &giRanges[i];
+        param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    }
+    giParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    giParams[4].Descriptor.ShaderRegister = 0;
+    giParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC giDesc{};
+    giDesc.NumParameters = static_cast<UINT>(std::size(giParams));
+    giDesc.pParameters = giParams;
+    giDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    blob.Reset();
+    errors.Reset();
+    if (FAILED(D3D12SerializeRootSignature(&giDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &errors))
+        || FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&mGiVolumeRootSignature))))
+    {
+        mLastError = "VolumetricFogRenderer: failed to create GI volume root signature.";
+        return false;
+    }
+
     return true;
 }
 
@@ -441,8 +585,120 @@ bool VolumetricFogRenderer::CreatePipelines()
         return false;
     if (!CompileComputePso(device, mAccumulateRootSignature.Get(), L"Data/Shaders/VolumetricFogAccumulate.hlsl", L"CSMain", mAccumulatePipelineState, mLastError))
         return false;
+    // Optional: without these the fog reads the screen-space GI directly.
+    std::string giVolumeError;
+    if (!CompileComputePso(device, mGiVolumeRootSignature.Get(), L"Data/Shaders/VolumetricFogGiVolume.hlsl", L"SplatCS", mGiSplatPipelineState, giVolumeError)
+        || !CompileComputePso(device, mGiVolumeRootSignature.Get(), L"Data/Shaders/VolumetricFogGiVolume.hlsl", L"ResolveCS", mGiResolvePipelineState, giVolumeError))
+    {
+        mGiSplatPipelineState.Reset();
+        mGiResolvePipelineState.Reset();
+        OutputDebugStringA((giVolumeError + "\n").c_str());
+    }
 
     return true;
+}
+
+bool VolumetricFogRenderer::EnsureGiVolume()
+{
+    if (mGiVolume[0] && mGiVolume[1] && mGiAccum)
+        return true;
+    if (mGiVolumeFailed || !mGiSplatPipelineState || !mGiResolvePipelineState)
+        return false;
+
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (!device)
+        return false;
+
+    // Fails once and stays off, rather than retrying an allocation every frame.
+    mGiVolumeFailed = true;
+    const wchar_t* names[2] = { L"VolumetricFog_GiVolume0", L"VolumetricFog_GiVolume1" };
+    for (int i = 0; i < 2; ++i)
+    {
+        if (!CreateTexture3D(device, kGiVolumeDims[0], kGiVolumeDims[1], kGiVolumeDims[2], kFogFormat,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, names[i], mGiVolume[i]))
+        {
+            mLastError = "VolumetricFogRenderer: failed to create the GI volume.";
+            return false;
+        }
+    }
+
+    // Four uints per cell. A committed resource starts zeroed, which is the empty
+    // state the resolve leaves it in after every frame.
+    const UINT64 accumBytes = static_cast<UINT64>(kGiVolumeDims[0]) * kGiVolumeDims[1] * kGiVolumeDims[2] * 16ull;
+    const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(accumBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&mGiAccum))))
+    {
+        mLastError = "VolumetricFogRenderer: failed to create the GI volume splat buffer.";
+        return false;
+    }
+    mGiAccum->SetName(L"VolumetricFog_GiSplats");
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = kFogFormat;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    srvDesc.Texture3D.MipLevels = 1;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = kFogFormat;
+    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+    uavDesc.Texture3D.WSize = kGiVolumeDims[2];
+    for (int i = 0; i < 2; ++i)
+    {
+        if (!AllocateDescriptor(mGiVolumeSrvCpu[i], mGiVolumeSrvGpu[i], mLastError)) return false;
+        if (!AllocateDescriptor(mGiVolumeUavCpu[i], mGiVolumeUavGpu[i], mLastError)) return false;
+        device->CreateShaderResourceView(mGiVolume[i].Get(), &srvDesc, mGiVolumeSrvCpu[i]);
+        device->CreateUnorderedAccessView(mGiVolume[i].Get(), nullptr, &uavDesc, mGiVolumeUavCpu[i]);
+    }
+
+    mGiVolumeFailed = false;
+    mGiVolumeHistoryValid = false;
+    return true;
+}
+
+void VolumetricFogRenderer::UpdateGiVolume(
+    ID3D12GraphicsCommandList* cmdList,
+    D3D12_GPU_VIRTUAL_ADDRESS constantsAddress,
+    D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv,
+    const FrameInputs& inputs)
+{
+    ID3D12Resource* next = mGiVolume[mGiVolumeWrite].Get();
+    const UINT read = 1u - mGiVolumeWrite;
+
+    auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(next,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cmdList->ResourceBarrier(1, &toUav);
+
+    cmdList->SetComputeRootSignature(mGiVolumeRootSignature.Get());
+    cmdList->SetComputeRootConstantBufferView(0, constantsAddress);
+    cmdList->SetComputeRootDescriptorTable(1, sceneDepthSrv);
+    cmdList->SetComputeRootDescriptorTable(2, inputs.GBufferNormalSrv);
+    cmdList->SetComputeRootDescriptorTable(3, inputs.ScreenGiSrv);
+    cmdList->SetComputeRootUnorderedAccessView(4, mGiAccum->GetGPUVirtualAddress());
+    cmdList->SetComputeRootDescriptorTable(5, mGiVolumeSrvGpu[read]);
+    cmdList->SetComputeRootDescriptorTable(6, mGiVolumeUavGpu[mGiVolumeWrite]);
+
+    // Splat: one thread per kGiSplatStride x kGiSplatStride block of the frame.
+    const UINT splatWidth = (mSceneWidth + kGiSplatStride - 1) / kGiSplatStride;
+    const UINT splatHeight = (mSceneHeight + kGiSplatStride - 1) / kGiSplatStride;
+    cmdList->SetPipelineState(mGiSplatPipelineState.Get());
+    cmdList->Dispatch((splatWidth + 7) / 8, (splatHeight + 7) / 8, 1);
+
+    auto splatBarrier = CD3DX12_RESOURCE_BARRIER::UAV(mGiAccum.Get());
+    cmdList->ResourceBarrier(1, &splatBarrier);
+
+    cmdList->SetPipelineState(mGiResolvePipelineState.Get());
+    cmdList->Dispatch(kGiVolumeDims[0] / kGiResolveGroup, kGiVolumeDims[1] / kGiResolveGroup, kGiVolumeDims[2] / kGiResolveGroup);
+
+    // The splat buffer is read and cleared by the resolve, and next frame's splats
+    // must not start before that is done.
+    D3D12_RESOURCE_BARRIER after[2] = {
+        CD3DX12_RESOURCE_BARRIER::UAV(mGiAccum.Get()),
+        CD3DX12_RESOURCE_BARRIER::Transition(next,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+    };
+    cmdList->ResourceBarrier(2, after);
 }
 
 bool VolumetricFogRenderer::CreateConstantBuffer()
@@ -525,6 +781,14 @@ bool VolumetricFogRenderer::CreateNullDescriptors()
 
     if (!AllocateDescriptor(mNullProbeSrvCpu, mNullProbeSrvGpu, mLastError)) return false;
     if (!AllocateDescriptor(mNullShadowSrvCpu, mNullShadowSrvGpu, mLastError)) return false;
+    if (!AllocateDescriptor(mNullVolumeSrvCpu, mNullVolumeSrvGpu, mLastError)) return false;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC volumeDesc{};
+    volumeDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    volumeDesc.Format = kFogFormat;
+    volumeDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    volumeDesc.Texture3D.MipLevels = 1;
+    device->CreateShaderResourceView(nullptr, &volumeDesc, mNullVolumeSrvCpu);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC probeDesc{};
     probeDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -610,7 +874,7 @@ void VolumetricFogRenderer::UploadConstants(
     constants.BaseHeight = settings.BaseHeight;
     constants.HeightFalloff = maxf(0.0f, settings.HeightFalloff);
     constants.ScatteringAlbedo = std::clamp(settings.ScatteringAlbedo, 0.0f, 1.0f);
-    constants.GiIntensity = maxf(0.0f, settings.GiIntensity);
+    constants.GiIntensity = maxf(0.0f, settings.GiIntensity) * maxf(0.0f, inputs.ProbeInvPreExposure);
 
     constants.FogColor[0] = settings.ColorR;
     constants.FogColor[1] = settings.ColorG;
@@ -648,18 +912,28 @@ void VolumetricFogRenderer::UploadConstants(
         constants.PointLights[i] = inputs.PointLights[i];
     }
 
-    // Zeroed grid dimensions are what the shader tests before it touches the
+    // A zero cascade count is what the shader tests before it touches the
     // probe buffer, so a frame without a grid never reads the stand-in
     // descriptor bound in its place.
     if (inputs.ProbeSrv.ptr != 0 && constants.GiIntensity > 0.0f)
+        constants.ProbeField = inputs.ProbeField;
+    // Likewise the screen-space GI, used only where no probe grid is given.
+    constants.ScreenGiEnabled = (inputs.ProbeSrv.ptr == 0 && inputs.ScreenGiSrv.ptr != 0 && constants.GiIntensity > 0.0f) ? 1u : 0u;
+
+    // ...and the world-space volume built from it (decided in Dispatch).
+    if (mGiVolumeActive)
     {
-        constants.ProbeGridX = inputs.ProbeGridX;
-        constants.ProbeGridY = inputs.ProbeGridY;
-        constants.ProbeGridZ = inputs.ProbeGridZ;
-        constants.ProbeSpacing = inputs.ProbeSpacing;
-        constants.ProbeOrigin[0] = inputs.ProbeOrigin[0];
-        constants.ProbeOrigin[1] = inputs.ProbeOrigin[1];
-        constants.ProbeOrigin[2] = inputs.ProbeOrigin[2];
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            constants.GiVolumeOrigin[axis] = mGiVolumeOrigin[axis];
+            constants.GiVolumePrevOrigin[axis] = mGiVolumePrevOrigin[axis];
+        }
+        constants.GiVolumeOrigin[3] = 1;
+        constants.GiVolumePrevOrigin[3] = mGiVolumeHistoryValid ? 1 : 0;
+        constants.GiVolumeCellSize = mGiVolumeCellSize;
+        constants.GiVolumeInvCellSize = 1.0f / mGiVolumeCellSize;
+        constants.GiVolumeFrame = mGiVolumeFrame;
+        constants.GiVolumeSplatStride = kGiSplatStride;
     }
 
     if (inputs.PointShadowSrv.ptr != 0
@@ -683,6 +957,10 @@ void VolumetricFogRenderer::UploadConstants(
         std::memcpy(constants.ViewProjInv, inputs.ViewProjInv, sizeof(constants.ViewProjInv));
     if (inputs.CurrViewProj != nullptr)
         std::memcpy(constants.CurrViewProj, inputs.CurrViewProj, sizeof(constants.CurrViewProj));
+
+    // Left zeroed (LocalEnabled = 0) without a map, which keeps the cubemap path.
+    if (inputs.Vsm != nullptr && inputs.VsmPageTable != 0 && inputs.VsmPoolSrv.ptr != 0)
+        constants.Vsm = *inputs.Vsm;
 
     std::memcpy(mMappedConstants + mFrameSlot, &constants, sizeof(constants));
 

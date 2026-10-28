@@ -145,8 +145,14 @@ private:
     ComPtr<ID3D12PipelineState> mPSO_NrdComposite;
 
     // ── Persistently-mapped 256-byte upload constant buffer ───────────────
-    ComPtr<ID3D12Resource> mConstantBuffer;
-    void*                  mMappedCb = nullptr;
+    // One slot per recording, more than there are frames in flight: a single slot was
+    // rewritten for the next frame while the GPU still read it, so while the camera
+    // moved the rays started from positions rebuilt with the wrong frame's matrices.
+    static constexpr UINT     kCbRingSlots = 8;
+    ComPtr<ID3D12Resource>    mConstantBuffer;
+    void*                     mMappedCb = nullptr;
+    UINT                      mCbRingSlot = 0;
+    D3D12_GPU_VIRTUAL_ADDRESS mCbGpuAddress = 0; // this recording's slot
 
     // ── AO and NRD textures ────────────────────────────────────────────────
     ComPtr<ID3D12Resource> mRawAOBuffer;

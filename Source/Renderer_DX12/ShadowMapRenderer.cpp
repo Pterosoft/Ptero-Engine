@@ -41,6 +41,43 @@ void ShadowMapRenderer::BeginShadowPass(
 {
     if (!commandList || !mIsInitialized) return;
 
+    // Store pre-transposed (row-major) matrix for HLSL cbuffer upload.
+    const XMFLOAT4X4 viewProjection = ComputeLightViewProjection(sunDir, sceneBoundRadius);
+    XMStoreFloat4x4(&mLightViewProjection, XMMatrixTranspose(XMLoadFloat4x4(&viewProjection)));
+
+    // -----------------------------------------------------------------------
+    // Transition shadow texture from SRV → DSV and clear it.
+    // -----------------------------------------------------------------------
+    const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+        mShadowDepthTexture.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    commandList->ResourceBarrier(1, &toDepthWrite);
+
+    commandList->ClearDepthStencilView(
+        mDsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    commandList->OMSetRenderTargets(0, nullptr, FALSE, &mDsvHandle);
+
+    // Shadow viewport covers the full shadow map texture.
+    const D3D12_VIEWPORT vp =
+    {
+        0.0f, 0.0f,
+        static_cast<float>(kShadowMapSize),
+        static_cast<float>(kShadowMapSize),
+        0.0f, 1.0f
+    };
+    const D3D12_RECT scissor = { 0, 0,
+        static_cast<LONG>(kShadowMapSize),
+        static_cast<LONG>(kShadowMapSize) };
+    commandList->RSSetViewports(1, &vp);
+    commandList->RSSetScissorRects(1, &scissor);
+}
+
+XMFLOAT4X4 ShadowMapRenderer::ComputeLightViewProjection(
+    const DirectX::XMFLOAT3& sunDir,
+    float                     sceneBoundRadius)
+{
     // -----------------------------------------------------------------------
     // Compute the orthographic light-space view-projection matrix.
     // We position the light camera far enough back that the entire scene sphere
@@ -70,36 +107,9 @@ void ShadowMapRenderer::BeginShadowPass(
     const XMMATRIX proj  = XMMatrixOrthographicLH(
         halfSize * 2.0f, halfSize * 2.0f, nearZ, farZ);
 
-    // Store pre-transposed (row-major) matrix for HLSL cbuffer upload.
-    XMStoreFloat4x4(&mLightViewProjection, XMMatrixTranspose(view * proj));
-
-    // -----------------------------------------------------------------------
-    // Transition shadow texture from SRV → DSV and clear it.
-    // -----------------------------------------------------------------------
-    const auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
-        mShadowDepthTexture.Get(),
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE);
-    commandList->ResourceBarrier(1, &toDepthWrite);
-
-    commandList->ClearDepthStencilView(
-        mDsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-    commandList->OMSetRenderTargets(0, nullptr, FALSE, &mDsvHandle);
-
-    // Shadow viewport covers the full shadow map texture.
-    const D3D12_VIEWPORT vp =
-    {
-        0.0f, 0.0f,
-        static_cast<float>(kShadowMapSize),
-        static_cast<float>(kShadowMapSize),
-        0.0f, 1.0f
-    };
-    const D3D12_RECT scissor = { 0, 0,
-        static_cast<LONG>(kShadowMapSize),
-        static_cast<LONG>(kShadowMapSize) };
-    commandList->RSSetViewports(1, &vp);
-    commandList->RSSetScissorRects(1, &scissor);
+    XMFLOAT4X4 viewProjection;
+    XMStoreFloat4x4(&viewProjection, view * proj);
+    return viewProjection;
 }
 
 void ShadowMapRenderer::EndShadowPass(ID3D12GraphicsCommandList* commandList)

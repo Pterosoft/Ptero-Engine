@@ -1,1 +1,2 @@
 K:\Ptero-Engine\Source\Game\x64\Release\Game.dll
+K:\Farkle\Source\Game\x64\Release\Game.dll

@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice porta in vita il classico gioco di dadi all'interno di un'atmosferica taverna medievale.
+Lancia i dadi, accumula punti e decidi fino a che punto sei disposto a sfidare la sorte. Ogni lancio riuscito ti mette davanti a una nuova scelta: mettere al sicuro i punti e giocare sul sicuro, oppure lanciare di nuovo rischiando di perdere tutto ciò che hai guadagnato in quel turno.
+Le regole sono semplici. Le decisioni no.
+
+[IMAGE: roll.png]
+Ogni turno inizia con sei dadi. Metti da parte le combinazioni che danno punti e rilancia i dadi rimanenti per continuare ad aumentare il tuo punteggio.
+Ma il rischio è sempre dietro l'angolo.
+Se un lancio non produce dadi che danno punti, fai Farkle e perdi tutti i punti non messi al sicuro in quel turno.
+A volte la scelta più sicura è fermarsi.
+A volte un altro lancio vale il rischio.
+E a volte i dadi hanno altri piani.
+
+[IMAGE: gameplay.png]
+Farkle si basa su un semplice sistema "push your luck" che ti mette continuamente di fronte a scelte tra rischio e ricompensa.
+Impara le regole in pochi istanti e concentrati su ciò che conta:
+[list]
+[*]Lancia sei dadi e cerca le combinazioni che danno punti
+[*]Tieni i dadi validi e rilancia gli altri
+[*]Prosegui il turno per ottenere punteggi più alti
+[*]Metti al sicuro i punti prima di perderli
+[*]Decidi quando la potenziale ricompensa vale il rischio
+[/list]
+Ogni lancio può cambiare le sorti della partita.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice è molto più di una tradizionale interfaccia da gioco da tavolo.
+Il gioco si svolge all'interno di una dettagliata taverna medievale in 3D, pensata per far sentire ogni partita come una vera sfida a dadi seduti al tavolo.
+Luci calde, interni in legno, suoni d'ambiente della taverna e dadi fisici creano un'atmosfera medievale coinvolgente. La colonna sonora include inoltre autentica musica medievale proveniente dall'epoca stessa, portando nella taverna la vera musica di quel tempo anziché affidarsi solo a composizioni moderne di ispirazione medievale.
+Insieme all'atmosfera della taverna e alla presentazione visiva, la musica fa sentire ogni partita immersa in un mondo medievale vivo.
+
+[IMAGE: learn.png]
+Nessun sistema complicato da memorizzare e nessun enorme regolamento da studiare.
+Farkle è una questione di probabilità, decisioni e capire quando fermarsi.
+Un giocatore prudente può costruire il punteggio con costanza.
+Un giocatore audace può rischiare tutto per un turno straordinario.
+Nessuno dei due approcci garantisce la vittoria.
+A volte bisogna semplicemente lanciare i dadi.
+
+[IMAGE: features.png]
+[list]
+[*]Gameplay di dadi classico ispirato a Farkle
+[*]Meccaniche "push your luck" di rischio e ricompensa
+[*]Dadi interamente renderizzati in 3D
+[*]Atmosferica ambientazione in una taverna medievale
+[*]Regole chiare e gameplay facile da imparare
+[*]Decisioni strategiche a ogni turno
+[*]Pensato sia per sessioni brevi che per partite più lunghe
+[/list]
+Siediti al tavolo, prendi i dadi e scopri fino a che punto sei disposto a sfidare la sorte.

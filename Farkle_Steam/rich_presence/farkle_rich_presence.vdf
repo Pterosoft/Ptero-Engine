@@ -1,0 +1,195 @@
+"lang"
+{
+	"english"
+	{
+		"tokens"
+		{
+			"#Menu"	"In the tavern"
+			"#VsAI"	"Playing against the AI · %score%"
+			"#Searching"	"Looking for a match"
+			"#Waiting"	"Waiting at an open table"
+			"#WaitingFriends"	"Waiting for friends to join"
+			"#Online"	"Playing online against %opponent% · %score%"
+		}
+	}
+	"german"
+	{
+		"tokens"
+		{
+			"#Menu"	"In der Taverne"
+			"#VsAI"	"Spielt gegen die KI · %score%"
+			"#Searching"	"Sucht eine Partie"
+			"#Waiting"	"Wartet an einem offenen Tisch"
+			"#WaitingFriends"	"Wartet auf Freunde"
+			"#Online"	"Spielt online gegen %opponent% · %score%"
+		}
+	}
+	"french"
+	{
+		"tokens"
+		{
+			"#Menu"	"À la taverne"
+			"#VsAI"	"Joue contre l’IA · %score%"
+			"#Searching"	"Cherche une partie"
+			"#Waiting"	"Attend à une table ouverte"
+			"#WaitingFriends"	"Attend ses amis"
+			"#Online"	"Joue en ligne contre %opponent% · %score%"
+		}
+	}
+	"spanish"
+	{
+		"tokens"
+		{
+			"#Menu"	"En la taberna"
+			"#VsAI"	"Jugando contra la IA · %score%"
+			"#Searching"	"Buscando partida"
+			"#Waiting"	"Esperando en una mesa abierta"
+			"#WaitingFriends"	"Esperando a sus amigos"
+			"#Online"	"Jugando en línea contra %opponent% · %score%"
+		}
+	}
+	"italian"
+	{
+		"tokens"
+		{
+			"#Menu"	"Nella taverna"
+			"#VsAI"	"Gioca contro l’IA · %score%"
+			"#Searching"	"Cerca una partita"
+			"#Waiting"	"Aspetta a un tavolo aperto"
+			"#WaitingFriends"	"Aspetta gli amici"
+			"#Online"	"Gioca online contro %opponent% · %score%"
+		}
+	}
+	"brazilian"
+	{
+		"tokens"
+		{
+			"#Menu"	"Na taverna"
+			"#VsAI"	"Jogando contra a IA · %score%"
+			"#Searching"	"Procurando uma partida"
+			"#Waiting"	"Esperando em uma mesa aberta"
+			"#WaitingFriends"	"Esperando os amigos"
+			"#Online"	"Jogando on-line contra %opponent% · %score%"
+		}
+	}
+	"portuguese"
+	{
+		"tokens"
+		{
+			"#Menu"	"Na taverna"
+			"#VsAI"	"A jogar contra a IA · %score%"
+			"#Searching"	"À procura de uma partida"
+			"#Waiting"	"À espera numa mesa aberta"
+			"#WaitingFriends"	"À espera dos amigos"
+			"#Online"	"A jogar online contra %opponent% · %score%"
+		}
+	}
+	"polish"
+	{
+		"tokens"
+		{
+			"#Menu"	"W karczmie"
+			"#VsAI"	"Gra z SI · %score%"
+			"#Searching"	"Szuka meczu"
+			"#Waiting"	"Czeka przy otwartym stole"
+			"#WaitingFriends"	"Czeka na znajomych"
+			"#Online"	"Gra online z: %opponent% · %score%"
+		}
+	}
+	"czech"
+	{
+		"tokens"
+		{
+			"#Menu"	"V hospodě"
+			"#VsAI"	"Hraje proti AI · %score%"
+			"#Searching"	"Hledá hru"
+			"#Waiting"	"Čeká u otevřeného stolu"
+			"#WaitingFriends"	"Čeká na přátele"
+			"#Online"	"Hraje online proti: %opponent% · %score%"
+		}
+	}
+	"greek"
+	{
+		"tokens"
+		{
+			"#Menu"	"Στην ταβέρνα"
+			"#VsAI"	"Παίζει με την ΤΝ · %score%"
+			"#Searching"	"Ψάχνει παρτίδα"
+			"#Waiting"	"Περιμένει σε ανοιχτό τραπέζι"
+			"#WaitingFriends"	"Περιμένει φίλους"
+			"#Online"	"Παίζει online με: %opponent% · %score%"
+		}
+	}
+	"turkish"
+	{
+		"tokens"
+		{
+			"#Menu"	"Meyhanede"
+			"#VsAI"	"Yapay zekâya karşı oynuyor · %score%"
+			"#Searching"	"Maç arıyor"
+			"#Waiting"	"Açık bir masada bekliyor"
+			"#WaitingFriends"	"Arkadaşlarını bekliyor"
+			"#Online"	"%opponent% ile çevrim içi oynuyor · %score%"
+		}
+	}
+	"ukrainian"
+	{
+		"tokens"
+		{
+			"#Menu"	"У таверні"
+			"#VsAI"	"Грає проти ШІ · %score%"
+			"#Searching"	"Шукає гру"
+			"#Waiting"	"Чекає за відкритим столом"
+			"#WaitingFriends"	"Чекає на друзів"
+			"#Online"	"Грає онлайн проти: %opponent% · %score%"
+		}
+	}
+	"arabic"
+	{
+		"tokens"
+		{
+			"#Menu"	"في الحانة"
+			"#VsAI"	"يلعب ضد الذكاء الاصطناعي · %score%"
+			"#Searching"	"يبحث عن مباراة"
+			"#Waiting"	"ينتظر على طاولة مفتوحة"
+			"#WaitingFriends"	"ينتظر الأصدقاء"
+			"#Online"	"يلعب عبر الإنترنت ضد %opponent% · %score%"
+		}
+	}
+	"schinese"
+	{
+		"tokens"
+		{
+			"#Menu"	"在酒馆里"
+			"#VsAI"	"正在与 AI 对局 · %score%"
+			"#Searching"	"正在寻找对局"
+			"#Waiting"	"正在开放牌桌等待"
+			"#WaitingFriends"	"正在等待好友加入"
+			"#Online"	"正在与 %opponent% 在线对局 · %score%"
+		}
+	}
+	"japanese"
+	{
+		"tokens"
+		{
+			"#Menu"	"酒場にいます"
+			"#VsAI"	"AI と対戦中 · %score%"
+			"#Searching"	"対戦相手を探しています"
+			"#Waiting"	"公開テーブルで待っています"
+			"#WaitingFriends"	"フレンドを待っています"
+			"#Online"	"%opponent% とオンライン対戦中 · %score%"
+		}
+	}
+	"koreana"
+	{
+		"tokens"
+		{
+			"#Menu"	"선술집에 있음"
+			"#VsAI"	"AI와 대전 중 · %score%"
+			"#Searching"	"대전 상대를 찾는 중"
+			"#Waiting"	"공개 테이블에서 기다리는 중"
+			"#WaitingFriends"	"친구를 기다리는 중"
+			"#Online"	"%opponent% 님과 온라인 대전 중 · %score%"
+		}
+	}
+}

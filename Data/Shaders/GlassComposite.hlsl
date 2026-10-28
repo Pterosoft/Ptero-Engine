@@ -5,6 +5,8 @@
 //   3. Inline ray-query fallback with FORCE_OPAQUE and optional thin-glass back-face culling.
 //   4. Cheap dispersion by offsetting scene-color samples, never by firing extra rays.
 
+#include "RtTransform.hlsli"
+
 cbuffer GlassConstants : register(b0)
 {
     uint  gFrameWidth;
@@ -196,11 +198,7 @@ float3 ShadeRayHitData(uint instIdx, uint primIdx, float2 bary, float3 rayDir, f
         + bary.y * float2(v2.u, v2.v);
 
     float3x4 o2w = objectToWorld;
-    float3x3 o2wRot = float3x3(
-        float3(o2w[0][0], o2w[1][0], o2w[2][0]),
-        float3(o2w[0][1], o2w[1][1], o2w[2][1]),
-        float3(o2w[0][2], o2w[1][2], o2w[2][2]));
-    float3 worldN = normalize(mul(o2wRot, localN));
+    float3 worldN = normalize(PteroObjectToWorldNormal(o2w, localN));
     if (dot(worldN, -rayDir) < 0.0f)
         worldN = -worldN;
 

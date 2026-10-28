@@ -1,0 +1,248 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: Title; src: url("../../../Website/dist/assets/title.ttf"); }
+@font-face { font-family: Body; src: url("../../../Website/dist/assets/body.ttf"); }
+html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; background: #0d0703; }
+.scene { position: absolute; inset: 0; overflow: hidden; opacity: 0; }
+.img { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.shade { position: absolute; inset: 0; }
+/* Captions stay between y=200 and y=1480: Reels, Shorts and Facebook cover the bottom and right edge */
+.cap { position: absolute; left: 60px; right: 60px; text-align: center; color: #f6e6c4;
+  text-shadow: 0 4px 24px rgba(0,0,0,.9), 0 0 4px rgba(0,0,0,.6); }
+.title { font-family: Title, Georgia, serif; line-height: 1; }
+.body { font-family: Body, Georgia, serif; }
+.kicker { color: #e9c98f; letter-spacing: .3em; text-transform: uppercase; font-size: 40px; }
+.sub { font-size: 50px; line-height: 1.3; color: #f0dcb4; }
+.logo { position: absolute; left: 50%; width: 820px; margin-left: -410px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.8)); }
+.icon { position: absolute; left: 50%; width: 150px; height: 150px; margin-left: -75px; display: grid; place-items: center;
+  border: 3px solid #c9a466; border-radius: 50%; background: rgba(20,12,6,.8); box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+.icon svg, .toast svg { fill: none; stroke: #e9c98f; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.icon svg { width: 84px; height: 84px; }
+svg .pip { fill: #e9c98f; stroke: none; }
+.panel { position: absolute; left: 50%; transform: translateX(-50%); box-sizing: border-box;
+  background: linear-gradient(180deg, rgba(34,20,10,.94), rgba(20,12,6,.96)); border: 3px solid #c9a466; border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.7), inset 0 0 0 8px rgba(201,164,102,.08); }
+.toast { width: 900px; padding: 34px 40px; display: flex; align-items: center; gap: 30px; }
+.toast svg { width: 96px; height: 96px; flex: none; }
+.toast .t1 { font-family: Body, Georgia, serif; color: #e9c98f; letter-spacing: .22em; text-transform: uppercase; font-size: 30px; }
+.toast .t2 { font-family: Title, Georgia, serif; color: #f6e6c4; font-size: 64px; line-height: 1.05; margin-top: 6px; }
+.friends { width: 860px; padding: 26px 34px; }
+.friends .head { font-family: Body, Georgia, serif; color: #e9c98f; letter-spacing: .22em; text-transform: uppercase; font-size: 30px;
+  padding: 6px 0 20px; border-bottom: 2px solid rgba(201,164,102,.35); }
+.friend { display: flex; align-items: center; gap: 26px; padding: 24px 0; border-bottom: 2px solid rgba(201,164,102,.15); }
+.friend:last-child { border-bottom: 0; }
+.avatar { width: 92px; height: 92px; border-radius: 10px; display: grid; place-items: center; font-family: Title, Georgia, serif;
+  font-size: 56px; color: #1c0f06; }
+.who { flex: 1; font-family: Body, Georgia, serif; }
+.who b { display: block; font-weight: normal; color: #f6e6c4; font-size: 46px; line-height: 1.1; }
+.who span { color: #9fc27a; font-size: 30px; }
+.invite { font-family: Body, Georgia, serif; font-size: 34px; letter-spacing: .08em; text-transform: uppercase; color: #f6e6c4;
+  border: 2px solid #c9a466; border-radius: 8px; padding: 12px 24px 9px; white-space: nowrap; }
+.invite.done { background: #c9a466; color: #1c0f06; }
+.bubble { position: absolute; max-width: 760px; font-family: Body, Georgia, serif; font-size: 52px; line-height: 1.2; padding: 26px 36px 22px;
+  border-radius: 28px; box-shadow: 0 16px 40px rgba(0,0,0,.6); }
+.bubble small { display: block; font-size: 28px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 6px; opacity: .8; }
+.bubble.them { left: 90px; background: rgba(34,20,10,.95); border: 3px solid #c9a466; color: #f6e6c4; border-bottom-left-radius: 6px; }
+.bubble.them small { color: #e9c98f; }
+.bubble.me { right: 90px; background: #c9a466; color: #1c0f06; border-bottom-right-radius: 6px; text-align: right; }
+.voice { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 22px; padding: 18px 34px;
+  border-radius: 60px; background: rgba(20,12,6,.88); border: 3px solid #c9a466; font-family: Body, Georgia, serif; font-size: 40px; color: #f6e6c4; white-space: nowrap; }
+.voice svg { width: 52px; height: 52px; fill: none; stroke: #e9c98f; stroke-width: 1.6; stroke-linecap: round; }
+.bars { display: flex; align-items: center; gap: 7px; height: 52px; }
+.bars i { display: block; width: 8px; border-radius: 4px; background: #e9c98f; }
+.btn { position: absolute; left: 50%; white-space: nowrap; background: rgba(20,12,6,.8);
+  border: 3px solid #c9a466; border-radius: 10px; padding: 22px 46px; font-family: Body, Georgia, serif;
+  color: #f6e6c4; font-size: 46px; letter-spacing: .05em; }
+.flash { position: absolute; inset: 0; background: #e9c98f; opacity: 0; pointer-events: none; mix-blend-mode: screen; }
+.fade { position: absolute; inset: 0; background: #0d0703; opacity: 0; pointer-events: none; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-match" viewBox="0 0 24 24">
+    <rect x="2" y="8.5" width="11" height="11" rx="2.2"/><circle class="pip" cx="5.2" cy="11.7" r="1"/><circle class="pip" cx="7.5" cy="14" r="1"/><circle class="pip" cx="9.8" cy="16.3" r="1"/>
+    <rect x="12.2" y="3.2" width="9.6" height="9.6" rx="2" transform="rotate(14 17 8)"/><circle class="pip" cx="15.3" cy="6.2" r=".95"/><circle class="pip" cx="18.6" cy="9.8" r=".95"/>
+  </symbol>
+  <symbol id="i-seat" viewBox="0 0 24 24"><path d="M6 3v18M6 13h10v8M6 13V3h5"/><path d="M6 17h10"/><path d="M19 3v6M16 6h6"/></symbol>
+  <symbol id="i-friends" viewBox="0 0 24 24">
+    <circle cx="9" cy="8" r="3.6"/><path d="M2.4 20.5c0-3.8 2.9-6.4 6.6-6.4s6.6 2.6 6.6 6.4"/>
+    <circle cx="17.2" cy="9" r="2.8"/><path d="M17.4 14.2c2.6.1 4.4 2.3 4.4 5.3"/>
+  </symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24">
+    <path d="M3 4.5h18v11.5h-9.5l-4.5 4v-4h-4z"/>
+    <rect x="10.4" y="6.6" width="3.2" height="5.4" rx="1.6"/><path d="M8.6 10.6a3.4 3.4 0 0 0 6.8 0M12 14v-.6"/>
+  </symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+</svg>
+
+<!-- 1: hook - the AI is winning, then someone takes its seat -->
+<div class="scene" id="s1">
+  <img class="img" id="i1" src="../../ScreensNew/03.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.88) 0%,rgba(13,7,3,.2) 30%,rgba(13,7,3,.2) 55%,rgba(13,7,3,.85) 80%)"></div>
+  <div class="cap title" id="c1" style="top:230px;font-size:128px">This AI is about<br>to lose its seat.</div>
+  <div class="panel toast" id="t1" style="top:1150px">
+    <svg viewBox="0 0 24 24"><use href="#i-seat"/></svg>
+    <div><div class="t1">A player joined</div><div class="t2">The AI's seat<br>has been taken</div></div>
+  </div>
+</div>
+<!-- 2: title -->
+<div class="scene" id="s2">
+  <img class="img" id="i2" src="source.webp">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.85) 0%,rgba(13,7,3,.1) 35%,rgba(13,7,3,.3) 55%,rgba(13,7,3,.9) 80%)"></div>
+  <img class="logo" id="l2" src="../../library/en/library_logo_transparent.png" style="top:150px">
+  <div class="cap title" id="c2a" style="top:980px;font-size:190px">Multiplayer</div>
+  <div class="cap body kicker" id="c2b" style="top:1220px">Is coming to the tavern</div>
+</div>
+<!-- 3: quick match -->
+<div class="scene" id="s3">
+  <img class="img" id="i3" src="../../ScreensNew/02.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.94) 0%,rgba(13,7,3,.88) 36%,rgba(13,7,3,.15) 56%,rgba(13,7,3,.6) 100%)"></div>
+  <div class="icon" id="k3" style="top:220px"><svg viewBox="0 0 24 24"><use href="#i-match"/></svg></div>
+  <div class="cap title" id="c3a" style="top:410px;font-size:140px">Quick Match</div>
+  <div class="cap body sub" id="c3b" style="top:570px">Get seated with another player<br>looking for a game</div>
+</div>
+<!-- 4: open table -->
+<div class="scene" id="s4">
+  <img class="img" id="i4" src="../../ScreensNew/04.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.94) 0%,rgba(13,7,3,.88) 36%,rgba(13,7,3,.15) 56%,rgba(13,7,3,.6) 100%)"></div>
+  <div class="icon" id="k4" style="top:220px"><svg viewBox="0 0 24 24"><use href="#i-seat"/></svg></div>
+  <div class="cap title" id="c4a" style="top:410px;font-size:140px">Open Your Table</div>
+  <div class="cap body sub" id="c4b" style="top:570px">Play the AI while you wait.<br>Anyone can take its seat.</div>
+</div>
+<!-- 5: steam friends -->
+<div class="scene" id="s5">
+  <img class="img" id="i5" src="source.webp" style="filter:blur(8px) brightness(.45)">
+  <div class="icon" id="k5" style="top:220px"><svg viewBox="0 0 24 24"><use href="#i-friends"/></svg></div>
+  <div class="cap title" id="c5a" style="top:410px;font-size:140px">Invite Friends</div>
+  <div class="cap body sub" id="c5b" style="top:570px">Straight from Steam</div>
+  <div class="panel friends" id="p5" style="top:760px">
+    <div class="head">Friends · Online</div>
+    <div class="friend" id="f1"><div class="avatar" style="background:#c9a466">M</div><div class="who"><b>Marta</b><span>Online</span></div><div class="invite" id="inv1">Invite</div></div>
+    <div class="friend" id="f2"><div class="avatar" style="background:#b57b4a">B</div><div class="who"><b>Bram</b><span>Online</span></div><div class="invite">Invite</div></div>
+    <div class="friend" id="f3"><div class="avatar" style="background:#8f6a3e">A</div><div class="who"><b>Aldric</b><span>Online</span></div><div class="invite">Invite</div></div>
+  </div>
+</div>
+<!-- 6: voice and text chat -->
+<div class="scene" id="s6">
+  <img class="img" id="i6" src="../../ScreensNew/03.png" style="filter:blur(6px) brightness(.4)">
+  <div class="icon" id="k6" style="top:220px"><svg viewBox="0 0 24 24"><use href="#i-chat"/></svg></div>
+  <div class="cap title" id="c6a" style="top:410px;font-size:130px">Voice &amp; Text Chat</div>
+  <div class="bubble me" id="b1" style="top:700px"><small>You</small>One more roll...</div>
+  <div class="bubble them" id="b2" style="top:900px"><small>Marta</small>Don't do it.</div>
+  <div class="bubble me" id="b3" style="top:1100px"><small>You</small>FARKLE!</div>
+  <div class="voice" id="v6" style="top:1330px"><svg viewBox="0 0 24 24"><use href="#i-mic"/></svg>Marta is laughing<div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div></div>
+</div>
+<!-- 7: end card -->
+<div class="scene" id="s7">
+  <img class="img" id="i7" src="source.webp" style="filter:blur(6px) brightness(.45)">
+  <img class="logo" id="l7" src="../../library/en/library_logo_transparent.png" style="top:200px">
+  <div class="cap body kicker" id="c7a" style="top:700px">Coming in the next update</div>
+  <div class="cap title" id="c7b" style="top:780px;font-size:170px">Multiplayer</div>
+  <div class="cap body sub" id="c7c" style="top:1000px">Quick Match · Open Tables<br>Steam Friends · Voice &amp; Text Chat</div>
+  <div class="btn" id="btn7" style="top:1250px">Play Farkle now on Steam</div>
+</div>
+<div class="flash" id="flash"></div>
+<div class="fade" id="fade"></div>
+<script>
+const W = 1080, H = 1920;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => { x = clamp(x); return x * x * (3 - 2 * x); };
+const outBack = x => { x = clamp(x); const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const lerp = (a, b, t) => a + (b - a) * t;
+const $ = id => document.getElementById(id);
+
+// Scene timing in seconds: [start, end]; scenes cross-fade over FADE. The audio cues in render-reel.cjs follow these times.
+const FADE = 0.3;
+const S = { s1: [0, 3.1], s2: [3.1, 5.9], s3: [5.9, 8.5], s4: [8.5, 11.1], s5: [11.1, 14], s6: [14, 17], s7: [17, 21] };
+window.DURATION = 21;
+
+// Pan/zoom a 1920x1080 source: focus point (fx,fy) in source px, scale relative to cover-height.
+function frame(img, fx0, fy0, z0, fx1, fy1, z1, t, k = ease(t)) {
+  const base = H / 1080;
+  const z = lerp(z0, z1, k) * base, fx = lerp(fx0, fx1, k), fy = lerp(fy0, fy1, k);
+  let x = W / 2 - fx * z, y = H / 2 - fy * z;
+  x = clamp(x, W - 1920 * z, 0); y = clamp(y, H - 1080 * z, 0);
+  img.style.transform = `translate(${x}px,${y}px) scale(${z})`;
+}
+function fadeUp(el, t, dy = 40) {
+  const k = ease(t);
+  el.style.opacity = k;
+  el.style.transform = `translateY(${(1 - k) * dy}px)`;
+}
+function pop(el, t, base = '') {
+  const k = clamp(t);
+  el.style.opacity = ease(k * 3);
+  el.style.transform = `${base} scale(${lerp(0.6, 1, outBack(k))})`;
+}
+// Feature scenes share one layout: icon pops, title and line rise.
+function feature(n, a) {
+  pop($('k' + n), (t0 - a - 0.05) / 0.4, '');
+  fadeUp($('c' + n + 'a'), (t0 - a - 0.15) / 0.4);
+  if ($('c' + n + 'b')) fadeUp($('c' + n + 'b'), (t0 - a - 0.45) / 0.45);
+}
+let t0 = 0;
+
+window.render = function (t) {
+  t0 = t;
+  const ids = Object.keys(S);
+  for (const [id, [a, b]] of Object.entries(S)) {
+    const last = id === ids[ids.length - 1];
+    const o = id === 's1' ? clamp((b + FADE - t) / FADE) : clamp(Math.min((t - a) / FADE, last ? 1 : (b + FADE - t) / FADE));
+    $(id).style.opacity = o;
+    $(id).style.zIndex = ids.indexOf(id);
+  }
+
+  // 1: hook. Punch in on the dice with a short shake as they land, caption is up from the first frame.
+  const punch = clamp(t / 0.45), shake = Math.max(0, 0.5 - t) * 14 * Math.sin(t * 70);
+  frame($('i1'), 960, 590, lerp(1.45, 1.08, ease(punch)), 960, 590, lerp(1.45, 1.08, ease(punch)), 0);
+  $('i1').style.transform += ` translate(${shake}px,${shake * 0.6}px)`;
+  $('c1').style.opacity = ease((t + 0.1) / 0.25);
+  $('c1').style.transform = `scale(${lerp(1.08, 1, ease(t / 0.3))})`;
+  pop($('t1'), (t - 1.35) / 0.45, 'translateX(-50%)');
+  $('flash').style.opacity = 0.35 * clamp(1 - Math.abs(t - 1.4) / 0.2);
+
+  // 2: title over the tavern
+  frame($('i2'), 1100, 600, 1.0, 1300, 600, 1.1, (t - 3.1) / 3.1);
+  fadeUp($('l2'), (t - 3.25) / 0.5);
+  pop($('c2a'), (t - 3.6) / 0.5);
+  fadeUp($('c2b'), (t - 4.1) / 0.5);
+
+  // 3, 4: gameplay pans behind the feature captions
+  frame($('i3'), 900, 640, 1.2, 1000, 600, 1.35, (t - 5.9) / 2.9);
+  feature(3, 5.9);
+  frame($('i4'), 1100, 640, 1.15, 1000, 640, 1.3, (t - 8.5) / 2.9);
+  feature(4, 8.5);
+
+  // 5: friends list, the first invite goes out
+  frame($('i5'), 1200, 600, 1.0, 1300, 600, 1.06, (t - 11.1) / 3.2);
+  feature(5, 11.1);
+  fadeUp($('p5'), (t - 11.6) / 0.5, 60);
+  $('p5').style.transform = `translateX(-50%) ${$('p5').style.transform}`;
+  const sent = t >= 12.6;
+  $('inv1').className = 'invite' + (sent ? ' done' : '');
+  $('inv1').textContent = sent ? 'Invited ✓' : 'Invite';
+  $('inv1').style.transform = `scale(${1 + 0.12 * clamp(1 - Math.abs(t - 12.6) / 0.15)})`;
+
+  // 6: chat bubbles, then voice
+  frame($('i6'), 960, 600, 1.1, 1000, 600, 1.16, (t - 14) / 3.3);
+  feature(6, 14);
+  pop($('b1'), (t - 14.6) / 0.35);
+  pop($('b2'), (t - 15.2) / 0.35);
+  pop($('b3'), (t - 15.8) / 0.35);
+  pop($('v6'), (t - 16.3) / 0.35, 'translateX(-50%)');
+  [...$('bars').children].forEach((bar, i) => { bar.style.height = `${14 + 36 * Math.abs(Math.sin(t * (7 + i * 1.7) + i))}px`; });
+
+  // 7: end card
+  frame($('i7'), 960, 560, 1.0, 1000, 580, 1.06, (t - 17) / 4);
+  fadeUp($('l7'), (t - 17.15) / 0.5);
+  fadeUp($('c7a'), (t - 17.4) / 0.5);
+  pop($('c7b'), (t - 17.6) / 0.5);
+  fadeUp($('c7c'), (t - 18.1) / 0.5);
+  const c = ease((t - 18.6) / 0.5);
+  $('btn7').style.opacity = c;
+  $('btn7').style.transform = `translateX(-50%) translateY(${(1 - c) * 40}px) scale(${1 + 0.025 * Math.sin(Math.max(0, t - 19.1) * 5)})`;
+  $('fade').style.opacity = clamp((t - 20.6) / 0.4);
+};
+render(0);
+</script>
+</body></html>

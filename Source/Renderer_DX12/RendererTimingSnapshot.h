@@ -8,6 +8,10 @@ struct RendererTimingEntry
     std::string Category;
     std::string Name;
     float CpuMilliseconds = 0.0f;
+    // GPU execution time between the pass's timestamps, from a frame a few
+    // frames old (timestamps are read back without stalling). Negative when
+    // no GPU timing is available.
+    float GpuMilliseconds = -1.0f;
 };
 
 // Per-pass CPU cost of recording one frame's command list.
@@ -21,5 +25,8 @@ struct RendererTimingEntry
 struct RendererTimingSnapshot
 {
     float TotalCpuMilliseconds = 0.0f;
+    // GPU time from the start to the end of the scene renderer's work, which
+    // includes anything recorded outside a timed pass. 0 when unavailable.
+    float TotalGpuMilliseconds = 0.0f;
     std::vector<RendererTimingEntry> Entries;
 };

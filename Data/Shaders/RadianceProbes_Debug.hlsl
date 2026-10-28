@@ -25,11 +25,24 @@ PSInput VSMain(VSInput input, uint instanceID : SV_InstanceID)
 {
     PSInput output;
 
-    float3 probeCenter = ProbeCoordToWorld(ProbeIndexToCoord(instanceID));
+    const uint cascade = ProbeIndexToCascade(instanceID);
+    float3 probeCenter = ProbeCoordToWorld(cascade, ProbeIndexToCoord(ProbeIndexToLocal(instanceID)));
     float3 localNormal = normalize(input.Position);
-    float3 worldPos    = probeCenter + input.Position * g_DebugSphereRadius;
+    // Coarser cascades draw larger spheres, in proportion to their spacing.
+    float3 worldPos    = probeCenter + input.Position * (g_DebugSphereRadius * float(1u << cascade));
 
     output.Position   = mul(float4(worldPos, 1.0f), g_ViewProj);
+
+    // A coarse probe inside the next finer cascade would sit among that
+    // cascade's spheres and hide them; collapse it so it draws nothing.
+    if (cascade > 0)
+    {
+        const float3 innerMin = g_CascadeOrigin[cascade - 1].xyz;
+        const float3 innerMax = innerMin
+            + float3(g_ProbeGridX - 1, g_ProbeGridY - 1, g_ProbeGridZ - 1) * g_CascadeOrigin[cascade - 1].w;
+        if (all(probeCenter >= innerMin) && all(probeCenter <= innerMax))
+            output.Position = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
     output.WorldPos   = worldPos;
     output.Normal     = localNormal;
     output.ProbeIndex = instanceID;

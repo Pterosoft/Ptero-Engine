@@ -27,6 +27,7 @@
 #include "DX12Helper.h"
 #include "DX12ShaderCompiler.h"
 #include "GeometryRaycaster.h"
+#include "ShadowPageView.h"
 #include "TerrainRenderer.h"
 #include "TextureManager.h"
 #include "VegetationScatter.h"
@@ -38,6 +39,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <memory>
@@ -130,6 +132,18 @@ public:
         ID3D12GraphicsCommandList* commandList,
         const DirectX::XMFLOAT4X4& lightViewProjection,
         DXGI_FORMAT                depthFormat);
+
+    // The same depth pass into each page of a paged shadow map (VirtualShadowMapRenderer),
+    // every page into its own viewport. An area is skipped for pages its bounds miss.
+    // Call at most once per frame.
+    void RenderShadowDepthPages(
+        ID3D12GraphicsCommandList*         commandList,
+        const std::vector<ShadowPageView>& pages,
+        DXGI_FORMAT                        depthFormat);
+
+    // Changes whenever the shadow-casting vegetation changes: a scatter lands, a mesh
+    // or a cut-out texture finishes loading. A cached shadow of it is stale then.
+    std::uint64_t GetShadowCasterSignature() const;
 
     // Motion vectors for the bent geometry.  Without this, TAA and DLSS
     // reproject foliage using camera motion alone and the canopy smears
@@ -275,9 +289,17 @@ private:
         // Card dimensions in mesh-local units, only read by the billboard pass.
         float BillboardHalfWidth   = 1.0f;
         float BillboardHeight      = 2.0f;
-        float _Pad0                = 0.0f;
+        // Took over the last padding word of the row; the shaders' gHasOpacityMap.
+        int   HasOpacityMap        = 0;
 
-        std::byte Padding[144]{};
+        // The material's reflectivity (0.5 neutral) and its subsurface-scattering
+        // profile slot for this frame (SubsurfaceProfiles, 0 = none). Written into the
+        // normal target's W exactly as GBuffer.hlsl does for meshes.
+        float SpecularFactor       = 0.5f;
+        int   SubsurfaceSlot       = 0;
+        float _Pad1[2]             = {};
+
+        std::byte Padding[128]{};
     };
     static_assert(sizeof(LayerConstants) == 256);
 
@@ -357,6 +379,7 @@ private:
         std::shared_ptr<GpuTexture> Metallic;
         std::shared_ptr<GpuTexture> Roughness;
         std::shared_ptr<GpuTexture> Ao;
+        std::shared_ptr<GpuTexture> Opacity;
 
         DirectX::XMFLOAT4 BaseColorTint{ 1.f, 1.f, 1.f, 1.f };
         float AlphaCutoff     = 0.5f;
@@ -364,8 +387,25 @@ private:
         float RoughnessFactor = 1.0f;
         float NormalScale     = 1.0f;
         float AoStrength      = 1.0f;
-        bool  HasPackedMaterialMap = false;
+        // What the shaders read as gHasPackedMaterialMap: 0 = separate maps, 1 = one
+        // packed RMA map in all three slots, 2 = one packed ORM map.
+        int   PackedLayout = 0;
+        float SpecularFactor = 0.5f;
+
+        // Subsurface scattering, as the material file describes it. The profile slot
+        // itself is acquired every frame in Render, because SubsurfaceProfiles hands
+        // slots out per frame.
+        bool              UseSubsurface          = false;
+        DirectX::XMFLOAT3 SubsurfaceColor        { 0.48f, 0.41f, 0.28f };
+        DirectX::XMFLOAT3 SubsurfaceFalloff      { 1.0f, 0.37f, 0.30f };
+        float             SubsurfaceRadiusMm     = 3.0f;
+        float             SubsurfaceTranslucency = 0.8f;
+
         bool  Resolved = false;
+        // The file this was read from and its time stamp then, so an edit saved from
+        // the Material Editor is picked up (RefreshChangedMaterials).
+        std::filesystem::path           File;
+        std::filesystem::file_time_type WriteTime{};
     };
 
     // Where one layer's instances live inside its area's buffer, and where its
@@ -386,6 +426,21 @@ private:
         std::string   MeshPath;
         std::string   MaterialPath;
         std::string   BillboardTexturePath;
+
+        // Which VegetationLayer on the area this range draws. Ranges are not one per
+        // layer: a layer with no instances has none, and a mesh with several material
+        // slots is split into one range per slot (see SplitRangesByMaterial).
+        std::uint32_t AreaLayer     = 0;
+        // The mesh material slot this range draws, and so the sub-material it uses
+        // from a multi-material file.
+        std::uint32_t MaterialId    = 0;
+        // The first range of its layer. Only it draws the billboard LOD and feeds ray
+        // tracing, both of which cover the whole plant rather than one material slot.
+        bool          PrimaryPart   = true;
+        // Set once the mesh is loaded and the index slices below are filled in.
+        bool          PartsResolved = false;
+        std::uint32_t LodIndexStart[kMaxLodsPerLayer] = {};
+        std::uint32_t LodIndexCount[kMaxLodsPerLayer] = {};
     };
 
     // Everything the renderer tracks for one VegetationAreaComponent.
@@ -433,7 +488,16 @@ private:
     bool EnsureInstanceBuffer(AreaState& state, std::uint32_t instanceCount);
     void UploadPendingInstances(ID3D12GraphicsCommandList* commandList, AreaState& state);
     bool EnsureSharedMesh(ID3D12GraphicsCommandList* commandList, const std::string& meshPath);
-    const LayerMaterial& ResolveLayerMaterial(const std::string& materialPath);
+    // materialId picks the sub-material of a multi-material file; a single material
+    // answers every id.
+    const LayerMaterial& ResolveLayerMaterial(const std::string& materialPath, std::uint32_t materialId);
+    // Replaces each of an area's ranges whose mesh has loaded with one range per
+    // material slot the mesh uses, each drawing only that slot's indices.
+    void SplitRangesByMaterial(AreaState& state);
+    // Forgets every cached material whose file has changed on disk since it was read,
+    // so the next lookup reloads it. Throttled; called from Update.
+    void RefreshChangedMaterials(float deltaSeconds);
+    float mMaterialCheckSeconds = 0.0f;
     bool EnsureCullResources(std::uint32_t totalInstances, std::uint32_t totalDrawSlots);
     bool EnsureConstantBuffers(std::size_t layerDrawCount);
     bool EnsureInteractionResources();
@@ -545,6 +609,14 @@ private:
     // --- Constant buffers -------------------------------------------------------
     Microsoft::WRL::ComPtr<ID3D12Resource> mPassCb;
     PassConstants* mMappedPassCb = nullptr;
+
+    // Pass constants for RenderShadowDepthPages: one slot per page, ringed over the
+    // frames in flight because every frame writes them.
+    static constexpr std::size_t   kPageFramesInFlight = 3;
+    static constexpr std::uint32_t kMaxShadowPages     = 256;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mPagePassCb;
+    PassConstants* mMappedPagePassCb = nullptr;
+    std::uint64_t  mPagePassFrame = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mLayerCb;
     LayerConstants* mMappedLayerCb = nullptr;

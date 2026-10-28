@@ -1,0 +1,183 @@
+FARKLE: TAVERN DICE
+END USER LICENSE AGREEMENT
+
+Last updated: 23 October 2026
+
+This End User License Agreement ("Agreement") is a legal agreement between you and Pterosoft
+Studio ("we", "us"), for the video game Farkle: Tavern Dice, including its executable files,
+engine (Ptero-Engine), content, audio, music, artwork, text, localizations, updates and any
+related documentation (together, the "Game").
+
+By installing, copying or playing the Game you agree to this Agreement. If you do not agree,
+do not install or play the Game. If you bought the Game and do not agree, you may be able to
+request a refund under the refund policy of the store where you bought it.
+
+The Game is distributed through Steam. Your use of Steam and of your Steam account is
+governed by the Steam Subscriber Agreement between you and Valve Corporation. Where this
+Agreement and the Steam Subscriber Agreement conflict about the Game itself, this Agreement
+applies between you and us.
+
+
+1. LICENSE
+
+1.1 Subject to this Agreement, we grant you a personal, limited, non-exclusive,
+non-transferable, non-sublicensable and revocable license to install and play the Game, for
+your own non-commercial entertainment, on computers you own or control, through the Steam
+account that holds a valid license to the Game.
+
+1.2 The Game is licensed, not sold. Except for the license in section 1.1, we and our
+licensors keep all rights, title and interest in the Game, including all copyrights,
+trademarks and other intellectual property rights. "Farkle: Tavern Dice", "Pterosoft Studio"
+and "Ptero-Engine" and their logos are our trademarks or names. The traditional dice game
+Farkle itself is not owned by us; this Agreement covers our implementation of it.
+
+
+2. RESTRICTIONS
+
+Except as expressly permitted by this Agreement or by applicable law that cannot be excluded
+by contract, you may not:
+
+(a) copy, sell, rent, lease, lend, sublicense, distribute, publicly perform or otherwise
+    commercially exploit the Game or any part of it;
+(b) reverse engineer, decompile, disassemble, decrypt or otherwise try to obtain the source
+    code of the Game, or extract, unpack or modify its packaged data files (including .ppak
+    archives), except to the extent such activity is expressly permitted by applicable law
+    (for example, for interoperability under the EU Software Directive);
+(c) remove, bypass or interfere with any copy protection, license check or Steam DRM in the
+    Game;
+(d) create, use or distribute cheats, cracks, key generators or unauthorized modifications of
+    the Game;
+(e) remove or alter any copyright, trademark or other notices in the Game;
+(f) use the Game, or any of its assets, to train, fine-tune or build any machine-learning or
+    artificial-intelligence model;
+(g) use the Game in any way that breaks applicable law.
+
+Streaming and videos: you may stream the Game and publish videos and screenshots of your
+gameplay, including on monetized channels, as long as you do not suggest that we endorse you
+and you do not distribute the Game's files. We may withdraw this permission for specific
+content that we reasonably consider harmful to the Game or to us.
+
+
+3. NO GAMBLING OR PRIZES
+
+The Game is a dice game played for entertainment only. It does not offer, and cannot be used
+for, gambling with real money or anything of real-world value. Scores, wins, achievements
+and other in-game results have no monetary value and cannot be exchanged for money, goods or
+services. You may not use the Game to organize or facilitate gambling.
+
+
+4. UPDATES AND CHANGES
+
+We may provide patches, updates and new content, which Steam may install automatically. Each
+update is part of the Game and is covered by this Agreement. We may change, add or remove
+features, but we will not take away the core features of the Game you paid for, except where
+required by law, for security reasons, or because a third-party service the Game relies on
+is no longer available.
+
+
+5. DATA AND PRIVACY
+
+5.1 The Game does not ask you for personal information and Pterosoft Studio does not collect
+personal data from the Game.
+
+5.2 The Game stores your settings and game data locally on your computer (for example in
+%LOCALAPPDATA%\Ptero-Engine\Farkle). This data stays on your computer unless you share it.
+
+5.3 The Game uses Steam to check that your account owns the Game and to provide Steam
+features such as achievements and the Steam overlay. Valve processes this data under its own
+privacy policy. Third-party technologies listed in section 7 run locally on your computer.
+
+5.4 If you contact us (for example for support), we will use the information you send only to
+answer you.
+
+
+6. HEALTH AND SAFETY
+
+A small number of people may experience seizures when exposed to certain light patterns or
+flashing lights, including in video games. If you or anyone in your family has an epileptic
+condition, consult a doctor before playing. Stop playing immediately and consult a doctor if
+you experience dizziness, altered vision, eye or muscle twitching, loss of awareness,
+disorientation, involuntary movements or convulsions. Take regular breaks.
+
+
+7. THIRD-PARTY COMPONENTS
+
+The Game includes software and technology licensed from third parties, including but not
+limited to: FMOD Studio by Firelight Technologies Pty Ltd.; Steamworks by Valve Corporation;
+NVIDIA DLSS, Streamline and NRD; AMD FidelityFX (including FSR); Intel XeSS; Microsoft
+DirectX Shader Compiler and Visual C++ runtime; Google Resonance Audio; libvpx, libwebm and
+Opus; RmlUi; libsodium; LZ4; and other open-source components. These components are subject
+to their own license terms, which are listed in the Game's credits and/or in the third-party
+notices that ship with the Game. Nothing in this Agreement limits your rights under those
+licenses. Medieval music in the Game is used under license or is in the public domain, as
+noted in the credits.
+
+
+8. TERMINATION
+
+This Agreement remains in effect until terminated. It ends automatically if you materially
+breach it and, where the breach can be fixed, do not fix it within a reasonable time after we
+tell you about it. You may end it at any time by uninstalling the Game. When it ends, you
+must stop playing the Game and delete all copies in your possession. Sections 1.2, 2, 3 and
+9 to 13 survive termination.
+
+
+9. WARRANTY DISCLAIMER
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE GAME IS PROVIDED "AS IS" AND "AS
+AVAILABLE", WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED OR STATUTORY,
+INCLUDING IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE
+AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE GAME WILL BE UNINTERRUPTED, ERROR-FREE OR
+COMPATIBLE WITH YOUR HARDWARE OR SOFTWARE. Ray tracing, upscaling and frame-generation
+features require compatible graphics hardware and drivers and may not be available on every
+system.
+
+
+10. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, WE WILL NOT BE LIABLE FOR ANY INDIRECT,
+INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS OR
+GOODWILL, ARISING OUT OF OR IN CONNECTION WITH THE GAME OR THIS AGREEMENT. OUR TOTAL
+LIABILITY TO YOU WILL NOT EXCEED THE AMOUNT YOU PAID FOR THE GAME.
+
+Nothing in this Agreement excludes or limits liability that cannot be excluded or limited by
+law, including liability for death or personal injury caused by negligence, for fraud, or for
+intentional misconduct or gross negligence.
+
+
+11. CONSUMER RIGHTS
+
+If you are a consumer, you may have rights under the laws of your country (including, in the
+European Union and the United Kingdom, statutory rights regarding digital content) that this
+Agreement cannot take away. Nothing in this Agreement affects those rights. Where any part
+of this Agreement is not allowed by the law that applies to you, that part does not apply
+to you.
+
+
+12. GOVERNING LAW
+
+This Agreement is governed by the laws of the Czech Republic, without regard to its
+conflict-of-law rules. Disputes will be heard by the courts of the Czech Republic, unless the
+law of your country of residence gives you the right to bring proceedings in your local
+courts or to benefit from mandatory protections of your local law. The United Nations Convention on
+Contracts for the International Sale of Goods does not apply.
+
+
+13. GENERAL
+
+This Agreement, together with any terms referred to in it, is the entire agreement between
+you and us about the Game. If any provision is held invalid or unenforceable, the rest stays
+in effect and the invalid provision is replaced by a valid one that comes closest to its
+intent. Our failure to enforce a provision is not a waiver. You may not transfer this
+Agreement; we may transfer it to a successor of our business, as long as your rights are not
+reduced. We may update this Agreement for future versions of the Game and will tell you about
+material changes through Steam or within the Game; if you do not agree to the changes, you
+may stop using the Game. This Agreement may be translated; if translations conflict, the
+English version prevails to the extent permitted by law.
+
+
+14. CONTACT
+
+Pterosoft Studio
+Email: support@pterosoftstudio.com
+Website: https://farkle.pterosoftstudio.com/

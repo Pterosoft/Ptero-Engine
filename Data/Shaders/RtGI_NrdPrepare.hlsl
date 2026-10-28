@@ -74,9 +74,12 @@ float ComputeViewZ(uint2 pixel, float hwDepth)
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
-    const uint2 pixel = DTid.xy;
-    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+    // NRD denoises on the trace grid: every input is written at the trace pixel,
+    // from the G-Buffer at the frame pixel that trace pixel was shaded for.
+    const uint2 tracePixel = DTid.xy;
+    if (any(tracePixel >= TraceSize()))
         return;
+    const uint2 pixel = TraceToFramePixel(tracePixel);
 
     const float4 normalDepthSample = t_NormalDepth.Load(int3(pixel, 0));
     const float  hwDepth           = normalDepthSample.z;
@@ -85,7 +88,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     // ── ViewZ ────────────────────────────────────────────────────────────────
     // NRD expects a large positive value for sky pixels.
     const float viewZ = isSky ? 1e6f : ComputeViewZ(pixel, hwDepth);
-    u_ViewZ[pixel] = viewZ;
+    u_ViewZ[tracePixel] = viewZ;
 
     // ── Normal + Roughness ───────────────────────────────────────────────────
     // Decode the oct-encoded world-space normal from the G-Buffer.
@@ -108,10 +111,10 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     uint   g10 = (uint)(saturate(packedNR.y) * 1023.0f + 0.5f) & 0x3FFu;
     uint   b10 = (uint)(saturate(packedNR.z) * 1023.0f + 0.5f) & 0x3FFu;
     uint   a2  = (uint)(saturate(packedNR.w) *    3.0f + 0.5f) & 0x3u;
-    u_NormalRoughness[pixel] = uint4(r10, g10, b10, a2);
+    u_NormalRoughness[tracePixel] = uint4(r10, g10, b10, a2);
 
     // ── Diffuse Radiance + Hit Distance ──────────────────────────────────────
-    float4 giSample   = t_GiRadiance.Load(int3(pixel, 0));
+    float4 giSample   = t_GiRadiance.Load(int3(tracePixel, 0));
     float3 giRadiance = giSample.rgb;
 
     // RayGen now stores the average ray hit distance in alpha. Feeding RELAX a
@@ -121,7 +124,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     // RELAX_FrontEnd_PackRadianceAndHitDist: packs (radiance, hitDist) into RGBA16F.
     float4 packedDiff = RELAX_FrontEnd_PackRadianceAndHitDist(
         isSky ? float3(0, 0, 0) : giRadiance, hitDist, /*sanitize=*/true);
-    u_DiffRadianceHitDist[pixel] = packedDiff;
+    u_DiffRadianceHitDist[tracePixel] = packedDiff;
 
     // ── Screen-space Motion Vectors ──────────────────────────────────────────
     // Motion = previous_UV - current_UV (NRD convention).
@@ -135,5 +138,5 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         float2 currUV   = ProjectCurrentUV(worldPos);
         motionVec = prevUV - currUV;
     }
-    u_MotionVectors[pixel] = motionVec;
+    u_MotionVectors[tracePixel] = motionVec;
 }

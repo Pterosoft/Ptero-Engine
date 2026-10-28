@@ -1,0 +1,2 @@
+K:\Ptero-Engine\Source\Video\x64\Release\Video.dll
+K:\Farkle\Source\Video\x64\Release\Video.dll

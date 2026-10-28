@@ -1,1 +1,2 @@
 K:\Ptero-Engine\Source\Ptero-Engine\GameLauncher\x64\Release\GameLauncherTemplate.exe
+K:\Farkle\Source\Ptero-Engine\GameLauncher\x64\Release\GameLauncherTemplate.exe

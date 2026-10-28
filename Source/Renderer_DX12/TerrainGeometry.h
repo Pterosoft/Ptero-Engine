@@ -28,6 +28,88 @@ struct TerrainVertex
 
 namespace TerrainGeometry
 {
+    // Inclusive rectangle of grid cells (heightmap samples or mesh vertices).
+    // Brush strokes record one so only the touched part of the mesh is rebuilt.
+    struct GridRect
+    {
+        int MinX = 0;
+        int MinY = 0;
+        int MaxX = -1;
+        int MaxY = -1;
+
+        bool IsEmpty() const { return MaxX < MinX || MaxY < MinY; }
+
+        void Merge(const GridRect& other)
+        {
+            if (other.IsEmpty())
+                return;
+            if (IsEmpty())
+            {
+                *this = other;
+                return;
+            }
+            MinX = (MinX < other.MinX) ? MinX : other.MinX;
+            MinY = (MinY < other.MinY) ? MinY : other.MinY;
+            MaxX = (MaxX > other.MaxX) ? MaxX : other.MaxX;
+            MaxY = (MaxY > other.MaxY) ? MaxY : other.MaxY;
+        }
+
+        static GridRect Full(int width, int height) { return { 0, 0, width - 1, height - 1 }; }
+    };
+
+    // The heightmap samples a brush at `brushCenterWorld` with `brushRadius`
+    // can touch, clamped to the grid.  Empty when the brush misses the patch.
+    GridRect BrushSampleRect(
+        int width,
+        int height,
+        float worldSize,
+        const DirectX::XMFLOAT2& brushCenterWorld,
+        float brushRadius);
+
+    // The mesh vertices whose position depends on any source sample inside
+    // `sourceRect`, when a (meshWidth x meshHeight) mesh is resampled from a
+    // (width x height) heightmap.  Grown by one vertex so the normals around
+    // the edit are recomputed too.
+    GridRect SourceRectToMeshRect(
+        const GridRect& sourceRect,
+        int width,
+        int height,
+        int meshWidth,
+        int meshHeight);
+
+    // Fill positions, texcoords and colours of the mesh vertices inside
+    // `meshRect`.  The mesh may be coarser than the heightmap (it is capped
+    // for VRAM); each vertex then takes a bilinear sample of the heightmap at
+    // its exact position rather than snapping to the nearest sample, which
+    // would drop most of the source and alias the surface.  `vertices` must
+    // already hold meshWidth*meshHeight entries.
+    void FillMeshVertices(
+        const std::vector<std::uint16_t>& samples,
+        int width,
+        int height,
+        const std::vector<DirectX::XMFLOAT4>* layerWeights,
+        int meshWidth,
+        int meshHeight,
+        float worldSize,
+        float heightScale,
+        float heightOffset,
+        const GridRect& meshRect,
+        std::vector<TerrainVertex>& vertices);
+
+    // Recompute the normals of the vertices inside `meshRect` from their
+    // neighbours' positions (one-sided differences at the patch border).
+    void ComputeMeshNormals(
+        int meshWidth,
+        int meshHeight,
+        const GridRect& meshRect,
+        std::vector<TerrainVertex>& vertices);
+
+    // Two triangles per grid quad, (meshWidth-1)*(meshHeight-1)*6 indices.
+    void BuildMeshIndices(
+        int meshWidth,
+        int meshHeight,
+        std::vector<std::uint32_t>& outIndices);
+
     // Convert a row-major uint16 heightmap (0..65535) into world-space
     // vertices on a square patch centred on the local origin.  vertices is
     // laid out row-major: index = y * width + x.  indices is two triangles
@@ -54,12 +136,14 @@ namespace TerrainGeometry
     // the brush radius/strength from the component.  samples is the in-out
     // heightmap (0..65535) that will be re-encoded into the DDS on save.
     //
-    // raise/lower add/subtract `strength` to every sample inside the brush,
-    // weighted by a smooth falloff that goes to zero at the rim.
-    // flatten pulls every sample inside the brush toward `flattenHeight`
-    // (in the same 0..65535 unit) with the same falloff.
-    // smooth runs a small box-blur pass (BrushSmoothingPasses times) over
-    // every sample inside the brush.
+    // Every brush is applied once per frame while the mouse is held, so the
+    // amounts are per application (the caller scales them by frame time).
+    // raise/lower add/subtract `strength` metres to every sample inside the
+    // brush, weighted by a smooth falloff that goes to zero at the rim.
+    // flatten moves every sample inside the brush `blend` of the way toward
+    // `flattenHeightWorld` (scaled by the same falloff).
+    // smooth runs a small box-blur pass (`passes` times) over every sample
+    // inside the brush and blends `blend` of the way toward the result.
     void ApplyRaiseBrush(
         std::vector<std::uint16_t>& samples,
         int width,
@@ -89,7 +173,8 @@ namespace TerrainGeometry
         float brushRadius,
         float flattenHeightWorld,
         float heightScale,
-        float heightOffset);
+        float heightOffset,
+        float blend);
 
     void ApplySmoothBrush(
         std::vector<std::uint16_t>& samples,
@@ -99,7 +184,7 @@ namespace TerrainGeometry
         const DirectX::XMFLOAT2& brushCenterWorld,
         float brushRadius,
         int   passes,
-        float heightScale);
+        float blend);
 
     // Paint the active layer into the per-sample splat weights.  Each weight
     // is an XMFLOAT4 (layers 0..3).  Inside the brush falloff the active

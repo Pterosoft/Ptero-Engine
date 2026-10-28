@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "System/DataFiles.h"
+#include "System/Udim.h"
 
 #include "MaterialEditor.h"
 #include "include\System\SystemAssetApi.h"
@@ -49,6 +50,12 @@ namespace
             return "Height";
         case MaterialTextureSlot::Opacity:
             return "Opacity";
+        case MaterialTextureSlot::OcclusionRoughnessMetallic:
+            return "ORM";
+        case MaterialTextureSlot::PrincipledMask:
+            return "PrincipledMask";
+        case MaterialTextureSlot::AnisotropyDirection:
+            return "AnisotropyDirection";
         default:
             return "Unknown";
         }
@@ -81,11 +88,32 @@ namespace
             { "parallaxMinSteps", materialDefinition.ParallaxMinSteps },
             { "parallaxMaxSteps", materialDefinition.ParallaxMaxSteps },
             { "parallaxFadeDistance", materialDefinition.ParallaxFadeDistance },
+            { "useTessellation", materialDefinition.UseTessellation },
+            { "tessellationMaxFactor", materialDefinition.TessellationMaxFactor },
+            { "tessellationTargetPixels", materialDefinition.TessellationTargetPixels },
+            { "tessellationFadeDistance", materialDefinition.TessellationFadeDistance },
+            { "displacementScale", materialDefinition.DisplacementScale },
+            { "displacementMidLevel", materialDefinition.DisplacementMidLevel },
             { "useSubsurfaceScattering", materialDefinition.UseSubsurfaceScattering },
             { "subsurfaceColor", materialDefinition.SubsurfaceColor },
             { "subsurfaceFalloff", materialDefinition.SubsurfaceFalloff },
             { "subsurfaceRadiusMm", materialDefinition.SubsurfaceRadiusMm },
             { "subsurfaceTranslucency", materialDefinition.SubsurfaceTranslucency },
+            { "useIrisAdjust", materialDefinition.UseIrisAdjust },
+            { "irisCenter", materialDefinition.IrisCenter },
+            { "irisRadius", materialDefinition.IrisRadius },
+            { "irisOffset", materialDefinition.IrisOffset },
+            { "irisScale", materialDefinition.IrisScale },
+            { "pupilRadius", materialDefinition.PupilRadius },
+            { "pupilScale", materialDefinition.PupilScale },
+            { "irisWarpRadius", materialDefinition.IrisWarpRadius },
+            { "subsurfaceFlatten", materialDefinition.SubsurfaceFlatten },
+            { "specularTint", materialDefinition.SpecularTint },
+            { "anisotropic", materialDefinition.Anisotropic },
+            { "sheen", materialDefinition.Sheen },
+            { "sheenTint", materialDefinition.SheenTint },
+            { "clearcoat", materialDefinition.Clearcoat },
+            { "clearcoatGloss", materialDefinition.ClearcoatGloss },
             { "doubleSided", materialDefinition.IsDoubleSided },
             { "useAlphaCutout", materialDefinition.UseAlphaCutout },
             { "useTransparentBlend", materialDefinition.UseTransparentBlend },
@@ -113,6 +141,9 @@ namespace
                     { "emissive", materialDefinition.Textures.EmissiveTexturePath },
                     { "height", materialDefinition.Textures.HeightTexturePath },
                     { "opacity", materialDefinition.Textures.OpacityTexturePath },
+                    { "orm", materialDefinition.Textures.OcclusionRoughnessMetallicTexturePath },
+                    { "principledMask", materialDefinition.Textures.PrincipledMaskTexturePath },
+                    { "anisotropyDirection", materialDefinition.Textures.AnisotropyDirectionTexturePath },
                 }
             }
         };
@@ -234,6 +265,12 @@ namespace
             outMaterialDefinition.ParallaxMinSteps = sourceJson.value("parallaxMinSteps", outMaterialDefinition.ParallaxMinSteps);
             outMaterialDefinition.ParallaxMaxSteps = sourceJson.value("parallaxMaxSteps", outMaterialDefinition.ParallaxMaxSteps);
             outMaterialDefinition.ParallaxFadeDistance = sourceJson.value("parallaxFadeDistance", outMaterialDefinition.ParallaxFadeDistance);
+            outMaterialDefinition.UseTessellation = sourceJson.value("useTessellation", outMaterialDefinition.UseTessellation);
+            outMaterialDefinition.TessellationMaxFactor = sourceJson.value("tessellationMaxFactor", outMaterialDefinition.TessellationMaxFactor);
+            outMaterialDefinition.TessellationTargetPixels = sourceJson.value("tessellationTargetPixels", outMaterialDefinition.TessellationTargetPixels);
+            outMaterialDefinition.TessellationFadeDistance = sourceJson.value("tessellationFadeDistance", outMaterialDefinition.TessellationFadeDistance);
+            outMaterialDefinition.DisplacementScale = sourceJson.value("displacementScale", outMaterialDefinition.DisplacementScale);
+            outMaterialDefinition.DisplacementMidLevel = sourceJson.value("displacementMidLevel", outMaterialDefinition.DisplacementMidLevel);
             outMaterialDefinition.UseSubsurfaceScattering = sourceJson.value("useSubsurfaceScattering", outMaterialDefinition.UseSubsurfaceScattering);
             if (!TryReadOptionalFloatArray3(sourceJson, "subsurfaceColor", outMaterialDefinition.SubsurfaceColor))
             {
@@ -247,6 +284,29 @@ namespace
             }
             outMaterialDefinition.SubsurfaceRadiusMm = sourceJson.value("subsurfaceRadiusMm", outMaterialDefinition.SubsurfaceRadiusMm);
             outMaterialDefinition.SubsurfaceTranslucency = sourceJson.value("subsurfaceTranslucency", outMaterialDefinition.SubsurfaceTranslucency);
+            outMaterialDefinition.UseIrisAdjust = sourceJson.value("useIrisAdjust", outMaterialDefinition.UseIrisAdjust);
+            if (!TryReadOptionalFloatArray2(sourceJson, "irisCenter", outMaterialDefinition.IrisCenter))
+            {
+                outErrorMessage = "irisCenter must be an array with 2 float values.";
+                return false;
+            }
+            if (!TryReadOptionalFloatArray2(sourceJson, "irisOffset", outMaterialDefinition.IrisOffset))
+            {
+                outErrorMessage = "irisOffset must be an array with 2 float values.";
+                return false;
+            }
+            outMaterialDefinition.IrisRadius = sourceJson.value("irisRadius", outMaterialDefinition.IrisRadius);
+            outMaterialDefinition.IrisScale = sourceJson.value("irisScale", outMaterialDefinition.IrisScale);
+            outMaterialDefinition.PupilRadius = sourceJson.value("pupilRadius", outMaterialDefinition.PupilRadius);
+            outMaterialDefinition.PupilScale = sourceJson.value("pupilScale", outMaterialDefinition.PupilScale);
+            outMaterialDefinition.IrisWarpRadius = sourceJson.value("irisWarpRadius", outMaterialDefinition.IrisWarpRadius);
+            outMaterialDefinition.SubsurfaceFlatten = sourceJson.value("subsurfaceFlatten", outMaterialDefinition.SubsurfaceFlatten);
+            outMaterialDefinition.SpecularTint = sourceJson.value("specularTint", outMaterialDefinition.SpecularTint);
+            outMaterialDefinition.Anisotropic = sourceJson.value("anisotropic", outMaterialDefinition.Anisotropic);
+            outMaterialDefinition.Sheen = sourceJson.value("sheen", outMaterialDefinition.Sheen);
+            outMaterialDefinition.SheenTint = sourceJson.value("sheenTint", outMaterialDefinition.SheenTint);
+            outMaterialDefinition.Clearcoat = sourceJson.value("clearcoat", outMaterialDefinition.Clearcoat);
+            outMaterialDefinition.ClearcoatGloss = sourceJson.value("clearcoatGloss", outMaterialDefinition.ClearcoatGloss);
             outMaterialDefinition.IsDoubleSided = sourceJson.value("doubleSided", outMaterialDefinition.IsDoubleSided);
             outMaterialDefinition.UseAlphaCutout = sourceJson.value("useAlphaCutout", outMaterialDefinition.UseAlphaCutout);
             outMaterialDefinition.UseTransparentBlend = sourceJson.value("useTransparentBlend", outMaterialDefinition.UseTransparentBlend);
@@ -291,6 +351,9 @@ namespace
                 outMaterialDefinition.Textures.EmissiveTexturePath = texturesJson.value("emissive", outMaterialDefinition.Textures.EmissiveTexturePath);
                 outMaterialDefinition.Textures.HeightTexturePath = texturesJson.value("height", outMaterialDefinition.Textures.HeightTexturePath);
                 outMaterialDefinition.Textures.OpacityTexturePath = texturesJson.value("opacity", outMaterialDefinition.Textures.OpacityTexturePath);
+                outMaterialDefinition.Textures.OcclusionRoughnessMetallicTexturePath = texturesJson.value("orm", outMaterialDefinition.Textures.OcclusionRoughnessMetallicTexturePath);
+                outMaterialDefinition.Textures.PrincipledMaskTexturePath = texturesJson.value("principledMask", outMaterialDefinition.Textures.PrincipledMaskTexturePath);
+                outMaterialDefinition.Textures.AnisotropyDirectionTexturePath = texturesJson.value("anisotropyDirection", outMaterialDefinition.Textures.AnisotropyDirectionTexturePath);
             }
 
             return true;
@@ -325,7 +388,8 @@ namespace
         const char* dialogTitle,
         const char* filterString,
         char* inOutPathBuffer,
-        const DWORD bufferCharacterCount)
+        const DWORD bufferCharacterCount,
+        const char* defaultExtension)
     {
         OPENFILENAMEA saveFileName{};
         saveFileName.lStructSize = sizeof(saveFileName);
@@ -335,7 +399,7 @@ namespace
         saveFileName.lpstrFile = inOutPathBuffer;
         saveFileName.nMaxFile = bufferCharacterCount;
         saveFileName.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-        saveFileName.lpstrDefExt = "json";
+        saveFileName.lpstrDefExt = defaultExtension;
         return GetSaveFileNameA(&saveFileName) == TRUE;
     }
 
@@ -356,22 +420,79 @@ namespace
             return false;
         }
 
-        char importStatusMessage[512] = {};
-        if (!System_ImportTextureToData(
-            filePathBuffer,
-            "Textures",
-            importStatusMessage,
-            static_cast<int>(std::size(importStatusMessage))))
+        const auto importOne = [&](const std::string& sourcePath, std::string& importedPath) -> bool
         {
-            outErrorMessage = importStatusMessage;
+            char importStatusMessage[512] = {};
+            if (!System_ImportTextureToData(
+                sourcePath.c_str(),
+                "Textures",
+                importStatusMessage,
+                static_cast<int>(std::size(importStatusMessage))))
+            {
+                outErrorMessage = importStatusMessage;
+                return false;
+            }
+
+            constexpr const char* importedPrefix = "Imported texture into Data: ";
+            importedPath = importStatusMessage;
+            if (importedPath.rfind(importedPrefix, 0) == 0)
+            {
+                importedPath.erase(0, std::strlen(importedPrefix));
+            }
+            return true;
+        };
+
+        std::string importedPath;
+        if (!importOne(filePathBuffer, importedPath))
+        {
             return false;
         }
 
-        constexpr const char* importedPrefix = "Imported texture into Data: ";
-        std::string importedPath = importStatusMessage;
-        if (importedPath.rfind(importedPrefix, 0) == 0)
+        // A file named like "Wall_Base_color_1001.png" whose sibling tiles (1002, ...) sit
+        // next to it is one tile of a UDIM set: import every tile and store the path with
+        // the <UDIM> token so the renderer picks each tile's texture per draw.
+        std::uint32_t udimTile = 0;
         {
-            importedPath.erase(0, std::strlen(importedPrefix));
+            const std::filesystem::path pickedPath(filePathBuffer);
+            const std::string stem = pickedPath.stem().string();
+            const auto isDigit = [](const char c) { return c >= '0' && c <= '9'; };
+            if (stem.size() >= 5
+                && (stem[stem.size() - 5] == '_' || stem[stem.size() - 5] == '.' || stem[stem.size() - 5] == '-')
+                && isDigit(stem[stem.size() - 4]) && isDigit(stem[stem.size() - 3])
+                && isDigit(stem[stem.size() - 2]) && isDigit(stem[stem.size() - 1]))
+            {
+                const std::uint32_t tile = static_cast<std::uint32_t>(std::stoul(stem.substr(stem.size() - 4)));
+                if (tile >= Udim::kFirstTile && tile <= Udim::kLastTile)
+                {
+                    const std::string tilePrefix = stem.substr(0, stem.size() - 4);
+                    const std::string extension = pickedPath.extension().string();
+                    std::vector<std::filesystem::path> siblingTiles;
+                    for (std::uint32_t other = Udim::kFirstTile; other <= Udim::kLastTile; ++other)
+                    {
+                        const std::filesystem::path candidate = pickedPath.parent_path() / (tilePrefix + std::to_string(other) + extension);
+                        std::error_code existsError;
+                        if (other != tile && std::filesystem::is_regular_file(candidate, existsError))
+                        {
+                            siblingTiles.push_back(candidate);
+                        }
+                    }
+
+                    // A lone "_1001" file is just a texture that happens to end in a number.
+                    if (!siblingTiles.empty())
+                    {
+                        for (const std::filesystem::path& sibling : siblingTiles)
+                        {
+                            std::string ignoredPath;
+                            if (!importOne(sibling.string(), ignoredPath))
+                            {
+                                outErrorMessage = "UDIM tile " + sibling.filename().string() + ": " + outErrorMessage;
+                                return false;
+                            }
+                        }
+                        udimTile = tile;
+                    }
+                }
+            }
         }
 
         const std::filesystem::path importedTexturePath(importedPath);
@@ -387,6 +508,18 @@ namespace
         else
         {
             destinationPath = importedTexturePath.string();
+        }
+
+        if (udimTile != 0)
+        {
+            // The imported file keeps the source stem, so the tile number sits right before the extension.
+            const std::string tileText = std::to_string(udimTile);
+            const std::size_t extensionPos = destinationPath.rfind('.');
+            if (extensionPos != std::string::npos && extensionPos >= tileText.size()
+                && destinationPath.compare(extensionPos - tileText.size(), tileText.size(), tileText) == 0)
+            {
+                destinationPath.replace(extensionPos - tileText.size(), tileText.size(), Udim::kToken);
+            }
         }
 
         outErrorMessage.clear();
@@ -414,6 +547,12 @@ std::string& MaterialTextureSet::GetTexturePath(const MaterialTextureSlot textur
         return EmissiveTexturePath;
     case MaterialTextureSlot::Height:
         return HeightTexturePath;
+    case MaterialTextureSlot::OcclusionRoughnessMetallic:
+        return OcclusionRoughnessMetallicTexturePath;
+    case MaterialTextureSlot::PrincipledMask:
+        return PrincipledMaskTexturePath;
+    case MaterialTextureSlot::AnisotropyDirection:
+        return AnisotropyDirectionTexturePath;
     case MaterialTextureSlot::Opacity:
     default:
         return OpacityTexturePath;
@@ -440,6 +579,12 @@ const std::string& MaterialTextureSet::GetTexturePath(const MaterialTextureSlot 
         return EmissiveTexturePath;
     case MaterialTextureSlot::Height:
         return HeightTexturePath;
+    case MaterialTextureSlot::OcclusionRoughnessMetallic:
+        return OcclusionRoughnessMetallicTexturePath;
+    case MaterialTextureSlot::PrincipledMask:
+        return PrincipledMaskTexturePath;
+    case MaterialTextureSlot::AnisotropyDirection:
+        return AnisotropyDirectionTexturePath;
     case MaterialTextureSlot::Opacity:
     default:
         return OpacityTexturePath;
@@ -569,7 +714,7 @@ bool MaterialEditor::OpenMaterialWithDialog(HWND ownerWindowHandle)
     if (!ShowOpenFileDialog(
         ownerWindowHandle,
         "Open Material",
-        "Material JSON\0*.json\0All Files\0*.*\0",
+        "Material\0*.material;*.json\0All Files\0*.*\0",
         filePathBuffer,
         static_cast<DWORD>(std::size(filePathBuffer))))
     {
@@ -588,9 +733,10 @@ bool MaterialEditor::SaveMaterialWithDialog(HWND ownerWindowHandle)
     if (!ShowSaveFileDialog(
         ownerWindowHandle,
         "Save Material",
-        "Material JSON\0*.json\0All Files\0*.*\0",
+        "Material (.material)\0*.material\0Legacy JSON Material (.json)\0*.json\0All Files\0*.*\0",
         filePathBuffer,
-        static_cast<DWORD>(std::size(filePathBuffer))))
+        static_cast<DWORD>(std::size(filePathBuffer)),
+        "material"))
     {
         return false;
     }
@@ -598,7 +744,7 @@ bool MaterialEditor::SaveMaterialWithDialog(HWND ownerWindowHandle)
     std::filesystem::path savePath(filePathBuffer);
     if (!savePath.has_extension())
     {
-        savePath += ".json";
+        savePath += ".material";
     }
 
     return SaveMaterialToFile(savePath);
@@ -674,7 +820,9 @@ std::vector<std::filesystem::path> MaterialEditor::FindAvailableMaterials() cons
             continue;
         }
 
-        if (_stricmp(it->path().extension().string().c_str(), ".json") == 0)
+        // .material, and .json from before materials had their own extension.
+        const std::string extension = it->path().extension().string();
+        if (_stricmp(extension.c_str(), ".material") == 0 || _stricmp(extension.c_str(), ".json") == 0)
         {
             materialFiles.push_back(std::filesystem::weakly_canonical(it->path()));
         }
@@ -689,10 +837,10 @@ std::filesystem::path MaterialEditor::BuildDefaultMaterialPath() const
     const std::filesystem::path materialLibraryDirectory = GetMaterialLibraryDirectory();
     if (materialLibraryDirectory.empty())
     {
-        return std::filesystem::path(mCurrentMaterial.Name + ".json");
+        return std::filesystem::path(mCurrentMaterial.Name + ".material");
     }
 
-    return materialLibraryDirectory / (mCurrentMaterial.Name + ".json");
+    return materialLibraryDirectory / (mCurrentMaterial.Name + ".material");
 }
 
 // ---------------------------------------------------------------------------
@@ -881,7 +1029,8 @@ bool MaterialEditor::SaveMultiMaterialWithDialog(HWND ownerWindowHandle)
         "Save Multi-Material",
         "Multi-Material JSON\0*.json\0All Files\0*.*\0",
         filePathBuffer,
-        static_cast<DWORD>(std::size(filePathBuffer))))
+        static_cast<DWORD>(std::size(filePathBuffer)),
+        "json"))
     {
         return false;
     }

@@ -3,6 +3,7 @@
 #include "System/PteroLog.h"
 #include "FfxLoader.h"
 #include "FidelityFX-SDK-2.3.0/Kits/FidelityFX/framegeneration/include/dx12/ffx_api_framegeneration_dx12.h"
+#include "XessLoader.h"
 
 #include "..\SDKs\Streamline\include\sl.h"
 
@@ -91,6 +92,19 @@ namespace
         // than a plain DXGI chain. The proxy is destroyed through this context.
         ffxContext SwapChainContext = nullptr;
         ffxContext ParkedSwapChainContext = nullptr;
+        // Set when the active chain is Intel XeSS-FG's proxy instead. XeSS-FG
+        // supports one proxy at a time, so it is never parked: the chain goes
+        // back to a plain one before its window is.
+        xefg_swapchain_handle_t XefgSwapChain = nullptr;
+
+        // Xe Low Latency. Created the first time XeSS frame generation or low
+        // latency is asked for and kept for the device's lifetime, as XeLL wants
+        // its sleep and markers every frame from then on. Must outlive XefgSwapChain.
+        xell_context_handle_t XellContext = nullptr;
+        bool XellLowLatencyEnabled = false;
+        // Frame ID shared by the XeLL markers and the XeSS-FG present ID.
+        uint32_t XessFrameId = 1;
+        bool XessFrameBegun = false;
 
         ComPtr<ID3D12DescriptorHeap> RtvHeap;
         ComPtr<ID3D12DescriptorHeap> SrvHeap;
@@ -99,7 +113,10 @@ namespace
         // Raised from 512 when FidelityFX SSSR arrived: it alone holds 47 slots (a depth pyramid
         // of per-level UAVs plus ping-ponged denoiser history). Slots are never freed, so the
         // margin also has to absorb every pass that is created lazily.
-        UINT SrvDescriptorCapacity = 1024;
+        // Raised from 1024 when the path tracer's material table arrived: it holds 1024
+        // contiguous slots for every texture a ray can hit. 8192 descriptors is 256 KB,
+        // and every tier of resource binding allows far more.
+        UINT SrvDescriptorCapacity = 8192;
         UINT NextAvailableSrvDescriptor = 1;
         std::array<ComPtr<ID3D12Resource>, FrameCount> RenderTargets;
 
@@ -329,10 +346,177 @@ namespace
         swapChain.Reset();
     }
 
+    // Which proxy, if any, the active chain is. Matches DX12Context_SetFrameGenerationProxy.
+    enum FrameGenerationProxy : int
+    {
+        FrameGenerationProxyNone = 0,
+        FrameGenerationProxyFsr  = 1,
+        FrameGenerationProxyXess = 2,
+    };
+
+    int ActiveProxyKind()
+    {
+        const auto& ctx = g_Context;
+        if (ctx.SwapChainContext != nullptr)
+            return FrameGenerationProxyFsr;
+        if (ctx.XefgSwapChain != nullptr)
+            return FrameGenerationProxyXess;
+        return FrameGenerationProxyNone;
+    }
+
+    // XeSS-FG's proxy is the other way round from FSR's: every application
+    // reference has to be gone before the context is destroyed, and destroying
+    // the context releases the native chain behind it.
+    void DestroyActiveSwapChain()
+    {
+        auto& ctx = g_Context;
+        if (ctx.XefgSwapChain == nullptr)
+        {
+            DestroySwapChain(ctx.SwapChain, ctx.SwapChainContext);
+            return;
+        }
+
+        const XessLoader::FrameGenerationFunctions* xefg = XessLoader::FrameGeneration();
+        if (xefg != nullptr)
+            xefg->SetEnabled(ctx.XefgSwapChain, 0);
+        ctx.SwapChain.Reset();
+        if (xefg != nullptr)
+        {
+            const xefg_swapchain_result_t result = xefg->Destroy(ctx.XefgSwapChain);
+            if (result < 0)
+                PteroLog::Writef(PteroLog::Level::Error, "XeSS-FG", "xefgSwapChainDestroy failed (%d).", static_cast<int>(result));
+            else
+                PteroLog::Write(PteroLog::Level::Info, "XeSS-FG", "Frame generation swap chain removed.");
+        }
+        ctx.XefgSwapChain = nullptr;
+    }
+
+    bool EnsureXellContext()
+    {
+        auto& ctx = g_Context;
+        if (ctx.XellContext != nullptr)
+            return true;
+
+        const XessLoader::LowLatencyFunctions* xell = XessLoader::LowLatency();
+        if (xell == nullptr || !ctx.Device)
+            return false;
+
+        const xell_result_t result = xell->D3D12CreateContext(ctx.Device.Get(), &ctx.XellContext);
+        if (result != XELL_RESULT_SUCCESS || ctx.XellContext == nullptr)
+        {
+            ctx.XellContext = nullptr;
+            PteroLog::Writef(PteroLog::Level::Warning, "XeLL",
+                "Xe Low Latency is unavailable on this device (xellD3D12CreateContext returned %d).", static_cast<int>(result));
+            return false;
+        }
+
+        xell->SetLoggingCallback(ctx.XellContext, XELL_LOGGING_LEVEL_WARNING, &XessLoader::LowLatencyLog);
+        ctx.XellLowLatencyEnabled = false;
+        PteroLog::Write(PteroLog::Level::Info, "XeLL", "Xe Low Latency context created.");
+        return true;
+    }
+
+    // XeLL requires the GPU to be idle while its mode changes.
+    void SetXellSleepMode(bool enable)
+    {
+        auto& ctx = g_Context;
+        if (ctx.XellContext == nullptr || ctx.XellLowLatencyEnabled == enable)
+            return;
+        if (const XessLoader::LowLatencyFunctions* xell = XessLoader::LowLatency())
+        {
+            xell_sleep_params_t params{};
+            params.bLowLatencyMode = enable ? 1u : 0u;
+            params.minimumIntervalUs = 0;
+            if (xell->SetSleepMode(ctx.XellContext, &params) == XELL_RESULT_SUCCESS)
+                ctx.XellLowLatencyEnabled = enable;
+        }
+    }
+
+    void AddXellMarker(xell_latency_marker_type_t marker)
+    {
+        auto& ctx = g_Context;
+        if (ctx.XellContext == nullptr)
+            return;
+        if (const XessLoader::LowLatencyFunctions* xell = XessLoader::LowLatency())
+            xell->AddMarkerData(ctx.XellContext, ctx.XessFrameId, marker);
+    }
+
+    // Creates XeSS-FG's proxy chain for the active window. The window must have
+    // no chain at this point. Leaves ctx.SwapChain empty on failure.
+    void CreateXessProxySwapChain(const DXGI_SWAP_CHAIN_DESC1& desc)
+    {
+        auto& ctx = g_Context;
+        const XessLoader::FrameGenerationFunctions* xefg = XessLoader::FrameGeneration();
+        if (xefg == nullptr)
+        {
+            SetContextError(std::string("Could not create the XeSS frame generation swap chain: ")
+                + (XessLoader::GetLastError() ? XessLoader::GetLastError() : "libxess_fg.dll is unavailable."));
+            PteroLog::Write(PteroLog::Level::Error, "XeSS-FG", gLastContextError.c_str());
+            return;
+        }
+        // XeSS-FG refuses to initialise without XeLL, and XeLL's low latency mode
+        // has to be on before frame generation is enabled.
+        if (!EnsureXellContext())
+        {
+            SetContextError("Could not create the XeSS frame generation swap chain: Xe Low Latency (libxell.dll) is unavailable.");
+            PteroLog::Write(PteroLog::Level::Error, "XeSS-FG", gLastContextError.c_str());
+            return;
+        }
+        SetXellSleepMode(true);
+
+        xefg_swapchain_handle_t handle = nullptr;
+        xefg_swapchain_result_t result = xefg->D3D12CreateContext(ctx.Device.Get(), &handle);
+        const char* step = "xefgSwapChainD3D12CreateContext";
+        if (result >= 0 && handle != nullptr)
+        {
+            xefg->SetLoggingCallback(handle, XEFG_SWAPCHAIN_LOGGING_LEVEL_WARNING, &XessLoader::FrameGenerationLog, nullptr);
+            result = xefg->SetLatencyReduction(handle, ctx.XellContext);
+            step = "xefgSwapChainSetLatencyReduction";
+        }
+        if (result >= 0 && handle != nullptr)
+        {
+            // Motion vectors are in UV and scaled per frame through the frame
+            // constants; depth is standard [0 near, 1 far].
+            xefg_swapchain_d3d12_init_params_t init{};
+            init.pApplicationSwapChain = nullptr;
+            init.initFlags = XEFG_SWAPCHAIN_INIT_FLAG_NONE;
+            init.maxInterpolatedFrames = XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES;
+            init.creationNodeMask = 1;
+            init.visibleNodeMask = 1;
+            init.uiMode = XEFG_SWAPCHAIN_UI_MODE_AUTO;
+            result = xefg->D3D12InitFromSwapChainDesc(handle, ctx.WindowHandle, &desc, nullptr,
+                ctx.CommandQueue.Get(), ctx.Factory.Get(), &init);
+            step = "xefgSwapChainD3D12InitFromSwapChainDesc";
+        }
+        IDXGISwapChain3* proxy = nullptr;
+        if (result >= 0 && handle != nullptr)
+        {
+            result = xefg->D3D12GetSwapChainPtr(handle, IID_PPV_ARGS(&proxy));
+            step = "xefgSwapChainD3D12GetSwapChainPtr";
+        }
+
+        if (result >= 0 && proxy != nullptr)
+        {
+            // GetSwapChainPtr hands back a reference the caller owns.
+            ctx.SwapChain.Attach(proxy);
+            ctx.XefgSwapChain = handle;
+            PteroLog::Write(PteroLog::Level::Info, "XeSS-FG", "Frame generation swap chain installed.");
+            return;
+        }
+
+        if (proxy != nullptr)
+            proxy->Release();
+        if (handle != nullptr)
+            xefg->Destroy(handle);
+        SetContextError(std::string("Could not create the XeSS frame generation swap chain (") + step
+            + " returned " + std::to_string(static_cast<int>(result)) + ").");
+        PteroLog::Write(PteroLog::Level::Error, "XeSS-FG", gLastContextError.c_str());
+    }
+
     // Replaces the active chain for the same window with a plain DXGI chain or with
-    // FSR's frame generation proxy. A window can have only one flip-model chain, so
-    // the old one is fully released before the new one is created.
-    void ReplaceActiveSwapChain(bool frameGenerationProxy)
+    // a frame generation proxy (FSR's or XeSS's). A window can have only one
+    // flip-model chain, so the old one is fully released before the new one is created.
+    void ReplaceActiveSwapChain(int proxyKind)
     {
         auto& ctx = g_Context;
         DXGI_SWAP_CHAIN_DESC1 current{};
@@ -343,9 +527,13 @@ namespace
 
         for (auto& target : ctx.RenderTargets)
             target.Reset();
-        DestroySwapChain(ctx.SwapChain, ctx.SwapChainContext);
+        DestroyActiveSwapChain();
 
-        if (frameGenerationProxy)
+        if (proxyKind == FrameGenerationProxyXess)
+        {
+            CreateXessProxySwapChain(desc);
+        }
+        else if (proxyKind == FrameGenerationProxyFsr)
         {
             const ffxFunctions* ffx = FfxLoader::Get();
             IDXGISwapChain4* proxy = nullptr;
@@ -412,7 +600,16 @@ namespace
             return {};
         }
 
-        std::filesystem::path currentPath = std::filesystem::path(executablePath).parent_path();
+        // A packaged game ships the Streamline plugins next to its executable, and
+        // has no Source tree to walk up to - so look there first.
+        const std::filesystem::path executableDirectory = std::filesystem::path(executablePath).parent_path();
+        if (std::filesystem::exists(executableDirectory / "sl.interposer.dll")
+            && std::filesystem::exists(executableDirectory / "sl.dlss.dll"))
+        {
+            return executableDirectory;
+        }
+
+        std::filesystem::path currentPath = executableDirectory;
         while (!currentPath.empty())
         {
             const std::filesystem::path candidate = currentPath / "Source" / "SDKs" / "Streamline" / "bin" / "x64";
@@ -444,7 +641,7 @@ namespace
         const std::filesystem::path pluginDirectory = FindStreamlinePluginDirectory();
         if (pluginDirectory.empty())
         {
-            SetContextError("DX12Context_StreamlineInitialize failed to locate Source\\SDKs\\Streamline\\bin\\x64.");
+            SetContextError("DX12Context_StreamlineInitialize failed to locate the Streamline plugins next to the executable or in Source\\SDKs\\Streamline\\bin\\x64.");
             return false;
         }
 
@@ -738,6 +935,17 @@ extern "C"
                 return false;
             }
 
+            // Xe Low Latency paces the frame here, before any of its work starts.
+            // The renderer samples input right after BeginFrame, so this is also
+            // where the simulation begins.
+            if (ctx.XellContext != nullptr)
+            {
+                if (const XessLoader::LowLatencyFunctions* xell = XessLoader::LowLatency())
+                    xell->Sleep(ctx.XellContext, ctx.XessFrameId);
+                AddXellMarker(XELL_SIMULATION_START);
+            }
+            ctx.XessFrameBegun = true;
+
             ctx.FrameIndex = ctx.SwapChain->GetCurrentBackBufferIndex();
 
             // Block until this back buffer's last frame retires. Reporting failure instead
@@ -830,8 +1038,11 @@ extern "C"
             ThrowIfFailedWithContext(ctx.CommandList->Close(), "ID3D12GraphicsCommandList::Close(frame)");
             ctx.CommandListOpen = false;
 
+            AddXellMarker(XELL_SIMULATION_END);
+            AddXellMarker(XELL_RENDERSUBMIT_START);
             ID3D12CommandList* commandLists[] = { ctx.CommandList.Get() };
             ctx.CommandQueue->ExecuteCommandLists(1, commandLists);
+            AddXellMarker(XELL_RENDERSUBMIT_END);
             if (timestamped)
                 ctx.TimestampPending[frameIndex] = true;
 
@@ -844,7 +1055,19 @@ extern "C"
                 return false;
             }
 
-            ThrowIfFailedWithContext(ctx.SwapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING), "IDXGISwapChain3::Present");
+            // XeSS-FG matches the resources tagged while recording to this present
+            // through the present ID, which is the same frame ID XeLL is given.
+            AddXellMarker(XELL_PRESENT_START);
+            if (ctx.XefgSwapChain != nullptr)
+            {
+                if (const XessLoader::FrameGenerationFunctions* xefg = XessLoader::FrameGeneration())
+                    xefg->SetPresentId(ctx.XefgSwapChain, ctx.XessFrameId);
+            }
+            const HRESULT presentResult = ctx.SwapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
+            AddXellMarker(XELL_PRESENT_END);
+            ++ctx.XessFrameId;
+            ctx.XessFrameBegun = false;
+            ThrowIfFailedWithContext(presentResult, "IDXGISwapChain3::Present");
 
             const UINT64 fenceValue = ctx.NextFenceValue++;
             ThrowIfFailedWithContext(ctx.CommandQueue->Signal(ctx.Fence.Get(), fenceValue), "ID3D12CommandQueue::Signal");
@@ -876,6 +1099,13 @@ extern "C"
     __declspec(dllexport) void __stdcall DX12Context_AbortFrame()
     {
         auto& ctx = g_Context;
+        // Whatever was tagged for this frame ID will never be presented; the next
+        // frame starts on a fresh one.
+        if (ctx.XessFrameBegun)
+        {
+            ++ctx.XessFrameId;
+            ctx.XessFrameBegun = false;
+        }
         if (ctx.CommandList && ctx.CommandListOpen)
         {
             const HRESULT closeHr = ctx.CommandList->Close();
@@ -920,6 +1150,11 @@ extern "C"
                 throw std::runtime_error("Presentation can only switch between frames to a valid window.");
             if (!FlushGPU(2000))
                 throw std::runtime_error("GPU wait timed out before switching presentation windows.");
+
+            // XeSS-FG supports a single proxy chain, so its chain is never parked.
+            // The frame loop installs a new one for the window that becomes active.
+            if (ctx.XefgSwapChain != nullptr)
+                ReplaceActiveSwapChain(FrameGenerationProxyNone);
 
             ComPtr<IDXGISwapChain3> next;
             ffxContext nextContext = nullptr;
@@ -1066,10 +1301,16 @@ extern "C"
     // between frames: the GPU is flushed and every back buffer reference dropped.
     // Returns false when the proxy was asked for but could not be created; the
     // window is then left with a working plain chain.
-    __declspec(dllexport) bool __stdcall DX12Context_SetFrameGenerationSwapChain(bool enable)
+    // Installs FSR's (1) or XeSS's (2) frame generation proxy for the active window,
+    // or a plain chain (0). Only between frames: the GPU is flushed and every back
+    // buffer reference dropped. Returns false when a proxy was asked for but could
+    // not be created; the window is then left with a working plain chain.
+    __declspec(dllexport) bool __stdcall DX12Context_SetFrameGenerationProxy(int proxyKind)
     {
         auto& ctx = g_Context;
-        if (enable == (ctx.SwapChainContext != nullptr))
+        if (proxyKind < FrameGenerationProxyNone || proxyKind > FrameGenerationProxyXess)
+            proxyKind = FrameGenerationProxyNone;
+        if (proxyKind == ActiveProxyKind())
             return true;
 
         try
@@ -1079,14 +1320,66 @@ extern "C"
             if (!FlushGPU(2000))
                 throw std::runtime_error("GPU wait timed out before replacing the swap chain.");
 
-            ReplaceActiveSwapChain(enable);
-            return enable == (ctx.SwapChainContext != nullptr);
+            ReplaceActiveSwapChain(proxyKind);
+            return proxyKind == ActiveProxyKind();
         }
         catch (const std::exception& exception)
         {
-            SetContextError(std::string("DX12Context_SetFrameGenerationSwapChain failed: ") + exception.what());
+            SetContextError(std::string("DX12Context_SetFrameGenerationProxy failed: ") + exception.what());
             return false;
         }
+    }
+
+    __declspec(dllexport) int __stdcall DX12Context_GetFrameGenerationProxy()
+    {
+        return ActiveProxyKind();
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_SetFrameGenerationSwapChain(bool enable)
+    {
+        return DX12Context_SetFrameGenerationProxy(enable ? FrameGenerationProxyFsr : FrameGenerationProxyNone);
+    }
+
+    // The XeSS-FG context behind the active proxy chain, or null.
+    __declspec(dllexport) void* __stdcall DX12Context_GetXessFrameGenerationContext()
+    {
+        return g_Context.XefgSwapChain;
+    }
+
+    // The frame ID the frame being recorded will be presented with. XeSS-FG
+    // resources and constants must be tagged with it.
+    __declspec(dllexport) UINT __stdcall DX12Context_GetXessFrameId()
+    {
+        return g_Context.XessFrameId;
+    }
+
+    // Turns Xe Low Latency's latency reduction on or off, creating the XeLL
+    // context the first time it is turned on. Only between frames: XeLL needs
+    // the GPU idle to change mode. Returns whether it is now on.
+    __declspec(dllexport) bool __stdcall DX12Context_SetXellLowLatency(bool enable)
+    {
+        auto& ctx = g_Context;
+        // XeSS-FG cannot run without it.
+        if (ctx.XefgSwapChain != nullptr)
+            enable = true;
+        if (enable == ctx.XellLowLatencyEnabled)
+            return enable;
+        if (ctx.CommandListOpen)
+            return ctx.XellLowLatencyEnabled;
+        if (enable && !EnsureXellContext())
+            return false;
+        if (ctx.XellContext == nullptr)
+            return false;
+
+        FlushGPU(2000);
+        SetXellSleepMode(enable);
+        PteroLog::Writef(PteroLog::Level::Info, "XeLL", "Latency reduction %s.", ctx.XellLowLatencyEnabled ? "on" : "off");
+        return ctx.XellLowLatencyEnabled;
+    }
+
+    __declspec(dllexport) bool __stdcall DX12Context_IsXellLowLatencyActive()
+    {
+        return g_Context.XellContext != nullptr && g_Context.XellLowLatencyEnabled;
     }
 
     __declspec(dllexport) bool __stdcall DX12Context_StreamlineInitialize()
@@ -1447,8 +1740,16 @@ extern "C"
 
             ctx.RtvHeap.Reset();
             ctx.SrvHeap.Reset();
-            DestroySwapChain(ctx.SwapChain, ctx.SwapChainContext);
+            DestroyActiveSwapChain();
             DestroySwapChain(ctx.ParkedSwapChain, ctx.ParkedSwapChainContext);
+            // After XeSS-FG, which depends on it.
+            if (ctx.XellContext != nullptr)
+            {
+                if (const XessLoader::LowLatencyFunctions* xell = XessLoader::LowLatency())
+                    xell->DestroyContext(ctx.XellContext);
+                ctx.XellContext = nullptr;
+                ctx.XellLowLatencyEnabled = false;
+            }
             ctx.ParkedWindowHandle = nullptr;
             ctx.Fence.Reset();
             ctx.CommandQueue.Reset();

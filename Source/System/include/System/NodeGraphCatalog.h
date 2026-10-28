@@ -14,8 +14,9 @@
 
 enum class NodePinKind
 {
-    // Execution flow, drawn white. Carries no value: an exec output fires exactly one
-    // target, an exec input may be fired by many sources.
+    // Execution flow, drawn white. Carries no value: an exec output may fire several
+    // targets (in turn, top to bottom on the canvas), an exec input may be fired by many
+    // sources.
     Exec,
     Bool,
     Number,

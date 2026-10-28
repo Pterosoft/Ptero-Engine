@@ -7,6 +7,7 @@
 #include "System/FbxCompiler.h"
 #include "System/PteroMeshFormat.h"
 #include "System/TextureImporter.h"
+#include "System/UnrealAssetImporter.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -361,6 +362,62 @@ bool AssetManager::ImportTextureToDataDirectory(
     return true;
 }
 
+bool AssetManager::ImportUnrealAssetToDataDirectory(
+    const std::string& sourceUassetPath,
+    const std::string& targetDirectoryRelativeToData,
+    std::string* summary)
+{
+    mLastErrorMessage.clear();
+
+    const std::filesystem::path sourcePath(sourceUassetPath);
+    if (sourceUassetPath.empty() || !std::filesystem::is_regular_file(sourcePath))
+    {
+        mLastErrorMessage = "The source .uasset file does not exist.";
+        return false;
+    }
+
+    const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+    if (dataDirectory.empty())
+    {
+        mLastErrorMessage = "Failed to locate the project's Data directory.";
+        return false;
+    }
+
+    const std::filesystem::path targetDirectory = targetDirectoryRelativeToData.empty()
+        ? dataDirectory / "Imported"
+        : (dataDirectory / std::filesystem::path(targetDirectoryRelativeToData)).lexically_normal();
+    if (!IsPathInsideRoot(dataDirectory, targetDirectory))
+    {
+        mLastErrorMessage = "The target import folder must stay inside the Data directory.";
+        return false;
+    }
+
+    UnrealAssetImporter::Result result;
+    std::string error;
+    if (!UnrealAssetImporter::Import(sourcePath, dataDirectory, targetDirectory, result, error))
+    {
+        mLastErrorMessage = error;
+        return false;
+    }
+
+    // Anything re-cooked must be reloaded rather than served from the cache.
+    for (const std::filesystem::path& written : result.WrittenFiles)
+    {
+        mMeshCache.erase(written.string());
+    }
+
+    if (summary != nullptr)
+    {
+        *summary = result.Summary;
+        if (!result.Warnings.empty())
+        {
+            *summary += " (" + std::to_string(result.Warnings.size()) + (result.Warnings.size() == 1 ? " warning: " : " warnings, first: ") +
+                result.Warnings.front() + ")";
+        }
+    }
+    return true;
+}
+
 bool AssetManager::ImportFbxToDataDirectory(
     const std::string& sourceFbxPath,
     const std::string& targetDirectoryRelativeToData,
@@ -606,11 +663,24 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
             return nullptr;
         }
 
+        // Re-cooking writes a file without collision hulls. A mesh that had them gets new
+        // ones built on the re-cooked geometry - the old hulls are in the old frame, so they
+        // cannot simply be carried over. Slow, but once per mesh.
+        PteroCollisionFileData outdated;
+        std::string ignoredError;
+        const bool hadCollision = ReadPteroFileData(*stream, legacyHeader, lodCount, outdated, ignoredError) &&
+            !outdated.CollisionHulls.empty();
+
         inputStreamOwner.reset();
         if (!FbxCompiler::CompileFbxToPtero(resolvedMeshPath, pteroPath))
         {
             mLastErrorMessage = "The cooked mesh is outdated and re-compilation failed.";
             return nullptr;
+        }
+
+        if (hadCollision)
+        {
+            CollisionGenerator::GenerateCollisions(pteroPath);
         }
 
         inputStreamOwner = DataFiles::OpenStream(pteroPath);

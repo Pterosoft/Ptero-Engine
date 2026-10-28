@@ -83,7 +83,7 @@ current step is still walking.
 
 | Category | Nodes |
 | --- | --- |
-| Events | On Game Start, On Game Stop, On Tick, On Video Finished, On Key Pressed, On Key Released, On UI Button Clicked |
+| Events | On Game Start, On Game Stop, On Tick, On Video Finished, On Key Pressed, On Key Released, On UI Button Clicked, On Landed, On Jumped |
 | Functions | Function Entry, Call Function, Return |
 | Flow | Branch, Delay, Gate, Sequence, Do Once, Do N, Flip Flop, For Loop, Switch |
 | Logic | Multiplexer, And, Or, Not, Compare |
@@ -92,7 +92,8 @@ current step is still walking.
 | Variables | Get Variable, Set Variable |
 | UI | Show/Close/Reload UI Document, Set UI Visible, Set UI Input Enabled, Set UI Text, Set UI Property, Set UI Class, Set UI Element Visible |
 | Video | Play Video, Pause Video, Resume Video, Stop Video, Seek Video, Set Video Looping, Set Video Volume, Is Video Playing, Get Video Time, Get Video Duration |
-| Input | Is Key Down |
+| Input | Is Key Down, Get Input Axis, Get Look Input, Get Mouse Delta, Set Mouse Captured, Is Mouse Captured |
+| Character | Add Movement Input, Add Look Input, Jump, Stop Jumping, Crouch, Uncrouch, Set Sprinting, Get Character State, Get Character Location, Teleport Character, Get/Set Movement Property, Get/Set Camera Property |
 | Entity | Entity, Find Entity, Is Entity Valid, Get Entity Name, Get/Set Entity Position, Move Entity By, Get/Set Entity Rotation, Rotate Entity By, Get/Set Entity Scale, Move Entity To, Get/Set Entity Property, Play/Stop Entity Audio |
 | Camera | Get Camera, Set Camera, Move Camera To, Release Camera, Camera Look Point |
 | Audio | Play Sound, Play Music, Play Music Playlist, Stop Music, Is Music Playing |
@@ -136,8 +137,8 @@ it that any game needs, rather than Farkle's own rules: the thousands-separated 
 Format Number, the quintic ease on the camera travel and the dice throw is Ease's *Smoother*
 curve, the throw itself is Move Entity To with an Arc Height, the table-to-result camera flight
 is Move Camera To, "where do the dice land" is Camera Look Point, and the shuffled soundtrack
-that never repeats a track is Play Music Playlist. Farkle still runs on its own C++; nothing in
-it was switched over to the graph.
+that never repeats a track is Play Music Playlist. Farkle itself has since been archived (see
+`Documentation/Farkle.md`); `Source/Game` now holds the first-person character game.
 
 ### Entities
 
@@ -176,6 +177,51 @@ The game module writes its own camera every frame before the graph runs. **Set C
 **Move Camera To** therefore *hold* the camera: the runtime re-applies the pose at the end of
 every tick until **Release Camera** hands it back. **Get Camera** reports the held pose while
 there is one.
+
+### Player character and controllers
+
+The engine has one first-person character: `CharacterMovement`
+(`Source/System/include/System/CharacterMovement.h`), a kinematic capsule that walks, sprints,
+crouches, jumps and falls against the level's static meshes and terrain, plus the eye camera on
+top of it (crouch height blend, head bob, landing dip, sprint FOV kick). It is the equivalent of
+Unreal's CharacterMovementComponent. Two interchangeable **player controllers** drive it, picked
+in **Windows > Game Settings...**:
+
+- **C++** - `FirstPersonCharacter` in `Source/Game`, built into Game.dll.
+- **Node Graph** - a `.nodegraph` whose **Character** nodes drive the same component.
+  **Export Node Graph Controller...** in Game Settings writes the node twin of the C++ controller
+  (`Data/Game/Controllers/FirstPersonController.nodegraph`) to start from.
+
+Like Blueprints, the graph decides *when* to move and the component decides *how*: **Add
+Movement Input** each tick (Forward/Right, -1..1, relative to the view), **Add Look Input** in
+degrees, **Jump** on a key press and **Stop Jumping** on release (release early for a lower
+hop), **Crouch**/**Uncrouch**, **Set Sprinting**. **Get Input Axis** turns a key pair into -1/0/1
+and **Get Look Input** turns the mouse into degrees with the player's sensitivity and Invert Y
+applied.
+
+The controller also owns the character's configuration. **Set Movement Settings**, **Set Camera
+Settings** and **Set Control Settings** carry every value on their node bodies - speeds,
+acceleration, jump, gravity, capsule; field of view, eye heights, head bob, look limits; mouse
+sensitivity, Invert Y, crouch/sprint toggles, mouse capture - and the exported controller runs
+them from On Game Start. Run before the first frame, they also snap the camera to the new eye
+height and field of view instead of blending. **Get/Set Movement Property** and **Get/Set Camera
+Property** change a single value later, e.g. a zoom or a slowing effect. The C++ controller sets
+the same values in `FirstPersonCharacter::ConfigureCharacter`.
+
+The Character nodes only have a character while the Node Graph controller is selected; with the
+C++ controller the character lives inside Game.dll and they log that once and do nothing. The
+controller graph runs in its own runtime beside the level graph; both see the same character, so
+a level graph can also **Teleport Character** or react **On Landed**. The character steps after
+both graphs have ticked, so input added on Tick moves it in the same frame, and a camera a graph
+holds with **Set Camera** wins over the character's view.
+
+Game Settings holds only the controller choice and the `.nodegraph` path. It is saved to
+`Data/Game/GameSettings.json` (shipped with the game) and read when Play starts. The player spawns at an entity named `PlayerStart` (feet at its position, facing its
+local +Y) or at the editor camera. The mouse is captured for looking while the game window has
+focus; **Escape** releases it and a click in the game view takes it back. Playing from the
+editor, **~** (the key under Escape, whatever the layout) ends the session and returns to the
+editor. With the mouse
+released, holding the right button still looks around.
 
 **On Key Pressed/Released** and **Is Key Down** only see keys while the game window has focus.
 **On UI Button Clicked** has its own queue in `RmlUiRenderer`, separate from the game module's,

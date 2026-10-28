@@ -1,0 +1,66 @@
+STEAM EVENT / ANNOUNCEMENT — ROADMAP
+Event type suggestion: "News" (or "Major Update" if you prefer it highlighted)
+
+ARTWORK (in Steam_Roadmap_Art/, regenerate with make_steam_art.ps1)
+  Cover image ........ cover_800x450.png
+  Header image ....... header_1920x622.png
+  Library spotlight .. library_spotlight_2108x460.png  (Major Update events only)
+
+TITLE
+The Road Ahead: What's Next for Farkle: Tavern Dice
+
+SUBTITLE
+Engine upgrades, new languages, multiplayer, progression and more music by the fire
+
+SUMMARY
+The tavern doors are open — and we're only getting started. Here's a look at the updates we're planning for Farkle: Tavern Dice.
+
+BODY (Steam BBCode — paste into the event description editor)
+------------------------------------------------------------------
+
+Greetings, travellers!
+
+Thank you to everyone who has pulled up a chair at our table since launch. Seeing you push your luck (and occasionally Farkle away a whole turn's worth of points) has been a joy.
+
+Farkle: Tavern Dice is just the first night at the tavern. Several updates are already in the making, and we want to share where the game is headed.
+
+[i]Please note: no release dates have been set for these updates. Features, scope and the order of updates may change as development continues.[/i]
+
+[h2]01 — A New Engine Foundation[/h2]
+Farkle is built on our own custom Ptero-Engine, and the next big step is moving the game to an updated engine version. This update is planned to bring:
+[list]
+[*][b]Better optimization[/b] across the board
+[*][b]Virtualized geometry[/b] and [b]virtual shadow maps[/b] for sharper, more detailed scenes
+[*][b]Intel XeSS[/b], alongside the existing DLSS and FSR options
+[*][b]Voxel global illumination[/b] — letting the game run on devices that [b]do not support DXR ray tracing[/b]
+[*][b]Path tracing[/b] for those who want the tavern at its most beautiful
+[*][b]Ptero AA & Ptero SR[/b] — our own analytic edge anti-aliasing and spatial reconstruction
+[*][b]Steam Achievements[/b]
+[/list]
+
+[h2]02 — A Tavern in More Languages[/h2]
+We want everyone to feel at home at the table. Localization is planned for:
+[list]
+[*]German, Polish, French, Italian, Spanish, Portuguese
+[*]Czech, Ukrainian, Turkish, Arabic
+[*]Korean, Chinese, Japanese
+[/list]
+
+[h2]03 — Company at the Table[/h2]
+Dice are always better with friends (and rivals). We're planning [b]leaderboards[/b] and [b]multiplayer[/b], bringing more ways to compete and share a game of dice.
+
+[h2]04 — Something to Work Toward[/h2]
+A [b]progression system[/b] and an [b]in-game store[/b], giving you goals to chase across many nights at the tavern.
+
+[h2]05 — More Music by the Fire[/h2]
+[b]Music extensions[/b] to expand the tavern's soundtrack, building on the authentic medieval music already playing by the hearth.
+
+[h2]Tell Us What You Think[/h2]
+Your feedback shapes what we build next. If you have ideas, run into a bug, or just want to tell us about your luckiest (or unluckiest) roll, join the conversation in the [url=https://steamcommunity.com/app/5368450/discussions/]Steam Community discussions[/url].
+
+You can also follow the roadmap on our website: [url=https://farkle.pterosoftstudio.com/]farkle.pterosoftstudio.com[/url]
+
+And if you haven't taken your seat yet, the [b]15% launch discount[/b] is still running for a limited time.
+
+Fortune favours one more roll.
+— Pterosoft Studio

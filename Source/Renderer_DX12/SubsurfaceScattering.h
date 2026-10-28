@@ -17,7 +17,9 @@
 //     straight into the scene colour (SubsurfaceScattering.hlsl);
 //   - ray traced: one inline-ray-tracing compute pass that scatters over the real
 //     surface and traces transmission thickness (SubsurfaceScattering_RT.hlsl),
-//     composited the same way.
+//     composited the same way. With ReSTIR on, the pass instead merges its probes with
+//     the pixel's reprojected history (temporal reuse), through a pair of reservoir
+//     buffers that swap roles every frame.
 //
 // The composite adds (scattered - original) diffuse, so specular, fog and everything else
 // the lighting pass wrote stays exactly as it was.
@@ -120,6 +122,18 @@ struct SubsurfaceGpuConstants
     uint32_t            HasSunShadow;
     uint32_t            HasPointShadows;
     float               ShadowPad[2];
+    // The virtual shadow map; when Active, the sun shadow SRV is its pool, which also
+    // holds the local lights' shadows.
+    VsmGpuConstants     Vsm;
+
+    // ReSTIR temporal reuse (ray-traced mode). The previous matrices belong to the frame
+    // whose reservoirs are in the history buffer; transposed, jittered.
+    DirectX::XMFLOAT4X4 PrevViewProj;
+    DirectX::XMFLOAT4X4 PrevInvViewProj;
+    uint32_t            Restir;
+    uint32_t            RestirTemporal;
+    uint32_t            RestirHistoryCap;
+    uint32_t            RestirPad;
 };
 static_assert(offsetof(SubsurfaceGpuConstants, Kernel) == 512);
 static_assert(offsetof(SubsurfaceGpuConstants, ViewProj) == 6912);
@@ -130,7 +144,11 @@ static_assert(offsetof(SubsurfaceGpuConstants, Lights) == 7168);
 static_assert(offsetof(SubsurfaceGpuConstants, LightViewProj) == 8704);
 static_assert(offsetof(SubsurfaceGpuConstants, PointFaceViewProj) == 8784);
 static_assert(offsetof(SubsurfaceGpuConstants, HasSunShadow) == 10320);
-static_assert(sizeof(SubsurfaceGpuConstants) == 10336, "Must match Subsurface.hlsli");
+static_assert(offsetof(SubsurfaceGpuConstants, Vsm) == 10336);
+static_assert(offsetof(SubsurfaceGpuConstants, PrevViewProj) == 11488);
+static_assert(offsetof(SubsurfaceGpuConstants, Restir) == 11616);
+static_assert(offsetof(SubsurfaceGpuConstants, RestirHistoryCap) == 11624);
+static_assert(sizeof(SubsurfaceGpuConstants) == 11632, "Must match Subsurface.hlsli");
 
 // Builds one profile's separable kernel exactly as the SDK does: taps spread over
 // [-range, range] with a quadratic distribution, weighted by the sum-of-Gaussians skin
@@ -170,6 +188,7 @@ public:
     bool IsInitialized() const { return mIsInitialized; }
     bool HasInitFailed() const { return mInitFailed; }
     bool SupportsRayTracing() const { return mPsoRayTraced != nullptr; }
+    bool SupportsRestir() const { return mPsoRestir != nullptr; }
     const char* GetLastError() const { return mLastError.empty() ? nullptr : mLastError.c_str(); }
 
     // Uploads this frame's constants and returns their address for the lighting pass.
@@ -195,6 +214,8 @@ public:
         // from compute (ALL_SHADER_RESOURCE) for the duration of Apply().
         D3D12_GPU_DESCRIPTOR_HANDLE SunShadow{};
         D3D12_GPU_DESCRIPTOR_HANDLE PointShadows{};
+        // The virtual shadow map's page table, when SunShadow is its pool.
+        D3D12_GPU_VIRTUAL_ADDRESS   VsmPageTable = 0;
     };
 
     // Scatters the diffuse target and composites it into the scene colour, which must be
@@ -213,6 +234,7 @@ private:
     bool CreateSizeDependentResources();
     void RetireSizeDependentResources();
     void TickRetiredResources();
+    bool EnsureReservoirs();
 
     static constexpr UINT kFramesInFlight = 3;
 
@@ -226,6 +248,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPsoBlurX;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPsoRayTraced;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPsoRestir;  // ray traced with temporal reuse
     // [0] = additive composite, [1] = replace (debug views)
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPsoCompositeBlurY[2];
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPsoCompositeRayTraced[2];
@@ -238,7 +261,22 @@ private:
     uint32_t      mFrameIndex = 0;
     D3D12_GPU_VIRTUAL_ADDRESS mCurrentConstants = 0;
     bool          mRayTracedThisFrame = false;
+    bool          mRestirThisFrame = false;
     int           mDebugView = 0;
+
+    // ReSTIR reservoirs, 48 bytes per pixel, created the first time the reservoir pass
+    // runs. mReservoirs[mHistoryIndex] is the history; each frame writes the other one and
+    // the two swap. Buffers decay to COMMON after every frame's submission, so Apply()
+    // moves them from COMMON each frame instead of tracking a state across frames.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mReservoirs[2];
+    UINT mReservoirWidth = 0;
+    UINT mReservoirHeight = 0;
+    UINT mHistoryIndex = 0;
+    // Whether the history buffer holds a frame's reservoirs, and that frame's matrices
+    // (jittered, not transposed). PrepareFrame stages this frame's; Apply commits them.
+    bool                mHistoryValid = false;
+    DirectX::XMFLOAT4X4 mHistoryViewProj{};
+    DirectX::XMFLOAT4X4 mFrameViewProj{};
 
     // Diffuse lighting written by the lighting pass (RTV + SRV) and the scratch target the
     // blur / ray-traced pass writes (UAV + SRV).

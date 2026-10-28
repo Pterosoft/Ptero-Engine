@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"german"
+	"Tokens"
+	{
+		"#Menu"	"In der Taverne"
+		"#VsAI"	"Spielt gegen die KI · %score%"
+		"#Searching"	"Sucht eine Partie"
+		"#Waiting"	"Wartet an einem offenen Tisch"
+		"#WaitingFriends"	"Wartet auf Freunde"
+		"#Online"	"Spielt online gegen %opponent% · %score%"
+	}
+}

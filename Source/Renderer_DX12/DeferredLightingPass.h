@@ -1,7 +1,8 @@
 #pragma once
 
 // DeferredLightingPass
-// Owns the three G-Buffer render targets (albedo, normal, material) and the
+// Owns the G-Buffer render targets (albedo, normal, material, edge, and the two
+// Disney principled targets) and the
 // fullscreen lighting-resolve pipeline.  The flow each frame is:
 //
 //   1. BeginGeometryPass()  – transition G-Buffer RTs to RenderTarget state,
@@ -17,10 +18,13 @@
 #include "DX12ShaderCompiler.h"
 #include "RadianceProbeSettings.h"
 #include "MsaaSettings.h"
+#include "VirtualShadowMapConstants.h"
+#include "PrincipledGBuffer.h"
 
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,6 +40,11 @@ struct GBufferSrvs
     D3D12_GPU_DESCRIPTOR_HANDLE Albedo{};
     D3D12_GPU_DESCRIPTOR_HANDLE Normal{};
     D3D12_GPU_DESCRIPTOR_HANDLE Material{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Edge{};      // Analytic Edge AA triangle edges
+    // Disney principled parameters (PrincipledBrdf.hlsli). Allocated together, so
+    // Principled1 directly follows Principled0 and the two bind as one table.
+    D3D12_GPU_DESCRIPTOR_HANDLE Principled0{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Principled1{};
 };
 
 class DeferredLightingPass
@@ -78,9 +87,15 @@ public:
         "PointLightGpu must match PointLightData in DeferredLighting.hlsl and "
         "RtgiPointLightData in RtGI_Common.hlsli.");
 
-    // Maximum point lights the lighting shader supports.
-    // Must match MAX_POINT_LIGHTS in DeferredLighting.hlsl.
+    // Lights in the fixed-size constant-buffer arrays (MAX_POINT_LIGHTS in
+    // DeferredLighting.hlsl and its mirrors): what the passes without clustered light
+    // lists see - the radiance probes and cascades, voxel GI, the path tracer, the
+    // ray-traced subsurface pass and particle lighting. The scene renderer hands them
+    // the kMaxPointLights most important of the scene's lights.
     static constexpr int kMaxPointLights = 16;
+    // Lights a scene can have. The deferred resolve, the fog and RTGI read all of them
+    // through LightClusterRenderer's structured buffer and clustered lists.
+    static constexpr int kMaxSceneLights = 256;
     static constexpr int kMaxShadowCastingPointLights = 4;
     static constexpr int kPointShadowFacesPerLight = 6;
 
@@ -117,6 +132,16 @@ public:
         UINT                        width,
         UINT                        height) const;
 
+    // Bind the G-Buffer RTs and scene depth again, part-way through the
+    // geometry pass, without clearing anything or changing resource states:
+    // for a pass that interrupts the geometry pass with compute work (the
+    // virtualized-geometry occlusion pass reads the depth drawn so far).
+    void RebindGeometryTargets(
+        ID3D12GraphicsCommandList* commandList,
+        D3D12_CPU_DESCRIPTOR_HANDLE sceneDsvHandle,
+        UINT                        width,
+        UINT                        height) const;
+
     // Transition G-Buffer RTs back to shader-resource state.
     // Call this after all geometry draw calls are finished.
     void EndGeometryPass(ID3D12GraphicsCommandList* commandList) const;
@@ -135,11 +160,18 @@ public:
         const DirectX::XMFLOAT4X4& invViewProj,
         const DirectX::XMFLOAT3&   cameraPosition);
 
-    // Upload shadow map parameters.
+    // Upload shadow map parameters. Turns the virtual shadow map off.
     void SetShadowData(
         const DirectX::XMFLOAT4X4& lightViewProjection,
         float                       shadowMapSize,
         D3D12_GPU_DESCRIPTOR_HANDLE shadowSrvHandle);
+
+    // Shadow the sun with the virtual shadow map instead (VirtualShadowMapRenderer):
+    // the pool takes the sun shadow map's slot (t4) and the page table binds at t11.
+    void SetVirtualShadowMap(
+        const VsmGpuConstants&      constants,
+        D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+        D3D12_GPU_DESCRIPTOR_HANDLE poolSrvHandle);
 
     // Supply the DXR GI accumulation texture SRV and an intensity multiplier.
     // Call with handle={} and intensity=0.0f to disable GI contribution.
@@ -159,15 +191,42 @@ public:
     // Forward the RTGI debug mode so deferred lighting can show specular-only output.
     void SetRtgiDebugView(int debugView);
 
+    // Shade with the Disney principled BRDF (true) or the original Lambert diffuse and
+    // Cook-Torrance specular (false).
+    void SetDisneyBrdf(bool enabled);
+
     // Supply the RTAO output texture SRV and an intensity multiplier.
     // Call with handle={} and intensity=0.0f to disable RTAO contribution.
     void SetAoSrv(D3D12_GPU_DESCRIPTOR_HANDLE aoSrvHandle, float intensity, int debugView = 0);
+
+    // How strongly the bound AO also darkens point, spot and rect lights' direct light
+    // (0 = ambient and GI only, 1 = fully). Without it AO is invisible wherever local
+    // lights rather than the sky light a space.
+    void SetAoDirectOcclusion(float amount);
+
+    // Ray-traced shadows (RtShadows). A null handle keeps that light's shadow maps.
+    void SetRtShadows(D3D12_GPU_DESCRIPTOR_HANDLE sunVisibilitySrv,
+                      D3D12_GPU_DESCRIPTOR_HANDLE localVisibilitySrv,
+                      int debugView);
 
     // Supply the accumulated volumetric fog 3D texture SRV.
     void SetVolumetricFogSrv(D3D12_GPU_DESCRIPTOR_HANDLE fogSrvHandle, const VolumetricFogSettings* settings);
     void SetPointShadowSrv(D3D12_GPU_DESCRIPTOR_HANDLE pointShadowSrvHandle, int activeShadowLightCount, float shadowMapSize, float shadowBias);
     void SetPointShadowMatrices(const DirectX::XMFLOAT4X4* faceViewProjections, int activeShadowLightCount);
     void SetPointShadowDebug(int debugView, int filterRadius, float seamBlendDistance, float normalOffset);
+
+    // The scene's lights and their clustered lists (LightClusterRenderer::GetBindings),
+    // which the resolve shades with. Must be set before ResolveLight.
+    void SetLightClusters(D3D12_GPU_VIRTUAL_ADDRESS constants, D3D12_GPU_VIRTUAL_ADDRESS lights,
+                          D3D12_GPU_VIRTUAL_ADDRESS extras, D3D12_GPU_VIRTUAL_ADDRESS viewMasks,
+                          D3D12_GPU_VIRTUAL_ADDRESS gridMasks)
+    {
+        mLightClusterAddresses[0] = constants;
+        mLightClusterAddresses[1] = lights;
+        mLightClusterAddresses[2] = extras;
+        mLightClusterAddresses[3] = viewMasks;
+        mLightClusterAddresses[4] = gridMasks;
+    }
 
     // Subsurface scattering for the next ResolveLight(). With a constants address, the
     // resolve switches to the pipeline variant that also writes each subsurface pixel's
@@ -201,6 +260,10 @@ public:
         int                         PointShadowLightCount = 0;
         D3D12_GPU_DESCRIPTOR_HANDLE PointShadowSrv{};
         DirectX::XMFLOAT4X4         PointFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+        // Virtual shadow map: when Vsm.Enabled, SunShadowSrv is its page pool, which
+        // rests in ALL_SHADER_RESOURCE.
+        VsmGpuConstants             Vsm{};
+        D3D12_GPU_VIRTUAL_ADDRESS   VsmPageTable = 0;
     };
     const ShadowSnapshot& GetShadowSnapshot() const { return mCpuShadows; }
 
@@ -221,6 +284,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetAlbedoRtv()   const { return mRtvHandles[0]; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetNormalRtv()   const { return mRtvHandles[1]; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetMaterialRtv() const { return mRtvHandles[2]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetEdgeRtv()     const { return mRtvHandles[3]; }
 
     // G-Buffer SRV GPU handles for binding in the lighting shader.
     const GBufferSrvs& GetSrvs() const { return mSrvs; }
@@ -228,16 +292,17 @@ public:
     const GBufferSrvs& GetDebugSrvs() const { return mDebugSrvs; }
 
     // Raw G-Buffer resource pointers for resource-barrier transitions (e.g. before DXR).
-    // Index: 0 = albedo, 1 = normal, 2 = material.
+    // Index: 0 = albedo, 1 = normal, 2 = material, 3 = edge, 4-5 = principled.
+    static constexpr UINT kGBufferTargetCount = PrincipledGBuffer::kGeometryPassTargetCount;
     ID3D12Resource* GetGBufferResource(UINT index) const
     {
-        return (index < 3u) ? mGBufferResources[index].Get() : nullptr;
+        return (index < kGBufferTargetCount) ? mGBufferResources[index].Get() : nullptr;
     }
 
     // Get MSAA G-Buffer resource (source for resolve). Returns nullptr if MSAA disabled.
     ID3D12Resource* GetMsaaGBufferResource(UINT index) const
     {
-        return (index < 3u) ? mMsaaGBufferResources[index].Get() : nullptr;
+        return (index < kGBufferTargetCount) ? mMsaaGBufferResources[index].Get() : nullptr;
     }
 
     bool IsMsaaEnabled() const { return mMsaaSettings.Enabled; }
@@ -287,6 +352,16 @@ private:
         int               PointShadowFilterRadius = 1;
         float             PointShadowSeamBlendDistance = 0.05f;
         float             PointShadowNormalOffset = 1.0f;
+        // 1 = Disney principled BRDF (PrincipledBrdf.hlsli), 0 = the original Lambert +
+        // Cook-Torrance model.
+        int               DisneyBrdf = 1;
+        // Ray-traced shadows (RtShadows): 1 = the sun / the listed local lights read
+        // their visibility from t14 / t15 instead of the shadow maps.
+        int               RtSunShadow = 0;
+        int               RtLocalShadows = 0;
+        // How much the ambient occlusion darkens local lights' direct light (0..1).
+        float             AoDirectOcclusion = 0.0f;
+        int               RtShadowDebugView = 0;
     };
     // LightingConstants is ~576 bytes; CB is allocated rounded up to 256 alignment.
 
@@ -298,19 +373,13 @@ private:
         float               PointShadowMapSize;
         float               PointShadowBias;
         DirectX::XMFLOAT4X4 PointShadowFaceViewProj[kMaxShadowCastingPointLights * kPointShadowFacesPerLight]{};
+        VsmGpuConstants     Vsm{};
     };
 
     struct alignas(256) ProbeConstants
     {
-        uint32_t ProbeGridX = 0;
-        uint32_t ProbeGridY = 0;
-        uint32_t ProbeGridZ = 0;
-        float    ProbeSpacing = 1.0f;
-        float    ProbeOriginX = 0.0f;
-        float    ProbeOriginY = 0.0f;
-        float    ProbeOriginZ = 0.0f;
-        float    Pad0 = 0.0f;
-        std::byte Padding[224]{};
+        RadianceProbeFieldGpu Field{};
+        std::byte Padding[256 - sizeof(RadianceProbeFieldGpu)]{};
     };
     static_assert(sizeof(ProbeConstants) == 256);
 
@@ -319,24 +388,24 @@ private:
     bool CreateConstantBuffers();
 
     // MSAA G-Buffer resources (source for resolve, only created if MSAA enabled).
-    Microsoft::WRL::ComPtr<ID3D12Resource> mMsaaGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12Resource> mMsaaGBufferResources[kGBufferTargetCount];
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mMsaaRtvHeap;
-    D3D12_CPU_DESCRIPTOR_HANDLE            mMsaaRtvHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mMsaaRtvHandles[kGBufferTargetCount]{};
 
-    // Single-sample G-Buffer resources (albedo, normal, material).
+    // Single-sample G-Buffer resources (albedo, normal, material, edge, principled x2).
     // These are always created and used for lighting (resolve targets if MSAA enabled).
-    Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[kGBufferTargetCount];
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap;
-    D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[kGBufferTargetCount]{};
     GBufferSrvs                            mSrvs{};
 
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> mRetiredGBufferResources;
     std::vector<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>> mRetiredGBufferDescriptorHeaps;
 
     // CPU handles matching the SRV allocations (kept for re-creating SRVs on resize).
-    D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[kGBufferTargetCount]{};
     GBufferSrvs                 mDebugSrvs{};
-    D3D12_CPU_DESCRIPTOR_HANDLE mDebugSrvCpuHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mDebugSrvCpuHandles[kGBufferTargetCount]{};
 
     // Current MSAA configuration.
     MsaaSettings mMsaaSettings{};
@@ -358,6 +427,15 @@ private:
     D3D12_GPU_VIRTUAL_ADDRESS   mSubsurfaceConstants = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE mSubsurfaceDiffuseRtv{};
 
+    // Root parameters 16..20: b0, t0..t3 in space 7 (LightClusters.hlsli).
+    static constexpr UINT       kLightClusterRootIndex = 16;
+    D3D12_GPU_VIRTUAL_ADDRESS   mLightClusterAddresses[5]{};
+
+    // Root parameters 21, 22: ray-traced sun visibility (t14), local light pairs (t15).
+    static constexpr UINT       kRtShadowRootIndex = kLightClusterRootIndex + 5;
+    D3D12_GPU_DESCRIPTOR_HANDLE mRtSunShadowSrv{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mRtLocalShadowSrv{};
+
     DirectX::XMFLOAT3 mCpuSunDirection{ 0.0f, 0.0f, -1.0f };
     DirectX::XMFLOAT3 mCpuSunColor{ 0.0f, 0.0f, 0.0f };
     DirectX::XMFLOAT3 mCpuSkyAmbient{ 0.0f, 0.0f, 0.0f };
@@ -366,20 +444,52 @@ private:
     ShadowSnapshot    mCpuShadows{};
 
     // Constant buffers.
+    //
+    // The mMapped*CB pointers the setters write through are CPU-side mirrors,
+    // not GPU memory. ResolveLight() snapshots all four into a fresh slot of a
+    // ring and binds that slot. They used to be single mapped copies, and with
+    // three frames in flight every setter overwrote constants that up to two
+    // earlier frames were still shading with: while the camera moved, the
+    // inverse view-projection and the probe-grid origin tore between frames,
+    // so pixels looked up the wrong probes - often ones buried in walls - and
+    // flashed black.
+    //
+    // More slots than frames in flight, because the pass can be recorded
+    // more than once per frame.
+    static constexpr UINT kCbRingSlots = 8;
+    // Advanced by ResolveLight(), which is const: the ring cursor is
+    // bookkeeping, not part of the pass's observable state.
+    mutable UINT mCbRingSlot = 0;
+
     Microsoft::WRL::ComPtr<ID3D12Resource> mCameraCB;
+    std::byte*                              mGpuCameraCB = nullptr;
+    std::unique_ptr<CameraConstants>        mCameraMirror;
     CameraConstants*                        mMappedCameraCB  = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mLightingCB;
+    std::byte*                              mGpuLightingCB = nullptr;
+    std::unique_ptr<LightingConstants>      mLightingMirror;
     LightingConstants*                      mMappedLightingCB = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mShadowCB;
+    std::byte*                              mGpuShadowCB = nullptr;
+    std::unique_ptr<ShadowConstants>        mShadowMirror;
     ShadowConstants*                        mMappedShadowCB   = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mProbeCB;
+    std::byte*                              mGpuProbeCB = nullptr;
+    std::unique_ptr<ProbeConstants>         mProbeMirror;
     ProbeConstants*                         mMappedProbeCB    = nullptr;
 
-    // Shadow SRV from last SetShadowData() call.
+    // One ring slot's stride for a constant block: its size rounded up to the
+    // 256-byte CBV alignment.
+    template <typename T>
+    static constexpr UINT64 CbStride() { return (sizeof(T) + 255ull) & ~255ull; }
+
+    // Shadow SRV from last SetShadowData() / SetVirtualShadowMap() call.
     D3D12_GPU_DESCRIPTOR_HANDLE mShadowSrvHandle{};
+    // Virtual shadow map page table (t11), or 0.
+    D3D12_GPU_VIRTUAL_ADDRESS   mVsmPageTable = 0;
 
     // GI SRV and intensity from last SetGiSrv() call.
     // Handle is zero-initialised; zero ptr means no GI contribution.

@@ -171,14 +171,16 @@
     <ClInclude Include="Game.h" />
     <ClInclude Include="FarkleConfig.h" />
     <ClInclude Include="GameAPI.h" />
-    <ClInclude Include="GameCamera.h" />
+    <ClInclude Include="..\Network\NetworkAPI.h" />
+    <ClInclude Include="..\System\include\System\CharacterMovement.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Game.cpp" />
-    <ClCompile Include="GameCamera.cpp" />
+    <ClCompile Include="GameAchievements.cpp" />
+    <ClCompile Include="GameOnline.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

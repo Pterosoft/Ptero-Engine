@@ -24,6 +24,63 @@ namespace
         // root the .ppak archives serve (see System/DataFiles.h).
         return DataFiles::FindDataDirectory();
     }
+
+    // One separable box-blur pass (radius `r`) over a row-major float grid,
+    // clamped at the borders.  Running sums keep it O(1) per sample.
+    void BoxBlur(std::vector<float>& values, int width, int height, int r, std::vector<float>& scratch)
+    {
+        scratch.resize(values.size());
+        const float inv = 1.0f / static_cast<float>(2 * r + 1);
+        for (int y = 0; y < height; ++y)
+        {
+            const float* row = values.data() + static_cast<size_t>(y) * width;
+            float* out = scratch.data() + static_cast<size_t>(y) * width;
+            float sum = 0.0f;
+            for (int k = -r; k <= r; ++k)
+                sum += row[(std::clamp)(k, 0, width - 1)];
+            for (int x = 0; x < width; ++x)
+            {
+                out[x] = sum * inv;
+                sum += row[(std::min)(x + r + 1, width - 1)] - row[(std::max)(x - r, 0)];
+            }
+        }
+        for (int x = 0; x < width; ++x)
+        {
+            const auto at = [&](int y) { return scratch[static_cast<size_t>((std::clamp)(y, 0, height - 1)) * width + x]; };
+            float sum = 0.0f;
+            for (int k = -r; k <= r; ++k)
+                sum += at(k);
+            for (int y = 0; y < height; ++y)
+            {
+                values[static_cast<size_t>(y) * width + x] = sum * inv;
+                sum += at(y + r + 1) - at(y - r);
+            }
+        }
+    }
+
+    // An 8-bit heightmap only has 256 levels, so a gentle slope becomes wide
+    // flat terraces joined by one-sample cliffs.  The mesh normals then flip
+    // between "flat" and "steep" in blotches that read as broken shadowing.
+    // Reconstruct the slope instead: blur, then clamp every sample back into
+    // the half-step band its stored value stands for, and repeat.  Terraces
+    // turn into ramps, while no height moves further from the source than the
+    // quantisation already put it.
+    void DequantizeHeights(std::vector<float>& heights, int width, int height, float step)
+    {
+        if (width < 2 || height < 2)
+            return;
+        const std::vector<float> original = heights;
+        const float halfStep = step * 0.5f;
+        std::vector<float> scratch;
+        constexpr int kIterations = 6;
+        constexpr int kRadius = 4;
+        for (int iteration = 0; iteration < kIterations; ++iteration)
+        {
+            BoxBlur(heights, width, height, kRadius, scratch);
+            for (size_t i = 0; i < heights.size(); ++i)
+                heights[i] = (std::clamp)(heights[i], original[i] - halfStep, original[i] + halfStep);
+        }
+    }
 }
 
 namespace HeightmapImporter
@@ -164,10 +221,13 @@ namespace HeightmapImporter
         }
 
         // Convert to a known channel layout so we can read the first
-        // channel as a height value.  R8_UNORM keeps the R channel intact;
-        // for HDR sources (32-bit float per channel) we convert through
-        // R32_FLOAT and then rescale to 0..65535.  BC-compressed sources
-        // (e.g. an existing .dds) are decompressed to RGBA8.
+        // channel as a height value.  Sources with more than 8 bits per
+        // channel (16-bit PNG/TIFF) go through R16_UNORM so no precision is
+        // lost; everything else through R8_UNORM.  For HDR sources (32-bit
+        // float per channel) we convert through R32_FLOAT and then rescale
+        // to 0..65535.  BC-compressed sources (e.g. an existing .dds) are
+        // decompressed to RGBA8.
+        const std::size_t sourceBits = DirectX::BitsPerColor(meta.format);
         DirectX::ScratchImage converted;
         if (meta.format == DXGI_FORMAT_R32_FLOAT)
         {
@@ -185,6 +245,16 @@ namespace HeightmapImporter
                 converted = std::move(decompressed);
                 meta = converted.GetMetadata();
             }
+        }
+        else if (sourceBits > 8)
+        {
+            // Converting a 16-bit greyscale PNG to R8 threw away the low byte,
+            // terracing a 32 m height range into 12.5 cm steps.
+            hr = (meta.format == DXGI_FORMAT_R16_UNORM)
+                ? converted.InitializeFromImage(*image.GetImage(0, 0, 0))
+                : DirectX::Convert(image.GetImages(), image.GetImageCount(), meta,
+                                   DXGI_FORMAT_R16_UNORM, DirectX::TEX_FILTER_DEFAULT,
+                                   DirectX::TEX_THRESHOLD_DEFAULT, converted);
         }
         else
         {
@@ -223,10 +293,12 @@ namespace HeightmapImporter
         outSamples.assign(static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight), 0);
 
         const bool   isFloat    = (topMip->format == DXGI_FORMAT_R32_FLOAT);
+        const bool   isSingle16 = (topMip->format == DXGI_FORMAT_R16_UNORM);
         const bool   isSingle8  = (topMip->format == DXGI_FORMAT_R8_UNORM);
         const uint8_t* pixels   = topMip->pixels;
         const size_t  rowPitch  = topMip->rowPitch;
 
+        std::vector<float> heights(outSamples.size());
         for (size_t y = 0; y < static_cast<size_t>(outHeight); ++y)
         {
             const uint8_t* row = pixels + y * rowPitch;
@@ -239,6 +311,10 @@ namespace HeightmapImporter
                     const float sample = reinterpret_cast<const float*>(row)[x];
                     normalisedHeight = (sample < 0.0f) ? 0.0f : (sample > 1.0f ? 1.0f : sample);
                 }
+                else if (isSingle16)
+                {
+                    normalisedHeight = static_cast<float>(reinterpret_cast<const std::uint16_t*>(row)[x]) / 65535.0f;
+                }
                 else if (isSingle8)
                 {
                     normalisedHeight = static_cast<float>(row[x]) / 255.0f;
@@ -247,12 +323,20 @@ namespace HeightmapImporter
                 {
                     normalisedHeight = static_cast<float>(row[x * 4]) / 255.0f;
                 }
-
-                const float scaled = normalisedHeight * 65535.0f + 0.5f;
-                outSamples[y * static_cast<size_t>(outWidth) + x] =
-                    static_cast<std::uint16_t>((scaled < 0.0f) ? 0.0f :
-                                               (scaled > 65535.0f ? 65535.0f : scaled));
+                heights[y * static_cast<size_t>(outWidth) + x] = normalisedHeight;
             }
+        }
+
+        // 8-bit (and BC-compressed, which decodes to 8-bit) sources are
+        // terraced; see DequantizeHeights.
+        if (!isFloat && !isSingle16 && sourceBits <= 8)
+            DequantizeHeights(heights, outWidth, outHeight, 1.0f / 255.0f);
+
+        for (size_t i = 0; i < heights.size(); ++i)
+        {
+            const float scaled = heights[i] * 65535.0f + 0.5f;
+            outSamples[i] = static_cast<std::uint16_t>((scaled < 0.0f) ? 0.0f :
+                                                       (scaled > 65535.0f ? 65535.0f : scaled));
         }
 
         if (shouldUninitialize) CoUninitialize();

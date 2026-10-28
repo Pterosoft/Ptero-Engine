@@ -159,13 +159,17 @@ my %groupTitle = (
     'fog'     => 'Volumetric fog',
     'clouds'  => 'Volumetric clouds',
     'shadow'  => 'Point shadows',
+    'shadow.vsm' => 'Virtual shadow maps',
+    'shadow.rt'  => 'Ray-traced shadows',
 );
 my @order = qw(r gi rtgi rc probes rtao gtao ssr taa smaa msaa dlss sharpen
-               bloom chroma agx tod wind fog clouds shadow);
+               bloom chroma agx tod wind fog clouds shadow shadow.vsm shadow.rt);
 
 my %byGroup;
 for my $row (@rows) {
     my ($g) = $row->{name} =~ /^([^.]+)/;
+    # The shadow cvars share a prefix; virtual and ray-traced ones get their own sections.
+    $g = $1 if $row->{name} =~ /^(shadow\.(?:vsm|rt))\./;
     push @{$byGroup{$g}}, $row;
 }
 

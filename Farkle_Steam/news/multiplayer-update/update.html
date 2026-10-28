@@ -1,0 +1,207 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: Title; src: url("../../../Website/dist/assets/title.ttf"); }
+@font-face { font-family: Body; src: url("../../../Website/dist/assets/body.ttf"); }
+html, body { margin: 0; overflow: hidden; background: #120a05; }
+.stage { position: relative; overflow: hidden; }
+.shot { position: absolute; inset: 0; background: url("source.webp") no-repeat; background-size: cover; }
+.shade { position: absolute; inset: 0; }
+.content { position: absolute; }
+.logo { display: block; filter: drop-shadow(0 6px 18px rgba(0,0,0,.7)); }
+.kicker { font-family: Body, Georgia, serif; color: #e9c98f; letter-spacing: .32em; text-transform: uppercase; }
+.headline { font-family: Title, Georgia, serif; color: #f6e6c4; line-height: 1; margin: 0; text-shadow: 0 4px 20px rgba(0,0,0,.8); }
+.rule { height: 3px; background: linear-gradient(90deg, #c9a466, rgba(201,164,102,0)); }
+.features { display: grid; grid-template-columns: auto auto; }
+.feature { display: flex; align-items: center; font-family: Body, Georgia, serif; color: #f6e6c4; white-space: nowrap;
+  text-shadow: 0 2px 10px rgba(0,0,0,.8); }
+.icon { flex: none; display: grid; place-items: center; border: 2px solid #c9a466; border-radius: 50%;
+  background: rgba(20,12,6,.75); box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+.icon svg { fill: none; stroke: #e9c98f; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.icon svg .pip { fill: #e9c98f; stroke: none; }
+.tag { display: inline-block; font-family: Body, Georgia, serif; background: #c9a466; color: #1c0f06; border-radius: 6px;
+  letter-spacing: .12em; text-transform: uppercase; box-shadow: 0 10px 30px rgba(0,0,0,.6), inset 0 0 0 3px rgba(28,15,6,.25); }
+
+/* 1920x1080 key art: Steam body image and IndieDB headline */
+.key .stage { width: 1920px; height: 1080px; }
+.key .shot { background-size: 112% auto; background-position: 100% 60%; }
+.key .shade { background:
+  linear-gradient(90deg, rgba(10,5,2,.9) 0%, rgba(10,5,2,.72) 30%, rgba(10,5,2,.2) 52%, rgba(10,5,2,0) 64%),
+  linear-gradient(0deg, rgba(10,5,2,.5) 0%, rgba(10,5,2,0) 25%),
+  radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 65%, rgba(0,0,0,.3) 100%); }
+.key .content { left: 120px; top: 70px; }
+.key .logo { width: 560px; margin-left: -40px; }
+.key .kicker { font-size: 30px; margin: -40px 0 18px 4px; }
+.key .headline { font-size: 112px; }
+.key .rule { width: 360px; margin: 30px 0 40px 4px; }
+.key .features { gap: 30px 56px; }
+.key .feature { font-size: 36px; gap: 20px; }
+.key .icon { width: 72px; height: 72px; }
+.key .icon svg { width: 40px; height: 40px; }
+.key .tag { font-size: 26px; padding: 12px 22px 9px; margin-top: 52px; }
+
+/* 800x450 event cover */
+.cover .stage { width: 800px; height: 450px; }
+.cover .shot { background-size: 125% auto; background-position: 100% 60%; }
+.cover .shade { background:
+  linear-gradient(90deg, rgba(10,5,2,.9) 0%, rgba(10,5,2,.66) 36%, rgba(10,5,2,.12) 62%, rgba(10,5,2,0) 72%),
+  radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 60%, rgba(0,0,0,.35) 100%); }
+.cover .content { left: 44px; top: 22px; }
+.cover .logo { width: 290px; margin-left: -22px; }
+.cover .kicker { font-size: 15px; margin: -22px 0 10px 2px; }
+.cover .headline { font-size: 64px; }
+.cover .icons { display: flex; gap: 14px; margin-top: 26px; }
+.cover .icon { width: 52px; height: 52px; }
+.cover .icon svg { width: 28px; height: 28px; }
+
+/* 1920x622 event header: one wide row */
+.header .stage { width: 1920px; height: 622px; }
+.header .shot { background-size: 110% auto; background-position: 100% 62%; }
+.header .shade { background:
+  linear-gradient(90deg, rgba(10,5,2,.92) 0%, rgba(10,5,2,.82) 36%, rgba(10,5,2,.45) 56%, rgba(10,5,2,0) 72%),
+  radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 60%, rgba(0,0,0,.35) 100%); }
+.header .content { left: 120px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 70px; }
+.header .logo { width: 500px; margin-left: -30px; }
+.header .divider { width: 3px; align-self: stretch; background: linear-gradient(180deg, rgba(201,164,102,0), #c9a466, rgba(201,164,102,0)); }
+.header .kicker { font-size: 26px; margin: 0 0 14px 4px; }
+.header .headline { font-size: 100px; }
+.header .icons { display: flex; gap: 20px; margin-top: 30px; }
+.header .icon { width: 66px; height: 66px; }
+.header .icon svg { width: 36px; height: 36px; }
+
+/* 1920x1080 feature board */
+.board .stage { width: 1920px; height: 1080px; }
+.board .shot { filter: blur(6px) brightness(.55); inset: -20px; background-position: 50% 60%; }
+.board .shade { background: radial-gradient(ellipse at 50% 45%, rgba(10,5,2,.35) 0%, rgba(10,5,2,.8) 100%); }
+.board .content { inset: 0; display: flex; flex-direction: column; align-items: center; }
+.board .kicker { font-size: 30px; margin-top: 96px; }
+.board .headline { font-size: 104px; margin-top: 14px; }
+.board .rule { width: 520px; margin: 34px 0 64px;
+  background: linear-gradient(90deg, rgba(201,164,102,0), #c9a466, rgba(201,164,102,0)); }
+.cards { display: flex; gap: 36px; }
+.card { width: 380px; box-sizing: border-box; padding: 48px 36px 52px; text-align: center;
+  background: linear-gradient(180deg, rgba(34,20,10,.88), rgba(20,12,6,.92)); border: 2px solid rgba(201,164,102,.75);
+  border-radius: 10px; box-shadow: 0 20px 50px rgba(0,0,0,.6), inset 0 0 0 6px rgba(201,164,102,.08); }
+.card .icon { width: 112px; height: 112px; margin: 0 auto 34px; }
+.card .icon svg { width: 60px; height: 60px; stroke-width: 1.4; }
+.card h2 { font-family: Title, Georgia, serif; font-weight: normal; color: #f6e6c4; font-size: 52px; line-height: 1; margin: 0 0 22px; }
+.card p { font-family: Body, Georgia, serif; color: #dcc59c; font-size: 27px; line-height: 1.35; margin: 0; }
+.board .logo { width: 300px; margin-top: auto; margin-bottom: 18px; }
+
+/* small extra line under the header */
+.also { font-family: Body, Georgia, serif; color: #e9c98f; text-shadow: 0 2px 10px rgba(0,0,0,.8); }
+.also b { color: #f6e6c4; font-weight: normal; }
+.header .also { font-size: 26px; margin: 22px 0 0 4px; }
+
+/* 1920x1080 lighting board: ray-traced shadows and AO */
+.light .stage { width: 1920px; height: 1080px; }
+.light .shot { filter: blur(2px) brightness(.62); inset: -8px; background-size: cover; background-position: 70% 60%; }
+.light .shade { background:
+  linear-gradient(0deg, rgba(10,5,2,.92) 0%, rgba(10,5,2,.55) 45%, rgba(10,5,2,.35) 100%),
+  radial-gradient(ellipse at 50% 40%, rgba(0,0,0,0) 40%, rgba(0,0,0,.5) 100%); }
+.light .content { inset: 0; display: flex; flex-direction: column; align-items: center; }
+.light .kicker { font-size: 30px; margin-top: 150px; }
+.light .headline { font-size: 104px; margin-top: 14px; }
+.light .rule { width: 520px; margin: 34px 0 80px;
+  background: linear-gradient(90deg, rgba(201,164,102,0), #c9a466, rgba(201,164,102,0)); }
+.light .cards { gap: 44px; }
+.light .card { width: 700px; display: flex; gap: 36px; align-items: center; text-align: left; padding: 44px 46px; }
+.light .card .icon { flex: none; margin: 0; width: 130px; height: 130px; }
+.light .card .icon svg { width: 72px; height: 72px; }
+.light .card h2 { font-size: 52px; margin-bottom: 18px; }
+.light .card p { font-size: 29px; }
+.light .note { font-family: Body, Georgia, serif; color: #dcc59c; font-size: 29px; margin-top: 70px; text-shadow: 0 2px 10px rgba(0,0,0,.8); }
+.light .note b { color: #f6e6c4; font-weight: normal; }
+.light .logo { width: 300px; margin-top: auto; margin-bottom: 18px; }
+.icon svg .soft { fill: rgba(233,201,143,.35); stroke: none; }
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <!-- two dice: Quick Match -->
+  <symbol id="i-match" viewBox="0 0 24 24">
+    <rect x="2" y="8.5" width="11" height="11" rx="2.2"/><circle class="pip" cx="5.2" cy="11.7" r="1"/><circle class="pip" cx="7.5" cy="14" r="1"/><circle class="pip" cx="9.8" cy="16.3" r="1"/>
+    <rect x="12.2" y="3.2" width="9.6" height="9.6" rx="2" transform="rotate(14 17 8)"/><circle class="pip" cx="15.3" cy="6.2" r=".95"/><circle class="pip" cx="18.6" cy="9.8" r=".95"/>
+  </symbol>
+  <!-- chair with a plus: take the open seat -->
+  <symbol id="i-seat" viewBox="0 0 24 24">
+    <path d="M6 3v18M6 13h10v8M6 13V3h5"/><path d="M6 17h10"/><path d="M19 3v6M16 6h6"/>
+  </symbol>
+  <!-- two people: Steam friends -->
+  <symbol id="i-friends" viewBox="0 0 24 24">
+    <circle cx="9" cy="8" r="3.6"/><path d="M2.4 20.5c0-3.8 2.9-6.4 6.6-6.4s6.6 2.6 6.6 6.4"/>
+    <circle cx="17.2" cy="9" r="2.8"/><path d="M17.4 14.2c2.6.1 4.4 2.3 4.4 5.3"/>
+  </symbol>
+  <!-- speech bubble with a microphone: voice and text chat -->
+  <symbol id="i-chat" viewBox="0 0 24 24">
+    <path d="M3 4.5h18v11.5h-9.5l-4.5 4v-4h-4z"/>
+    <rect x="10.4" y="6.6" width="3.2" height="5.4" rx="1.6"/><path d="M8.6 10.6a3.4 3.4 0 0 0 6.8 0M12 14v-.6"/>
+  </symbol>
+  <!-- a light, a die and the shadow it casts: ray-traced shadows -->
+  <symbol id="i-shadow" viewBox="0 0 24 24">
+    <circle cx="4.6" cy="4.6" r="2.2"/><path d="M4.6 .9v.8M.9 4.6h.8M7.5 4.6h.8M4.6 7.5v.8"/>
+    <path class="soft" d="M16 16l5.5 5.5h-7.8L10 16z"/>
+    <rect x="10" y="10" width="6" height="6" rx="1.2"/><circle class="pip" cx="13" cy="13" r=".9"/>
+  </symbol>
+  <!-- a ball resting in a corner, shaded where it meets the walls: ambient occlusion -->
+  <symbol id="i-ao" viewBox="0 0 24 24">
+    <ellipse class="soft" cx="10.5" cy="19.6" rx="8.5" ry="1.6"/>
+    <path class="soft" d="M17.2 18.4h3.2V9.5c-.9 3.2-1.8 6.4-3.2 8.9z"/>
+    <path d="M2 20.4h19M20.6 20.4V3"/>
+    <rect x="5" y="11.6" width="10" height="8.8" rx="1.8"/><circle class="pip" cx="7.8" cy="14.2" r=".95"/><circle class="pip" cx="12.2" cy="17.8" r=".95"/>
+  </symbol>
+</svg>
+
+<div class="stage">
+  <div class="shot"></div>
+  <div class="shade"></div>
+  <div class="content" id="content"></div>
+</div>
+
+<script>
+// ?layout=key|cover|header|board|light picks the image; render.cjs takes a screenshot of each
+const layout = new URLSearchParams(location.search).get('layout') || 'key';
+document.body.className = layout;
+const features = [
+  ['match',   'Quick Match',       'Get seated with another player looking for a game.'],
+  ['seat',    'Open Your Table',   'Play the AI until a player takes its seat.'],
+  ['friends', 'Invite Friends',    'Invite your Steam friends or join their table.'],
+  ['chat',    'Voice & Text Chat', 'Talk across the table, or keep it to text.'],
+];
+const lighting = [
+  ['shadow', 'Ray-Traced Shadows', 'Crisp where the dice touch the table, softer as they fall away. From the main light, or from the candles and the hearth too.'],
+  ['ao',     'Ray-Traced AO',      'Soft shading in corners, under the dice and around the table legs, traced against the whole room.'],
+];
+const icon = id => `<div class="icon"><svg viewBox="0 0 24 24"><use href="#i-${id}"/></svg></div>`;
+const logo = '<img class="logo" src="../../library/en/library_logo_transparent.png">';
+const html = {
+  key: `${logo}
+    <div class="kicker">Out now</div>
+    <h1 class="headline">Multiplayer<br>is Here</h1>
+    <div class="rule"></div>
+    <div class="features">${features.map(([id, name]) => `<div class="feature">${icon(id)}${name}</div>`).join('')}</div>
+    <div class="tag">New: ray-traced shadows &amp; AO</div>`,
+  cover: `${logo}
+    <div class="kicker">Out now</div>
+    <h1 class="headline">Multiplayer<br>is Here</h1>
+    <div class="icons">${features.map(([id]) => icon(id)).join('')}</div>`,
+  header: `${logo}<div class="divider"></div>
+    <div>
+      <div class="kicker">Out now</div>
+      <h1 class="headline">Multiplayer is Here</h1>
+      <div class="also">Plus <b>ray-traced shadows</b> and <b>ray-traced ambient occlusion</b></div>
+    </div>`,
+  board: `<div class="kicker">Out now</div>
+    <h1 class="headline">Company at the Table</h1>
+    <div class="rule"></div>
+    <div class="cards">${features.map(([id, name, text]) => `<div class="card">${icon(id)}<h2>${name}</h2><p>${text}</p></div>`).join('')}</div>
+    ${logo}`,
+  light: `<div class="kicker">Also in this update</div>
+    <h1 class="headline">Ray-Traced Light</h1>
+    <div class="rule"></div>
+    <div class="cards">${lighting.map(([id, name, text]) => `<div class="card">${icon(id)}<div><h2>${name}</h2><p>${text}</p></div></div>`).join('')}</div>
+    <div class="note">Turn them on in <b>Settings › Lighting</b>. Needs a graphics card with DirectX Raytracing.</div>
+    ${logo}`,
+};
+document.getElementById('content').innerHTML = html[layout];
+</script>
+</body></html>

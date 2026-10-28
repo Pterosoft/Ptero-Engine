@@ -29,7 +29,7 @@ float PteroEncodeSurfaceSpecular(float specular)
 
 // The same channel also carries the pixel's subsurface-scattering profile slot
 // (Subsurface.hlsli), packed into the integer part above the specular value:
-//     W = specular + 2 * slot,   specular in [0.001, 1], slot in [0, 15]
+//     W = +/-(specular + 2 * slot),   specular in [0.001, 1], slot in [0, 15]
 // Slot 0 means "no subsurface scattering", so every surface that never heard of
 // subsurface scattering writes exactly what it always did. A 32-bit float holds the
 // sum with ~2e-6 of precision left for the specular part, far below what matters.
@@ -38,8 +38,24 @@ float PteroEncodeSurfaceSpecularAndSubsurface(float specular, uint subsurfaceSlo
     return PteroEncodeSurfaceSpecular(specular) + 2.0f * (float)min(subsurfaceSlot, 15u);
 }
 
+// The sign of the channel is a third, independent field: negative marks vegetation leaves
+// (Vegetation.hlsl / VegetationBillboard.hlsl), which DPLE gives its foliage response.
+// Every stored value is at least kPteroMinStoredSpecular away from zero, so the sign is
+// never ambiguous, and both decoders below ignore it - a leaf shades exactly as it would
+// unflagged.
+float PteroEncodeFoliageSurfaceSpecular(float specular)
+{
+    return -PteroEncodeSurfaceSpecular(specular);
+}
+
+bool PteroIsFoliageSurface(float packedSpecular)
+{
+    return packedSpecular < 0.0f;
+}
+
 uint PteroDecodeSubsurfaceSlot(float packedSpecular)
 {
+    packedSpecular = abs(packedSpecular);
     return (packedSpecular >= 2.0f) ? min((uint)(packedSpecular * 0.5f), 15u) : 0u;
 }
 
@@ -49,6 +65,7 @@ uint PteroDecodeSubsurfaceSlot(float packedSpecular)
 // Any subsurface slot packed above the specular value is stripped first.
 float PteroDecodeSurfaceSpecular(float packedSpecular)
 {
+    packedSpecular = abs(packedSpecular);
     packedSpecular -= 2.0f * (float)PteroDecodeSubsurfaceSlot(packedSpecular);
     return (packedSpecular > 0.0f) ? saturate(packedSpecular) : kPteroDefaultSpecular;
 }

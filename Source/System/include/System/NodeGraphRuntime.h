@@ -1,5 +1,6 @@
 #pragma once
 
+#include "System/CharacterMovement.h"
 #include "System/NodeGraphDocument.h"
 
 #include <cstdint>
@@ -19,6 +20,27 @@ struct NodeGraphTransform
 
 // The game camera in the engine's left-handed Z-up space, angles in radians:
 //   forward = (sin(Yaw) * cos(Pitch), cos(Yaw) * cos(Pitch), sin(Pitch))
+// Nearest surface along a Raycast: a level mesh, a terrain or a rigid body.
+struct NodeGraphRayHit
+{
+    double Distance = 0.0;
+    double Position[3]{};
+    double Normal[3]{ 0.0, 0.0, 1.0 };
+    std::uint64_t EntityId = 0; // 0 when the surface belongs to no entity
+};
+
+// Two physics bodies that started touching. An id is 0 for the player, who is not an
+// entity; PlayerInvolved says when that is the case.
+struct NodeGraphPhysicsHit
+{
+    std::uint64_t EntityA = 0;
+    std::uint64_t EntityB = 0;
+    bool PlayerInvolved = false;
+    double Position[3]{};
+    double Normal[3]{ 0.0, 0.0, 1.0 };
+    double ImpactSpeed = 0.0;
+};
+
 struct NodeGraphCameraPose
 {
     double Position[3]{};
@@ -80,6 +102,21 @@ public:
     // Starts or stops the entity's Audio Emitter.
     virtual bool SetEntityAudioPlaying(std::uint64_t entityId, bool playing) = 0;
 
+    // Rigid bodies (Physics.dll). Forces, impulses and velocities act on an entity with a
+    // Dynamic Rigid Body and fail for anything else. Vectors are world space: N*s for an
+    // impulse, N for a force, m/s for velocity, radians per second for spin.
+    virtual bool AddEntityImpulse(std::uint64_t entityId, const double impulse[3]) = 0;
+    virtual bool AddEntityForce(std::uint64_t entityId, const double force[3]) = 0;
+    virtual bool SetEntityVelocity(std::uint64_t entityId, const double velocity[3]) = 0;
+    virtual bool GetEntityVelocity(std::uint64_t entityId, double velocity[3]) = 0;
+    virtual bool SetEntityAngularVelocity(std::uint64_t entityId, const double velocity[3]) = 0;
+    // Against everything solid except the player. `direction` need not be normalised.
+    virtual bool Raycast(const double origin[3], const double direction[3], double maxDistance,
+                         NodeGraphRayHit& hit) = 0;
+    // The collisions that began in the latest physics step. The host steps physics after
+    // the graphs tick, so a graph sees a frame's hits on the next frame's tick.
+    virtual const std::vector<NodeGraphPhysicsHit>& GetPhysicsHits() = 0;
+
     // The camera the frame will render with. SetCamera is applied as-is; the runtime is
     // what re-applies a held pose every frame over the game module's own camera.
     virtual NodeGraphCameraPose GetCamera() = 0;
@@ -99,6 +136,29 @@ public:
     virtual bool PollUiClick(std::string& elementId) = 0;
     virtual void ToggleFullscreen() = 0;
     virtual bool IsStandalone() = 0;
+
+    // The player character, when the host runs it for a Node Graph controller (Game
+    // Settings > Player Controller). Null with the C++ controller, whose character lives
+    // inside Game.dll - the Character nodes then report that and do nothing. The host
+    // steps the character after the graphs have ticked, so input added on Tick moves it
+    // in the same frame.
+    virtual CharacterMovement* GetPlayerCharacter() = 0;
+    // Mouse movement this frame in pixels (+X right, +Y down); zero while not captured.
+    virtual void GetMouseDelta(double& x, double& y) = 0;
+    virtual void SetMouseCaptured(bool captured) = 0;
+    virtual bool IsMouseCaptured() = 0;
+
+    // Steam achievements and INT stats by their Steamworks API names. Without Steam they
+    // are kept for the play session only, so a graph can be tested from the editor.
+    // UnlockAchievement is true once unlocked, including when it already was.
+    virtual bool UnlockAchievement(const std::string& name) = 0;
+    virtual bool IsAchievementUnlocked(const std::string& name) = 0;
+    virtual bool ClearAchievement(const std::string& name) = 0;
+    // Steam's "progress / maximum" notification; it unlocks nothing.
+    virtual bool ShowAchievementProgress(const std::string& name, int progress, int maximum) = 0;
+    virtual bool GetStat(const std::string& name, int& value) = 0;
+    virtual bool SetStat(const std::string& name, int value) = 0;
+    virtual bool IsSteamRunning() = 0;
 };
 
 // One value flowing along a data connection. Graphs are loosely typed on purpose - a
@@ -168,6 +228,10 @@ public:
 
     float GetPlayTimeSeconds() const { return static_cast<float>(mPlayTimeSeconds); }
 
+    // True while Set Camera / Move Camera To hold the camera. The host checks this before
+    // putting the player character's view on screen, so a scripted camera shot wins.
+    bool IsCameraHeld() const { return mCameraHeld; }
+
 private:
     struct NodeState
     {
@@ -191,6 +255,11 @@ private:
         std::uint64_t TweenEntity = 0;
         double TweenFrom[5]{};
         double TweenTo[5]{};
+        // Raycast: the last result (Success is Hit). On Rigid Body Hit: the hit being
+        // reported, with Hit Player in Flag.
+        std::uint64_t ResultEntity = 0;
+        std::uint64_t ResultOtherEntity = 0;
+        double ResultValues[7]{}; // Raycast: distance, position, normal. Hit: speed, position.
     };
 
     struct RuntimeNode
@@ -213,6 +282,9 @@ private:
     // Fires one node that is an entry point, with a fresh step budget and depth.
     void FireEntry(int nodeIndex, int outPortIndex);
     void FireInputEvents();
+    void FireCharacterEvents();
+    void ExecuteCharacterNode(int nodeIndex);
+    NodeGraphValue EvaluateCharacterOutput(int nodeIndex, int outPortIndex);
     void AdvanceTweens(float deltaSeconds);
     void UpdatePlaylist();
     void PlayNextPlaylistTrack();
@@ -229,6 +301,9 @@ private:
     std::uint64_t ReadEntity(int nodeIndex);
     NodeGraphValue EvaluateEntityOutput(int nodeIndex, int outPortIndex);
     void ExecuteEntityNode(int nodeIndex);
+    void ExecutePhysicsNode(int nodeIndex);
+    NodeGraphValue EvaluatePhysicsOutput(int nodeIndex, int outPortIndex);
+    void FirePhysicsEvents();
     // The pose Get Camera reports: the held one while the graph owns the camera, since
     // the renderer's camera still shows the game module's pose until the tick ends.
     NodeGraphCameraPose CurrentCamera();
@@ -279,6 +354,14 @@ private:
     // each frame before the graph runs.
     bool mCameraHeld = false;
     NodeGraphCameraPose mCameraPose;
+
+    // The character's landing and jump counters as of the last tick. The character only
+    // counts; each runtime compares against what it saw, so a level graph and a player
+    // controller graph can both react to the same landing.
+    std::uint32_t mCharacterLandedSeen = 0;
+    std::uint32_t mCharacterJumpedSeen = 0;
+    // Said once per session, not once per frame, when Character nodes run without one.
+    bool mReportedNoCharacter = false;
 
     // Play Music Playlist. Lives on the runtime rather than a node: there is one music
     // channel, and whichever node last started music owns it.

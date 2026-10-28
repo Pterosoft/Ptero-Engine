@@ -15,6 +15,9 @@
 // so the specular channel is valid across the whole G-Buffer, including at MSAA edges
 // where the resolve averages this channel with a neighbouring surface.
 #include "SurfaceSpecular.hlsli"
+// Foliage writes no triangle edges for Analytic Edge AA: its silhouette is the alpha
+// test's, which the triangles know nothing about.
+#include "AnalyticEdge.hlsli"
 
 cbuffer VegetationPassConstants : register(b0)
 {
@@ -96,6 +99,10 @@ struct PSOutput
     float4 Albedo   : SV_Target0;
     float4 Normal   : SV_Target1;
     float4 Material : SV_Target2;
+    uint4  Edge     : SV_Target3;   // always kPteroNoEdge
+    // Disney principled parameters (PrincipledBrdf.hlsli); foliage has none, so zero.
+    float4 Principled0 : SV_Target4;
+    float4 Principled1 : SV_Target5;
 };
 
 float2 OctWrap(float2 v)
@@ -192,11 +199,20 @@ PSOutput PSMain(PSInput input)
 
     const float3 N = normalize(input.WorldNormal);
 
-    output.Albedo   = float4(texColor.rgb * gBaseColorTint.rgb, texColor.a * gBaseColorTint.a);
-    output.Normal   = float4(EncodeOctNormal(N), input.Position.z, PteroEncodeSurfaceSpecular(kPteroDefaultSpecular));
+    // Opaque once past the alpha test; see Vegetation.hlsl. The lighting pass blends by
+    // this channel.
+    output.Albedo   = float4(texColor.rgb * gBaseColorTint.rgb, 1.0f);
+    // Same foliage flag as the mesh LODs (Vegetation.hlsl), so DPLE's response does not
+    // change at the billboard transition.
+    output.Normal   = float4(EncodeOctNormal(N), input.Position.z,
+        gTranslucency > 0.0f ? PteroEncodeFoliageSurfaceSpecular(kPteroDefaultSpecular)
+                             : PteroEncodeSurfaceSpecular(kPteroDefaultSpecular));
     // No material maps at billboard range; the scalar factors are all the
     // lighting needs to keep the card consistent with the mesh LODs.
     output.Material = float4(gRoughnessFactor, gMetallicFactor, 1.0f, 0.0f);
+    output.Edge     = kPteroNoEdge;
+    output.Principled0 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    output.Principled1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     return output;
 }

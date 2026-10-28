@@ -1,0 +1,42 @@
+{
+    "name": "Midnight Brass",
+    "description": "Deep navy panels, steel-blue secondary text and icons, and a warm brass accent.",
+    "author": "Pterosoft",
+    "dark": true,
+
+    "icons": {
+        "color": "#a3b8cd",
+        "active": "#080a15",
+        "checked": "#d9ab79",
+        "selected": "#080a15",
+        "disabled": "#3a4560"
+    },
+
+    "colors": {
+        "window": "#080a15",
+        "panel": "#0c0f1e",
+        "header": "#121629",
+        "base": "#05060e",
+        "alternateBase": "#0a0d1a",
+        "button": "#141a2e",
+        "buttonHover": "#1c2440",
+        "buttonPressed": "#0e1222",
+        "border": "#1f2742",
+        "borderStrong": "#34405f",
+        "separator": "#161c30",
+        "text": "#e4e8f0",
+        "textDim": "#7e9ab5",
+        "textDisabled": "#4a566e",
+        "accent": "#d9ab79",
+        "accentHover": "#e6bf93",
+        "accentPressed": "#c49262",
+        "accentSoft": "rgba(217, 171, 121, 0.16)",
+        "accentText": "#080a15",
+        "checkedText": "#f3dcc0",
+        "menu": "#0e1224",
+        "menuBorder": "#26304d",
+        "tooltip": "#141a2e",
+        "scrollbar": "#26304d",
+        "scrollbarHover": "#3e4c70"
+    }
+}

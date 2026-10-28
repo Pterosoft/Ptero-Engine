@@ -6,6 +6,11 @@
 // Supplies the reflectivity knob's encoding; the deferred resolve, SSR and the ray-traced
 // specular pass all decode it from the same header.
 #include "SurfaceSpecular.hlsli"
+#include "Tessellation.hlsli"
+#include "TangentFrame.hlsli"
+#include "AnalyticEdge.hlsli"
+// The Disney principled parameters and their two G-Buffer targets.
+#include "PrincipledBrdf.hlsli"
 
 cbuffer EntityConstants : register(b0)
 {
@@ -17,7 +22,10 @@ cbuffer EntityConstants : register(b0)
 cbuffer MaterialConstants : register(b1)
 {
     float4 gBaseColorTint;      // RGBA tint multiplied with base-color texture
-    float3 gEmissiveColor;      float _MatPad0;
+    float3 gEmissiveColor;
+    // Texture mip bias: the sharpening or upscaler bias, applied by scaling the UV
+    // gradients every SampleGrad takes, so changing it rebuilds no pipeline.
+    float  gTextureMipBias;
     float  gMetallicFactor;     // scalar multiplied with metallic texture (or used directly)
     float  gRoughnessFactor;    // scalar multiplied with roughness texture (or used directly)
     float  gNormalScale;        // tangent-space normal intensity
@@ -28,6 +36,8 @@ cbuffer MaterialConstants : register(b1)
     int    gHasRoughnessMap;
     int    gHasAoMap;
     int    gHasEmissiveMap;
+    // 0 = separate maps; 1 = one packed map, R = roughness, G = metallic, B = AO (RMA);
+    // 2 = one packed map, R = AO, G = roughness, B = metallic (ORM, Unreal's layout).
     int    gHasPackedMaterialMap;
     // Reflectivity, 0.5 = neutral. Scales the surface's normal-incidence reflectance, so
     // it is what gives a metal a specular response when the scene offers it nothing to
@@ -44,7 +54,10 @@ cbuffer MaterialConstants : register(b1)
     // 1 = negate the normal map's green channel: an OpenGL-convention map (green up)
     // read in the engine's DirectX convention (green down the texture).
     int    gFlipNormalGreen;
-    float2 _MatPad2;
+    // Iris adjust (ApplyIrisAdjust). Every value is a half, packed two to a word, so the
+    // block fits the padding the buffer already had. Off while the warp radius is 0.
+    uint   gIrisCenterPacked;   // half2: UV of the iris centre in the authored texture
+    uint   gIrisOffsetPacked;   // half2: UV the iris is moved by
     // UV transform: rotate the source UVs about (0.5, 0.5), scale by tiling, then offset.
     // The rotation arrives pre-resolved as sin/cos so the shader does no trigonometry.
     float2 gUvTiling;
@@ -64,6 +77,28 @@ cbuffer MaterialConstants : register(b1)
     // never reach 1, so without this the whole surface sits half a volume deep and most
     // of the offset is a uniform slab shift instead of relief.
     float  gParallaxReferenceHeight;
+    // Tessellation + displacement (only read by the tessellated pipeline, HSMain/DSMain).
+    int    gUseTessellation;
+    float  gTessMaxFactor;
+    float  gTessTargetPixels;       // on-screen length of one tessellated edge
+    float  gTessFadeDistance;       // metres; 0 = no fade
+    float  gDisplacementScale;      // metres between black and white
+    float  gDisplacementMidLevel;   // height value that stays on the surface
+    float  gTessPixelScale;         // (viewport height / 2) / tan(fovY / 2)
+    uint   gIrisRadiiPacked;        // half2: iris radius, warp radius (UV; 0 = iris adjust off)
+    // Disney principled BRDF lobes (PrincipledBrdf.hlsli), all 0..1 and all off at 0.
+    float  gPrincipledSubsurface;
+    float  gPrincipledSpecularTint;
+    float  gPrincipledSheen;
+    float  gPrincipledSheenTint;
+    float  gPrincipledClearcoat;
+    float  gPrincipledClearcoatGloss;
+    float  gPrincipledAnisotropic;
+    int    gHasPrincipledMap;           // t8 bound
+    int    gHasAnisotropyDirectionMap;  // t9 bound
+    uint   gIrisScalesPacked;           // half2: iris scale, pupil scale
+    uint   gPupilRadiusPacked;          // half: pupil radius (UV)
+    float  _MatPad5;
 };
 
 cbuffer RainSurfaceConstants : register(b2)
@@ -82,6 +117,13 @@ Texture2D    gAoTexture         : register(t4);  // ambient occlusion (R channel
 Texture2D    gEmissiveTexture   : register(t5);  // emissive (RGB)
 Texture2D    gOpacityTexture    : register(t6);  // opacity (R)
 Texture2D    gHeightTexture     : register(t7);  // height / displacement (R, white = high)
+// Disney principled mask: R clearcoat, G sheen, B anisotropic, A flatten (subsurface). Each
+// channel scales its material slider, the way the packed maps scale theirs; a source
+// without alpha loads A = 1 and leaves the flatten slider as it is.
+Texture2D    gPrincipledTexture : register(t8);
+// Anisotropy direction: RG is the highlight's direction in the UV frame (R along U, G
+// along V, 0.5 = zero), read in the same green convention as the normal map.
+Texture2D    gAnisotropyDirectionTexture : register(t9);
 SamplerState gLinearSampler     : register(s0);
 
 struct VSInput
@@ -105,11 +147,16 @@ struct PSInput
 //   SV_Target0 – Albedo  (RGB = base colour, A = unused)
 //   SV_Target1 – Normal  (RGB = world-space normal encoded to [0,1])
 //   SV_Target2 – Material (R = roughness, G = metallic, B = AO, A = unused)
+//   SV_Target3 – Edge     (the triangle's nearest edges, AnalyticEdge.hlsli)
+//   SV_Target4/5 – Disney principled parameters (PrincipledBrdf.hlsli)
 struct PSOutput
 {
-    float4 Albedo   : SV_Target0;
-    float4 Normal   : SV_Target1;
-    float4 Material : SV_Target2;
+    float4 Albedo      : SV_Target0;
+    float4 Normal      : SV_Target1;
+    float4 Material    : SV_Target2;
+    uint4  Edge        : SV_Target3;
+    float4 Principled0 : SV_Target4;
+    float4 Principled1 : SV_Target5;
 };
 
 float ComputeRainWetnessMask(float3 worldNormal)
@@ -133,6 +180,82 @@ float2 EncodeOctNormal(float3 n)
 // The step budget is fixed, so this is what bounds how far a grazing ray may sweep.
 static const float kParallaxMaxTexelsPerStep = 4.0f;
 
+float2 UnpackHalf2(uint packed)
+{
+    return float2(f16tof32(packed), f16tof32(packed >> 16));
+}
+
+// The iris is copied undistorted out to this multiple of its radius, so the limbus ring
+// and a little sclera travel with it.
+static const float kIrisLimbusMargin = 1.2f;
+
+// Eye material helper: moves, scales and dilates the iris in texture space so an eye can
+// look somewhere without rotating its mesh. Inside the disc of warp radius around the
+// authored iris centre, the iris (out to kIrisLimbusMargin) is drawn rigidly at its new
+// place and size, and the sclera between it and the disc's rim is stretched along rays
+// from the new centre to the rim; outside the disc the texture is untouched. That keeps
+// the map continuous, so neither a seam nor a second copy of the iris can appear.
+float2 ApplyIrisAdjust(float2 uv)
+{
+    const float2 radii = UnpackHalf2(gIrisRadiiPacked);
+    const float  warpRadius = radii.y;
+    if (warpRadius <= 0.0f)
+        return uv;
+
+    const float2 center = UnpackHalf2(gIrisCenterPacked);
+    const float2 q = uv - center;
+    if (dot(q, q) >= warpRadius * warpRadius)
+        return uv;
+
+    const float2 scales      = UnpackHalf2(gIrisScalesPacked);
+    const float  irisRadius  = max(radii.x, 1e-4f);
+    const float  srcInner    = irisRadius * kIrisLimbusMargin;
+    const float  dstInner    = min(srcInner * max(scales.x, 0.05f), warpRadius * 0.9f);
+    const float  scale       = dstInner / srcInner;
+
+    // The moved iris must stay inside the disc, with some sclera left at its far side.
+    float2 offset = UnpackHalf2(gIrisOffsetPacked);
+    const float maxShift = max(warpRadius * 0.97f - dstInner, 0.0f);
+    const float shift = length(offset);
+    if (shift > maxShift)
+        offset *= maxShift / shift;
+
+    // Everything from here is relative to the authored iris centre.
+    const float2 d = q - offset;          // relative to the moved iris centre
+    const float  r = length(d);
+    float2 src;
+    if (r <= dstInner)
+    {
+        src = d / scale;
+    }
+    else
+    {
+        const float2 dir = d / r;
+        // Where the ray from the moved centre leaves the disc.
+        const float b = dot(offset, dir);
+        const float tExit = -b + sqrt(max(b * b - (dot(offset, offset) - warpRadius * warpRadius), 0.0f));
+        const float f = saturate((r - dstInner) / max(tExit - dstInner, 1e-6f));
+        src = lerp(dir * srcInner, offset + dir * tExit, f);
+    }
+
+    // Pupil dilation: a radial remap inside the iris that resizes the pupil while the
+    // iris's outer edge stays put.
+    const float pupilRadius = f16tof32(gPupilRadiusPacked);
+    const float srcRadius = length(src);
+    if (pupilRadius > 0.0f && srcRadius < irisRadius)
+    {
+        const float a  = clamp(pupilRadius / irisRadius, 0.01f, 0.95f);
+        const float a2 = clamp(a * max(scales.y, 0.0f), 0.01f, 0.95f);
+        const float rho = srcRadius / irisRadius;
+        const float rhoSrc = rho < a2
+            ? rho * (a / a2)
+            : a + (rho - a2) * (1.0f - a) / (1.0f - a2);
+        src *= rhoSrc / max(rho, 1e-6f);
+    }
+
+    return center + src;
+}
+
 // Applies the material's UV transform to the mesh's authored texture coordinates.
 float2 TransformUv(float2 uv)
 {
@@ -140,63 +263,7 @@ float2 TransformUv(float2 uv)
     const float2 rotated = float2(
         centered.x * gUvRotationCos - centered.y * gUvRotationSin,
         centered.x * gUvRotationSin + centered.y * gUvRotationCos) + 0.5f;
-    return rotated * gUvTiling + gUvOffset;
-}
-
-// Builds a tangent frame aligned with the UV layout, derived from screen-space
-// derivatives so no tangent vertex attribute is needed. Parallax only makes sense in
-// a UV-aligned frame: the height volume is addressed in texture space, so the marching
-// direction has to be expressed there too. Also reports how many world units one UV
-// unit spans along each axis; parallax only uses this to tell a usable UV
-// parameterisation from an unusable one. Meshes whose UVs are degenerate (a flat or
-// missing UV set gives zero derivatives) fall back to an arbitrary frame around N and
-// report a zero scale, which disables parallax.
-void BuildTangentFrame(
-    float3 worldPosition,
-    float2 uv,
-    float3 N,
-    out float3 T,
-    out float3 B,
-    out float2 worldUnitsPerUv)
-{
-    const float3 dpdx = ddx(worldPosition);
-    const float3 dpdy = ddy(worldPosition);
-    const float2 duvdx = ddx(uv);
-    const float2 duvdy = ddy(uv);
-
-    // Solve for the tangent vectors in the plane perpendicular to N.
-    const float3 dpdyPerp = cross(dpdy, N);
-    const float3 dpdxPerp = cross(N, dpdx);
-    float3 tangent   = dpdyPerp * duvdx.x + dpdxPerp * duvdy.x;
-    float3 bitangent = dpdyPerp * duvdx.y + dpdxPerp * duvdy.y;
-
-    // That solve leaves both vectors scaled by the UV determinant. Dividing it back out
-    // is what makes them real tangents: their lengths become world units per UV unit,
-    // which the parallax march needs to know, and the sign restores the right handedness
-    // on mirrored UV shells, where a plain normalize() leaves T and B flipped.
-    const float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
-
-    // The degeneracy test has to be relative. Both the determinant and the derivatives
-    // shrink with the pixel's footprint, so the absolute epsilon this used to compare
-    // against started rejecting perfectly good UVs once the camera came close enough to
-    // a high-resolution texture - which swapped the frame for an arbitrary one and sent
-    // the march off in a direction unrelated to the texture.
-    const float uvDerivativeScale = dot(duvdx, duvdx) + dot(duvdy, duvdy);
-    if (uvDerivativeScale <= 0.0f || abs(determinant) < 1e-8f * uvDerivativeScale)
-    {
-        const float3 up = (abs(N.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
-        T = normalize(cross(up, N));
-        B = cross(N, T);
-        worldUnitsPerUv = float2(0.0f, 0.0f);
-        return;
-    }
-
-    tangent   /= determinant;
-    bitangent /= determinant;
-
-    worldUnitsPerUv = max(float2(length(tangent), length(bitangent)), 1e-20f);
-    T = tangent   / worldUnitsPerUv.x;
-    B = bitangent / worldUnitsPerUv.y;
+    return ApplyIrisAdjust(rotated * gUvTiling + gUvOffset);
 }
 
 // Depth below the reference plane, so a height at or above the reference sits flush
@@ -260,9 +327,125 @@ PSInput VSMain(VSInput input)
     return output;
 }
 
-PSOutput PSMain(PSInput input)
+// ---------------------------------------------------------------------------
+// Tessellated path (materials with Tessellation enabled and a height map).
+// VSMainTess -> HSMain -> fixed-function tessellator -> DSMain -> PSMain.
+// ---------------------------------------------------------------------------
+
+struct TessControlPoint
+{
+    float3 LocalPosition : POSITION;
+    float3 LocalNormal   : NORMAL;
+    float2 TexCoord      : TEXCOORD;
+    float4 Color         : COLOR;
+    float3 WorldPosition : WORLDPOS;
+    float4 ClipPosition  : CLIPPOS;
+};
+
+TessControlPoint VSMainTess(VSInput input)
+{
+    TessControlPoint output;
+    output.LocalPosition = input.Position;
+    output.LocalNormal   = input.Normal;
+    output.TexCoord      = input.TexCoord;
+    output.Color         = input.Color;
+    output.WorldPosition = mul(float4(input.Position, 1.0f), gModel).xyz;
+    output.ClipPosition  = mul(float4(input.Position, 1.0f), gMVP);
+    return output;
+}
+
+PteroTessPatchConstants HSConstants(InputPatch<TessControlPoint, 3> patch)
+{
+    PteroTessPatchConstants output;
+
+    const float slack = abs(gDisplacementScale) * 3.0f;
+    if (PteroTessPatchOutsideFrustum(patch[0].ClipPosition, patch[1].ClipPosition, patch[2].ClipPosition, slack))
+    {
+        // A zero factor discards the patch.
+        output.Edges[0] = output.Edges[1] = output.Edges[2] = 0.0f;
+        output.Inside = 0.0f;
+        output.DisplacementMip = 0.0f;
+        return output;
+    }
+
+    [unroll]
+    for (int edge = 0; edge < 3; ++edge)
+    {
+        output.Edges[edge] = PteroTessEdgeFactor(
+            patch[(edge + 1) % 3].WorldPosition, patch[(edge + 2) % 3].WorldPosition,
+            gCameraPositionWS, gTessPixelScale, gTessTargetPixels, gTessMaxFactor, gTessFadeDistance);
+    }
+    output.Inside = max(output.Edges[0], max(output.Edges[1], output.Edges[2]));
+
+    float heightWidth, heightHeight;
+    gHeightTexture.GetDimensions(heightWidth, heightHeight);
+    output.DisplacementMip = PteroDisplacementMip(
+        TransformUv(patch[0].TexCoord), TransformUv(patch[1].TexCoord), TransformUv(patch[2].TexCoord),
+        output.Inside, float2(heightWidth, heightHeight));
+    return output;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HSConstants")]
+[maxtessfactor(64.0)]
+TessControlPoint HSMain(InputPatch<TessControlPoint, 3> patch, uint pointId : SV_OutputControlPointID)
+{
+    return patch[pointId];
+}
+
+[domain("tri")]
+PSInput DSMain(
+    PteroTessPatchConstants patchConstants,
+    float3 barycentrics : SV_DomainLocation,
+    const OutputPatch<TessControlPoint, 3> patch)
+{
+    float3 localPosition = patch[0].LocalPosition * barycentrics.x
+                         + patch[1].LocalPosition * barycentrics.y
+                         + patch[2].LocalPosition * barycentrics.z;
+    const float3 localNormal = normalize(patch[0].LocalNormal * barycentrics.x
+                                       + patch[1].LocalNormal * barycentrics.y
+                                       + patch[2].LocalNormal * barycentrics.z);
+    const float2 texCoord = patch[0].TexCoord * barycentrics.x
+                          + patch[1].TexCoord * barycentrics.y
+                          + patch[2].TexCoord * barycentrics.z;
+    const float4 color = patch[0].Color * barycentrics.x
+                       + patch[1].Color * barycentrics.y
+                       + patch[2].Color * barycentrics.z;
+
+    // Displace in object space.  gDisplacementScale is in world metres, so divide by
+    // how long a unit object-space normal is in world space (exact for uniform scale).
+    if (gUseTessellation != 0 && gHasHeightMap != 0)
+    {
+        const float height = gHeightTexture.SampleLevel(
+            gLinearSampler, TransformUv(texCoord), patchConstants.DisplacementMip).r;
+        const float worldPerLocal = max(length(mul(float4(localNormal, 0.0f), gModel).xyz), 1e-6f);
+        localPosition += localNormal
+                       * ((height - gDisplacementMidLevel) * gDisplacementScale / worldPerLocal);
+    }
+
+    PSInput output;
+    output.Position      = mul(float4(localPosition, 1.0f), gMVP);
+    output.WorldPosition = mul(float4(localPosition, 1.0f), gModel).xyz;
+    // The interpolated normal is the undisplaced one; the normal map carries the
+    // displaced detail, which is what a displacement map's companion normal map is for.
+    output.WorldNormal   = mul(float4(localNormal, 0.0f), gModel).xyz;
+    output.TexCoord      = texCoord;
+    output.Color         = color;
+    return output;
+}
+
+PSOutput PSMain(PSInput input PTERO_EDGE_PS_INPUT)
 {
     PSOutput output;
+
+    // Before the alpha test discards anything, as it takes derivatives. A cut-out
+    // material's silhouette is drawn by its opacity map, not by its triangles, so it
+    // gets no edges: that is texture-frequency detail the analytic resolve cannot see.
+    const uint4 triangleEdges = PTERO_EDGE_VALUE;
+    output.Edge = gUseAlphaCutout ? kPteroNoEdge : triangleEdges;
 
     float3 N = normalize(input.WorldNormal);
 
@@ -272,9 +455,11 @@ PSOutput PSMain(PSInput input)
     float2 uv = TransformUv(input.TexCoord);
 
     // Derivatives of the untouched UV drive mip selection throughout the parallax march;
-    // they must be taken before the march so no derivative is read inside a loop.
-    const float2 uvDdx = ddx(uv);
-    const float2 uvDdy = ddy(uv);
+    // they must be taken before the march so no derivative is read inside a loop. Scaled
+    // by 2^bias, which shifts the mip every SampleGrad picks by the texture mip bias.
+    const float mipGradientScale = exp2(gTextureMipBias);
+    const float2 uvDdx = ddx(uv) * mipGradientScale;
+    const float2 uvDdy = ddy(uv) * mipGradientScale;
 
     float3 T, B;
     float2 worldUnitsPerUv;
@@ -383,15 +568,15 @@ PSOutput PSMain(PSInput input)
     float4 aoSample = gAoTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);
 
     float roughness = gHasRoughnessMap
-        ? (gHasPackedMaterialMap ? roughnessSample.r : roughnessSample.r) * gRoughnessFactor
+        ? (gHasPackedMaterialMap == 2 ? roughnessSample.g : roughnessSample.r) * gRoughnessFactor
         : gRoughnessFactor;
 
     float metallic = gHasMetallicMap
-        ? (gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
+        ? (gHasPackedMaterialMap == 2 ? metallicSample.b : gHasPackedMaterialMap ? metallicSample.g : metallicSample.r) * gMetallicFactor
         : gMetallicFactor;
 
     float ao = gHasAoMap
-        ? lerp(1.0f, gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
+        ? lerp(1.0f, gHasPackedMaterialMap == 2 ? aoSample.r : gHasPackedMaterialMap ? aoSample.b : aoSample.r, gAoStrength)
         : 1.0f;
 
     const float rainWetness = gRainWetnessIntensity * saturate(gRainEnabled) * ComputeRainWetnessMask(N);
@@ -408,6 +593,37 @@ PSOutput PSMain(PSInput input)
     output.Albedo = float4(baseAlbedo, useTransparentBlend ? saturate(opacity) : 1.0f);
 
     output.Material = float4(roughness, metallic, ao, 0.0f);
+
+    PteroPrincipled principled;
+    principled.subsurface     = gPrincipledSubsurface;
+    principled.specularTint   = gPrincipledSpecularTint;
+    principled.sheen          = gPrincipledSheen;
+    principled.sheenTint      = gPrincipledSheenTint;
+    principled.clearcoat      = gPrincipledClearcoat;
+    principled.clearcoatGloss = gPrincipledClearcoatGloss;
+    principled.anisotropic    = gPrincipledAnisotropic;
+    if (gHasPrincipledMap)
+    {
+        const float4 mask = gPrincipledTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);
+        principled.clearcoat   *= mask.r;
+        principled.sheen       *= mask.g;
+        principled.anisotropic *= mask.b;
+        principled.subsurface  *= mask.a;
+    }
+
+    // Anisotropy stretches the highlight along the texture's U axis - the same
+    // UV-aligned frame the normal map was applied in - or along the direction map.
+    principled.tangent = T;
+    if (gHasAnisotropyDirectionMap && principled.anisotropic > 0.0f)
+    {
+        float2 direction = gAnisotropyDirectionTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).rg * 2.0f - 1.0f;
+        if (gFlipNormalGreen != 0)
+            direction.y = -direction.y;
+        // A texel near the middle has no direction to give; U is as good as any.
+        if (dot(direction, direction) > 1e-4f)
+            principled.tangent = T * direction.x + B * direction.y;
+    }
+    PteroEncodePrincipled(principled, N, output.Principled0, output.Principled1);
 
     return output;
 }

@@ -47,7 +47,10 @@ cbuffer SssrConstants : register(b0)
     uint     gHistoryValid;      // 0 on the first frame after (re)creation or a gap
     float    gIntensity;
     uint     gDebugView;
-    float    _SssrPad0;
+    // Scale of the fallback reflection (voxel GI's) the deferred resolve already added;
+    // 0 when there is none. Intersect fills misses with it, Apply takes the deferred
+    // copy back out where SSSR covers the surface, so the two never stack.
+    float    gFallbackScale;
 };
 
 // ------------------------------------------------------------------ G-Buffer decoding

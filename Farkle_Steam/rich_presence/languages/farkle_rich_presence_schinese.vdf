@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"schinese"
+	"Tokens"
+	{
+		"#Menu"	"在酒馆里"
+		"#VsAI"	"正在与 AI 对局 · %score%"
+		"#Searching"	"正在寻找对局"
+		"#Waiting"	"正在开放牌桌等待"
+		"#WaitingFriends"	"正在等待好友加入"
+		"#Online"	"正在与 %opponent% 在线对局 · %score%"
+	}
+}

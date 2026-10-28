@@ -1,7 +1,9 @@
 #include "QtUi.h"
+#include "QtUiTheme.h"
 #pragma warning(push)
 #pragma warning(disable : 4996) // Qt 6.11 overrides its own deprecated event hook.
 #include <QtWidgets/QtWidgets>
+#include <QtGui/QIconEngine>
 #include <QtGui/QPainter>
 #include <QtGui/QStandardItemModel>
 #include <QtCore/QElapsedTimer>
@@ -85,6 +87,8 @@ struct Scope
 // The renderer polls input with GetAsyncKeyState, which has nothing to report a wheel
 // with, so the one place that does see the wheel - Qt's event delivery - banks it here.
 int viewportWheelAngle = 0;
+// The same, for the game UI: every surface that can show it banks here, and only the UI drains it.
+int uiWheelAngle = 0;
 class Surface : public QWidget
 {
   public:
@@ -102,6 +106,7 @@ class Surface : public QWidget
     }
     void wheelEvent(QWheelEvent *event) override
     {
+        uiWheelAngle += event->angleDelta().y();
         if (!banksWheelForCamera)
         {
             QWidget::wheelEvent(event);
@@ -152,6 +157,10 @@ class EventCounter : public QObject
     // than guessed at: a FontChange or StyleChange arriving each frame points straight at
     // an unguarded setter, where a Resize points at a layout that will not settle.
     QHash<int, unsigned> types, lastTypes;
+    // Double clicks as Qt delivered them, left/right/middle. Mouse buttons are otherwise
+    // polled, and polling only runs while the editor's main window is foreground, so a
+    // floating tool window (the asset browser) would never see a double click at all.
+    bool doubled[3]{};
 
     void reset()
     {
@@ -177,6 +186,13 @@ class EventCounter : public QObject
         case QEvent::LayoutRequest:
             ++layouts;
             break;
+        case QEvent::MouseButtonDblClick: {
+            const Qt::MouseButton button = static_cast<QMouseEvent *>(event)->button();
+            const int index = button == Qt::LeftButton ? 0 : button == Qt::RightButton ? 1 : button == Qt::MiddleButton ? 2 : -1;
+            if (index >= 0)
+                doubled[index] = true;
+            break;
+        }
         case QEvent::Paint: {
             ++paints;
             const QString name = watched->objectName().isEmpty()
@@ -249,6 +265,8 @@ qint64 clickTime[3]{};
 UiVec2 nextSize{}, nextPos{}, nextPivot{}, minSize{}, maxSize{};
 float nextAlpha = 1, nextWidth = 0;
 bool positionSet = false;
+// SetNextItemIcon: taken by the next item that can show an icon, dropped by any other.
+QString nextIcon;
 QString key(const char *name)
 {
     QString result = scopes.empty() ? QString() : scopes.back().key;
@@ -300,6 +318,7 @@ bool take(Node &n)
     n.fired = false;
     last = &n;
     lastChanged = result;
+    nextIcon.clear();
     return result;
 }
 QGridLayout *grid(QWidget *w)
@@ -374,6 +393,7 @@ void place(Node &n)
     n.widget->show();
     last = &n;
     lastChanged = false;
+    nextIcon.clear();
 }
 template <class T> T *control(Node &n)
 {
@@ -526,6 +546,104 @@ void applyToolTip(QWidget *w, const QString &tip)
     if (w && w->toolTip() != tip)
         w->setToolTip(tip);
 }
+// QLineEdit::setMaxLength has no early-out either: it re-applies the current text, which
+// drops the selection and moves the cursor to the end. Re-asserted every frame, that made
+// it impossible to select text in any field.
+void applyMaxLength(QLineEdit *w, std::size_t capacity)
+{
+    const int length = int(capacity ? capacity - 1 : 0);
+    if (w->maxLength() != length)
+        w->setMaxLength(length);
+}
+// Marks a widget for a selector in the style's sheet (QPushButton[uiSelectable="true"]).
+// A dynamic property is only read when the widget is polished, hence the repolish - done
+// once, since the flag never goes away again.
+void setStyleFlag(QWidget *w, const char *flag)
+{
+    if (w->property(flag).toBool())
+        return;
+    w->setProperty(flag, true);
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+}
+QString takeIcon()
+{
+    QString icon;
+    icon.swap(nextIcon);
+    return icon;
+}
+// setIcon has no early-out, so only touch it when the name or the style changed. The icon
+// recolors itself on a style switch, but one that was missing may exist in the new set.
+template <class T> void applyIcon(T *target, const QString &icon)
+{
+    const QString stamp = icon.isEmpty() ? QString() : icon + "#" + QString::number(QtUiTheme::Generation());
+    if (target->property("uiIconName").toString() == stamp)
+        return;
+    target->setProperty("uiIconName", stamp);
+    target->setIcon(QtUiTheme::Icon(icon));
+}
+// A tree header's expand chevron and its item icon, side by side in one icon: a
+// QToolButton draws either its arrow or its icon, never both. The rect is two squares
+// wide with a small gap; each half paints from the style at paint time, like any icon.
+class TreeHeaderIconEngine : public QIconEngine
+{
+  public:
+    TreeHeaderIconEngine(QIcon chevron, QIcon item) : chevron(std::move(chevron)), item(std::move(item)) {}
+    void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override
+    {
+        const int side = rect.height();
+        const int inset = side / 6; // the chevron reads better a little smaller than the icon
+        chevron.paint(painter, QRect(rect.left(), rect.top(), side, side).adjusted(inset, inset, -inset, -inset),
+                      Qt::AlignCenter, mode, state);
+        item.paint(painter, QRect(rect.right() + 1 - side, rect.top(), side, side), Qt::AlignCenter, mode, state);
+    }
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+    {
+        return scaledPixmap(size, mode, state, 1.0);
+    }
+    QPixmap scaledPixmap(const QSize &size, QIcon::Mode mode, QIcon::State state, qreal scale) override
+    {
+        QPixmap pm(size * scale);
+        pm.fill(Qt::transparent);
+        pm.setDevicePixelRatio(scale);
+        QPainter p(&pm);
+        paint(&p, QRect(QPoint(), size), mode, state);
+        return pm;
+    }
+    QSize actualSize(const QSize &size, QIcon::Mode, QIcon::State) override
+    {
+        return size;
+    }
+    QIconEngine *clone() const override
+    {
+        return new TreeHeaderIconEngine(chevron, item);
+    }
+
+  private:
+    QIcon chevron, item;
+};
+// Gives a tree header its icon, replacing Qt's arrow with a themed chevron beside it.
+// Returns false when the icon file is missing, so the caller keeps the plain arrow.
+bool applyTreeHeaderIcon(QToolButton *w, const QString &icon, bool expanded)
+{
+    const QIcon item = QtUiTheme::Icon(icon);
+    if (item.isNull())
+        return false;
+    const int side = QtUiTheme::Metric("iconSize", 18);
+    const QSize size(side * 2 + side / 3, side);
+    if (w->iconSize() != size)
+        w->setIconSize(size);
+    const QString stamp = icon + (expanded ? "#open#" : "#closed#") + QString::number(QtUiTheme::Generation());
+    if (w->property("uiIconName").toString() != stamp)
+    {
+        w->setProperty("uiIconName", stamp);
+        const QIcon chevron = QtUiTheme::Icon(expanded ? "chevron-down" : "chevron-right");
+        w->setIcon(QIcon(new TreeHeaderIconEngine(chevron, item)));
+    }
+    if (w->arrowType() != Qt::NoArrow)
+        w->setArrowType(Qt::NoArrow);
+    return true;
+}
 void textWidget(const QString &text, bool wrap = false, const QColor &tint = QColor())
 {
     Node &n = node(serial("text"));
@@ -542,7 +660,7 @@ void textWidget(const QString &text, bool wrap = false, const QColor &tint = QCo
         w->setTextFormat(Qt::PlainText);
     if (w->textInteractionFlags() != Qt::TextSelectableByMouse)
         w->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    const QColor tone = tint.isValid() ? tint : QColor("#f2ebe3");
+    const QColor tone = tint.isValid() ? tint : QtUiTheme::Color("text");
     if (w->palette().color(QPalette::WindowText) != tone)
     {
         QPalette p = w->palette();
@@ -707,6 +825,89 @@ void dimensions(QWidget *w, bool fresh)
     positionSet = false;
     nextAlpha = 1;
 }
+
+// QtUi::Notification's card: a frameless tool window owned by the shell, so it floats
+// above the native viewport and minimizes with the editor, and shown without activation
+// so it never takes the keyboard from whatever the user is doing.
+class Toast : public QFrame
+{
+  public:
+    Toast() : QFrame(shell, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus)
+    {
+        setObjectName("PteroToast");
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setFocusPolicy(Qt::NoFocus);
+        setStyleSheet("QFrame#PteroToast { background-color: palette(window); border: 1px solid palette(mid);"
+                      " border-left: 3px solid palette(highlight); border-radius: 4px; }");
+
+        title = new QLabel(this);
+        QFont titleFont = title->font();
+        titleFont.setBold(true);
+        titleFont.setPointSizeF(titleFont.pointSizeF() * 1.1);
+        title->setFont(titleFont);
+        close = new QToolButton(this);
+        close->setText(QString::fromUtf8("\xE2\x9C\x95"));
+        close->setAutoRaise(true);
+        close->setToolTip("Dismiss");
+        auto *header = new QHBoxLayout();
+        header->addWidget(title, 1);
+        header->addWidget(close, 0, Qt::AlignTop);
+
+        text = new QLabel(this);
+        text->setWordWrap(true);
+        text->setTextFormat(Qt::PlainText);
+
+        primary = new QPushButton(this);
+        secondary = new QPushButton(this);
+        primary->setDefault(true);
+        auto *buttons = new QHBoxLayout();
+        buttons->addStretch(1);
+        buttons->addWidget(secondary);
+        buttons->addWidget(primary);
+
+        for (QWidget *button : {static_cast<QWidget *>(close), static_cast<QWidget *>(primary), static_cast<QWidget *>(secondary)})
+            button->setFocusPolicy(Qt::NoFocus);
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(16, 10, 10, 12);
+        layout->setSpacing(8);
+        layout->addLayout(header);
+        layout->addWidget(text);
+        layout->addLayout(buttons);
+        setFixedWidth(380);
+
+        QObject::connect(primary, &QPushButton::clicked, this, [this] { result = 1; });
+        QObject::connect(secondary, &QPushButton::clicked, this, [this] { result = 2; });
+        QObject::connect(close, &QToolButton::clicked, this, [this] { result = 3; });
+    }
+
+    QLabel *title = nullptr;
+    QLabel *text = nullptr;
+    QToolButton *close = nullptr;
+    QPushButton *primary = nullptr;
+    QPushButton *secondary = nullptr;
+    int result = 0;
+    int seen = 0;
+};
+std::map<QString, QPointer<Toast>> toasts;
+
+// Stacks the visible toasts upward from the shell's bottom-right corner.
+void PlaceToasts()
+{
+    constexpr int kMargin = 16;
+    const QRect area(shell->mapToGlobal(QPoint(0, 0)), shell->size());
+    int bottom = area.bottom() - kMargin;
+    for (auto &[id, toast] : toasts)
+    {
+        if (!toast || toast->isHidden())
+            continue;
+        toast->adjustSize();
+        const QPoint position(area.right() - kMargin - toast->width(), bottom - toast->height());
+        if (toast->pos() != position)
+            toast->move(position);
+        bottom = position.y() - 8;
+    }
+}
 } // namespace
 
 namespace QtUi
@@ -732,53 +933,12 @@ bool Initialize(HWND owner, bool persistLayout)
     }
     QApplication::setStyle("Fusion");
     QApplication::setQuitOnLastWindowClosed(false);
-    qApp->styleHints()->setColorScheme(Qt::ColorScheme::Dark);
-    const BOOL darkTitle = TRUE;
-    DwmSetWindowAttribute(host, 20, &darkTitle, sizeof(darkTitle));
     QCoreApplication::setOrganizationName("Pterosoft");
     QCoreApplication::setApplicationName("Ptero Editor");
-    QPalette p;
-    p.setColor(QPalette::Window, QColor("#191a1c"));
-    p.setColor(QPalette::WindowText, QColor("#f2ebe3"));
-    p.setColor(QPalette::Base, QColor("#111214"));
-    p.setColor(QPalette::AlternateBase, QColor("#222326"));
-    p.setColor(QPalette::Text, QColor("#f2ebe3"));
-    p.setColor(QPalette::Button, QColor("#292a2d"));
-    p.setColor(QPalette::ButtonText, QColor("#f2ebe3"));
-    p.setColor(QPalette::Highlight, QColor("#c73d0d"));
-    p.setColor(QPalette::HighlightedText, Qt::white);
-    p.setColor(QPalette::ToolTipBase, QColor("#292a2d"));
-    p.setColor(QPalette::ToolTipText, QColor("#f2ebe3"));
-    p.setColor(QPalette::Link, QColor("#db521a"));
-    p.setColor(QPalette::Disabled, QPalette::Text, QColor("#797a7d"));
-    p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#797a7d"));
-    QApplication::setPalette(p);
-    // The editor writes in the system UI font - the one Windows puts in a title bar - at
-    // the size the system asks for. It used to load Playfair Display out of Data/Fonts,
-    // but a display serif at 11 pixels is the wrong tool for panels that are mostly dense
-    // labels and numbers, and it never matched the window chrome around it. Playfair is
-    // still the HUD's font: RmlUiRenderer loads it for the documents under Data/UI, which
-    // is game content and nothing to do with the editor's own chrome.
-    //
-    // The class overrides are set to the same font deliberately. Qt takes a menu's font
-    // from the system's menu metrics rather than from the general UI font, and the two
-    // are not guaranteed to agree.
-    const QFont uiFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    QApplication::setFont(uiFont);
-    for (const char *type : {"QMenuBar", "QMenu", "QDockWidget", "QToolTip"})
-        QApplication::setFont(uiFont, type);
-    qApp->setStyleSheet(
-        "QMainWindow::separator { background:#333438; width:5px; height:5px; }"
-        "QDockWidget::title { background:#222326; padding:6px; border-bottom:1px solid #393a3e; }"
-        "QPushButton, QToolButton { padding:4px 8px; border:1px solid #424348; border-radius:4px; background:#292a2d; }"
-        "QPushButton:hover,QToolButton:hover { border-color:#db521a; }"
-        "QPushButton:checked,QToolButton:checked { background:#793014; border-color:#c73d0d; }"
-        "QLineEdit,QAbstractSpinBox,QComboBox { padding:3px; border:1px solid #424348; border-radius:3px; "
-        "background:#111214; }"
-        "QLineEdit:focus,QAbstractSpinBox:focus,QComboBox:focus { border-color:#c73d0d; }"
-        "QTabBar::tab { padding:7px 12px; background:#222326; } QTabBar::tab:selected { border-bottom:2px solid "
-        "#c73d0d; }"
-        "QMenu::item:selected { background:#793014; } QProgressBar::chunk { background:#c73d0d; }");
+    // Palette, font, stylesheet and title-bar theme all come from the active editor style
+    // (Data/Styles/*.style). The editor writes in the system UI font unless a style names
+    // another; Playfair Display stays the HUD's font, loaded by RmlUiRenderer for Data/UI.
+    QtUiTheme::Initialize(host);
     shell = new QMainWindow;
     // Qt must create the shell as a child of the host itself. Setting the native parent
     // before the HWND exists marks the platform window "embedded": Qt then keeps its
@@ -867,6 +1027,7 @@ void Shutdown()
     shell = nullptr;
     surface = nullptr;
     viewportWheelAngle = 0;
+    uiWheelAngle = 0;
     nodes.clear();
     scopes.clear();
     ids.clear();
@@ -877,6 +1038,7 @@ void Shutdown()
     styles.clear();
     widths.clear();
     last = nullptr;
+    QtUiTheme::Shutdown();
     app.reset();
     host = nullptr;
 }
@@ -890,6 +1052,52 @@ void *ShellWidget()
     // include it. Tool windows built directly on Qt - the node graph editor - parent
     // themselves to this so they inherit the editor's palette and stay above it.
     return shell;
+}
+int Notification(const char *id, const char *title, const char *text, const char *primaryButton,
+                 const char *secondaryButton)
+{
+    if (!shell)
+        return 0;
+
+    QPointer<Toast> &toast = toasts[QString::fromUtf8(id)];
+    if (!toast)
+        toast = new Toast();
+    toast->seen = frame;
+
+    auto setText = [](auto *widget, const char *value)
+    {
+        const QString text = QString::fromUtf8(value ? value : "");
+        if (widget->text() != text)
+            widget->setText(text);
+    };
+    setText(toast->title, title);
+    setText(toast->text, text);
+    setText(toast->primary, primaryButton);
+    setText(toast->secondary, secondaryButton);
+    toast->primary->setVisible(primaryButton != nullptr);
+    toast->secondary->setVisible(secondaryButton != nullptr);
+
+    // Follow the editor: hidden while it is minimized or a game has the screen.
+    const bool hostShown = IsWindowVisible(host) && !IsIconic(host) && !IsGameWindowOpen();
+    if (hostShown && toast->isHidden())
+    {
+        toast->setWindowOpacity(0.0);
+        toast->show();
+        auto *fade = new QPropertyAnimation(toast, "windowOpacity", toast);
+        fade->setDuration(180);
+        fade->setStartValue(0.0);
+        fade->setEndValue(1.0);
+        fade->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+    else if (!hostShown && !toast->isHidden())
+    {
+        toast->hide();
+    }
+    PlaceToasts();
+
+    const int result = toast->result;
+    toast->result = 0;
+    return result;
 }
 float FramebufferScale()
 {
@@ -1193,6 +1401,16 @@ float ConsumeViewportWheelDelta()
     viewportWheelAngle = 0;
     return notches;
 }
+float ConsumeUiWheelDelta()
+{
+    const float notches = float(uiWheelAngle) / 120.f;
+    uiWheelAngle = 0;
+    return notches;
+}
+void AddWheelDelta(int angleDelta)
+{
+    uiWheelAngle += angleDelta;
+}
 void NewFrame()
 {
     uiFrameStart = timer.nsecsElapsed();
@@ -1203,6 +1421,7 @@ void NewFrame()
     ids.clear();
     trees.clear();
     skippedMenus.clear();
+    nextIcon.clear();
     textureViews.clear();
     overlay->commands.clear();
     const qint64 eventsStart = timer.nsecsElapsed();
@@ -1241,12 +1460,25 @@ void NewFrame()
             clickTime[i] = now;
         }
         mouseDown[i] = down;
+        // While the main window is foreground the poll above already caught it; taking
+        // Qt's as well could report one double click on two consecutive frames.
+        if (events)
+        {
+            mouseDouble[i] = mouseDouble[i] || (!active && events->doubled[i]);
+            events->doubled[i] = false;
+        }
     }
     io.KeyCtrl = keys[VK_CONTROL];
     io.KeyShift = keys[VK_SHIFT];
     QWidget *focus = QApplication::focusWidget();
     io.WantTextInput = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus) ||
                                  qobject_cast<QTextEdit *>(focus));
+    // A tool docked in the shell that handles its own keys (the Sequencer's timeline: Delete,
+    // Space, Ctrl+Z) marks itself with this property. The editor's shortcuts are polled
+    // from the physical keyboard, so without it one key press would act in both places -
+    // deleting a key in the timeline and the selected entity in the level.
+    for (QWidget *w = focus; w && !io.WantTextInput; w = w->parentWidget())
+        io.WantTextInput = w->property("pteroKeyboardOwner").toBool();
     viewport.WorkSize = {float(shell->width()), float(shell->height())};
     const QPoint origin = shell->mapToGlobal(QPoint(0, 0));
     viewport.WorkPos = {float(origin.x()), float(origin.y())};
@@ -1267,6 +1499,9 @@ void EndFrame()
             if (n->action)
                 n->action->setVisible(false);
         }
+    for (auto &[id, toast] : toasts)
+        if (toast && toast->seen != frame && !toast->isHidden())
+            toast->hide();
     if (frame == 2)
     {
         QList<QDockWidget *> left, right;
@@ -1563,6 +1798,7 @@ void EndMenuBar()
 }
 bool BeginMenu(const char *name, bool available)
 {
+    const QString icon = takeIcon();
     QString id = key(name);
     Node &n = node(id);
     auto &parent = scopes.back();
@@ -1577,6 +1813,9 @@ bool BeginMenu(const char *name, bool available)
             parent.bar->addMenu(menu);
         n.action = menu->menuAction();
     }
+    // Menu-bar titles stay text only; an icon there only shows on a submenu entry.
+    if (parent.menu)
+        applyIcon(n.action.data(), icon);
     n.action->setVisible(true);
     n.action->setEnabled(available && enabled());
     auto *menu = static_cast<QMenu *>(n.widget.data());
@@ -1606,6 +1845,7 @@ void EndMenu()
 }
 bool MenuItem(const char *name, const char *shortcut, bool checked, bool available)
 {
+    const QString icon = takeIcon();
     Node &n = node(key(name));
     if (!n.action)
     {
@@ -1618,6 +1858,7 @@ bool MenuItem(const char *name, const char *shortcut, bool checked, bool availab
         QObject::connect(n.action, &QAction::triggered, n.action, [&n] { n.fired = true; actionFired = true; });
     }
     n.action->setText(label(name) + (shortcut ? "\t" + QString(shortcut) : QString()));
+    applyIcon(n.action.data(), icon);
     n.action->setCheckable(checked || n.action->isCheckable());
     n.action->setChecked(checked);
     n.action->setEnabled(available && enabled());
@@ -1635,10 +1876,21 @@ bool MenuItem(const char *name, const char *shortcut, bool *checked, bool availa
 }
 bool Button(const char *name, UiVec2 size)
 {
+    const QString icon = takeIcon();
     Node &n = node(key(name));
     bool fresh = !n.widget;
     auto *w = control<QPushButton>(n);
-    w->setText(label(name));
+    // Icon-only buttons (IconButton, ImageButton) carry their label as a tooltip instead.
+    // Clearing the text here rather than after the fact keeps setText from flipping the
+    // text back and forth - and relaying out the toolbar - every frame.
+    const QString text = w->property("uiIconOnly").toBool() ? QString() : label(name);
+    if (w->text() != text)
+        w->setText(text);
+    applyIcon(w, icon);
+    // Clicking an icon button must not take the keyboard from the viewport, and a focused
+    // button would draw its icon in the "active" color.
+    if (!icon.isEmpty() && w->focusPolicy() != Qt::NoFocus)
+        w->setFocusPolicy(Qt::NoFocus);
     if (fresh)
     {
         // QPushButton turns on autoDefault inside a QDialog, and Begin builds every
@@ -1697,11 +1949,12 @@ bool Selectable(const char *name, bool selected, int, UiVec2 size)
     auto *w = static_cast<QPushButton *>(last->widget.data());
     w->setCheckable(true);
     w->setChecked(selected);
-    applyStyleSheet(w, "text-align:left;");
+    setStyleFlag(w, "uiSelectable");
     return changed;
 }
 bool headerButton(const char *name, int flags)
 {
+    const QString icon = takeIcon();
     Node &n = node(key(name));
     bool fresh = !n.widget;
     auto *w = control<QToolButton>(n);
@@ -1710,13 +1963,22 @@ bool headerButton(const char *name, int flags)
     w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     if (fresh)
     {
+        setStyleFlag(w, "uiHeader");
         n.expanded = (flags & QtUiTreeNodeFlags_DefaultOpen) != 0;
         QObject::connect(w, &QToolButton::clicked, w, [&n] {
             n.expanded = !n.expanded;
             n.fired = true;
         });
     }
-    w->setArrowType(n.expanded ? Qt::DownArrow : Qt::RightArrow);
+    if (icon.isEmpty() || !applyTreeHeaderIcon(w, icon, n.expanded))
+        w->setArrowType(n.expanded ? Qt::DownArrow : Qt::RightArrow);
+    // A selected tree node shows like a selected leaf. Checkable only while selected, so a
+    // click on an unselected header does not leave it checked on its own.
+    const bool selected = (flags & QtUiTreeNodeFlags_Selected) != 0;
+    if (w->isCheckable() != selected)
+        w->setCheckable(selected);
+    if (w->isChecked() != selected)
+        w->setChecked(selected);
     take(n);
     return n.expanded;
 }
@@ -1793,7 +2055,7 @@ bool InputTextSubmit(const char *name, char *value, std::size_t capacity,
     bool fresh = !n.widget;
     auto *w = labeledControl<QLineEdit>(n, name);
     applyToolTip(w, label(name));
-    w->setMaxLength(int(capacity ? capacity - 1 : 0));
+    applyMaxLength(w, capacity);
     if (fresh)
     {
         // Only Return reports. A console line is meaningless half-typed, so the
@@ -1916,7 +2178,7 @@ bool InputText(const char *name, char *value, std::size_t capacity, int)
     bool fresh = !n.widget;
     auto *w = labeledControl<QLineEdit>(n, name);
     applyToolTip(w, label(name));
-    w->setMaxLength(int(capacity ? capacity - 1 : 0));
+    applyMaxLength(w, capacity);
     if (fresh)
         QObject::connect(w, &QLineEdit::textEdited, w, [&n](const QString &v) {
             n.value = v;
@@ -2480,7 +2742,14 @@ void TextDisabled(const char *f, ...)
 {
     va_list a;
     va_start(a, f);
-    textWidget(format(f, a), false, QColor("#959699"));
+    textWidget(format(f, a), false, QtUiTheme::Color("textDim"));
+    va_end(a);
+}
+void TextDisabledWrapped(const char *f, ...)
+{
+    va_list a;
+    va_start(a, f);
+    textWidget(format(f, a), true, QtUiTheme::Color("textDim"));
     va_end(a);
 }
 void TextColored(UiVec4 c, const char *f, ...)
@@ -2559,14 +2828,60 @@ bool ImageButton(const char *name, UiTextureID id, UiVec2 size)
         {
             w->setIcon(QIcon(it->second));
             w->setProperty("uiIcon", static_cast<unsigned long long>(id));
+            w->setProperty("uiIconOnly", true);
+            w->setText(QString());
         }
-        w->setIconSize(QSize(int(size.x), int(size.y)));
-        w->setText("");
-        w->setFixedSize(int(size.x + 8), int(size.y + 8));
-        applyStyleSheet(w, "padding:3px;");
+        const QSize iconSize(int(size.x), int(size.y));
+        if (w->iconSize() != iconSize)
+            w->setIconSize(iconSize);
+        const QSize box(int(size.x + 8), int(size.y + 8));
+        if (w->minimumSize() != box || w->maximumSize() != box)
+            w->setFixedSize(box);
+        setStyleFlag(w, "uiIconButton");
     }
     applyToolTip(w, label(name));
     return clicked;
+}
+void SetNextItemIcon(const char *icon)
+{
+    nextIcon = QString::fromUtf8(icon ? icon : "");
+}
+bool IconButton(const char *name, const char *icon)
+{
+    SetNextItemIcon(icon);
+    const bool clicked = Button(name);
+    auto *w = static_cast<QPushButton *>(last->widget.data());
+    // A missing icon file leaves an ordinary text button, sized to its label.
+    const bool iconOnly = !w->icon().isNull();
+    if (w->property("uiIconOnly").toBool() != iconOnly)
+    {
+        w->setProperty("uiIconOnly", iconOnly);
+        w->setText(iconOnly ? QString() : label(name));
+    }
+    if (iconOnly)
+    {
+        setStyleFlag(w, "uiIconButton");
+        const int side = QtUiTheme::Metric("toolButtonSize", 36);
+        const QSize box(side, side);
+        if (w->minimumSize() != box || w->maximumSize() != box)
+            w->setFixedSize(box);
+    }
+    applyToolTip(w, label(name));
+    return clicked;
+}
+std::vector<std::string> LoadSettingList(const char *key)
+{
+    std::vector<std::string> values;
+    for (const QString &value : QSettings().value(QString::fromUtf8(key)).toStringList())
+        values.push_back(value.toLocal8Bit().toStdString());
+    return values;
+}
+void SaveSettingList(const char *key, const std::vector<std::string> &values)
+{
+    QStringList list;
+    for (const std::string &value : values)
+        list.append(QString::fromLocal8Bit(value.c_str()));
+    QSettings().setValue(QString::fromUtf8(key), list);
 }
 bool IsItemHovered()
 {
@@ -2620,7 +2935,8 @@ QtUiStyle &GetStyle()
 }
 UiVec4 GetStyleColorVec4(int c)
 {
-    return c == QtUiCol_Text ? UiVec4(.95f, .92f, .89f, 1) : UiVec4(.78f, .24f, .05f, 1);
+    const QColor tone = QtUiTheme::Color(c == QtUiCol_Text ? "text" : "accent");
+    return UiVec4(float(tone.redF()), float(tone.greenF()), float(tone.blueF()), float(tone.alphaF()));
 }
 QtUiViewport *GetMainViewport()
 {
@@ -2777,6 +3093,14 @@ void UiDrawList::AddCircleFilled(UiVec2 a, float r, UiU32 c, int)
         p.setPen(Qt::NoPen);
         p.setBrush(color(c));
         p.drawEllipse(QPointF(a.x, a.y), r, r);
+    });
+}
+void UiDrawList::AddText(UiVec2 a, UiU32 c, const char *text)
+{
+    const QString string = QString::fromUtf8(text ? text : "");
+    overlay->commands.push_back([=](QPainter &p) {
+        p.setPen(color(c));
+        p.drawText(QPointF(a.x, a.y + p.fontMetrics().ascent()), string);
     });
 }
 void UiDrawList::AddPolyline(const UiVec2 *points, int count, UiU32 c, int flags, float width)

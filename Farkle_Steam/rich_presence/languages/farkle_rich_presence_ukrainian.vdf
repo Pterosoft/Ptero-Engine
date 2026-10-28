@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"ukrainian"
+	"Tokens"
+	{
+		"#Menu"	"У таверні"
+		"#VsAI"	"Грає проти ШІ · %score%"
+		"#Searching"	"Шукає гру"
+		"#Waiting"	"Чекає за відкритим столом"
+		"#WaitingFriends"	"Чекає на друзів"
+		"#Online"	"Грає онлайн проти: %opponent% · %score%"
+	}
+}

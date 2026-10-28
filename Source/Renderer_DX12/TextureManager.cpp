@@ -205,30 +205,11 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     }
 
     // ----------------------------------------------------------------
-    // 1. Create a one-shot command allocator + list for the upload.
-    // ----------------------------------------------------------------
-    ComPtr<ID3D12CommandAllocator> uploadAllocator;
-    if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-        IID_PPV_ARGS(&uploadAllocator))))
-    {
-        mLastError = "Failed to create upload command allocator.";
-        return nullptr;
-    }
-
-    ComPtr<ID3D12GraphicsCommandList> uploadCmdList;
-    if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-        uploadAllocator.Get(), nullptr, IID_PPV_ARGS(&uploadCmdList))))
-    {
-        mLastError = "Failed to create upload command list.";
-        return nullptr;
-    }
-
-    // ----------------------------------------------------------------
-    // 2. Load the DDS file and create the committed GPU resource.
+    // 1. Load the DDS file and create the committed GPU resource.
     // ----------------------------------------------------------------
     // Read through DataFiles (a packaged game decrypts it from Textures.ppak). The bytes
     // must outlive UpdateSubresources below: the subresource table points into them.
-    std::vector<std::uint8_t> ddsData;
+    std::vector<std::uint8_t>& ddsData = mReadBuffer;
     if (!DataFiles::ReadBytes(texturePath, ddsData))
     {
         mLastError = "Could not read DDS file: " + ddsPath;
@@ -255,32 +236,21 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
     }
 
     // ----------------------------------------------------------------
-    // 3. Upload subresources through a temporary upload heap.
+    // 2. Upload subresources through the shared upload heap.
     // ----------------------------------------------------------------
     const UINT64 uploadBufferSize = GetRequiredIntermediateSize(
         textureResource.Get(), 0, static_cast<UINT>(subresources.size()));
 
-    D3D12_HEAP_PROPERTIES uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-    D3D12_RESOURCE_DESC   uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
-
-    ComPtr<ID3D12Resource> uploadBuffer;
-    hr = device->CreateCommittedResource(
-        &uploadHeapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &uploadBufferDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&uploadBuffer));
-
-    if (FAILED(hr))
-    {
-        mLastError = "Failed to create upload buffer for texture.";
+    if (!EnsureUploadObjects(device, uploadBufferSize))
         return nullptr;
-    }
 
-    UpdateSubresources(uploadCmdList.Get(),
+    // The previous load waited for its copy, so the allocator is idle.
+    mUploadAllocator->Reset();
+    mUploadCommandList->Reset(mUploadAllocator.Get(), nullptr);
+
+    UpdateSubresources(mUploadCommandList.Get(),
         textureResource.Get(),
-        uploadBuffer.Get(),
+        mUploadBuffer.Get(),
         0, 0,
         static_cast<UINT>(subresources.size()),
         subresources.data());
@@ -290,27 +260,25 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
         textureResource.Get(),
         D3D12_RESOURCE_STATE_COPY_DEST,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    uploadCmdList->ResourceBarrier(1, &barrier);
+    mUploadCommandList->ResourceBarrier(1, &barrier);
 
-    uploadCmdList->Close();
+    mUploadCommandList->Close();
 
-    // Execute and wait for GPU to finish consuming the upload buffer.
-    ID3D12CommandList* cmdLists[] = { uploadCmdList.Get() };
+    // Execute and wait for the GPU to finish reading the upload buffer, which the
+    // next load overwrites.
+    ID3D12CommandList* cmdLists[] = { mUploadCommandList.Get() };
     queue->ExecuteCommandLists(1, cmdLists);
 
-    ComPtr<ID3D12Fence> fence;
-    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-    HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    queue->Signal(fence.Get(), 1);
-    fence->SetEventOnCompletion(1, fenceEvent);
-    WaitForSingleObject(fenceEvent, INFINITE);
-    CloseHandle(fenceEvent);
-
-    // upload buffer can now be safely released (GPU is done reading from it).
-    uploadBuffer.Reset();
+    const UINT64 fenceValue = ++mUploadFenceValue;
+    queue->Signal(mUploadFence.Get(), fenceValue);
+    if (mUploadFence->GetCompletedValue() < fenceValue)
+    {
+        mUploadFence->SetEventOnCompletion(fenceValue, mUploadFenceEvent);
+        WaitForSingleObject(mUploadFenceEvent, INFINITE);
+    }
 
     // ----------------------------------------------------------------
-    // 4. Allocate an SRV descriptor and create the view.
+    // 3. Allocate an SRV descriptor and create the view.
     // ----------------------------------------------------------------
     auto gpuTex = std::make_shared<GpuTexture>();
     gpuTex->Resource = textureResource;
@@ -339,4 +307,90 @@ std::shared_ptr<GpuTexture> TextureManager::LoadDDS(const std::string& ddsPath, 
 void TextureManager::Shutdown()
 {
     mCache.clear();
+    mUploadBuffer.Reset();
+    mUploadBufferCapacity = 0;
+    mUploadCommandList.Reset();
+    mUploadAllocator.Reset();
+    mUploadFence.Reset();
+    mUploadFenceValue = 0;
+    if (mUploadFenceEvent != nullptr)
+    {
+        CloseHandle(mUploadFenceEvent);
+        mUploadFenceEvent = nullptr;
+    }
+    mReadBuffer = {};
+}
+
+// ---------------------------------------------------------------------------
+// EnsureUploadObjects
+// ---------------------------------------------------------------------------
+bool TextureManager::EnsureUploadObjects(ID3D12Device* device, UINT64 uploadBytes)
+{
+    if (!mUploadAllocator)
+    {
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+            IID_PPV_ARGS(&mUploadAllocator))))
+        {
+            mLastError = "Failed to create upload command allocator.";
+            return false;
+        }
+    }
+
+    if (!mUploadCommandList)
+    {
+        if (FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            mUploadAllocator.Get(), nullptr, IID_PPV_ARGS(&mUploadCommandList))))
+        {
+            mLastError = "Failed to create upload command list.";
+            return false;
+        }
+        // Created open; LoadDDS resets it before every recording.
+        mUploadCommandList->Close();
+    }
+
+    if (!mUploadFence)
+    {
+        mUploadFenceValue = 0;
+        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mUploadFence))))
+        {
+            mLastError = "Failed to create texture upload fence.";
+            return false;
+        }
+    }
+
+    if (mUploadFenceEvent == nullptr)
+    {
+        mUploadFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (mUploadFenceEvent == nullptr)
+        {
+            mLastError = "Failed to create texture upload fence event.";
+            return false;
+        }
+    }
+
+    if (mUploadBuffer && mUploadBufferCapacity >= uploadBytes)
+        return true;
+
+    // Grow only, to the largest texture seen so far; a level's tiles are mostly
+    // one size, so this settles after the first load.
+    mUploadBuffer.Reset();
+    mUploadBufferCapacity = 0;
+
+    const D3D12_HEAP_PROPERTIES uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_RESOURCE_DESC   uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBytes);
+    if (FAILED(device->CreateCommittedResource(
+        &uploadHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&mUploadBuffer))))
+    {
+        mLastError = "Failed to create upload buffer for texture.";
+        return false;
+    }
+
+    mUploadBuffer->SetName(L"TextureManager_Upload");
+    mUploadBufferCapacity = uploadBytes;
+    return true;
 }

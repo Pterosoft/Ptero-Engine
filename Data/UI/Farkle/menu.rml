@@ -3,6 +3,7 @@
 <body class="menu-screen" data-screen="menu">
 <div id="main-board" class="wood-panel">
 <button id="start-button" class="menu-button primary">Play</button>
+<button id="online-button" class="menu-button" data-page="online.rml">Play Online</button>
 <button id="settings-button" class="menu-button" data-page="settings-graphics.rml">Settings</button>
 <button id="credits-button" class="menu-button" data-page="credits.rml">Credits</button>
 <button id="exit-button" class="menu-button">Exit</button>

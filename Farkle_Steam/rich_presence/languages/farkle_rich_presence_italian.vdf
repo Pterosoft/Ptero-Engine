@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"italian"
+	"Tokens"
+	{
+		"#Menu"	"Nella taverna"
+		"#VsAI"	"Gioca contro l’IA · %score%"
+		"#Searching"	"Cerca una partita"
+		"#Waiting"	"Aspetta a un tavolo aperto"
+		"#WaitingFriends"	"Aspetta gli amici"
+		"#Online"	"Gioca online contro %opponent% · %score%"
+	}
+}

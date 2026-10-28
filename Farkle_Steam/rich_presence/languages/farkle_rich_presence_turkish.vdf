@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"turkish"
+	"Tokens"
+	{
+		"#Menu"	"Meyhanede"
+		"#VsAI"	"Yapay zekâya karşı oynuyor · %score%"
+		"#Searching"	"Maç arıyor"
+		"#Waiting"	"Açık bir masada bekliyor"
+		"#WaitingFriends"	"Arkadaşlarını bekliyor"
+		"#Online"	"%opponent% ile çevrim içi oynuyor · %score%"
+	}
+}

@@ -92,7 +92,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\Physics;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -114,7 +114,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\Physics;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -134,7 +134,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\Physics;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -142,10 +142,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;..\SDKs\libsodium-1.0.22\bin\x64\Debug\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;Physics.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxess.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxess_fg.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxell.dll" "$(OutDir)"</Command>
       <Message>Copying dxcompiler.dll and dxil.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -160,18 +160,18 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\SDKs\dxc\inc;..\SDKs;..\SDKs\RmlUI\Include;..\SDKs\NRD\_NRD_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include;..\SDKs\NRD\_NRI_SDK\Include\Extensions;..\SDKs\NRD\Integration;..\System;..\System\include;..\Audio;..\Video;..\Physics;..\SDKs\CoACD\public;..\SDKs\lz4-1.10.0\lib;..\SDKs\libsodium-1.0.22\src\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Debug;..\..\Binaries;..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\SDKs\RmlUI\Bin-Static\Release;..\SDKs\RmlUI\Dependencies\Bin-Static\lib;..\SDKs\NRD\_NRD_SDK\Lib\Release;..\..\Binaries;..\SDKs\libsodium-1.0.22\bin\x64\Release\v145\static;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rmlui.lib;rmlui_debugger.lib;freetype.lib;NRD.lib;Audio.lib;Video.lib;Physics.lib;libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Debug\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxcompiler.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(SolutionDir)..\SDKs\dxc\bin\x64\dxil.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\NRD\_NRD_SDK\Lib\Release\NRD.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\FidelityFX-SDK-2.3.0\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxess.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxess_fg.dll" "$(OutDir)" &amp;&amp; xcopy /Y /D "$(ProjectDir)..\SDKs\xess-3.0.2\bin\libxell.dll" "$(OutDir)"</Command>
       <Message>Copying dxcompiler.dll and dxil.dll</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -181,6 +181,14 @@
     <ClInclude Include="AgxTonemapSettings.h" />
     <ClInclude Include="AreaTex.h" />
     <ClInclude Include="BloomRenderer.h" />
+    <ClInclude Include="FftBloomRenderer.h" />
+    <ClInclude Include="LensFlareRenderer.h" />
+    <ClInclude Include="LensFlareSettings.h" />
+    <ClInclude Include="SkyGlareRenderer.h" />
+    <ClInclude Include="SkyGlareSettings.h" />
+    <ClInclude Include="GpuSkyModel.h" />
+    <ClInclude Include="LensFlareOptics.h" />
+    <ClInclude Include="LensDiffraction.h" />
     <ClInclude Include="BloomSettings.h" />
     <ClInclude Include="DecalRenderer.h" />
     <ClInclude Include="DlssRenderer.h" />
@@ -189,8 +197,14 @@
     <ClInclude Include="FsrFrameGeneration.h" />
     <ClInclude Include="FsrRenderer.h" />
     <ClInclude Include="FsrSettings.h" />
+    <ClInclude Include="XessFrameGeneration.h" />
+    <ClInclude Include="XessLoader.h" />
+    <ClInclude Include="XessRenderer.h" />
+    <ClInclude Include="XessSettings.h" />
     <ClInclude Include="GtaoSettings.h" />
     <ClInclude Include="ImageSharpenRenderer.h" />
+    <ClInclude Include="GBufferViewRenderer.h" />
+    <ClInclude Include="DebugViewNames.h" />
     <ClInclude Include="MotionVectorRenderer.h" />
     <ClInclude Include="MsaaSettings.h" />
     <ClInclude Include="PointShadowMapRenderer.h" />
@@ -199,11 +213,18 @@
     <ClInclude Include="RadianceCascadesSettings.h" />
     <ClInclude Include="RadianceProbeRenderer.h" />
     <ClInclude Include="RadianceProbeSettings.h" />
+    <ClInclude Include="VoxelGIRenderer.h" />
+    <ClInclude Include="VoxelGISettings.h" />
     <ClInclude Include="LightStyles.h" />
     <ClInclude Include="ParticleRenderer.h" />
+    <ClInclude Include="ParticleEffects.h" />
     <ClInclude Include="RainRenderer.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="RtAmbientOcclusion.h" />
+    <ClInclude Include="RtShadows.h" />
+    <ClInclude Include="RtShadowSettings.h" />
+    <ClInclude Include="PathTracer.h" />
+    <ClInclude Include="PathTracerSettings.h" />
     <ClInclude Include="Components.h" />
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="DeferredLightingPass.h" />
@@ -219,13 +240,16 @@
     <ClInclude Include="..\System\include\System\PackagingKeyObfuscation.h" />
     <ClInclude Include="..\System\include\System\AssetFilter.h" />
     <ClInclude Include="EngineCVars.h" />
+    <ClInclude Include="..\System\include\System\SteamAchievements.h" />
     <ClInclude Include="GameHost.h" />
     <ClInclude Include="ReleaseGame.h" />
     <ClInclude Include="RmlUiRenderInterface.h" />
     <ClInclude Include="RmlUiSystemInterface.h" />
+    <ClInclude Include="UiLocalization.h" />
     <ClInclude Include="RmlUiRenderer.h" />
     <ClInclude Include="..\Game\GameAPI.h" />
     <ClInclude Include="EditorMainMenu.h" />
+    <ClInclude Include="DataFolderWatcher.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="GlassRenderer.h" />
     <ClInclude Include="HosekWilkieSky.h" />
@@ -240,14 +264,27 @@
     <ClInclude Include="RtGlobalIllumination.h" />
     <ClInclude Include="SceneSerializer.h" />
     <ClInclude Include="ShadowMapRenderer.h" />
+    <ClInclude Include="ShadowPageView.h" />
+    <ClInclude Include="VirtualShadowMapConstants.h" />
+    <ClInclude Include="VirtualShadowMapRenderer.h" />
+    <ClInclude Include="LightClusterRenderer.h" />
+    <ClInclude Include="VirtualShadowMapSettings.h" />
     <ClInclude Include="SharpenSettings.h" />
     <ClInclude Include="SkyRenderer.h" />
+    <ClInclude Include="AarRenderer.h" />
+    <ClInclude Include="AarSettings.h" />
+    <ClInclude Include="AnalyticEdgeAARenderer.h" />
+    <ClInclude Include="AnalyticEdgeAASettings.h" />
     <ClInclude Include="SMAARenderer.h" />
     <ClInclude Include="SMAASettings.h" />
     <ClInclude Include="SsrRenderer.h" />
     <ClInclude Include="SssrRenderer.h" />
+    <ClInclude Include="DpleRenderer.h" />
+    <ClInclude Include="DpleSettings.h" />
     <ClInclude Include="SubsurfaceScattering.h" />
     <ClInclude Include="SubsurfaceSettings.h" />
+    <ClInclude Include="ShadingSettings.h" />
+    <ClInclude Include="PrincipledGBuffer.h" />
     <ClInclude Include="SsrSettings.h" />
     <ClInclude Include="ChromaticAberrationRenderer.h" />
     <ClInclude Include="ChromaticAberrationSettings.h" />
@@ -259,6 +296,9 @@
     <ClInclude Include="GeometryRaycaster.h" />
     <ClInclude Include="VegetationScatter.h" />
     <ClInclude Include="VegetationRenderer.h" />
+    <ClInclude Include="VirtualGeometryRenderer.h" />
+    <ClInclude Include="VirtualGeometryBuilder.h" />
+    <ClInclude Include="VirtualGeometrySettings.h" />
     <ClInclude Include="WindSettings.h" />
     <ClInclude Include="WaterRenderer.h" />
     <ClInclude Include="TextureManager.h" />
@@ -273,6 +313,11 @@
     <ClCompile Include="AgxTonemapper.cpp" />
     <ClCompile Include="AutoExposure.cpp" />
     <ClCompile Include="BloomRenderer.cpp" />
+    <ClCompile Include="FftBloomRenderer.cpp" />
+    <ClCompile Include="LensFlareRenderer.cpp" />
+    <ClCompile Include="SkyGlareRenderer.cpp" />
+    <ClCompile Include="LensFlareOptics.cpp" />
+    <ClCompile Include="LensDiffraction.cpp" />
     <ClCompile Include="DecalRenderer.cpp" />
     <ClCompile Include="DeferredLightingPass.cpp" />
     <ClCompile Include="dllmain.cpp" />
@@ -280,26 +325,36 @@
     <ClCompile Include="FfxLoader.cpp" />
     <ClCompile Include="FsrFrameGeneration.cpp" />
     <ClCompile Include="FsrRenderer.cpp" />
+    <ClCompile Include="XessFrameGeneration.cpp" />
+    <ClCompile Include="XessLoader.cpp" />
+    <ClCompile Include="XessRenderer.cpp" />
     <ClCompile Include="DX12Context.cpp" />
     <ClCompile Include="DX12RendererAPI.cpp" />
     <ClCompile Include="HeightmapImporter.cpp" />
     <ClCompile Include="DX12SceneRenderer.cpp" />
     <ClCompile Include="DX12ShaderCompiler.cpp" />
     <ClCompile Include="Editor.cpp" />
+    <ClCompile Include="..\System\src\SteamAchievements.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="GameHost.cpp" />
     <ClCompile Include="ReleaseGame.cpp" />
     <ClCompile Include="RmlUiRenderInterface.cpp" />
     <ClCompile Include="RmlUiSystemInterface.cpp" />
+    <ClCompile Include="UiLocalization.cpp" />
     <ClCompile Include="RmlUiRenderer.cpp" />
     <ClCompile Include="EditorMainMenu.cpp" />
+    <ClCompile Include="DataFolderWatcher.cpp" />
     <ClCompile Include="EditorConsole.cpp" />
     <ClCompile Include="EditorUiViewer.cpp" />
     <ClCompile Include="EditorUndo.cpp" />
     <ClCompile Include="EditorLightGizmos.cpp" />
+    <ClCompile Include="EditorParticles.cpp" />
     <ClCompile Include="..\System\src\PteroLog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\CVar.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="EngineCVars.cpp" />
     <ClCompile Include="GameSettings.cpp" />
+    <ClCompile Include="GameProjectSettings.cpp" />
+    <ClCompile Include="PlayerCollision.cpp" />
+    <ClCompile Include="ScenePhysics.cpp" />
     <ClCompile Include="GlassRenderer.cpp" />
     <ClCompile Include="..\System\MaterialEditor.cpp" />
     <ClCompile Include="..\System\src\AssetManager.cpp" />
@@ -402,6 +457,13 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <AdditionalIncludeDirectories>..\SDKs\DirectXTex;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <!-- Unreal .uasset import; AssetManager (compiled above) calls into it. -->
+    <ClCompile Include="..\System\src\UnrealAssetImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealPackage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealOodle.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealTexture.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealStaticMesh.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Unreal\UnrealMaterial.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <!-- DirectXTex source units for texture conversion -->
     <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -456,6 +518,7 @@
     <ClCompile Include="EntityMeshRenderer.cpp" />
     <ClCompile Include="HosekWilkieSky.cpp" />
     <ClCompile Include="ImageSharpenRenderer.cpp" />
+    <ClCompile Include="GBufferViewRenderer.cpp" />
     <ClCompile Include="..\SDKs\HosekWilkie\ArHosekSkyModel.c">
       <CompileAs>CompileAsC</CompileAs>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -471,16 +534,25 @@
     <ClCompile Include="PointLightRenderer.cpp" />
     <ClCompile Include="RadianceCascadesRenderer.cpp" />
     <ClCompile Include="RadianceProbeRenderer.cpp" />
+    <ClCompile Include="VoxelGIRenderer.cpp" />
     <ClCompile Include="ParticleRenderer.cpp" />
+    <ClCompile Include="ParticleEffects.cpp" />
     <ClCompile Include="RainRenderer.cpp" />
     <ClCompile Include="RtAmbientOcclusion.cpp" />
+    <ClCompile Include="RtShadows.cpp" />
+    <ClCompile Include="PathTracer.cpp" />
     <ClCompile Include="RtGlobalIllumination.cpp" />
     <ClCompile Include="SceneSerializer.cpp" />
     <ClCompile Include="ShadowMapRenderer.cpp" />
+    <ClCompile Include="VirtualShadowMapRenderer.cpp" />
+    <ClCompile Include="LightClusterRenderer.cpp" />
     <ClCompile Include="SkyRenderer.cpp" />
+    <ClCompile Include="AarRenderer.cpp" />
+    <ClCompile Include="AnalyticEdgeAARenderer.cpp" />
     <ClCompile Include="SMAARenderer.cpp" />
     <ClCompile Include="SsrRenderer.cpp" />
     <ClCompile Include="SssrRenderer.cpp" />
+    <ClCompile Include="DpleRenderer.cpp" />
     <ClCompile Include="SubsurfaceScattering.cpp" />
     <ClCompile Include="ChromaticAberrationRenderer.cpp" />
     <ClCompile Include="TerrainGeometry.cpp" />
@@ -488,6 +560,32 @@
     <ClCompile Include="GeometryRaycaster.cpp" />
     <ClCompile Include="VegetationScatter.cpp" />
     <ClCompile Include="VegetationRenderer.cpp" />
+    <ClCompile Include="VirtualGeometryRenderer.cpp" />
+    <ClCompile Include="VirtualGeometryBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <!-- meshoptimizer 1.3: clusterization and simplification for virtualized geometry
+         (VirtualGeometryBuilder.cpp, via demo\clusterlod.h). Own object folder: names like
+         partition, rasterizer and allocator are generic enough to collide. -->
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\allocator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\clusterizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexanalyzer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\indexgenerator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\meshletcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\meshletutils.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\opacitymap.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\overdrawoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\partition.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\quantization.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\rasterizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\remesher.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\simplifier.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\spatialorder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\stripifier.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\tangentspace.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vcacheoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vertexcodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vertexfilter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
+    <ClCompile Include="..\SDKs\meshoptimizer-1.3\src\vfetchoptimizer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><ObjectFileName>$(IntDir)meshoptimizer\</ObjectFileName></ClCompile>
     <ClCompile Include="WaterRenderer.cpp" />
     <ClCompile Include="TAARenderer.cpp" />
     <ClCompile Include="TextureManager.cpp" />
@@ -512,6 +610,9 @@
     <None Include="..\..\Data\Shaders\RtGI_Spatial.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
     </None>
+    <None Include="..\..\Data\Shaders\RtGI_Vsm.hlsli" />
+    <None Include="..\..\Data\Shaders\RtGI_RayDebug.hlsli" />
+    <None Include="..\..\Data\Shaders\RtGI_RayDebugDraw.hlsl" />
     <None Include="..\..\Data\Shaders\RtAO_Common.hlsli" />
     <None Include="..\..\Data\Shaders\RtAO_RayGen.hlsl" />
     <None Include="..\..\Data\Shaders\RtAO_Temporal.hlsl" />
@@ -521,6 +622,11 @@
     </None>
     <None Include="..\..\Data\Shaders\RadianceCascadesTrace.hlsl" />
     <None Include="..\..\Data\Shaders\RadianceCascadesComposite.hlsl" />
+    <None Include="..\..\Data\Shaders\AnalyticAwareReconstruction.hlsl" />
+    <None Include="..\..\Data\Shaders\AnalyticEdge.hlsli" />
+    <None Include="..\..\Data\Shaders\PrincipledBrdf.hlsli" />
+    <None Include="..\..\Data\Shaders\AnalyticEdgeResolve.hlsli" />
+    <None Include="..\..\Data\Shaders\AnalyticEdgeAA.hlsl" />
     <None Include="..\..\Data\Shaders\SMAA.hlsl" />
     <None Include="..\..\Data\Shaders\SMAA_Ptero.hlsl" />
     <None Include="SMAA.h" />
@@ -530,9 +636,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\QtUi\QtUi.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\QtUi\QtUiTheme.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\QtUi\QtUiHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="QtViewportRenderer.cpp" />
     <ClInclude Include="..\QtUi\QtUi.h" />
+    <ClInclude Include="..\QtUi\QtUiTheme.h" />
     <ClInclude Include="..\QtUi\UiTypes.h" />
     <ClInclude Include="QtViewportRenderer.h" />
   </ItemGroup>
@@ -543,12 +651,49 @@
     <ClCompile Include="..\System\src\NodeGraphCatalog.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphDocument.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphRuntime.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\NodeGraphTemplates.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphEditorWindow.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\System\src\NodeGraphEditorHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClInclude Include="..\System\include\System\NodeGraphCatalog.h" />
     <ClInclude Include="..\System\include\System\NodeGraphDocument.h" />
     <ClInclude Include="..\System\include\System\NodeGraphEditor.h" />
     <ClInclude Include="..\System\include\System\NodeGraphRuntime.h" />
+    <ClInclude Include="..\System\include\System\NodeGraphTemplates.h" />
+    <ClInclude Include="..\System\include\System\CharacterMovement.h" />
+    <ClInclude Include="PlayerCollision.h" />
+    <ClInclude Include="ScenePhysics.h" />
+    <!-- Property reflection and the cinematic runtime, built into both the editor and the
+         packaged game's renderer. EntityProperties registers the entity and environment
+         properties; CinematicWorldHost plays sequences against a level. -->
+    <ClCompile Include="..\System\src\Guid.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\PropertyRegistry.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Cinematics\CinematicCurve.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Cinematics\SequenceTrack.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Cinematics\CinematicSequence.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\System\src\Cinematics\SequencePlayer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="EntityProperties.cpp" />
+    <ClCompile Include="CinematicWorldHost.cpp" />
+    <ClCompile Include="EditorCinematics.cpp" />
+    <ClCompile Include="FrameCapture.cpp" />
+    <ClInclude Include="FrameCapture.h" />
+    <!-- Ptero Sequencer, the cinematic editor: Qt, so editor-only like the Node Graph
+         window. The packaged game's renderer gets the headless facade instead. -->
+    <ClCompile Include="..\Editor\Sequencer\SequencerDocument.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\Editor\Sequencer\SequencerTimeline.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\Editor\Sequencer\SequencerWindow.cpp" Condition="'$(PteroGameRuntime)'!='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\Editor\Sequencer\SequencerEditorHeadless.cpp" Condition="'$(PteroGameRuntime)'=='true'"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClInclude Include="..\Editor\Sequencer\SequencerEditor.h" />
+    <ClInclude Include="..\Editor\Sequencer\SequencerDocument.h" />
+    <ClInclude Include="..\Editor\Sequencer\SequencerTimeline.h" />
+    <ClInclude Include="..\System\include\System\Guid.h" />
+    <ClInclude Include="..\System\include\System\PropertyRegistry.h" />
+    <ClInclude Include="..\System\include\System\Cinematics\CinematicCurve.h" />
+    <ClInclude Include="..\System\include\System\Cinematics\SequenceTrack.h" />
+    <ClInclude Include="..\System\include\System\Cinematics\CinematicSequence.h" />
+    <ClInclude Include="..\System\include\System\Cinematics\SequencePlayer.h" />
+    <ClInclude Include="EntityProperties.h" />
+    <ClInclude Include="CinematicWorldHost.h" />
+    <ClInclude Include="GameProjectSettings.h" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(PteroGameRuntime)'=='true'">
     <ClCompile>

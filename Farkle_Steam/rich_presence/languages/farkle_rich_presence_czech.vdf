@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"czech"
+	"Tokens"
+	{
+		"#Menu"	"V hospodě"
+		"#VsAI"	"Hraje proti AI · %score%"
+		"#Searching"	"Hledá hru"
+		"#Waiting"	"Čeká u otevřeného stolu"
+		"#WaitingFriends"	"Čeká na přátele"
+		"#Online"	"Hraje online proti: %opponent% · %score%"
+	}
+}

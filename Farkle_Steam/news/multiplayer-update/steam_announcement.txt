@@ -1,0 +1,85 @@
+TITLE:
+Multiplayer is Here – Plus Ray-Traced Shadows and AO
+
+SUBTITLE (event summary):
+Quick Match, open tables, Steam friend invites, and voice and text chat are out now – along with ray-traced shadows and ray-traced ambient occlusion.
+
+IMAGES:
+Cover (800x450):   steam_event_cover.png
+Header (1920x622): steam_event_header.png
+In the body:       multiplayer_update.png, multiplayer_features.png, raytraced_lighting.png
+                   (upload them in the event editor and replace the [img] lines below)
+
+BODY (paste into the Steam event editor):
+
+[h1]Company at the table[/h1]
+
+A while ago we promised you wouldn't have to play the tavern's regulars alone forever. Today the wait is over: [b]multiplayer is out now[/b] in [b]Farkle: Tavern Dice[/b]. Pull up a chair and play against friends, rivals and travellers from all over the world.
+
+[img]multiplayer_update.png[/img]
+
+[hr][/hr]
+
+[h2]How to play online[/h2]
+
+Choose [b]Play Online[/b] in the main menu.
+
+[img]multiplayer_features.png[/img]
+
+[h3]🎲 Quick Match[/h3]
+Hit Quick Match and we'll seat you at a table with another player. If nobody's around, we open a table for you: you start playing the AI right away, and the next player who comes looking takes its seat.
+
+[h3]🍺 Open your table[/h3]
+Choose [b]Open Table[/b] to start a game against the AI with your table open to the public. You don't wait for anyone: whenever another player comes looking for a match, they [b]take the AI's seat[/b] at the next turn, score and all.
+
+[h3]🤝 Play with your Steam friends[/h3]
+[b]Play with Friends[/b] opens the Steam invite list. Friends can also join you straight from their [b]Steam friends list[/b], which now shows what you're up to – "Playing online against Marta · 1,250 – 900".
+
+[h3]💬 Voice and text chat[/h3]
+Talk across the table with [b]voice chat[/b], or type in the [b]chat box[/b] (Enter sends). Chat goes through Steam's own text filter. With Steam friends your microphone starts on; with players you don't know it starts off. You can mute the other player at any time.
+
+[h3]⚖️ Fair dice[/h3]
+Before the first roll, both players' games agree on the dice together, and the guest's game checks every throw. Nobody can load the dice, not even the player hosting the table.
+
+[h3]⏳ No stalling[/h3]
+Each decision has a [b]30-second timer[/b]. If it runs out, the AI finishes that turn for you. If a player leaves, the one who stays plays on against the AI with the score as it stands.
+
+[hr][/hr]
+
+[h2]Ray-traced light in the tavern[/h2]
+
+This update also brings two new lighting options for graphics cards with [b]DirectX Raytracing[/b].
+
+[img]raytraced_lighting.png[/img]
+
+[h3]Ray-traced shadows[/h3]
+Shadows are traced from the light itself, so they're crisp where a die touches the table and grow softer the farther they fall. Choose [b]Sun[/b] for the main light, or [b]Sun + Lights[/b] to trace shadows from the candles and the hearth too.
+
+[h3]Ray-traced ambient occlusion[/h3]
+The soft shading in corners, under the dice and around the table legs is now traced against the whole room, not guessed from what's on screen. Things just off-screen or hidden behind others still darken what's next to them.
+
+[b]Where to find them:[/b] Settings › Lighting › [b]Ray-Traced Shadows[/b], and [b]AO Method[/b] › Ray Traced. On graphics cards without ray tracing the options simply don't appear, and the game looks just as it did.
+
+[hr][/hr]
+
+[h2]What's next[/h2]
+
+Multiplayer is the first step. Next on the road:
+
+[list]
+[*][b]Ranked matches and leaderboards[/b]
+[*][b]A progression system[/b] – win matches to earn in-game coins and unlock [b]special dice[/b] with their own quirks
+[*][b]Cosmetics[/b] – the only thing that will ever cost money. Special dice are earned by playing, never sold.
+[/list]
+
+[i]Plans may change as development continues.[/i]
+
+[hr][/hr]
+
+[h2]Tell us how it plays[/h2]
+
+Found a bug at the table, or have an idea for multiplayer? Let us know in the [url=https://steamcommunity.com/app/5368450/discussions/]Steam discussions[/url] – your feedback shapes what we build next.
+
+Someone's waiting at the table. 🎲
+
+[url=https://store.steampowered.com/app/5368450]Farkle: Tavern Dice on Steam[/url]

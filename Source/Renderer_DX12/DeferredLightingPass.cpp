@@ -1,13 +1,17 @@
 #include "pch.h"
 #include "DeferredLightingPass.h"
+#include "LightClusterRenderer.h"
 #include "System/PteroLog.h"
 
 #include "VolumetricFogSettings.h"
+#include "AnalyticEdgeAARenderer.h"
 
 #include "d3dx12.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 // Extern C helpers shared across the renderer.
 extern "C"
@@ -45,13 +49,37 @@ using namespace DirectX;
 //
 // The deferred lighting resolve was immune because it samples the real D32
 // depth buffer instead, which is why the fault looked like an RTGI-only bug.
-static constexpr DXGI_FORMAT kGBufferFormats[3] =
+static constexpr DXGI_FORMAT kGBufferFormats[] =
 {
     DXGI_FORMAT_R8G8B8A8_UNORM,     // albedo
     DXGI_FORMAT_R32G32B32A32_FLOAT, // normal + depth
     DXGI_FORMAT_R8G8B8A8_UNORM,     // material
+    AnalyticEdge::kGBufferFormat,   // triangle edges for Analytic Edge AA
+    PrincipledGBuffer::kFormat,     // Disney: subsurface, specular tint, sheen, sheen tint
+    PrincipledGBuffer::kFormat,     // Disney: clearcoat, clearcoat gloss, anisotropic, tangent
 };
-static constexpr UINT kGBufferCount = 3;
+static constexpr UINT kGBufferCount = DeferredLightingPass::kGBufferTargetCount;
+static_assert(std::size(kGBufferFormats) == kGBufferCount);
+
+// Clear colours, which are also the targets' optimised clear values. The normal target
+// clears depth to 1.0 so untouched sky pixels can be rejected; the edge target clears
+// to "no edge" (kPteroNoEdge in AnalyticEdge.hlsli) - it is an integer format, and a
+// float clear colour is converted to its integer value.
+// The principled targets clear to zero, which is every extra lobe off.
+static constexpr float kGBufferClearColors[kGBufferCount][4] =
+{
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 0.5f, 0.5f, 1.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 255.0f, 255.0f, 255.0f, 255.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+};
+
+// Whether ResolveSubresource can average a target under MSAA. The edge target is an
+// integer format, which cannot be resolved - and an average of several triangles' edges
+// would mean nothing anyway, which is why Analytic Edge AA and AAR do not run under MSAA.
+static constexpr bool kGBufferResolvable[kGBufferCount] = { true, true, true, false, true, true };
 
 // ---------------------------------------------------------------------------
 // Public
@@ -111,7 +139,7 @@ void DeferredLightingPass::BeginGeometryPass(
     const auto* resources = mMsaaSettings.Enabled ? mMsaaGBufferResources : mGBufferResources;
     const auto* rtvHandles = mMsaaSettings.Enabled ? mMsaaRtvHandles : mRtvHandles;
 
-    // Transition all three G-Buffer RTs from SRV/RESOLVE_SOURCE -> RTV.
+    // Transition all G-Buffer RTs from SRV/RESOLVE_SOURCE -> RTV.
     D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
@@ -123,19 +151,31 @@ void DeferredLightingPass::BeginGeometryPass(
     }
     commandList->ResourceBarrier(kGBufferCount, barriers);
 
-    // Clear all three G-Buffer RTs to zero/identity.
-    const float clearBlack[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    // The normal RT stores oct-encoded normal XY plus copied scene depth in Z.
-    // Clear depth to 1.0 for untouched sky pixels so RTGI can reject them safely.
-    const float clearNormal[] = { 0.5f, 0.5f, 1.0f, 0.0f };
-    commandList->ClearRenderTargetView(rtvHandles[0], clearBlack,  0, nullptr);
-    commandList->ClearRenderTargetView(rtvHandles[1], clearNormal, 0, nullptr);
-    commandList->ClearRenderTargetView(rtvHandles[2], clearBlack,  0, nullptr);
+    // Clear all G-Buffer RTs to zero/identity. The normal RT stores oct-encoded normal
+    // XY plus copied scene depth in Z; depth clears to 1.0 for untouched sky pixels so
+    // RTGI can reject them safely. The edge RT clears to "no edge".
+    for (UINT i = 0; i < kGBufferCount; ++i)
+        commandList->ClearRenderTargetView(rtvHandles[i], kGBufferClearColors[i], 0, nullptr);
 
-    // Bind all three MRT outputs together with the shared depth buffer.
+    // Bind all MRT outputs together with the shared depth buffer.
     commandList->OMSetRenderTargets(kGBufferCount, rtvHandles, FALSE, &sceneDsvHandle);
 
     // Set viewport / scissor to the current scene dimensions.
+    const D3D12_VIEWPORT vp = { 0,0, static_cast<float>(width), static_cast<float>(height), 0,1 };
+    const D3D12_RECT     sr = { 0,0, static_cast<LONG>(width),  static_cast<LONG>(height) };
+    commandList->RSSetViewports(1, &vp);
+    commandList->RSSetScissorRects(1, &sr);
+}
+
+void DeferredLightingPass::RebindGeometryTargets(
+    ID3D12GraphicsCommandList* commandList,
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneDsvHandle,
+    UINT                        width,
+    UINT                        height) const
+{
+    const auto* rtvHandles = mMsaaSettings.Enabled ? mMsaaRtvHandles : mRtvHandles;
+    commandList->OMSetRenderTargets(kGBufferCount, rtvHandles, FALSE, &sceneDsvHandle);
+
     const D3D12_VIEWPORT vp = { 0,0, static_cast<float>(width), static_cast<float>(height), 0,1 };
     const D3D12_RECT     sr = { 0,0, static_cast<LONG>(width),  static_cast<LONG>(height) };
     commandList->RSSetViewports(1, &vp);
@@ -180,18 +220,21 @@ void DeferredLightingPass::ResolveGBuffer(ID3D12GraphicsCommandList* commandList
 
     // Transition single-sample buffers to RESOLVE_DEST
     D3D12_RESOURCE_BARRIER preResolveBarriers[kGBufferCount];
+    UINT resolveCount = 0;
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
-        preResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+        if (!kGBufferResolvable[i]) continue;
+        preResolveBarriers[resolveCount++] = CD3DX12_RESOURCE_BARRIER::Transition(
             mGBufferResources[i].Get(),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RESOLVE_DEST);
     }
-    commandList->ResourceBarrier(kGBufferCount, preResolveBarriers);
+    commandList->ResourceBarrier(resolveCount, preResolveBarriers);
 
     // Resolve each MSAA G-Buffer RT to its single-sample counterpart
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
+        if (!kGBufferResolvable[i]) continue;
         commandList->ResolveSubresource(
             mGBufferResources[i].Get(),      // Dest (single-sample)
             0,                                // DestSubresource
@@ -202,14 +245,16 @@ void DeferredLightingPass::ResolveGBuffer(ID3D12GraphicsCommandList* commandList
 
     // Transition single-sample buffers to PSR for lighting pass
     D3D12_RESOURCE_BARRIER postResolveBarriers[kGBufferCount];
+    resolveCount = 0;
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
-        postResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+        if (!kGBufferResolvable[i]) continue;
+        postResolveBarriers[resolveCount++] = CD3DX12_RESOURCE_BARRIER::Transition(
             mGBufferResources[i].Get(),
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
-    commandList->ResourceBarrier(kGBufferCount, postResolveBarriers);
+    commandList->ResourceBarrier(resolveCount, postResolveBarriers);
 }
 
 void DeferredLightingPass::SetSceneLighting(
@@ -273,21 +318,7 @@ void DeferredLightingPass::SetProbeSrv(
 
     ProbeConstants pc{};
     if (probeSrvHandle.ptr != 0 && settings != nullptr)
-    {
-        pc.ProbeGridX = static_cast<uint32_t>((std::max)(settings->GridX, 0));
-        pc.ProbeGridY = static_cast<uint32_t>((std::max)(settings->GridY, 0));
-        pc.ProbeGridZ = static_cast<uint32_t>((std::max)(settings->GridZ, 0));
-        pc.ProbeSpacing = settings->Spacing;
-
-        float ox = 0.0f;
-        float oy = 0.0f;
-        float oz = 0.0f;
-        ResolveProbeGridOrigin(*settings, cameraPosition.x, cameraPosition.y, cameraPosition.z, ox, oy, oz);
-
-        pc.ProbeOriginX = ox;
-        pc.ProbeOriginY = oy;
-        pc.ProbeOriginZ = oz;
-    }
+        pc.Field = ResolveProbeField(*settings, cameraPosition.x, cameraPosition.y, cameraPosition.z);
 
     std::memcpy(mMappedProbeCB, &pc, sizeof(pc));
 }
@@ -381,6 +412,17 @@ void DeferredLightingPass::SetRtgiDebugView(int debugView)
     }
 }
 
+void DeferredLightingPass::SetDisneyBrdf(bool enabled)
+{
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.DisneyBrdf = enabled ? 1 : 0;
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
 void DeferredLightingPass::SetSpecularSrv(
     D3D12_GPU_DESCRIPTOR_HANDLE specularSrvHandle,
     float                       intensity)
@@ -411,6 +453,36 @@ void DeferredLightingPass::SetVolumetricFogSrv(
         lc.FogStartDistance = settings != nullptr ? settings->StartDistance : 0.1f;
         lc.FogMaxDistance = settings != nullptr ? settings->MaxDistance : 100.0f;
         lc.FogDebugView = settings != nullptr ? settings->DebugView : 0;
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
+void DeferredLightingPass::SetAoDirectOcclusion(float amount)
+{
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.AoDirectOcclusion = std::clamp(amount, 0.0f, 1.0f);
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
+void DeferredLightingPass::SetRtShadows(
+    D3D12_GPU_DESCRIPTOR_HANDLE sunVisibilitySrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE localVisibilitySrv,
+    int debugView)
+{
+    mRtSunShadowSrv = sunVisibilitySrv;
+    mRtLocalShadowSrv = localVisibilitySrv;
+
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.RtSunShadow = sunVisibilitySrv.ptr != 0 ? 1 : 0;
+        lc.RtLocalShadows = localVisibilitySrv.ptr != 0 ? 1 : 0;
+        lc.RtShadowDebugView = (sunVisibilitySrv.ptr != 0 || localVisibilitySrv.ptr != 0) ? debugView : 0;
         std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
     }
 }
@@ -454,6 +526,34 @@ void DeferredLightingPass::SetShadowData(
     sc.ShadowBias    = 0.003f;
     sc.PointShadowMapSize = mPointShadowMapSize;
     sc.PointShadowBias = mPointShadowBias;
+    std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
+
+    mVsmPageTable = 0;
+    mCpuShadows.Vsm = VsmGpuConstants{};
+    mCpuShadows.VsmPageTable = 0;
+}
+
+void DeferredLightingPass::SetVirtualShadowMap(
+    const VsmGpuConstants&      constants,
+    D3D12_GPU_VIRTUAL_ADDRESS   pageTable,
+    D3D12_GPU_DESCRIPTOR_HANDLE poolSrvHandle)
+{
+    mShadowSrvHandle = poolSrvHandle;
+    mVsmPageTable = pageTable;
+
+    mCpuShadows.LightViewProj = XMFLOAT4X4{};
+    mCpuShadows.ShadowMapSize = 0.0f;
+    mCpuShadows.ShadowBias = 0.0f;
+    mCpuShadows.SunShadowSrv = poolSrvHandle;
+    mCpuShadows.Vsm = constants;
+    mCpuShadows.VsmPageTable = pageTable;
+
+    if (!mMappedShadowCB) return;
+
+    ShadowConstants sc{};
+    sc.PointShadowMapSize = mPointShadowMapSize;
+    sc.PointShadowBias = mPointShadowBias;
+    sc.Vsm = constants;
     std::memcpy(mMappedShadowCB, &sc, sizeof(sc));
 }
 
@@ -512,14 +612,21 @@ void DeferredLightingPass::ResolveLight(
     //  10 – SRV table: specular reflections (t8)
     //  11 – SRV table: point shadow map array (t9)
     //  12 – SRV table: radiance probes (t10)
-    if (mCameraCB)
-        commandList->SetGraphicsRootConstantBufferView(0, mCameraCB->GetGPUVirtualAddress());
-    if (mLightingCB)
-        commandList->SetGraphicsRootConstantBufferView(1, mLightingCB->GetGPUVirtualAddress());
-    if (mShadowCB)
-        commandList->SetGraphicsRootConstantBufferView(2, mShadowCB->GetGPUVirtualAddress());
-    if (mProbeCB)
-        commandList->SetGraphicsRootConstantBufferView(3, mProbeCB->GetGPUVirtualAddress());
+    // Snapshot the CPU mirrors into this recording's own ring slot; see
+    // kCbRingSlots in the header for why a GPU copy is never written twice.
+    mCbRingSlot = (mCbRingSlot + 1u) % kCbRingSlots;
+    const auto bindCb = [&](UINT rootIndex, ID3D12Resource* cb, std::byte* gpu, const void* mirror, size_t size, UINT64 stride)
+    {
+        if (!cb || !gpu || !mirror)
+            return;
+        const UINT64 offset = static_cast<UINT64>(mCbRingSlot) * stride;
+        std::memcpy(gpu + offset, mirror, size);
+        commandList->SetGraphicsRootConstantBufferView(rootIndex, cb->GetGPUVirtualAddress() + offset);
+    };
+    bindCb(0, mCameraCB.Get(),   mGpuCameraCB,   mMappedCameraCB,   sizeof(CameraConstants),   CbStride<CameraConstants>());
+    bindCb(1, mLightingCB.Get(), mGpuLightingCB, mMappedLightingCB, sizeof(LightingConstants), CbStride<LightingConstants>());
+    bindCb(2, mShadowCB.Get(),   mGpuShadowCB,   mMappedShadowCB,   sizeof(ShadowConstants),   CbStride<ShadowConstants>());
+    bindCb(3, mProbeCB.Get(),    mGpuProbeCB,    mMappedProbeCB,    sizeof(ProbeConstants),    CbStride<ProbeConstants>());
 
     // G-buffer SRVs (t0-t2): albedo, normal, material – contiguous since allocated in a loop.
     if (mSrvs.Albedo.ptr != 0)
@@ -558,6 +665,30 @@ void DeferredLightingPass::ResolveLight(
     if (subsurface)
         commandList->SetGraphicsRootConstantBufferView(13, mSubsurfaceConstants);
 
+    //  14 – SRV virtual shadow map page table (t11). Only read while the constants say
+    //       the map is on, but a root descriptor must always name something.
+    commandList->SetGraphicsRootShaderResourceView(14,
+        mVsmPageTable != 0 ? mVsmPageTable : mShadowCB->GetGPUVirtualAddress());
+
+    //  15 – SRV table: principled G-Buffer targets (t12, t13)
+    if (mSrvs.Principled0.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(15, mSrvs.Principled0);
+
+    //  21, 22 – ray-traced sun visibility (t14) and local light pairs (t15)
+    if (mRtSunShadowSrv.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(kRtShadowRootIndex, mRtSunShadowSrv);
+    if (mRtLocalShadowSrv.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(kRtShadowRootIndex + 1, mRtLocalShadowSrv);
+
+    //  16..20 – the scene's lights and their clustered lists (b0, t0..t3 in space 7).
+    //           Without them the shader would loop over whatever memory it was handed,
+    //           so nothing is drawn rather than that.
+    if (mLightClusterAddresses[0] == 0)
+        return;
+    commandList->SetGraphicsRootConstantBufferView(kLightClusterRootIndex, mLightClusterAddresses[0]);
+    for (UINT i = 1; i < 5; ++i)
+        commandList->SetGraphicsRootShaderResourceView(kLightClusterRootIndex + i, mLightClusterAddresses[i]);
+
     // Draw a fullscreen triangle (3 vertices, no vertex buffer needed).
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 0, nullptr);
@@ -567,26 +698,19 @@ void DeferredLightingPass::ResolveLight(
 
 void DeferredLightingPass::Shutdown()
 {
-    if (mCameraCB && mMappedCameraCB)
-    {
-        mCameraCB->Unmap(0, nullptr);
-        mMappedCameraCB = nullptr;
-    }
-    if (mLightingCB && mMappedLightingCB)
-    {
-        mLightingCB->Unmap(0, nullptr);
-        mMappedLightingCB = nullptr;
-    }
-    if (mShadowCB && mMappedShadowCB)
-    {
-        mShadowCB->Unmap(0, nullptr);
-        mMappedShadowCB = nullptr;
-    }
-    if (mProbeCB && mMappedProbeCB)
-    {
-        mProbeCB->Unmap(0, nullptr);
-        mMappedProbeCB = nullptr;
-    }
+    if (mCameraCB && mGpuCameraCB)     mCameraCB->Unmap(0, nullptr);
+    if (mLightingCB && mGpuLightingCB) mLightingCB->Unmap(0, nullptr);
+    if (mShadowCB && mGpuShadowCB)     mShadowCB->Unmap(0, nullptr);
+    if (mProbeCB && mGpuProbeCB)       mProbeCB->Unmap(0, nullptr);
+    mGpuCameraCB = mGpuLightingCB = mGpuShadowCB = mGpuProbeCB = nullptr;
+    mMappedCameraCB = nullptr;
+    mMappedLightingCB = nullptr;
+    mMappedShadowCB = nullptr;
+    mMappedProbeCB = nullptr;
+    mCameraMirror.reset();
+    mLightingMirror.reset();
+    mShadowMirror.reset();
+    mProbeMirror.reset();
     mCameraCB.Reset();
     mLightingCB.Reset();
     mShadowCB.Reset();
@@ -675,10 +799,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             texDesc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             texDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
-            float clearColor[4] = {};
-            if (i == 1) { clearColor[0] = clearColor[1] = clearColor[2] = 0.5f; }
             D3D12_CLEAR_VALUE clearVal{ kGBufferFormats[i], {} };
-            std::memcpy(clearVal.Color, clearColor, sizeof(clearColor));
+            std::memcpy(clearVal.Color, kGBufferClearColors[i], sizeof(clearVal.Color));
 
             if (FAILED(device->CreateCommittedResource(
                 &defaultHeap, D3D12_HEAP_FLAG_NONE,
@@ -689,7 +811,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
                 return false;
             }
 
-            const wchar_t* names[] = { L"GBuffer_MSAA_Albedo", L"GBuffer_MSAA_Normal", L"GBuffer_MSAA_Material" };
+            const wchar_t* names[] = { L"GBuffer_MSAA_Albedo", L"GBuffer_MSAA_Normal", L"GBuffer_MSAA_Material", L"GBuffer_MSAA_Edge",
+                                       L"GBuffer_MSAA_Principled0", L"GBuffer_MSAA_Principled1" };
             mMsaaGBufferResources[i]->SetName(names[i]);
 
             // Create MSAA RTV
@@ -737,10 +860,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
         texDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
         // Clear value must match the clear colour in BeginGeometryPass.
-        float clearColor[4] = {};
-        if (i == 1) { clearColor[0] = clearColor[1] = clearColor[2] = 0.5f; } // normal
         D3D12_CLEAR_VALUE clearVal{ kGBufferFormats[i], {} };
-        std::memcpy(clearVal.Color, clearColor, sizeof(clearColor));
+        std::memcpy(clearVal.Color, kGBufferClearColors[i], sizeof(clearVal.Color));
 
         if (FAILED(device->CreateCommittedResource(
             &defaultHeap, D3D12_HEAP_FLAG_NONE,
@@ -751,7 +872,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             return false;
         }
 
-        const wchar_t* names[] = { L"GBuffer_Albedo", L"GBuffer_Normal", L"GBuffer_Material" };
+        const wchar_t* names[] = { L"GBuffer_Albedo", L"GBuffer_Normal", L"GBuffer_Material", L"GBuffer_Edge",
+                                   L"GBuffer_Principled0", L"GBuffer_Principled1" };
         mGBufferResources[i]->SetName(names[i]);
 
         // RTV.
@@ -776,6 +898,9 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             if (i == 0) mSrvs.Albedo   = gpuSrv;
             if (i == 1) mSrvs.Normal   = gpuSrv;
             if (i == 2) mSrvs.Material = gpuSrv;
+            if (i == 3) mSrvs.Edge     = gpuSrv;
+            if (i == 4) mSrvs.Principled0 = gpuSrv;
+            if (i == 5) mSrvs.Principled1 = gpuSrv;
         }
 
         // The shaders' view carries every channel as stored. It used to force alpha to 1
@@ -810,6 +935,9 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             if (i == 0) mDebugSrvs.Albedo   = gpuSrv;
             if (i == 1) mDebugSrvs.Normal   = gpuSrv;
             if (i == 2) mDebugSrvs.Material = gpuSrv;
+            if (i == 3) mDebugSrvs.Edge     = gpuSrv;
+            if (i == 4) mDebugSrvs.Principled0 = gpuSrv;
+            if (i == 5) mDebugSrvs.Principled1 = gpuSrv;
         }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC debugSrvDesc{};
@@ -864,10 +992,22 @@ bool DeferredLightingPass::CreateConstantBuffers()
         return SUCCEEDED(outCB->Map(0, nullptr, outMapped));
     };
 
-    if (!makeCB(sizeof(CameraConstants),  mCameraCB,  reinterpret_cast<void**>(&mMappedCameraCB),  L"DeferredLighting_CameraCB"))  return false;
-    if (!makeCB(sizeof(LightingConstants), mLightingCB, reinterpret_cast<void**>(&mMappedLightingCB), L"DeferredLighting_LightingCB")) return false;
-    if (!makeCB(sizeof(ShadowConstants),  mShadowCB,  reinterpret_cast<void**>(&mMappedShadowCB),  L"DeferredLighting_ShadowCB"))  return false;
-    if (!makeCB(sizeof(ProbeConstants),   mProbeCB,   reinterpret_cast<void**>(&mMappedProbeCB),   L"DeferredLighting_ProbeCB"))   return false;
+    // kCbRingSlots copies of each block; see the header.
+    if (!makeCB(CbStride<CameraConstants>()   * kCbRingSlots, mCameraCB,   reinterpret_cast<void**>(&mGpuCameraCB),   L"DeferredLighting_CameraCB"))   return false;
+    if (!makeCB(CbStride<LightingConstants>() * kCbRingSlots, mLightingCB, reinterpret_cast<void**>(&mGpuLightingCB), L"DeferredLighting_LightingCB")) return false;
+    if (!makeCB(CbStride<ShadowConstants>()   * kCbRingSlots, mShadowCB,   reinterpret_cast<void**>(&mGpuShadowCB),   L"DeferredLighting_ShadowCB"))   return false;
+    if (!makeCB(CbStride<ProbeConstants>()    * kCbRingSlots, mProbeCB,    reinterpret_cast<void**>(&mGpuProbeCB),    L"DeferredLighting_ProbeCB"))    return false;
+
+    // The setters read-modify-write these mirrors. Zero-filled, like the
+    // freshly created upload buffers they replace.
+    if (!mCameraMirror)   { mCameraMirror   = std::make_unique<CameraConstants>();   std::memset(mCameraMirror.get(),   0, sizeof(CameraConstants)); }
+    if (!mLightingMirror) { mLightingMirror = std::make_unique<LightingConstants>(); std::memset(mLightingMirror.get(), 0, sizeof(LightingConstants)); }
+    if (!mShadowMirror)   { mShadowMirror   = std::make_unique<ShadowConstants>();   std::memset(mShadowMirror.get(),   0, sizeof(ShadowConstants)); }
+    if (!mProbeMirror)    { mProbeMirror    = std::make_unique<ProbeConstants>();    std::memset(mProbeMirror.get(),    0, sizeof(ProbeConstants)); }
+    mMappedCameraCB   = mCameraMirror.get();
+    mMappedLightingCB = mLightingMirror.get();
+    mMappedShadowCB   = mShadowMirror.get();
+    mMappedProbeCB    = mProbeMirror.get();
     return true;
 }
 
@@ -909,7 +1049,16 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     //  slot 11 – Descriptor table: point shadow map array t9
     //  slot 12 – Descriptor table: radiance probes t10
     //  slot 13 – CBV (b4) subsurface constants  (subsurface variant only)
-    D3D12_ROOT_PARAMETER rootParams[14]{};
+    //  slot 14 – SRV (t11) virtual shadow map page table (root descriptor)
+    //  slot 15 – Descriptor table: principled G-Buffer SRVs t12,t13
+    //  slots 16..20 – light clusters (space 7)
+    //  slot 21 – Descriptor table: ray-traced sun visibility t14
+    //  slot 22 – Descriptor table: ray-traced local light visibility t15
+    D3D12_ROOT_PARAMETER rootParams[kRtShadowRootIndex + 2]{};
+
+    rootParams[14].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParams[14].Descriptor.ShaderRegister = 11; // t11
+    rootParams[14].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0
@@ -1035,6 +1184,39 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     rootParams[13].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[13].Descriptor.ShaderRegister = 4; // b4
     rootParams[13].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Disney principled parameters: t12, t13 - allocated in the same loop, so contiguous.
+    D3D12_DESCRIPTOR_RANGE principledRange{};
+    principledRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    principledRange.NumDescriptors                    = PrincipledGBuffer::kTargetCount;
+    principledRange.BaseShaderRegister                = 12; // t12
+    principledRange.OffsetInDescriptorsFromTableStart = 0;
+
+    rootParams[15].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[15].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[15].DescriptorTable.pDescriptorRanges   = &principledRange;
+    rootParams[15].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // 16..20: the scene's lights and their clustered lists (LightClusters.hlsli).
+    LightClusterRenderer::FillRootParameters(&rootParams[kLightClusterRootIndex], D3D12_SHADER_VISIBILITY_PIXEL);
+    static_assert(kRtShadowRootIndex == kLightClusterRootIndex + LightClusterRenderer::kRootParameterCount,
+                  "the ray-traced shadow tables follow the light clusters");
+
+    // Ray-traced shadows: t14 sun visibility, t15 local light pairs - separate tables,
+    // only read while the lighting constants say they are bound.
+    D3D12_DESCRIPTOR_RANGE rtSunShadowRange{};
+    rtSunShadowRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rtSunShadowRange.NumDescriptors     = 1;
+    rtSunShadowRange.BaseShaderRegister = 14; // t14
+    D3D12_DESCRIPTOR_RANGE rtLocalShadowRange = rtSunShadowRange;
+    rtLocalShadowRange.BaseShaderRegister = 15; // t15
+
+    rootParams[kRtShadowRootIndex].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[kRtShadowRootIndex].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[kRtShadowRootIndex].DescriptorTable.pDescriptorRanges   = &rtSunShadowRange;
+    rootParams[kRtShadowRootIndex].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[kRtShadowRootIndex + 1] = rootParams[kRtShadowRootIndex];
+    rootParams[kRtShadowRootIndex + 1].DescriptorTable.pDescriptorRanges = &rtLocalShadowRange;
 
     // Static samplers.
     D3D12_STATIC_SAMPLER_DESC pointSampler{};

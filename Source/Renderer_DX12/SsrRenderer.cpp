@@ -95,13 +95,13 @@ bool SsrRenderer::CreatePipeline()
 
     // One single-descriptor table per input, so each SRV can be bound directly from the
     // handle its owner already holds in the shared heap. A single contiguous table would
-    // mean copying five descriptors into a private heap every frame to make them adjacent.
-    D3D12_DESCRIPTOR_RANGE srvRanges[5]{};
-    for (UINT i = 0; i < 5; ++i)
+    // mean copying six descriptors into a private heap every frame to make them adjacent.
+    D3D12_DESCRIPTOR_RANGE srvRanges[6]{};
+    for (UINT i = 0; i < 6; ++i)
     {
         srvRanges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors = 1;
-        srvRanges[i].BaseShaderRegister = i;   // t0..t4
+        srvRanges[i].BaseShaderRegister = i;   // t0..t5
         srvRanges[i].OffsetInDescriptorsFromTableStart = 0;
     }
 
@@ -111,13 +111,13 @@ bool SsrRenderer::CreatePipeline()
     uavRange.BaseShaderRegister = 0;   // u0
     uavRange.OffsetInDescriptorsFromTableStart = 0;
 
-    // 0 = CBV b0, 1..5 = SRV t0..t4, 6 = UAV u0.
-    D3D12_ROOT_PARAMETER params[7]{};
+    // 0 = CBV b0, 1..6 = SRV t0..t5, 7 = UAV u0.
+    D3D12_ROOT_PARAMETER params[8]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    for (UINT i = 0; i < 5; ++i)
+    for (UINT i = 0; i < 6; ++i)
     {
         params[1 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[1 + i].DescriptorTable.NumDescriptorRanges = 1;
@@ -125,10 +125,10 @@ bool SsrRenderer::CreatePipeline()
         params[1 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
 
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[6].DescriptorTable.NumDescriptorRanges = 1;
-    params[6].DescriptorTable.pDescriptorRanges = &uavRange;
-    params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[7].DescriptorTable.NumDescriptorRanges = 1;
+    params[7].DescriptorTable.pDescriptorRanges = &uavRange;
+    params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // Clamping matters here: a ray that runs off the frame must not wrap around and
     // reflect the opposite edge. The shader fades these out, but the sample still happens.
@@ -253,7 +253,9 @@ void SsrRenderer::Dispatch(
     const SsrSettings&           settings,
     const DirectX::XMFLOAT4X4&   viewProjection,
     const DirectX::XMFLOAT4X4&   inverseViewProjection,
-    const DirectX::XMFLOAT3&     cameraPosition)
+    const DirectX::XMFLOAT3&     cameraPosition,
+    D3D12_GPU_DESCRIPTOR_HANDLE  fallbackSpecularSrv,
+    float                        fallbackScale)
 {
     if (!mIsInitialized || commandList == nullptr || sceneColorResource == nullptr)
         return;
@@ -281,6 +283,7 @@ void SsrRenderer::Dispatch(
         cb.MaxDistance = (std::max)(settings.MaxDistance, 1.0e-3f);
         cb.EdgeFadeStart = std::clamp(settings.EdgeFadeStart, 0.0f, 0.999f);
         cb.DebugView = settings.DebugView;
+        cb.FallbackScale = fallbackSpecularSrv.ptr != 0 ? (std::max)(fallbackScale, 0.0f) : 0.0f;
         std::memcpy(mMappedCb, &cb, sizeof(cb));
     }
 
@@ -305,7 +308,9 @@ void SsrRenderer::Dispatch(
     commandList->SetComputeRootDescriptorTable(3, normalSrv);
     commandList->SetComputeRootDescriptorTable(4, materialSrv);
     commandList->SetComputeRootDescriptorTable(5, albedoSrv);
-    commandList->SetComputeRootDescriptorTable(6, mOutputUavGpu);
+    // Without a fallback the table still needs a valid view; the shader does not read it.
+    commandList->SetComputeRootDescriptorTable(6, fallbackSpecularSrv.ptr != 0 ? fallbackSpecularSrv : albedoSrv);
+    commandList->SetComputeRootDescriptorTable(7, mOutputUavGpu);
 
     const UINT groupsX = (mWidth + 7) / 8;
     const UINT groupsY = (mHeight + 7) / 8;

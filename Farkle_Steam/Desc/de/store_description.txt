@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice erweckt das klassische Würfelspiel in einer stimmungsvollen mittelalterlichen Taverne zum Leben.
+Würfle, sammle Punkte und entscheide, wie viel du riskieren willst. Jeder erfolgreiche Wurf stellt dich vor eine neue Wahl: Sichere deine Punkte und geh auf Nummer sicher – oder würfle erneut und riskiere, alles zu verlieren, was du in diesem Zug erspielt hast.
+Die Regeln sind einfach. Die Entscheidungen nicht.
+
+[IMAGE: roll.png]
+Jeder Zug beginnt mit sechs Würfeln. Lege punktende Kombinationen beiseite und würfle mit den übrigen Würfeln weiter, um deine Punktzahl auszubauen.
+Doch das Risiko würfelt immer mit.
+Bringt ein Wurf keine punktenden Würfel, hast du einen Farkle – und verlierst alle ungesicherten Punkte dieses Zuges.
+Manchmal ist Aufhören die klügste Wahl.
+Manchmal ist ein weiterer Wurf das Risiko wert.
+Und manchmal haben die Würfel ganz eigene Pläne.
+
+[IMAGE: gameplay.png]
+Farkle basiert auf einem einfachen Push-your-Luck-Prinzip, das dich ständig zwischen Risiko und Belohnung abwägen lässt.
+Die Regeln sind schnell gelernt, sodass du dich auf das Wesentliche konzentrieren kannst:
+[list]
+[*]Wirf sechs Würfel und suche nach punktenden Kombinationen
+[*]Behalte punktende Würfel und würfle den Rest erneut
+[*]Setze deinen Zug fort, um höhere Punktzahlen zu erzielen
+[*]Sichere deine Punkte, bevor du sie verlierst
+[*]Entscheide, wann die mögliche Belohnung das Risiko wert ist
+[/list]
+Jeder Wurf kann den Verlauf der Partie verändern.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice ist mehr als eine klassische Tischspiel-Oberfläche.
+Das Spiel findet in einer detailreichen mittelalterlichen 3D-Taverne statt, in der sich jede Partie anfühlt, als säßest du an einem echten Würfeltisch.
+Warmes Licht, hölzerne Innenräume, Tavernengeräusche und physikalische Würfel sorgen für eine immersive mittelalterliche Atmosphäre. Der Soundtrack enthält zudem authentische mittelalterliche Musik aus der Epoche selbst – echte Musik jener Zeit statt ausschließlich moderner, vom Mittelalter inspirierter Kompositionen.
+Zusammen mit dem Tavernenambiente und der visuellen Gestaltung lässt die Musik jede Partie in einer lebendigen mittelalterlichen Welt verwurzelt wirken.
+
+[IMAGE: learn.png]
+Keine komplizierten Systeme zum Auswendiglernen, kein dickes Regelbuch.
+Bei Farkle geht es um Wahrscheinlichkeit, Entscheidungen und darum, den richtigen Moment zum Aufhören zu erkennen.
+Vorsichtige Spieler bauen ihre Punktzahl Schritt für Schritt auf.
+Mutige Spieler setzen alles auf einen gewaltigen Zug.
+Keiner der beiden Wege garantiert den Sieg.
+Manchmal muss man einfach würfeln.
+
+[IMAGE: features.png]
+[list]
+[*]Klassisches, von Farkle inspiriertes Würfel-Gameplay
+[*]Push-your-Luck-Mechanik mit Risiko und Belohnung
+[*]Vollständig in 3D gerenderte Würfel
+[*]Stimmungsvolle mittelalterliche Taverne
+[*]Einfache Regeln und schnell erlerntes Gameplay
+[*]Taktische Entscheidungen in jedem Zug
+[*]Für kurze Runden und längere Partien gemacht
+[/list]
+Nimm Platz am Tisch, greif zu den Würfeln und finde heraus, wie viel du riskieren willst.

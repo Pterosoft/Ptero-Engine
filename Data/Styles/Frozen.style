@@ -1,0 +1,54 @@
+{
+    "name": "Frozen",
+    "description": "White panels with frozen blue as the secondary colour and a touch of brass for the active tool.",
+    "author": "Pterosoft",
+    "dark": false,
+
+    "icons": {
+        "color": "#2a3b50",
+        "active": "#0d1522",
+        "checked": "#9a6a33",
+        "selected": "#0d1522",
+        "disabled": "#b4c0cd"
+    },
+
+    "colors": {
+        "window": "#ffffff",
+        "panel": "#ffffff",
+        "header": "#dbe7f3",
+        "base": "#ffffff",
+        "alternateBase": "#f4f8fc",
+        "button": "#f4f8fc",
+        "buttonHover": "#e3edf7",
+        "buttonPressed": "#d0e0ef",
+        "border": "#c6d7ea",
+        "borderStrong": "#a0bddb",
+        "separator": "#e3ebf4",
+        "text": "#0d1522",
+        "textDim": "#4a6078",
+        "textDisabled": "#a3b1c2",
+        "accent": "#a0bddb",
+        "accentHover": "#b3cbe4",
+        "accentPressed": "#86a5c6",
+        "accentSoft": "rgba(160, 189, 219, 0.35)",
+        "accentText": "#0d1522",
+        "checkedText": "#0d1522",
+        "menu": "#ffffff",
+        "menuBorder": "#c6d7ea",
+        "tooltip": "#ffffff",
+        "scrollbar": "#c6d7ea",
+        "scrollbarHover": "#a0bddb",
+
+        "warm": "#d9ab79"
+    },
+
+    "stylesheet": [
+        "QDockWidget::title { background: @header; border-bottom: 1px solid @border; }",
+        "QPushButton[uiIconButton=\"true\"]:checked { border: 2px solid @warm; }",
+        "QPushButton[uiSelectable=\"true\"]:!checked { background: @button; }",
+        "QPushButton[uiSelectable=\"true\"]:!checked:hover { background: @buttonHover; }",
+        "QPushButton[uiSelectable=\"true\"]:checked { background: @accent; border-color: @accentPressed; }",
+        "QToolButton[uiHeader=\"true\"]:checked { background: @accent; border-color: @accentPressed; }",
+        "QToolBar::handle { background: @warm; }"
+    ]
+}

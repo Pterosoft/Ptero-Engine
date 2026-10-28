@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice da vida al clásico juego de dados en una taberna medieval llena de ambiente.
+Lanza los dados, suma puntos y decide hasta dónde estás dispuesto a tentar a la suerte. Cada tirada con éxito te plantea una nueva decisión: guardar tus puntos y jugar sobre seguro, o volver a tirar y arriesgarte a perder todo lo que has ganado en ese turno.
+Las reglas son sencillas. Las decisiones, no.
+
+[IMAGE: roll.png]
+Cada turno empieza con seis dados. Aparta las combinaciones que puntúan y vuelve a lanzar los dados restantes para seguir aumentando tu puntuación.
+Pero el riesgo siempre está presente.
+Si una tirada no da ningún dado que puntúe, haces Farkle y pierdes todos los puntos no guardados de ese turno.
+A veces, lo más seguro es plantarse.
+A veces, una tirada más merece la pena.
+Y a veces, los dados tienen otros planes.
+
+[IMAGE: gameplay.png]
+Farkle se basa en un sencillo sistema de tentar a la suerte que te obliga a sopesar constantemente riesgo y recompensa.
+Aprende las reglas en poco tiempo y céntrate en lo que importa:
+[list]
+[*]Lanza seis dados y busca combinaciones que puntúen
+[*]Quédate con los dados que puntúan y vuelve a tirar el resto
+[*]Alarga tu turno para conseguir puntuaciones más altas
+[*]Guarda tus puntos antes de perderlos
+[*]Decide cuándo la posible recompensa merece el riesgo
+[/list]
+Cada tirada puede cambiar el rumbo de la partida.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice es mucho más que una interfaz de juego de mesa tradicional.
+El juego transcurre en una detallada taberna medieval en 3D, diseñada para que cada partida se sienta como sentarse a jugar una auténtica partida de dados.
+La iluminación cálida, los interiores de madera, el sonido ambiente de la taberna y los dados físicos crean una atmósfera medieval inmersiva. Además, la banda sonora incluye auténtica música medieval procedente de la propia época histórica, que lleva a la taberna música real de aquel tiempo en lugar de depender solo de composiciones modernas de inspiración medieval.
+Junto con el ambiente de la taberna y su apartado visual, la música hace que cada partida se sienta arraigada en un mundo medieval vivo.
+
+[IMAGE: learn.png]
+No hay sistemas complicados que memorizar ni un enorme reglamento que aprender.
+Farkle va de probabilidad, de tomar decisiones y de saber cuándo parar.
+Un jugador prudente puede ir sumando puntos poco a poco.
+Un jugador atrevido puede arriesgarlo todo por un turno espectacular.
+Ninguna de las dos estrategias garantiza la victoria.
+A veces, simplemente hay que lanzar los dados.
+
+[IMAGE: features.png]
+[list]
+[*]Jugabilidad de dados clásica inspirada en Farkle
+[*]Mecánicas de riesgo y recompensa para tentar a la suerte
+[*]Dados totalmente renderizados en 3D
+[*]Ambientación en una taberna medieval llena de atmósfera
+[*]Reglas sencillas y una jugabilidad fácil de aprender
+[*]Decisiones estratégicas en cada turno
+[*]Diseñado tanto para sesiones cortas como para partidas largas
+[/list]
+Siéntate a la mesa, coge los dados y descubre hasta dónde estás dispuesto a tentar a la suerte.

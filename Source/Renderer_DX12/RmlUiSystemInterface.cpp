@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "RmlUiSystemInterface.h"
+#include "UiLocalization.h"
 
 #include <string>
 
@@ -9,6 +10,18 @@ RmlUiSystemInterface::RmlUiSystemInterface() : mStartTime(std::chrono::steady_cl
 double RmlUiSystemInterface::GetElapsedTime()
 {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - mStartTime).count();
+}
+
+int RmlUiSystemInterface::TranslateString(Rml::String& translated, const Rml::String& input)
+{
+    std::string output;
+    if (!UiLocalization::Translate(input, output))
+    {
+        translated = input;
+        return 0;
+    }
+    translated = output;
+    return 1;
 }
 
 bool RmlUiSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message)

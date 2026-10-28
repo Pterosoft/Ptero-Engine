@@ -55,6 +55,11 @@ public:
     // On UI Button Clicked. False when none are waiting.
     bool PollGraphClick(std::string& elementId);
     void ApplyGameUiCommand(int operation, const char* id, const char* value);
+    // A form control's current value (the chat box's text). False without such a control.
+    bool GetElementValue(const std::string& elementId, std::string& value) const;
+    // True while a text field has keyboard focus, so typing in it is not also taken as the
+    // game's single-key shortcuts.
+    bool HasTextInputFocus() const;
     int GetFarkleWinningScore() const;
     // The player menus' controller, created on first use. The host assigns its Apply
     // callback and option lists; it survives document loads.
@@ -85,6 +90,9 @@ public:
     // false when the pointer is somewhere else in the editor, which sends RmlUi a mouse
     // leave so hover states do not stick.
     void SetMouseState(bool hasFocus, float x, float y, bool leftDown, bool rightDown, bool middleDown);
+    // Wheel notches, positive when scrolled away from the user; scrolls whatever list is
+    // under the pointer. Call after SetMouseState for the same frame.
+    void ProcessMouseWheel(float notches);
 
     // Polls the keyboard and forwards key and text events. Called once per frame while
     // the UI has input focus.
@@ -155,10 +163,14 @@ private:
     void ReleaseRenderTarget();
 
     bool LoadFonts();
+    void LoadFallbackFonts();
     int GetKeyModifierState() const;
 
     RmlUiSystemInterface mSystemInterface;
     RmlUiRenderInterface mRenderInterface;
+    // Windows' CJK and Arabic fonts, read into memory for RmlUi, which uses the bytes in
+    // place until Rml::Shutdown.
+    std::vector<std::vector<unsigned char>> mFallbackFontData;
 
     Rml::Context* mContext = nullptr;
     Rml::ElementDocument* mDocument = nullptr;

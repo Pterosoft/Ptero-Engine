@@ -415,6 +415,10 @@ float4 PSMain(VertexOutput fs_in) : SV_Target0
 
     // compute reflected color
     float3 reflectColor = SampleReflection(surfacePosition, eyeDir, normal, surfaceDist, useFiltering);
+    // Engine addition: the sky pass draws the sun disc far brighter than the
+    // sky (see kSunDiscRadianceScale), and the analytic specular above already
+    // accounts for the sun. Capped like it, so the mirrored disc cannot sparkle.
+    reflectColor = min(reflectColor, 64.0f);
 
     // shore foam
     float foam = 0;

@@ -63,6 +63,9 @@
     <ClInclude Include="EditorMainMenu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DataFolderWatcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="DX12ShaderCompiler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -78,6 +81,9 @@
     <ClInclude Include="Editor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\System\include\System\SteamAchievements.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="GameHost.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -85,6 +91,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RmlUiSystemInterface.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UiLocalization.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RmlUiRenderer.h">
@@ -111,6 +120,12 @@
     <ClInclude Include="ImageSharpenRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GBufferViewRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DebugViewNames.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="TimeOfDaySettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -121,6 +136,21 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ShadowMapRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ShadowPageView.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapConstants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LightClusterRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VirtualShadowMapSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PointLightRenderer.h">
@@ -144,10 +174,28 @@
     <ClInclude Include="RtAmbientOcclusion.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RtShadows.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RtShadowSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PathTracer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PathTracerSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SubsurfaceScattering.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SubsurfaceSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ShadingSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PrincipledGBuffer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="AgxTonemapSettings.h">
@@ -180,16 +228,52 @@
     <ClInclude Include="SssrRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DpleRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DpleSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="BloomSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="BloomRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FftBloomRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SkyGlareRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SkyGlareSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="GpuSkyModel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensFlareOptics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LensDiffraction.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="RadianceProbeSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RadianceProbeRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VoxelGIRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VoxelGISettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PointShadowMapRenderer.h">
@@ -216,6 +300,18 @@
     <ClInclude Include="FsrSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="XessFrameGeneration.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="XessLoader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="XessRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="XessSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="MotionVectorRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -226,6 +322,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ParticleRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ParticleEffects.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RainRenderer.h">
@@ -241,6 +340,18 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SMAASettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AnalyticEdgeAASettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AnalyticEdgeAARenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AarSettings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AarRenderer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SMAARenderer.h">
@@ -281,6 +392,9 @@
     <ClCompile Include="EditorMainMenu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="DataFolderWatcher.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\System\MaterialEditor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -291,6 +405,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ImageSharpenRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GBufferViewRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GlassRenderer.cpp">
@@ -380,6 +497,12 @@
     <ClCompile Include="ShadowMapRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="VirtualShadowMapRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LightClusterRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="DeferredLightingPass.cpp">
       <Filter>Source Files\Renderer</Filter>
     </ClCompile>
@@ -404,6 +527,12 @@
     <ClCompile Include="RtAmbientOcclusion.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RtShadows.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PathTracer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="SubsurfaceScattering.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -425,13 +554,37 @@
     <ClCompile Include="SssrRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="DpleRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="BloomRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FftBloomRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensFlareRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SkyGlareRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensFlareOptics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LensDiffraction.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RadianceProbeRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="VoxelGIRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Editor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\System\src\SteamAchievements.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GameHost.cpp">
@@ -441,6 +594,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RmlUiSystemInterface.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UiLocalization.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RmlUiRenderer.cpp">
@@ -458,6 +614,15 @@
     <ClCompile Include="FsrRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="XessFrameGeneration.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="XessLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="XessRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="MotionVectorRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -465,6 +630,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ParticleRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ParticleEffects.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="EditorParticles.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RainRenderer.cpp">
@@ -524,6 +695,12 @@
     <ClCompile Include="SMAARenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="AnalyticEdgeAARenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AarRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="HeightmapImporter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -572,6 +749,21 @@
       <Filter>Source Files\Shaders</Filter>
     </None>
     <None Include="..\..\Data\Shaders\SMAA.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\AnalyticEdge.hlsli">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\PrincipledBrdf.hlsli">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\AnalyticEdgeAA.hlsl">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\AnalyticEdgeResolve.hlsli">
+      <Filter>Source Files\Shaders</Filter>
+    </None>
+    <None Include="..\..\Data\Shaders\AnalyticAwareReconstruction.hlsl">
       <Filter>Source Files\Shaders</Filter>
     </None>
     <None Include="..\..\Data\Shaders\SMAA_Ptero.hlsl">

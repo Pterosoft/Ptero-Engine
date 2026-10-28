@@ -1,0 +1,19 @@
+Sky textures - sources and licences
+===================================
+
+All maps are equirectangular (whole sphere), 2:1.
+
+NASA Scientific Visualization Studio - CGI Moon Kit (https://svs.gsfc.nasa.gov/4720)
+Public domain. Built from Lunar Reconnaissance Orbiter (LROC) imagery.
+  lroc_color_2k.jpg               2048x1024, 8-bit sRGB
+  lroc_color_16bit_srgb_4k.tif    4096x2048, 16-bit sRGB
+
+Solar System Scope (https://www.solarsystemscope.com/textures/)
+Creative Commons Attribution 4.0 International (CC BY 4.0).
+Credit "Solar System Scope" wherever the game lists its credits.
+  2k_sun.jpg                      2048x1024
+  2k_moon.jpg                     2048x1024
+  2k_stars.jpg                    2048x1024
+  2k_stars_milky_way.jpg          2048x1024
+
+Downloaded 2026-09-30.

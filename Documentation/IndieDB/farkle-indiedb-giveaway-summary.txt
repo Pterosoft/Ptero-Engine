@@ -1,0 +1,7 @@
+Pull up a chair! We're giving away Steam keys for Farkle: Tavern Dice, the classic push-your-luck dice game played by candlelight in a medieval tavern.
+
+Roll six dice, keep the ones that score, then bank your points or risk them all on one more roll. Roll nothing that scores and you Farkle, losing the whole turn. First to 3,000 wins.
+
+The game is built in our own Ptero-Engine and was just updated with virtualized geometry, virtual shadow maps, voxel GI that runs without a ray tracing GPU, and full path tracing. It also has 48 Steam Achievements, authentic medieval music and 16 languages.
+
+Enter for a chance to win a key, and good luck at the table!

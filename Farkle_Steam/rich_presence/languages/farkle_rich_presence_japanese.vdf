@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"japanese"
+	"Tokens"
+	{
+		"#Menu"	"酒場にいます"
+		"#VsAI"	"AI と対戦中 · %score%"
+		"#Searching"	"対戦相手を探しています"
+		"#Waiting"	"公開テーブルで待っています"
+		"#WaitingFriends"	"フレンドを待っています"
+		"#Online"	"%opponent% とオンライン対戦中 · %score%"
+	}
+}

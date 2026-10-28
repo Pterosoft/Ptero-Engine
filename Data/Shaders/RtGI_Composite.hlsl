@@ -21,8 +21,10 @@ RWTexture2D<float4> u_FinalOutput : register(u1);  // final lit output for displ
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
+    // A trace pixel. At reduced resolution u1 is the trace-grid result that
+    // RtGI_Upsample.hlsl fills the frame from, rather than the frame itself.
     const uint2 pixel = DTid.xy;
-    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+    if (any(pixel >= TraceSize()))
         return;
 
     float4 giSample  = t_GIRadiance.Load(int3(pixel, 0));

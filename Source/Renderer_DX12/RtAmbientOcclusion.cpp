@@ -290,7 +290,7 @@ void RtAmbientOcclusion::Dispatch(
     }
 
     cmdList->SetComputeRootSignature(mRootSignature.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, mCbGpuAddress);
 
     cmdList->SetPipelineState(mPSO_RayGen.Get());
     cmdList->SetComputeRootDescriptorTable(1, gbufferNormalSrv);
@@ -304,7 +304,7 @@ void RtAmbientOcclusion::Dispatch(
     mRawAOBufferInSrvState = true;
 
     cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, mCbGpuAddress);
     cmdList->SetPipelineState(mPSO_NrdPrepare.Get());
     cmdList->SetComputeRootDescriptorTable(1, gbufferNormalSrv);
     cmdList->SetComputeRootDescriptorTable(2, sceneDepthSrv);
@@ -356,7 +356,7 @@ void RtAmbientOcclusion::Dispatch(
     }
 
     cmdList->SetComputeRootSignature(mRootSignatureNrd.Get());
-    cmdList->SetComputeRootConstantBufferView(0, mConstantBuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootConstantBufferView(0, mCbGpuAddress);
     cmdList->SetPipelineState(mPSO_NrdComposite.Get());
     cmdList->SetComputeRootDescriptorTable(1, mNrdOutDiffSrvGpu);
     cmdList->SetComputeRootDescriptorTable(5, mOutputUavGpu);
@@ -536,7 +536,7 @@ bool RtAmbientOcclusion::CreateResolutionBuffers()
     mNrdNormalRoughness = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R10G10B10A2_TYPELESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_NormalRoughness");
     mNrdViewZ = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_ViewZ");
     mNrdOutDiff = MakeTexture2D(dev, mWidth, mHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"RTAO_NRD_OutDiff");
-    mConstantBuffer = MakeUploadCB(dev, sizeof(RtAOConstants), &mMappedCb);
+    mConstantBuffer = MakeUploadCB(dev, sizeof(RtAOConstants) * kCbRingSlots, &mMappedCb);
     mRawAOBufferInSrvState = false;
     mOutputBufferInSrvState = true;
 
@@ -667,5 +667,9 @@ void RtAmbientOcclusion::UploadConstants(
         std::memcpy(cb.WorldToView, kIdentity, sizeof(kIdentity));
     }
     std::memcpy(cb.CameraPos, cameraPos, 3 * sizeof(float));
-    std::memcpy(mMappedCb, &cb, sizeof(cb));
+
+    mCbRingSlot = (mCbRingSlot + 1u) % kCbRingSlots;
+    const UINT64 cbOffset = UINT64(mCbRingSlot) * sizeof(RtAOConstants);
+    std::memcpy(static_cast<std::byte*>(mMappedCb) + cbOffset, &cb, sizeof(cb));
+    mCbGpuAddress = mConstantBuffer->GetGPUVirtualAddress() + cbOffset;
 }

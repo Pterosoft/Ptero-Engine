@@ -1,0 +1,906 @@
+{
+    "name": "Sponza",
+    "subMaterials": [
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "ceiling",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_ceiling_a_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "column_c",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_column_c_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "floor",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_floor_a_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "column_a",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_column_a_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "column_b",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_column_b_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "Material__47",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "leaf",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_thorn_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_e",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_fabric_green_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_d",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_fabric_blue_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_a",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_fabric_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "flagpole",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_flagpole_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_g",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_curtain_blue_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_c",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_curtain_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "fabric_f",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_curtain_green_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "chain",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/chain_texture.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "vase_hanging",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/vase_hanging.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "Material__57",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/vase_plant.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "vase",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/vase_dif.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "Material__298",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/background.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "roof",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_roof_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "arch",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_arch_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "bricks",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/spnza_bricks_a_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "details",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/sponza_details_diff.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "Material__25",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/lion.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        },
+        {
+            "alphaCutoff": 0.5,
+            "alphaCutout": false,
+            "ambientOcclusionStrength": 1.0,
+            "baseColorTint": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "doubleSided": false,
+            "emissiveColor": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "heightReference": 1.0,
+            "heightScale": 0.05000000074505806,
+            "metallicFactor": 1.0,
+            "name": "vase_round",
+            "normalScale": 1.0,
+            "opacity": 1.0,
+            "roughnessFactor": 1.0,
+            "textures": {
+                "ambientOcclusion": "",
+                "baseColor": "Textures/vase_round.dds",
+                "emissive": "",
+                "height": "",
+                "metallic": "",
+                "metallicRoughness": "",
+                "normal": "",
+                "opacity": "",
+                "roughness": ""
+            },
+            "transparentBlend": false
+        }
+    ],
+    "type": "MultiMaterial"
+}

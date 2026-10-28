@@ -5,6 +5,7 @@
 #include "System/AssetManager.h"
 #include "System/CollisionGenerator.h"
 #include "System/FbxCompiler.h"
+#include "System/UnrealAssetImporter.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -126,6 +127,75 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_ImportTextureToData(
 
     WriteStatusMessage(statusMessage, statusMessageCapacity, "Imported texture into Data: " + importedTexturePath);
     return true;
+}
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_ImportUnrealAssetToData(
+    const char* sourceUassetPath,
+    const char* targetDirectoryRelativeToData,
+    char* statusMessage,
+    int statusMessageCapacity)
+{
+    if (sourceUassetPath == nullptr || sourceUassetPath[0] == '\0')
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Choose a .uasset file to import.");
+        return false;
+    }
+
+    std::string summary;
+    const std::string targetDirectory = targetDirectoryRelativeToData != nullptr
+        ? std::string(targetDirectoryRelativeToData)
+        : std::string{};
+
+    // A private AssetManager keeps this callable from several threads at once: the editor
+    // imports a batch of .uasset files in parallel.
+    AssetManager assetManager;
+    if (!assetManager.ImportUnrealAssetToDataDirectory(sourceUassetPath, targetDirectory, &summary))
+    {
+        const std::string failureMessage = assetManager.GetLastErrorMessage().empty()
+            ? "The System asset manager failed to import the Unreal asset."
+            : assetManager.GetLastErrorMessage();
+        WriteStatusMessage(statusMessage, statusMessageCapacity, failureMessage);
+        return false;
+    }
+
+    WriteStatusMessage(statusMessage, statusMessageCapacity, "Imported " + summary);
+    return true;
+}
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_GetUnrealAssetInfo(
+    const char* uassetPath,
+    char* assetClass,
+    int assetClassCapacity,
+    bool* importable,
+    bool* alreadyImported)
+{
+    if (uassetPath == nullptr || uassetPath[0] == '\0')
+    {
+        return false;
+    }
+
+    const std::string className = UnrealAssetImporter::PeekAssetClass(uassetPath);
+    WriteStatusMessage(assetClass, assetClassCapacity, className);
+    const bool canImport = UnrealAssetImporter::IsImportableClass(className);
+    if (importable != nullptr)
+    {
+        *importable = canImport;
+    }
+    if (alreadyImported != nullptr)
+    {
+        *alreadyImported = canImport && UnrealAssetImporter::HasImportedOutput(uassetPath);
+    }
+    return !className.empty();
+}
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_IsUnrealImportAvailable(
+    char* statusMessage,
+    int statusMessageCapacity)
+{
+    std::string reason;
+    const bool available = UnrealAssetImporter::IsDecompressorAvailable(&reason);
+    WriteStatusMessage(statusMessage, statusMessageCapacity, reason);
+    return available;
 }
 
 extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateMeshLods(

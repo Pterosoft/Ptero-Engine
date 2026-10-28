@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"polish"
+	"Tokens"
+	{
+		"#Menu"	"W karczmie"
+		"#VsAI"	"Gra z SI · %score%"
+		"#Searching"	"Szuka meczu"
+		"#Waiting"	"Czeka przy otwartym stole"
+		"#WaitingFriends"	"Czeka na znajomych"
+		"#Online"	"Gra online z: %opponent% · %score%"
+	}
+}

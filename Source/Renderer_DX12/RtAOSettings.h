@@ -30,6 +30,11 @@ struct RtAOSettings
     // 1.0 = full occlusion; 0.0 = AO disabled in composite. Range [0.0..1.0].
     float Intensity = 1.0f;
 
+    // How much the AO also darkens point, spot and rect lights' direct light.
+    // 0 = sky ambient and GI only (the sun never: it has its own shadow);
+    // 1 = local lights fully occluded. Range [0.0..1.0].
+    float LocalLightOcclusion = 0.5f;
+
     // 0 = final AO, 1 = raw noisy AO, 2 = NRD-denoised AO
     int DebugView = 0;
 };

@@ -58,8 +58,8 @@ cbuffer AgxConstantBuffer : register(b0)
 
     uint  FrameWidth;
     uint  FrameHeight;
-    float _Pad3;
-    float _Pad4;
+    float NightDesaturation; // 0..1, from the time of day; 0 = off
+    float InvDisplayGamma;   // 1 / the player's display gamma; 1 = off
 };
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,19 @@ float3 ApplySaturation(float3 color, float saturation)
     const float3 lumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
     const float luma = dot(color, lumaWeights);
     return lerp(luma.xxx, color, saturation);
+}
+
+// Night vision (scotopic / mesopic): in the dark the rods, which see no colour,
+// take over from the cones. Works on exposed scene-linear light, before AgX, so
+// "dark" means dark on screen: below ~0.05 (a couple of stops under mid-grey)
+// the full NightDesaturation applies, above ~1 (a light, the moon) none does,
+// and between them it eases off in log space, as vision crosses over.
+float3 ApplyNightDesaturation(float3 color, float strength)
+{
+    const float3 lumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
+    const float luma = dot(color, lumaWeights);
+    const float cones = smoothstep(0.0f, 1.0f, saturate((log2(max(luma, 1e-6f)) - log2(0.05f)) / -log2(0.05f)));
+    return lerp(color, luma.xxx, strength * (1.0f - cones));
 }
 
 float3 ApplyContrast(float3 color, float3 contrast)
@@ -283,6 +296,11 @@ void CSMain(uint3 dispatchId : SV_DispatchThreadID)
     color *= Ev100ToExposureScale(ev100) * exp2(Exposure);
     color = SanitizeColor(color);
 
+    // 1b. Night vision, on the exposed light (see ApplyNightDesaturation).
+    [branch]
+    if (NightDesaturation > 0.0f)
+        color = ApplyNightDesaturation(color, NightDesaturation);
+
     // 2. AgX base transform into encoded display space.
     color = AgxEncode(color);
 
@@ -294,6 +312,11 @@ void CSMain(uint3 dispatchId : SV_DispatchThreadID)
 
     // 5. Apply color grading in display-linear space.
     color = ApplyColorGrading(color);
+
+    // 6. The player's display gamma (Settings > Image), on display-linear light.
+    [branch]
+    if (InvDisplayGamma != 1.0f)
+        color = pow(max(color, 0.0f), InvDisplayGamma);
 
     gOutput[dispatchId.xy] = float4(SanitizeColor(color), 1.0f);
 }

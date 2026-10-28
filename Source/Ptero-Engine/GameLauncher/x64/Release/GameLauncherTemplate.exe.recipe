@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>K:\Ptero-Engine\Source\Ptero-Engine\x64\Release\GameLauncherTemplate.exe</FullPath>
+      <FullPath>K:\Farkle\Source\Ptero-Engine\x64\Release\GameLauncherTemplate.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

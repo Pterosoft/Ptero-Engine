@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -42,6 +43,13 @@ public:
 
     const std::string& LastError() const { return mLastError; }
 
+    // Whether ddsPath is already on the GPU, without touching the disk.
+    bool IsCached(const std::string& ddsPath) const
+    {
+        const auto it = mCache.find(ddsPath);
+        return it != mCache.end() && it->second.Texture != nullptr;
+    }
+
     // Release all cached GPU resources (call before device destruction).
     void Shutdown();
 
@@ -62,6 +70,23 @@ private:
 
     // Execute a one-shot copy command to flush upload heaps to the GPU.
     bool FlushUploads(std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& uploadBuffers);
+
+    // Upload machinery kept across loads. Every load waits for its copy before
+    // returning, so one of each is always free again by the next load. Creating
+    // them per texture meant a fresh upload heap (tens of MB for a 4K tile), command
+    // allocator, list, fence and event for every file: a level with a couple of
+    // hundred UDIM tiles churned gigabytes of kernel allocations back to back,
+    // which was enough to make other applications' audio crackle while it loaded.
+    bool EnsureUploadObjects(ID3D12Device* device, UINT64 uploadBytes);
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator>    mUploadAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> mUploadCommandList;
+    Microsoft::WRL::ComPtr<ID3D12Fence>               mUploadFence;
+    HANDLE                                            mUploadFenceEvent = nullptr;
+    UINT64                                            mUploadFenceValue = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource>            mUploadBuffer;
+    UINT64                                            mUploadBufferCapacity = 0;
+    // The file's bytes, read into the same allocation each time for the same reason.
+    std::vector<std::uint8_t>                         mReadBuffer;
 
     std::unordered_map<std::string, CachedTextureEntry> mCache;
     std::string mLastError;

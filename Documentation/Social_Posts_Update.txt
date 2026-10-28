@@ -1,0 +1,262 @@
+SOCIAL POSTS — ENGINE UPDATE ("A New Engine Foundation")
+Companion to Steam_Announcement_Update.txt. Post once the Steam event is live, so the links land on it.
+
+Links
+  Steam store ..... https://store.steampowered.com/app/5368450/
+  Website ......... https://farkle.pterosoftstudio.com/
+  Discussions ..... https://steamcommunity.com/app/5368450/discussions/
+
+Assets
+  A  = Steam_Update_Art/                        (videos; make_update_short.ps1, make_compare_short.ps1, make_feature_shorts.ps1)
+  AN = Steam_Update_Art/Announcement/           (stills; make_announcement_art.ps1)
+  SO = Steam_Update_Art/Announcement/Social/
+
+Vertical videos (1080x1920, with music and fireplace audio). The same four files serve as
+YouTube Shorts, Instagram Reels and Facebook Reels:
+  V1  A/farkle_update_short_1080x1920.mp4         ~18 s  the update at a glance
+  V2  A/farkle_before_after_short_1080x1920.mp4          the tavern before and after
+  V3  A/farkle_ptero_short_1080x1920.mp4          24 s   Ptero Reconstruction explained
+  V4  A/farkle_achievements_short_1080x1920.mp4   24 s   the 48 achievements
+
+Suggested order: V1 on launch day, V2 a day later, then V3 and V4 a few days apart, so the
+update gets several days of posts instead of one.
+
+Where there is no title field (Instagram, Facebook Reels), the "Title" is the caption's first
+line: the part shown before "...more". Keep it as written.
+
+
+====================================================================
+YOUTUBE
+====================================================================
+
+--- Short V1 — the update ---
+Title:
+Farkle just got a whole new engine 🎲🔥 #shorts
+Description:
+The first big update for Farkle: Tavern Dice is out now on Steam. The tavern runs on a new version of our own Ptero-Engine: virtualized geometry, virtual shadow maps, better global illumination, path tracing, new bloom and lens flares, our own Ptero Reconstruction upscaling, and 48 Steam Achievements.
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+🌐 More: https://farkle.pterosoftstudio.com/
+
+#Farkle #IndieGame #GameDev #DiceGame #Shorts
+
+--- Short V2 — before and after ---
+Title:
+Our tavern, before and after the engine update 🕯️ #shorts
+Description:
+Same table, same dice, new engine. This is Farkle: Tavern Dice before and after our Ptero-Engine update: real candlelight, sharp shadows, and a hearth that actually lights the room.
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+🌐 More: https://farkle.pterosoftstudio.com/
+
+#Farkle #IndieGame #GameDev #BeforeAndAfter #Shorts
+
+--- Short V3 — Ptero Reconstruction ---
+Title:
+How our upscaler keeps edges sharp 📐 #shorts
+Description:
+Most upscalers only see colours, so a low-resolution edge turns into a smear and thin details break up. Ptero-SR, the upscaler we built into our Ptero-Engine, keeps the exact edges of every triangle, so each pixel on an edge gets its true coverage: clean, stable edges with no ghosting. Ptero-AA uses the same edges for anti-aliasing at native resolution.
+
+Both are in Farkle: Tavern Dice now. Find them under Settings → Upscaler / Anti-Aliasing.
+(The diagram is an illustration of the technique.)
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+🌐 More: https://farkle.pterosoftstudio.com/
+
+#Farkle #GameDev #Graphics #Upscaling #RealTimeRendering #IndieDev #Shorts
+
+--- Short V4 — achievements ---
+Title:
+48 new achievements in our dice game 🏆 #shorts
+Description:
+Farkle: Tavern Dice now has 48 Steam Achievements. Roll a straight, get hot dice twice in one turn, win from 1,500 points behind, farkle on your very first roll... and a few for the graphics menu. Some are hidden.
+
+Which one are you going for first? 👇
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+
+#Farkle #SteamAchievements #DiceGame #IndieGame #Shorts
+
+--- Community post — image: SO/square_1080x1080.png ---
+Text:
+The first big Farkle update is out! 🎲
+
+🏰 A new engine: virtualized geometry, virtual shadow maps, better GI and path tracing
+📐 Ptero-SR and Ptero-AA, our own upscaling and anti-aliasing
+🏆 48 Steam Achievements
+
+Which one are you going for first? 👇
+https://store.steampowered.com/app/5368450/
+
+--- Thumbnail — SO/youtube_thumbnail_1280x720.png ---
+For a long-form video only. Shorts take their thumbnail from a frame of the video.
+
+
+====================================================================
+INSTAGRAM
+====================================================================
+
+Instagram captions can't hold clickable links, so they say "link in bio": put the Steam store
+link in the profile before posting.
+
+--- Reel V1 — the update ---
+Title (first line):
+New engine, new light, same dice. 🎲🔥
+Description:
+The first big update for Farkle: Tavern Dice is out now on Steam. Virtualized geometry, virtual shadow maps, better global illumination, path tracing, our own Ptero Reconstruction upscaling, and 48 Steam Achievements.
+
+Link in bio.
+
+#Farkle #IndieGame #IndieDev #GameDev #DiceGame #SteamGames #PCGaming
+
+--- Reel V2 — before and after ---
+Title (first line):
+Same tavern. New engine. 🕯️
+Description:
+Farkle: Tavern Dice before and after our Ptero-Engine update: real candlelight, sharp shadows, and a hearth that actually lights the room. Which one would you rather play in?
+
+Out now on Steam. Link in bio.
+
+#Farkle #BeforeAndAfter #IndieGame #GameDev #Medieval #CozyGames
+
+--- Reel V3 — Ptero Reconstruction ---
+Title (first line):
+Why most upscalers smear edges, and how ours doesn't 📐
+Description:
+A normal upscaler only sees colours, so edges blur and thin details break up. Ptero-SR, built into our own engine, keeps the exact edges of every triangle and gives each pixel its true coverage: clean, stable edges, no ghosting.
+
+Now in Farkle: Tavern Dice, under Settings → Upscaler. (Diagram is an illustration.)
+
+#GameDev #Graphics #RealTimeRendering #IndieDev #Farkle #TechArt
+
+--- Reel V4 — achievements ---
+Title (first line):
+48 achievements just landed 🏆🎲
+Description:
+Roll a straight. Get hot dice twice in one turn. Win from 1,500 behind. Farkle on your very first roll (yes, that's one too). Farkle: Tavern Dice now has 48 Steam Achievements, and a few are hidden.
+
+Which one are you going for first? Link in bio.
+
+#Farkle #SteamAchievements #DiceGame #IndieGame #GamingCommunity
+
+--- Feed carousel (4:5), in this order ---
+  SO/carousel_1_cover_1080x1350.png
+  SO/carousel_2_before_after_1080x1350.png
+  SO/carousel_3_ptero_reconstruction_1080x1350.png
+  SO/carousel_4_achievements_1080x1350.png
+  SO/carousel_5_out_now_1080x1350.png
+Title (first line):
+The tavern has been rebuilt. 🕯️🎲
+Description:
+The first big update for Farkle: Tavern Dice is out now on Steam. The game runs on a new version of our own Ptero-Engine:
+
+🏰 Virtualized geometry and virtual shadow maps
+🔥 Better global illumination, path tracing, new bloom and lens flares
+📐 Ptero Reconstruction: Ptero-SR and Ptero-AA, our own upscaling and anti-aliasing, built from the scene's exact triangle edges
+🏆 48 Steam Achievements, some of them hidden
+
+Swipe for a before and after 👉
+
+Out now on Steam. Link in bio.
+
+#Farkle #IndieGame #IndieDev #GameDev #DiceGame #SteamGames #PCGaming #Medieval #CozyGames #GameEngine #RealTimeRendering #PathTracing
+
+--- Story — SO/story_1080x1920.png ---
+Add a link sticker → https://store.steampowered.com/app/5368450/  (sticker text: "Play on Steam")
+Place it under "OUT NOW ON STEAM", above the bottom ~340 px.
+
+
+====================================================================
+FACEBOOK
+====================================================================
+
+Links are clickable on Facebook, so they go in the text. When the Reel upload offers a title
+field, use the Title; otherwise make it the first line of the description.
+
+--- Reel V1 — the update ---
+Title:
+Farkle just got a whole new engine 🎲🔥
+Description:
+The first big update for Farkle: Tavern Dice is out now! Our tavern runs on a new version of our own Ptero-Engine: virtualized geometry, virtual shadow maps, better global illumination, path tracing, new bloom and lens flares, our own Ptero Reconstruction upscaling, and 48 Steam Achievements.
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+
+--- Reel V2 — before and after ---
+Title:
+Same tavern, new engine 🕯️
+Description:
+Here's Farkle: Tavern Dice before and after our engine update. Same table, same dice, but now with real candlelight, sharp shadows, and a hearth that actually lights the room. Which one would you rather play in? 👇
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+
+--- Reel V3 — Ptero Reconstruction ---
+Title:
+How we keep edges sharp at lower resolutions 📐
+Description:
+Most upscalers only see colours, so edges smear and thin details break up. Ptero-SR, the upscaler we built into our Ptero-Engine, keeps the exact edges of every triangle, so every pixel on an edge gets its true coverage: clean, stable edges with no ghosting. Ptero-AA does the same at native resolution.
+
+You'll find both in Farkle's settings now. (The diagram is an illustration of the technique.)
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+
+--- Reel V4 — achievements ---
+Title:
+48 Steam Achievements are here 🏆
+Description:
+Roll a straight. Get hot dice twice in one turn. Win from 1,500 points behind. Farkle on the very first roll of a match (yes, there's an achievement for that too). Farkle: Tavern Dice now has 48 Steam Achievements, and a few of them are hidden.
+
+Which one are you going for first? 👇
+🎲 https://store.steampowered.com/app/5368450/
+
+--- Feed post — the five carousel images as a multi-photo post (or SO/square_1080x1080.png alone) ---
+Title:
+The tavern has been rebuilt. 🕯️🎲
+Description:
+The first big update for Farkle: Tavern Dice is out now on Steam! The game now runs on a new version of our own Ptero-Engine, and the whole tavern looks different for it:
+
+🏰 Virtualized geometry and virtual shadow maps, for sharper detail and crisp shadows from every candle
+🔥 Better global illumination, a new Voxel GI mode that works without a ray tracing GPU, path tracing, and new bloom and lens flares
+📐 Ptero Reconstruction: Ptero-SR and Ptero-AA, upscaling and anti-aliasing we built ourselves. Instead of guessing from colours, they use the scene's exact triangle edges, so edges stay clean and stable.
+🏆 48 Steam Achievements: lucky rolls, bad beats, long streaks, and a few for the graphics menu. Some are hidden…
+
+Flick through for a before and after 👉
+
+🎲 Play on Steam: https://store.steampowered.com/app/5368450/
+📜 Full patch notes: https://farkle.pterosoftstudio.com/
+
+--- Story — SO/story_1080x1920.png, with a link sticker to the Steam store (as on Instagram) ---
+
+
+====================================================================
+BLUESKY  (thread of 3; each post is under the 300-character limit)
+====================================================================
+Bluesky posts have no title. A video can go in any post in place of its images (V1 fits post 1).
+
+Post 1 — images (16:9):
+  A/bluesky_update_2000x1125.png
+  A/bluesky_before_after_2000x1125.png
+Alt text 1: Farkle title card over the candlelit tavern, announcing "A New Engine Foundation": virtualized geometry, virtual shadow maps, path tracing, better global illumination, bloom and lens flares, Steam Achievements.
+Alt text 2: The tavern before and after the update. Before: flat orange lighting. After: candlelight, deep shadows under the table and a glowing hearth.
+
+The first big Farkle update is out! 🎲
+
+The tavern now runs on a new version of our Ptero-Engine, with virtualized geometry, virtual shadow maps, better global illumination, path tracing, new bloom and lens flares.
+
+Pull up a chair:
+https://store.steampowered.com/app/5368450/
+
+Post 2 — image: AN/ptero_reconstruction_1920x1080.png
+Alt text: Illustration of the same half-resolution input upscaled 2x two ways. Colour-only upscaling smears edges and breaks up a thin railing; Ptero-SR shades every pixel by its exact coverage, so the railing stays intact.
+
+New in the settings: Ptero Reconstruction, our own tech.
+
+Most upscalers only see colours. Ptero-SR and Ptero-AA keep the triangles' exact edges, so every edge pixel gets its true coverage: clean, stable edges with no ghosting. #gamedev #indiedev
+
+Post 3 — image: AN/achievements_1920x1080.png
+Alt text: Eighteen Farkle achievement icons, including First Victory, Hot Hands, Heartbreaker, Speed Run, In-House and Collector.
+
+And 48 Steam Achievements are here 🏆
+
+Roll a straight, win from 1,500 behind, farkle on your very first roll... and a few for the graphics menu. Some are hidden.
+
+Full patch notes: https://farkle.pterosoftstudio.com/

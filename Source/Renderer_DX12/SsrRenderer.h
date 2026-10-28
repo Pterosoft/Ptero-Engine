@@ -24,6 +24,10 @@ public:
     // sceneColorResource is both an input (sampled) and the destination the result is
     // copied back into. It must be in PIXEL_SHADER_RESOURCE state on entry, and is left
     // that way on exit. The depth SRV must already be readable by a compute shader.
+    //
+    // fallbackSpecularSrv, when set, is a reflection the deferred resolve already added
+    // at fallbackScale (voxel GI's); wherever a ray hits, it is replaced rather than
+    // added to.
     void Dispatch(
         ID3D12GraphicsCommandList*   commandList,
         ID3D12Resource*              sceneColorResource,
@@ -35,7 +39,9 @@ public:
         const SsrSettings&           settings,
         const DirectX::XMFLOAT4X4&   viewProjection,      // already transposed for HLSL
         const DirectX::XMFLOAT4X4&   inverseViewProjection,
-        const DirectX::XMFLOAT3&     cameraPosition);
+        const DirectX::XMFLOAT3&     cameraPosition,
+        D3D12_GPU_DESCRIPTOR_HANDLE  fallbackSpecularSrv = {},
+        float                        fallbackScale = 0.0f);
 
     bool IsInitialized() const { return mIsInitialized; }
 
@@ -59,7 +65,7 @@ private:
         float StepGrowth = 1.05f;          float Thickness = 0.5f;
         float MaxRoughness = 0.6f;         int   RefineSteps = 6;
         float MaxDistance = 60.0f;         float EdgeFadeStart = 0.85f;
-        int   DebugView = 0;               float Pad0 = 0.0f;
+        int   DebugView = 0;               float FallbackScale = 0.0f;
     };
 
     DX12Shader                                   mComputeShader;

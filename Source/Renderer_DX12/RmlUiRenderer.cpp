@@ -8,12 +8,14 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Debugger.h>
 
 #include "System/DataFiles.h"
+#include "UiLocalization.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -21,6 +23,8 @@
 #include <cwctype>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -231,6 +235,19 @@ public:
         {
             const auto key = event.GetParameter<int>("key_identifier", 0);
             if (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE) return;
+            // Enter in a text field submits it through the button its data-submit names
+            // (the chat box sends its line). Space is ordinary typing there.
+            auto* target = event.GetTargetElement();
+            if (target && target->GetTagName() == "input")
+            {
+                const auto submit = target->GetAttribute<Rml::String>("data-submit", "");
+                if (key == Rml::Input::KI_RETURN && !submit.empty() && mOwner.mGameActions.size() < 32)
+                {
+                    mOwner.mGameActions.push_back(submit);
+                    event.StopPropagation();
+                }
+                return;
+            }
         }
         auto* element = event.GetTargetElement();
         while (element && element->GetTagName() != "button") element = element->GetParentNode();
@@ -326,6 +343,10 @@ void RmlUiRenderer::ApplyGameUiCommand(int operation, const char* id, const char
     case 3: element->SetClass(value, false); break;
     case 4: element->RemoveAttribute("disabled"); break;
     case 5: element->SetAttribute("disabled", true); break;
+    case 6:
+        if (auto* control = dynamic_cast<Rml::ElementFormControl*>(element))
+            control->SetValue(value ? value : "");
+        break;
     }
     // Keep tab navigation inside an open pause/help dialog.
     if (std::string(id) == "dialog" && std::string(value) == "hidden")
@@ -335,6 +356,22 @@ void RmlUiRenderer::ApplyGameUiCommand(int operation, const char* id, const char
         auto* focus = mDocument->GetElementById(operation == 3 ? "close-button" : "roll-button");
         if (focus) focus->Focus();
     }
+}
+
+bool RmlUiRenderer::GetElementValue(const std::string& elementId, std::string& value) const
+{
+    auto* element = mDocument ? mDocument->GetElementById(elementId) : nullptr;
+    auto* control = dynamic_cast<Rml::ElementFormControl*>(element);
+    if (!control) return false;
+    value = control->GetValue();
+    return true;
+}
+
+bool RmlUiRenderer::HasTextInputFocus() const
+{
+    auto* focus = mContext ? mContext->GetFocusElement() : nullptr;
+    return focus && focus->GetTagName() == "input"
+        && focus->GetAttribute<Rml::String>("type", "text") == "text";
 }
 
 RmlUiRenderer::RmlUiRenderer() = default;
@@ -493,6 +530,7 @@ void RmlUiRenderer::Shutdown()
         Rml::Shutdown();
         mOwnsRmlLifetime = false;
         mDebuggerAvailable = false;
+        mFallbackFontData.clear();
     }
 
     ReleaseRenderTarget();
@@ -529,6 +567,8 @@ bool RmlUiRenderer::LoadFonts()
             loadedAny = true;
     }
 
+    LoadFallbackFonts();
+
     if (!loadedAny)
     {
         mLastError = "RmlUiRenderer: no font faces could be loaded from Data/Fonts.";
@@ -536,6 +576,44 @@ bool RmlUiRenderer::LoadFonts()
     }
 
     return true;
+}
+
+// The game's display fonts cover Western European text only. A fallback face is asked for
+// any character the document's own font lacks, first one first: EB Garamond (shipped with
+// the game) for the rest of Latin, Greek and Cyrillic, then Windows' own fonts for Chinese,
+// Japanese, Korean and Arabic. The language in use puts its CJK font first, as Chinese and
+// Japanese share characters drawn differently. Missing system fonts are skipped.
+void RmlUiRenderer::LoadFallbackFonts()
+{
+    const std::filesystem::path garamond = FindDataDirectory() / L"UI" / L"Farkle" / L"Fonts" / L"EB_Garamond" / L"static" / L"EBGaramond-SemiBold.ttf";
+    if (DataFiles::IsFile(garamond))
+        Rml::LoadFontFace(WideToUtf8(garamond.wstring()), true);
+
+    wchar_t windowsDirectory[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(windowsDirectory, MAX_PATH) == 0)
+        return;
+    const std::filesystem::path systemFonts = std::filesystem::path(windowsDirectory) / L"Fonts";
+
+    // Arabic first: the CJK fonts map Arabic presentation forms to empty boxes, and a
+    // fallback that has a codepoint at all is the one used.
+    std::vector<const wchar_t*> fonts = {L"tahoma.ttf", L"segoeui.ttf", L"msyh.ttc", L"YuGothM.ttc", L"malgun.ttf"};
+    const std::string& language = UiLocalization::GetLanguage();
+    if (language == "ja") std::swap(fonts[2], fonts[3]);
+    if (language == "ko") std::swap(fonts[2], fonts[4]);
+
+    for (const wchar_t* font : fonts)
+    {
+        std::ifstream file(systemFonts / font, std::ios::binary);
+        if (!file)
+            continue;
+        std::vector<unsigned char> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        if (data.empty())
+            continue;
+        const Rml::Span<const Rml::byte> bytes(data.data(), data.size());
+        const std::string family = "Fallback " + WideToUtf8(font);
+        if (Rml::LoadFontFace(bytes, family, Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto, true))
+            mFallbackFontData.push_back(std::move(data));
+    }
 }
 
 bool RmlUiRenderer::CreateRenderTarget(UINT width, UINT height)
@@ -943,10 +1021,32 @@ void RmlUiRenderer::SetMouseState(
         if (buttons[button])
             mContext->ProcessMouseButtonDown(button, modifiers);
         else
+        {
             mContext->ProcessMouseButtonUp(button, modifiers);
+            // A click focuses what it lands on, and most styles share :focus with :hover,
+            // so a clicked button kept looking hovered after the mouse left it. Only
+            // controls that take typing or dragging keep focus from a click; keyboard
+            // (Tab) focus is untouched.
+            if (Rml::Element* focused = mContext->GetFocusElement())
+            {
+                const Rml::String& tag = focused->GetTagName();
+                if (tag != "input" && tag != "select" && tag != "textarea" && tag != "body"
+                    && focused != focused->GetOwnerDocument())
+                    focused->Blur();
+            }
+        }
 
         mMouseButtonDown[button] = buttons[button];
     }
+}
+
+void RmlUiRenderer::ProcessMouseWheel(float notches)
+{
+    if (!mIsInitialized || mContext == nullptr || !mInputEnabled || !mHasMouseFocus || notches == 0.0f)
+        return;
+
+    // RmlUi scrolls down for a positive delta, which is the wheel pulled towards the user.
+    mContext->ProcessMouseWheel(-notches, GetKeyModifierState());
 }
 
 void RmlUiRenderer::UpdateKeyboardInput()

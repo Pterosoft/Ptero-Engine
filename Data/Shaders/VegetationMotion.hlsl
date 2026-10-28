@@ -50,7 +50,9 @@ cbuffer VegetationLayerConstants : register(b1)
     int    gHasAoMap;
 
     int    gHasPackedMaterialMap;
-    float3 _LayerPad0;
+    float2 _LayerPad0;
+    // 1 = cut out on gOpacityTexture.r instead of the base colour's alpha.
+    int    gHasOpacityMap;
 };
 
 Texture2D gBaseColorTexture : register(t0);
@@ -62,6 +64,10 @@ Texture2D gInteractionMap   : register(t5);
 
 StructuredBuffer<VegetationInstance> gInstances      : register(t6);
 StructuredBuffer<uint>               gVisibleIndices : register(t7);
+
+// Separate opacity mask, for materials that keep the cut-out shape out of the base
+// colour's alpha. Above the instance buffers because t5..t7 are taken.
+Texture2D gOpacityTexture   : register(t8);
 
 SamplerState gLinearSampler : register(s0);
 SamplerState gClampSampler  : register(s1);
@@ -159,11 +165,16 @@ float2 ClipToUv(float4 clipPos)
     return uv * 0.5f + 0.5f;
 }
 
+float VegetationAlpha(float2 uv, float baseAlpha)
+{
+    return gHasOpacityMap ? gOpacityTexture.Sample(gLinearSampler, uv).r : baseAlpha;
+}
+
 float4 PSMain(VSOutput input) : SV_Target
 {
     // The same alpha test as the colour pass, so a cut-out leaf does not write
     // motion vectors for the transparent part of its card.
-    const float alpha = gBaseColorTexture.Sample(gLinearSampler, input.TexCoord).a;
+    const float alpha = VegetationAlpha(input.TexCoord, gBaseColorTexture.Sample(gLinearSampler, input.TexCoord).a);
     clip(alpha - gAlphaCutoff);
 
     const float2 currentUv  = ClipToUv(input.CurrentClipPos);

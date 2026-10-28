@@ -1,0 +1,747 @@
+{
+ "width": 2560,
+ "height": 4096,
+ "tile": 256,
+ "tiles": [
+  {
+   "file": "achieved/ACH_STRAIGHT_SHOOTER.png",
+   "x": 0,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_PAIR_UP.png",
+   "x": 256,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_THREE_ONES.png",
+   "x": 512,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_FOUR_OF_A_KIND.png",
+   "x": 768,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_FIVE_OF_A_KIND.png",
+   "x": 1024,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_SIX_OF_A_KIND.png",
+   "x": 1280,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_SIX_ONES.png",
+   "x": 1536,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_LUCKY_FIVES.png",
+   "x": 1792,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_HOT_DICE.png",
+   "x": 2048,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_HOT_DICE_TWICE.png",
+   "x": 2304,
+   "y": 0
+  },
+  {
+   "file": "achieved/ACH_ONE_DIE_LEFT.png",
+   "x": 0,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_BANK_2000.png",
+   "x": 256,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_BANK_3000.png",
+   "x": 512,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_PLAYED_IT_SAFE.png",
+   "x": 768,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_FIFTY_AND_DONE.png",
+   "x": 1024,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_SO_CLOSE.png",
+   "x": 1280,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_HEARTBREAKER.png",
+   "x": 1536,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_FIRST_FARKLE.png",
+   "x": 1792,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_THREE_FARKLES.png",
+   "x": 2048,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_OPENING_FARKLE.png",
+   "x": 2304,
+   "y": 256
+  },
+  {
+   "file": "achieved/ACH_ROCK_BOTTOM.png",
+   "x": 0,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_FIRST_VICTORY.png",
+   "x": 256,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_FLAWLESS.png",
+   "x": 512,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_SHUTOUT.png",
+   "x": 768,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_COMEBACK.png",
+   "x": 1024,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_NAIL_BITER.png",
+   "x": 1280,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_HELD_THE_LINE.png",
+   "x": 1536,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_LAST_DITCH.png",
+   "x": 1792,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_SPEED_RUN.png",
+   "x": 2048,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_MARATHON.png",
+   "x": 2304,
+   "y": 512
+  },
+  {
+   "file": "achieved/ACH_QUICK_DRAW.png",
+   "x": 0,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_HOUSE_RULES.png",
+   "x": 256,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_MATCHES_10.png",
+   "x": 512,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_MATCHES_50.png",
+   "x": 768,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_MATCHES_100.png",
+   "x": 1024,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_STREAK_3.png",
+   "x": 1280,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_STREAK_5.png",
+   "x": 1536,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_STREAK_10.png",
+   "x": 1792,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_BANKER.png",
+   "x": 2048,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_COLLECTOR.png",
+   "x": 2304,
+   "y": 768
+  },
+  {
+   "file": "achieved/ACH_DICE_WHISPERER.png",
+   "x": 0,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_COULDNT_RESIST.png",
+   "x": 256,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_INDECISIVE.png",
+   "x": 512,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_NIGHT_OWL.png",
+   "x": 768,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_FOLLOW_THE_LIGHT.png",
+   "x": 1024,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_GROUND_TRUTH.png",
+   "x": 1280,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_PHOTOGRAPHER.png",
+   "x": 1536,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_LIGHT_AND_DARK.png",
+   "x": 1792,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_BOUNCE_HOUSE.png",
+   "x": 2048,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_POTATO_MODE.png",
+   "x": 2304,
+   "y": 1024
+  },
+  {
+   "file": "achieved/ACH_MAXED_OUT.png",
+   "x": 0,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_PURIST.png",
+   "x": 256,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_FULL_SPECTRUM.png",
+   "x": 512,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_LIGHTS_OUT.png",
+   "x": 768,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_CLEAR_SKIES.png",
+   "x": 1024,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_CONTACT_SHADOWS.png",
+   "x": 1280,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_ALPHABET_SOUP.png",
+   "x": 1536,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_IN_HOUSE.png",
+   "x": 1792,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_SHARP_EYE.png",
+   "x": 2048,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_EDGE_LORD.png",
+   "x": 2304,
+   "y": 1280
+  },
+  {
+   "file": "achieved/ACH_ULTRA_PERFORMANCE.png",
+   "x": 0,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_TWICE_THE_FRAMES.png",
+   "x": 256,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_WINDOW_SHOPPER.png",
+   "x": 512,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_BIG_SCREEN.png",
+   "x": 768,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_THROUGH_THE_LENS.png",
+   "x": 1024,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_NUMBERS_PERSON.png",
+   "x": 1280,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_BENCHMARK.png",
+   "x": 1536,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_SILENT_TREATMENT.png",
+   "x": 1792,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_JUST_THE_MUSIC.png",
+   "x": 2048,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_TINKERER.png",
+   "x": 2304,
+   "y": 1536
+  },
+  {
+   "file": "achieved/ACH_BACK_TO_BASICS.png",
+   "x": 0,
+   "y": 1792
+  },
+  {
+   "file": "achieved/ACH_GRAPHICS_CONNOISSEUR.png",
+   "x": 256,
+   "y": 1792
+  },
+  {
+   "file": "achieved/ACH_COMPLETIONIST.png",
+   "x": 512,
+   "y": 1792
+  },
+  {
+   "file": "achieved/ACH_FARKLE_MASTER.png",
+   "x": 768,
+   "y": 1792
+  },
+  {
+   "file": "unachieved/ACH_STRAIGHT_SHOOTER.png",
+   "x": 0,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_PAIR_UP.png",
+   "x": 256,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_THREE_ONES.png",
+   "x": 512,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_FOUR_OF_A_KIND.png",
+   "x": 768,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_FIVE_OF_A_KIND.png",
+   "x": 1024,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_SIX_OF_A_KIND.png",
+   "x": 1280,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_SIX_ONES.png",
+   "x": 1536,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_LUCKY_FIVES.png",
+   "x": 1792,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_HOT_DICE.png",
+   "x": 2048,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_HOT_DICE_TWICE.png",
+   "x": 2304,
+   "y": 2048
+  },
+  {
+   "file": "unachieved/ACH_ONE_DIE_LEFT.png",
+   "x": 0,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_BANK_2000.png",
+   "x": 256,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_BANK_3000.png",
+   "x": 512,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_PLAYED_IT_SAFE.png",
+   "x": 768,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_FIFTY_AND_DONE.png",
+   "x": 1024,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_SO_CLOSE.png",
+   "x": 1280,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_HEARTBREAKER.png",
+   "x": 1536,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_FIRST_FARKLE.png",
+   "x": 1792,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_THREE_FARKLES.png",
+   "x": 2048,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_OPENING_FARKLE.png",
+   "x": 2304,
+   "y": 2304
+  },
+  {
+   "file": "unachieved/ACH_ROCK_BOTTOM.png",
+   "x": 0,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_FIRST_VICTORY.png",
+   "x": 256,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_FLAWLESS.png",
+   "x": 512,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_SHUTOUT.png",
+   "x": 768,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_COMEBACK.png",
+   "x": 1024,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_NAIL_BITER.png",
+   "x": 1280,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_HELD_THE_LINE.png",
+   "x": 1536,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_LAST_DITCH.png",
+   "x": 1792,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_SPEED_RUN.png",
+   "x": 2048,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_MARATHON.png",
+   "x": 2304,
+   "y": 2560
+  },
+  {
+   "file": "unachieved/ACH_QUICK_DRAW.png",
+   "x": 0,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_HOUSE_RULES.png",
+   "x": 256,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_MATCHES_10.png",
+   "x": 512,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_MATCHES_50.png",
+   "x": 768,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_MATCHES_100.png",
+   "x": 1024,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_STREAK_3.png",
+   "x": 1280,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_STREAK_5.png",
+   "x": 1536,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_STREAK_10.png",
+   "x": 1792,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_BANKER.png",
+   "x": 2048,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_COLLECTOR.png",
+   "x": 2304,
+   "y": 2816
+  },
+  {
+   "file": "unachieved/ACH_DICE_WHISPERER.png",
+   "x": 0,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_COULDNT_RESIST.png",
+   "x": 256,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_INDECISIVE.png",
+   "x": 512,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_NIGHT_OWL.png",
+   "x": 768,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_FOLLOW_THE_LIGHT.png",
+   "x": 1024,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_GROUND_TRUTH.png",
+   "x": 1280,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_PHOTOGRAPHER.png",
+   "x": 1536,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_LIGHT_AND_DARK.png",
+   "x": 1792,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_BOUNCE_HOUSE.png",
+   "x": 2048,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_POTATO_MODE.png",
+   "x": 2304,
+   "y": 3072
+  },
+  {
+   "file": "unachieved/ACH_MAXED_OUT.png",
+   "x": 0,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_PURIST.png",
+   "x": 256,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_FULL_SPECTRUM.png",
+   "x": 512,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_LIGHTS_OUT.png",
+   "x": 768,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_CLEAR_SKIES.png",
+   "x": 1024,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_CONTACT_SHADOWS.png",
+   "x": 1280,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_ALPHABET_SOUP.png",
+   "x": 1536,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_IN_HOUSE.png",
+   "x": 1792,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_SHARP_EYE.png",
+   "x": 2048,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_EDGE_LORD.png",
+   "x": 2304,
+   "y": 3328
+  },
+  {
+   "file": "unachieved/ACH_ULTRA_PERFORMANCE.png",
+   "x": 0,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_TWICE_THE_FRAMES.png",
+   "x": 256,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_WINDOW_SHOPPER.png",
+   "x": 512,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_BIG_SCREEN.png",
+   "x": 768,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_THROUGH_THE_LENS.png",
+   "x": 1024,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_NUMBERS_PERSON.png",
+   "x": 1280,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_BENCHMARK.png",
+   "x": 1536,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_SILENT_TREATMENT.png",
+   "x": 1792,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_JUST_THE_MUSIC.png",
+   "x": 2048,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_TINKERER.png",
+   "x": 2304,
+   "y": 3584
+  },
+  {
+   "file": "unachieved/ACH_BACK_TO_BASICS.png",
+   "x": 0,
+   "y": 3840
+  },
+  {
+   "file": "unachieved/ACH_GRAPHICS_CONNOISSEUR.png",
+   "x": 256,
+   "y": 3840
+  },
+  {
+   "file": "unachieved/ACH_COMPLETIONIST.png",
+   "x": 512,
+   "y": 3840
+  },
+  {
+   "file": "unachieved/ACH_FARKLE_MASTER.png",
+   "x": 768,
+   "y": 3840
+  }
+ ]
+}

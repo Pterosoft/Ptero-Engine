@@ -90,20 +90,45 @@ namespace
         }
     }
 
+    // The scene has been converted to metres and to 3ds Max's axis system (Z up, right-
+    // handed, the front of a model facing -Y) before any vertex is read; see
+    // ConvertSceneToEngineFrame. The engine is Z up too but left-handed: looking along +Y,
+    // +X is on the *left* of the screen. Mirroring X keeps a model's right side on the
+    // right, and its front still faces -Y - towards a camera at yaw 0 - just as it faced
+    // the front viewport in the DCC tool. One mirror, so triangle winding flips too.
     DirectX::XMFLOAT3 ConvertPositionToLeftHanded(const FbxVector4& position)
     {
         return DirectX::XMFLOAT3(
-            static_cast<float>(position[0]),
+            static_cast<float>(-position[0]),
             static_cast<float>(position[1]),
-            static_cast<float>(-position[2]));
+            static_cast<float>(position[2]));
     }
 
     DirectX::XMFLOAT3 ConvertNormalToLeftHanded(const FbxVector4& normal)
     {
         return DirectX::XMFLOAT3(
-            static_cast<float>(normal[0]),
+            static_cast<float>(-normal[0]),
             static_cast<float>(normal[1]),
-            static_cast<float>(-normal[2]));
+            static_cast<float>(normal[2]));
+    }
+
+    // Brings any FBX into one frame, whatever tool and settings wrote it: the files in
+    // Data alone mix centimetres (Maya, Blender, Houdini), inches (3ds Max) and both Y-up
+    // and Z-up. Both conversions rewrite node transforms only, which EvaluateGlobalTransform
+    // then folds into every vertex.
+    void ConvertSceneToEngineFrame(FbxScene* scene)
+    {
+        FbxGlobalSettings& settings = scene->GetGlobalSettings();
+
+        if (settings.GetSystemUnit() != FbxSystemUnit::m)
+        {
+            FbxSystemUnit::m.ConvertScene(scene);
+        }
+
+        if (settings.GetAxisSystem() != FbxAxisSystem::Max)
+        {
+            FbxAxisSystem::Max.ConvertScene(scene);
+        }
     }
 
     FbxVector4 TransformPositionToWorld(const FbxAMatrix& transform, const FbxVector4& position)
@@ -951,7 +976,7 @@ namespace
                     }
                 }
 
-                // Flipping winding keeps front faces correct after the handedness flip (Z negation).
+                // Flipping winding keeps front faces correct after the handedness flip (the X mirror).
                 indices.push_back(triangleIndices[0]);
                 indices.push_back(triangleIndices[2]);
                 indices.push_back(triangleIndices[1]);
@@ -1017,6 +1042,8 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
 
     importer->Destroy();
 
+    ConvertSceneToEngineFrame(scene);
+
     std::vector<FbxMesh*> meshes;
     if (!TriangulateAndCollectMeshes(scene, meshes))
     {
@@ -1072,8 +1099,53 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
     return writeSucceeded;
 }
 
+bool FbxCompiler::WritePteroMesh(
+    const std::string& pteroOutPath,
+    std::vector<Vertex> vertices,
+    std::vector<std::uint32_t> indices,
+    std::vector<PteroSubMeshEntry> subMeshes)
+{
+    MeshLodData baseLod;
+    baseLod.vertices = std::move(vertices);
+    baseLod.indices = std::move(indices);
+    baseLod.subMeshEntries = std::move(subMeshes);
+    const std::vector<MeshLodData> lods = GenerateMeshLods(baseLod);
+    return !lods.empty() && WritePteroMeshFile(pteroOutPath, lods);
+}
+
+bool FbxCompiler::EnsureCurrentPtero(const std::string& pteroPath)
+{
+    std::ifstream inputStream(pteroPath, std::ios::binary);
+    LegacyPteroMeshHeader header{};
+    inputStream.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (inputStream && std::memcmp(header.magic, "PTRO", 4) == 0 && header.version == kPteroMeshVersion)
+    {
+        return true;
+    }
+    inputStream.close();
+
+    // "<name>.fbx.ptero" is cooked from "<name>.fbx".
+    const std::filesystem::path path(pteroPath);
+    if (_stricmp(path.extension().string().c_str(), ".ptero") != 0)
+    {
+        return false;
+    }
+    const std::filesystem::path fbxPath = path.parent_path() / path.stem();
+    return std::filesystem::exists(fbxPath) && CompileFbxToPtero(fbxPath.string(), pteroPath);
+}
+
 bool FbxCompiler::GenerateLodsForPtero(const std::string& pteroPath)
 {
+    // An outdated file is re-cooked instead, which generates the LODs anyway.
+    std::ifstream versionStream(pteroPath, std::ios::binary);
+    LegacyPteroMeshHeader header{};
+    versionStream.read(reinterpret_cast<char*>(&header), sizeof(header));
+    versionStream.close();
+    if (header.version != kPteroMeshVersion)
+    {
+        return EnsureCurrentPtero(pteroPath);
+    }
+
     std::vector<MeshLodData> sourceLods;
     if (!ReadPteroMeshFile(pteroPath, sourceLods) || sourceLods.empty())
     {
@@ -1097,6 +1169,25 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
 }
 
 bool FbxCompiler::GenerateLodsForPtero(const std::string& pteroPath)
+{
+    (void)pteroPath;
+    return false;
+}
+
+bool FbxCompiler::WritePteroMesh(
+    const std::string& pteroOutPath,
+    std::vector<Vertex> vertices,
+    std::vector<std::uint32_t> indices,
+    std::vector<PteroSubMeshEntry> subMeshes)
+{
+    (void)pteroOutPath;
+    (void)vertices;
+    (void)indices;
+    (void)subMeshes;
+    return false;
+}
+
+bool FbxCompiler::EnsureCurrentPtero(const std::string& pteroPath)
 {
     (void)pteroPath;
     return false;

@@ -1,0 +1,80 @@
+STEAM EVENT / ANNOUNCEMENT — ENGINE UPDATE
+Event type suggestion: "Major Update" (gets the library spotlight)
+
+ARTWORK (in Steam_Update_Art/Announcement/, regenerate with Steam_Update_Art/make_announcement_art.ps1)
+  Cover image ........ cover_800x450.png
+  Header image ....... header_1920x622.png
+  Library spotlight .. library_spotlight_2108x460.png
+  In-body images ..... upload these to the event and paste each [img] where marked below:
+    [IMAGE 1] Steam_Update_Art/bluesky_before_after_2000x1125.png
+    [IMAGE 2] Announcement/ptero_reconstruction_1920x1080.png
+    [IMAGE 3] Announcement/achievements_1920x1080.png
+
+TITLE
+A New Engine Foundation: The Tavern, Rebuilt
+
+SUBTITLE
+Virtualized geometry, Ptero Reconstruction, new lighting and 48 Steam Achievements
+
+SUMMARY
+The first big update to Farkle: Tavern Dice is here. The tavern runs on a new version of our Ptero-Engine, with sharper detail, richer light, our own reconstruction tech, and 48 Steam Achievements to chase.
+
+BODY (Steam BBCode — paste into the event description editor)
+------------------------------------------------------------------
+
+Greetings, travellers!
+
+When we shared our roadmap, the first stop on it was a new engine foundation. Today it's here. Farkle: Tavern Dice now runs on a new version of our own Ptero-Engine, and the tavern has been rebuilt with it, from the shadows under the table to the glow of the hearth.
+
+And because a good night at the table deserves something to show for it, this update also brings [b]Steam Achievements[/b].
+
+[IMAGE 1]
+
+[h2]A Sharper, Richer Tavern[/h2]
+[list]
+[*][b]Virtualized geometry[/b]: the tavern's models are streamed at the detail your screen can actually show, so close-ups stay crisp without the pop of switching between detail levels.
+[*][b]Virtual shadow maps[/b]: much sharper, more stable shadows from every candle and from the fire, right down to the dice on the table.
+[*][b]Better global illumination[/b]: improved RTGI and probe lighting, with the old probe caching artifacts fixed, and everything above now lit correctly by GI.
+[*][b]Voxel GI[/b]: a new global illumination mode that [b]does not need a ray tracing GPU[/b], so more players get bounced light in the tavern.
+[*][b]Path tracing[/b]: for those who want to see the tavern at its most beautiful.
+[*][b]New bloom and lens flares[/b]: the firelight and candle flames now bloom and flare the way a camera would see them.
+[*][b]Intel XeSS[/b] alongside DLSS and FSR, plus [b]frame generation[/b] with FSR or XeSS on supported systems.
+[*]Refined volumetric fog, and a long list of smaller lighting and loading fixes.
+[/list]
+
+[h2]Ptero Reconstruction: Ptero-SR and Ptero-AA[/h2]
+This update introduces two techniques we built ourselves for the Ptero-Engine. You'll find them in the Settings menu as [b]Ptero-SR[/b] (under Upscaler) and [b]Ptero-AA[/b] (under Anti-Aliasing).
+
+Most upscalers only ever see colours. When the game renders at a lower resolution, an edge that falls halfway across a pixel becomes "some in-between colour", and all an upscaler can do afterwards is blur it or sharpen it back, often with halos. Thin details like railings and table edges are the first to suffer.
+
+Ptero Reconstruction works from the geometry instead. While the scene is rendered, the engine keeps the exact edges of the triangles that make up each pixel. Because those edges are just as precise at your screen's resolution as at the render resolution, every output pixel on an edge can be given its [b]exact coverage[/b]: how much of it is the table and how much is the wall behind it. Colours are rebuilt only from samples on the same side of the edge and on the same surface, so they never bleed into each other.
+
+[IMAGE 2]
+
+[list]
+[*][b]Ptero-SR[/b] is a spatial upscaler. It renders fewer pixels and rebuilds clean, stable edges at full resolution, with no ghosting from previous frames. It offers Native, Quality and Balanced modes.
+[*][b]Ptero-AA[/b] is anti-aliasing at native resolution, using the same exact edge coverage without any temporal pass, for a sharp, smear-free image.
+[/list]
+Both need a GPU with Shader Model 6.1 support. If yours doesn't have it, the options simply won't appear, and DLSS, FSR, XeSS, TAA, SMAA and MSAA are all still there.
+
+[h2]48 Steam Achievements[/h2]
+[IMAGE 3]
+
+Farkle: Tavern Dice now has [b]48 Steam Achievements[/b]. There's something for every kind of player:
+[list]
+[*][b]At the table[/b]: roll a straight, score six of a kind, get hot dice twice in one turn, bank 3,000 points in a single turn, or win after trailing by 1,500.
+[*][b]Bad beats[/b]: some achievements reward the nights that go wrong. Farkle on your very first roll, farkle three turns in a row... we'll leave the rest for you to discover.
+[*][b]The long game[/b]: play 100 matches, win 10 in a row, bank 100,000 points over all your games, and score every type of combination. These show their progress in Steam as you go.
+[*][b]For the graphics menu[/b]: win with every setting on Low, then again with everything on Ultra and path tracing on. Win using Ptero-SR, win at native resolution with no upscaler, or play a whole match path traced.
+[/list]
+A few achievements are hidden. Most of them find you right after you push your luck one roll too far.
+
+Achievements earned while Steam is running are saved to your Steam profile. Only your own play counts, not your opponent's.
+
+[h2]Tell Us What You Think[/h2]
+This is the biggest change to the game since launch, and we'd love to hear how it runs and looks on your machine. If you spot a bug, have a question about the new settings, or just want to brag about a lucky roll, join us in the [url=https://steamcommunity.com/app/5368450/discussions/]Steam Community discussions[/url].
+
+The rest of the roadmap, including more languages, multiplayer, progression and more music, is on our website: [url=https://farkle.pterosoftstudio.com/]farkle.pterosoftstudio.com[/url]
+
+Pull up a chair. The fire's been rebuilt.
+— Pterosoft Studio

@@ -60,6 +60,29 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
         "Draws scene geometry as wireframe.",
         [rendererPointer] { rendererPointer->InvalidateEntityPipeline(); });
 
+    // ------------------------------------------------------ virtual geometry
+    VirtualGeometrySettings& vg = renderer.GetVirtualGeometryRenderer().GetSettings();
+    CVar::RegisterBool ("vg.enabled", &vg.Enabled,
+        "Virtualized geometry for meshes flagged Virtualized Geometry. Off draws them with their ordinary LODs.");
+    CVar::RegisterBool ("vg.all", &vg.VirtualizeAllMeshes,
+        "Draw every eligible mesh through virtualized geometry, whatever its own flag says. Not saved with the level.");
+    CVar::RegisterFloat("vg.errorthreshold", &vg.ErrorThresholdPixels,
+        "Largest simplification error a cluster may show, in pixels. Lower is sharper and costs more triangles.",
+        0.1f, 16.0f);
+    CVar::RegisterBool ("vg.occlusion", &vg.OcclusionCulling,
+        "Two-pass hierarchical-Z occlusion culling of clusters. Inactive with MSAA.");
+    CVar::RegisterBool ("vg.backfaceculling", &vg.BackfaceCulling,
+        "Skip clusters whose every triangle faces away from the camera.");
+    CVar::RegisterBool ("vg.meshshaders", &vg.MeshShaders,
+        "Rasterise clusters with mesh shaders when the GPU has them. Off forces the vertex shader path.");
+    CVar::RegisterBool ("vg.shadows", &vg.Shadows,
+        "Virtualized meshes cast shadows from their clusters. Off draws their shadows the ordinary way.");
+    CVar::RegisterEnum ("vg.debugview", &vg.DebugView,
+        "Colours virtualized geometry by cluster, instance, or DAG level (LOD).",
+        { "off", "clusters", "instances", "lod" }, 0);
+    CVar::RegisterBool ("vg.freeze", &vg.FreezeCulling,
+        "Freeze culling and LOD selection at the current camera, then fly around to inspect what was selected.");
+
     // ------------------------------------------------------------------ game
     CVar::RegisterBool("game.skipintro", &renderer.GetSkipGameIntroRef(),
         "Skip the Pterosoft/engine logo intro when a play session starts. Mainly for "
@@ -73,15 +96,25 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterBool ("rtgi.enabled", &rtgi.Enabled, "Ray-traced global illumination.");
     CVar::RegisterBool ("rtgi.nrd", &rtgi.UseNrdDenoiser, "Denoise with NVIDIA RELAX instead of the built-in temporal filter.");
     CVar::RegisterInt  ("rtgi.raysperpixel", &rtgi.RaysPerPixel, "GI rays traced per pixel per frame.", 1, 32);
+    CVar::RegisterInt  ("rtgi.diffuseresolution", &rtgi.DiffuseResolution, "Diffuse GI trace resolution divisor: 1 full, 2 half, 4 quarter.", 1, 4);
+    CVar::RegisterInt  ("rtgi.specularresolution", &rtgi.SpecularResolution, "Reflection trace resolution divisor: 1 full, 2 half.", 1, 2);
     CVar::RegisterInt  ("rtgi.maxbounces", &rtgi.MaxBounces, "Indirect bounces per path.", 1, 8);
     CVar::RegisterBool ("rtgi.nee", &rtgi.NextEventEstimation, "Next-event estimation: sample lights directly at each hit.");
+    CVar::RegisterBool ("rtgi.nee.vsm", &rtgi.VsmVisibility, "Answer next-event visibility from the virtual shadow map where it has a fine enough page; trace a ray elsewhere.");
+    CVar::RegisterFloat("rtgi.nee.vsmmaxtexel", &rtgi.VsmMaxTexelSize, "Coarsest shadow-map texel, in metres, trusted at a bounce hit; coarser pages leak through thin walls.", 0.001f, 1.0f);
+    CVar::RegisterBool ("rtgi.nee.stochastic", &rtgi.StochasticLights, "Test the shadows of a few lights per bounce hit, picked by contribution, instead of every light.");
+    CVar::RegisterInt  ("rtgi.nee.lightsamples", &rtgi.LightSamples, "Lights per bounce hit with stochastic light sampling.", 1, 4);
+    CVar::RegisterBool ("rtgi.blas.virtualgeometry", &rtgi.VirtualGeometryBlas, "Ray trace virtualized meshes against a simplified cut through their cluster DAG.");
+    CVar::RegisterFloat("rtgi.blas.loderror", &rtgi.BlasLodError, "Simplification error, in metres, of the nearest ray tracing tier.", 0.0f, 0.1f);
+    CVar::RegisterFloat("rtgi.blas.tierdistance", &rtgi.BlasTierDistance, "Distance, in metres, where the second ray tracing detail tier starts; each further tier starts 4x further out.", 1.0f, 200.0f);
+    CVar::RegisterInt  ("rtgi.blas.tiers", &rtgi.BlasTierCount, "Ray tracing detail tiers by distance, each with 4x the error of the one before.", 1, 3);
     CVar::RegisterFloat("rtgi.radianceclamp", &rtgi.RadianceClamp, "Ceiling on a single sample's radiance; lower kills fireflies and dims bright bounces.", 0.0f, 1000.0f);
     CVar::RegisterFloat("rtgi.accumulationblend", &rtgi.AccumulationBlend, "Weight of the current frame in the non-NRD accumulator.", 0.0f, 1.0f);
-    CVar::RegisterFloat("rtgi.gi.intensity", &rtgi.GiIntensity, "Multiplier on the final indirect contribution.", 0.0f, 10.0f);
+    CVar::RegisterFloat("rtgi.gi.intensity", &rtgi.GiIntensity, "Multiplier on the final indirect contribution.", 0.0f, 16.0f);
     CVar::RegisterFloat("rtgi.colorleak", &rtgi.ColorLeakIntensity, "How much surface colour bleeds into the bounce.", 0.0f, 10.0f);
     CVar::RegisterBool ("rtgi.specular.enabled", &rtgi.SpecularEnabled, "Ray-traced specular (glossy reflections) on top of diffuse GI.");
     CVar::RegisterFloat("rtgi.specular.roughnessthreshold", &rtgi.SpecularRoughnessThreshold, "Surfaces rougher than this get no ray-traced specular.", 0.0f, 1.0f);
-    CVar::RegisterFloat("rtgi.specular.intensity", &rtgi.SpecularIntensity, "Multiplier on ray-traced specular.", 0.0f, 10.0f);
+    CVar::RegisterFloat("rtgi.specular.intensity", &rtgi.SpecularIntensity, "Multiplier on ray-traced specular.", 0.0f, 16.0f);
     CVar::RegisterBool ("rtgi.temporalreuse", &rtgi.TemporalReuseEnabled, "ReSTIR temporal reservoir reuse. Unused while the NRD denoiser is on.");
     CVar::RegisterInt  ("rtgi.maxhistorylength", &rtgi.MaxHistoryLength, "Frames a temporal reservoir may accumulate.", 1, 200);
     CVar::RegisterBool ("rtgi.spatialreuse", &rtgi.SpatialReuseEnabled, "ReSTIR spatial reservoir reuse. Unused while the NRD denoiser is on.");
@@ -97,6 +130,39 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
         "Replaces the image with one RTGI intermediate.",
         { "off", "radiance", "luminance", "reservoir", "deterministic_probe", "flat_white",
           "world_normal", "world_position", "hit_distance", "ray_direction" }, 0);
+    CVar::RegisterBool ("rtgi.rays.show", &rtgi.RayDebugEnabled, "Draw the GI paths of a sparse set of pixels over the image.");
+    CVar::RegisterBool ("rtgi.rays.freeze", &rtgi.RayDebugFreeze, "Stop capturing GI rays and keep drawing the captured ones.");
+    CVar::RegisterEnum ("rtgi.rays.pattern", &rtgi.RayDebugPattern, "Which pixels trace visible rays.", { "grid", "centre" }, 0);
+    CVar::RegisterInt  ("rtgi.rays.spacing", &rtgi.RayDebugSpacing, "Pixels between traced pixels in the grid pattern.", 8, 512);
+    CVar::RegisterInt  ("rtgi.rays.history", &rtgi.RayDebugHistoryFrames, "Frames of GI rays kept on screen.", 1, 256);
+    CVar::RegisterEnum ("rtgi.rays.colour", &rtgi.RayDebugColorMode, "GI ray colouring.", { "bounce", "radiance" }, 0);
+    CVar::RegisterBool ("rtgi.rays.shadow", &rtgi.RayDebugShowShadowRays, "Draw the sun shadow ray from each bounce hit.");
+    CVar::RegisterBool ("rtgi.rays.camera", &rtgi.RayDebugShowCameraRays, "Draw the camera ray to each traced pixel.");
+    CVar::RegisterFloat("rtgi.rays.brightness", &rtgi.RayDebugBrightness, "GI ray brightness; 1 is about a sunlit white surface.", 0.0f, 100.0f);
+    CVar::RegisterFloat("rtgi.rays.width", &rtgi.RayDebugLineWidth, "GI ray line width in pixels.", 0.5f, 8.0f);
+    CVar::RegisterFloat("rtgi.rays.misslength", &rtgi.RayDebugMissLength, "Metres drawn of GI rays that escape to the sky.", 0.0f, 1000.0f);
+    CVar::RegisterFloat("rtgi.rays.shadowlength", &rtgi.RayDebugShadowLength, "Metres drawn of sun shadow rays.", 0.0f, 1000.0f);
+
+    VoxelGISettings& voxelGi = renderer.GetVoxelGiSettings();
+    CVar::RegisterBool ("voxelgi.enabled", &voxelGi.Enabled, "Voxel cone traced GI; takes over from RTGI and the radiance probes while on.");
+    CVar::RegisterBool ("voxelgi.fallback", &voxelGi.FallbackWithoutRayTracing, "Run voxel GI in place of RTGI / radiance probes on GPUs without DXR 1.1.");
+    CVar::RegisterInt  ("voxelgi.resolution", &voxelGi.Resolution, "Voxels along each edge of a clipmap level (32, 64, 96 or 128).", 32, 128);
+    CVar::RegisterInt  ("voxelgi.levels", &voxelGi.LevelCount, "Nested clipmap levels, each twice the size of the one inside it.", 2, 6);
+    CVar::RegisterFloat("voxelgi.voxelsize", &voxelGi.VoxelSize, "Voxel edge, in metres, in the finest clipmap level.", 0.05f, 2.0f);
+    CVar::RegisterInt  ("voxelgi.lodbias", &voxelGi.LodBias, "Mesh LOD voxelized into the finest level; coarser levels add one per level.", 0, 8);
+    CVar::RegisterBool ("voxelgi.sunshadows", &voxelGi.SunShadows, "Trace the sun's shadow through the voxels when lighting them.");
+    CVar::RegisterBool ("voxelgi.localshadows", &voxelGi.LocalLightShadows, "Trace local lights' shadows through the voxels when lighting them.");
+    CVar::RegisterFloat("voxelgi.multibounce", &voxelGi.MultiBounce, "Share of the previous bounce fed back into the voxels; 0 = one bounce.", 0.0f, 1.0f);
+    CVar::RegisterFloat("voxelgi.temporalblend", &voxelGi.TemporalBlend, "Share of the voxels' new lighting taken per frame; lower is steadier. 1 = no smoothing.", 0.01f, 1.0f);
+    CVar::RegisterInt  ("voxelgi.cones", &voxelGi.DiffuseCones, "Diffuse cones per pixel: 1, 5 or 9.", 1, 9);
+    CVar::RegisterBool ("voxelgi.halfres", &voxelGi.HalfResolution, "Trace at half resolution and upsample.");
+    CVar::RegisterFloat("voxelgi.maxdistance", &voxelGi.MaxTraceDistance, "Furthest a cone travels, in metres, before it takes the sky.", 1.0f, 1000.0f);
+    CVar::RegisterFloat("voxelgi.surfaceoffset", &voxelGi.SurfaceOffset, "Cone start offset from the surface, in voxels.", 0.0f, 4.0f);
+    CVar::RegisterFloat("voxelgi.gi.intensity", &voxelGi.GiIntensity, "Multiplier on the voxel diffuse GI.", 0.0f, 16.0f);
+    CVar::RegisterBool ("voxelgi.specular.enabled", &voxelGi.SpecularEnabled, "Cone traced reflections.");
+    CVar::RegisterFloat("voxelgi.specular.roughnessthreshold", &voxelGi.SpecularRoughnessThreshold, "Surfaces rougher than this get no reflection cone.", 0.0f, 1.0f);
+    CVar::RegisterFloat("voxelgi.specular.intensity", &voxelGi.SpecularIntensity, "Multiplier on the voxel reflections.", 0.0f, 16.0f);
+    CVar::RegisterInt  ("voxelgi.debugview", &voxelGi.DebugView, "0 off, 1 raw GI, 2 GI luminance, 3 reflections, 20 voxel albedo, 21 voxel radiance, 22 clipmap levels.", 0, 22);
 
     RadianceCascadesSettings& cascades = renderer.GetRadianceCascadesSettings();
     CVar::RegisterBool ("rc.enabled", &cascades.Enabled, "Radiance-cascade global illumination.");
@@ -125,13 +191,18 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterInt  ("probes.gridx", &probes.GridX, "Probes along X.", 1, 128);
     CVar::RegisterInt  ("probes.gridy", &probes.GridY, "Probes along Y.", 1, 128);
     CVar::RegisterInt  ("probes.gridz", &probes.GridZ, "Probes along Z.", 1, 128);
-    CVar::RegisterFloat("probes.spacing", &probes.Spacing, "Distance between probes, in metres.", 0.1f, 100.0f);
+    CVar::RegisterFloat("probes.spacing", &probes.Spacing, "Distance between probes in the finest cascade, in metres.", 0.1f, 100.0f);
+    CVar::RegisterInt  ("probes.cascades", &probes.CascadeCount, "Nested probe grids around the camera, each twice as coarse.", 1, kMaxRadianceProbeCascades);
     CVar::RegisterFloat("probes.originx", &probes.OriginX, "Grid origin X.", -10000.0f, 10000.0f);
     CVar::RegisterFloat("probes.originy", &probes.OriginY, "Grid origin Y.", -10000.0f, 10000.0f);
     CVar::RegisterFloat("probes.originz", &probes.OriginZ, "Grid origin Z.", -10000.0f, 10000.0f);
     CVar::RegisterBool ("probes.followcamera", &probes.FollowCamera, "Recentres the grid on the camera.");
     CVar::RegisterInt  ("probes.raysperprobe", &probes.RaysPerProbe, "Rays cast per probe per update.", 1, 1024);
+    CVar::RegisterInt  ("probes.traceresolution", &probes.TraceResolution, "Share of probes traced per frame, as a divisor: 1 all, 2 half, 4 quarter.", 1, 4);
     CVar::RegisterFloat("probes.updateblend", &probes.UpdateBlend, "Weight of a fresh probe update against its history.", 0.0f, 1.0f);
+    CVar::RegisterFloat("probes.gi.intensity", &probes.GiIntensity, "Multiplier on the probe indirect contribution.", 0.0f, 16.0f);
+    CVar::RegisterBool ("probes.specular.enabled", &probes.SpecularEnabled, "Ray-traced specular reflections in probe GI mode.");
+    CVar::RegisterFloat("probes.specular.intensity", &probes.SpecularIntensity, "Multiplier on probe-mode specular reflections.", 0.0f, 16.0f);
     CVar::RegisterBool ("probes.debug.show", &probes.DebugShowProbes, "Draws a sphere at every probe.");
     CVar::RegisterInt  ("probes.debug.lightingmode", &probes.DebugLightingMode, "What the debug spheres display.", 0, 4);
     CVar::RegisterFloat("probes.debug.sphereradius", &probes.DebugSphereRadius, "Radius of the debug spheres, in metres.", 0.01f, 5.0f);
@@ -145,6 +216,41 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("rtao.power", &rtao.AOPower, "Exponent applied to the occlusion term.", 0.1f, 8.0f);
     CVar::RegisterFloat("rtao.intensity", &rtao.Intensity, "Multiplier on the occlusion term.", 0.0f, 4.0f);
     CVar::RegisterInt  ("rtao.debugview", &rtao.DebugView, "RTAO debug visualisation.", 0, 4);
+    CVar::RegisterFloat("rtao.locallightocclusion", &rtao.LocalLightOcclusion, "How much RTAO darkens point, spot and rect lights' direct light.", 0.0f, 1.0f);
+
+    // ------------------------------------------------------- ray-traced shadows
+    RtShadowSettings& rtShadows = renderer.GetRtShadowSettings();
+    CVar::RegisterBool ("shadow.rt.enabled", &rtShadows.Enabled, "Ray-traced sun shadows instead of the shadow map.");
+    CVar::RegisterBool ("shadow.rt.locallights", &rtShadows.LocalLights, "Also ray trace point, spot and rect light shadows (8 per pixel).");
+    CVar::RegisterInt  ("shadow.rt.raysperpixel", &rtShadows.RaysPerPixel, "Shadow rays per pixel per light per frame.", 1, 8);
+    CVar::RegisterFloat("shadow.rt.sunsize", &rtShadows.SunAngularDiameter, "Sun angular diameter in degrees (real sun ~0.53); 0 = hard.", 0.0f, 10.0f);
+    CVar::RegisterFloat("shadow.rt.lightsoftness", &rtShadows.LocalLightSoftness, "Multiplier on local lights' emitter size for their shadows.", 0.0f, 4.0f);
+    CVar::RegisterFloat("shadow.rt.maxraylength", &rtShadows.MaxRayLength, "Longest sun shadow ray, in metres.", 1.0f, 10000.0f);
+    CVar::RegisterFloat("shadow.rt.raybias", &rtShadows.RayBias, "Ray origin offset along the normal, in metres.", 0.0f, 0.5f);
+    CVar::RegisterFloat("shadow.rt.temporalblend", &rtShadows.TemporalBlend, "Weight of the current frame in the sun shadow history.", 0.02f, 1.0f);
+    CVar::RegisterInt  ("shadow.rt.filterradius", &rtShadows.MaxFilterRadius, "Widest sun penumbra blur, in pixels.", 0, 16);
+    CVar::RegisterInt  ("shadow.rt.debugview", &rtShadows.DebugView, "1 sun visibility, 2 raw sun rays, 3 local light visibility, 4 raw local light rays.", 0, 4);
+
+    // ----------------------------------------------------------- path tracing
+    PathTracerSettings& pathTracer = renderer.GetPathTracerSettings();
+    CVar::RegisterBool ("pt.enabled", &pathTracer.Enabled, "Path tracer; replaces the lit scene.");
+    CVar::RegisterInt  ("pt.mode", reinterpret_cast<int*>(&pathTracer.Mode), "0 reference (accumulate), 1 real time (NRD denoised).", 0, 1);
+    CVar::RegisterInt  ("pt.rt.bounces", &pathTracer.RealTimeMaxBounces, "Real time: bounces after the visible surface.", 0, 8);
+    CVar::RegisterInt  ("pt.rt.spp", &pathTracer.RealTimeSamplesPerPixel, "Real time: paths per lobe per pixel per frame.", 1, 4);
+    CVar::RegisterBool ("pt.rt.screencache", &pathTracer.ScreenCache, "Real time: end paths in last frame's denoised lighting (unlimited bounces).");
+    CVar::RegisterBool ("pt.rt.denoise", &pathTracer.Denoise, "Real time: NRD RELAX denoising.");
+    CVar::RegisterInt  ("pt.rt.historyframes", &pathTracer.DenoiserHistoryFrames, "Real time: frames NRD accumulates over.", 4, 60);
+    CVar::RegisterInt  ("pt.maxbounces", &pathTracer.MaxBounces, "Bounces after the first hit.", 0, 32);
+    CVar::RegisterInt  ("pt.samplesperframe", &pathTracer.SamplesPerFrame, "Paths per pixel each frame.", 1, 16);
+    CVar::RegisterInt  ("pt.maxsamples", &pathTracer.MaxSamples, "Samples per pixel before the image is held; 0 = never.", 0, 65536);
+    CVar::RegisterFloat("pt.indirectclamp", &pathTracer.IndirectClamp, "Luminance cap on bounced light per sample; 0 = off.", 0.0f, 1000.0f);
+    CVar::RegisterFloat("pt.emissive", &pathTracer.EmissiveIntensity, "Multiplier on material emissive colour.", 0.0f, 1000.0f);
+    CVar::RegisterFloat("pt.groundalbedo", &pathTracer.GroundAlbedo, "Albedo of the stand-in ground escaped rays see.", 0.0f, 1.0f);
+    CVar::RegisterBool ("pt.softshadows", &pathTracer.SoftShadows, "Sample the sun disc and light areas.");
+    CVar::RegisterBool ("pt.alphatest", &pathTracer.AlphaTest, "Let light through alpha-cut materials.");
+    CVar::RegisterBool ("pt.terrainshadows", &pathTracer.TerrainDisplacementShadows, "Shadow rays march displaced terrain height maps.");
+    CVar::RegisterBool ("pt.reset", &pathTracer.ResetAccumulation, "Restart the accumulation.");
+    CVar::RegisterInt  ("pt.debugview", &pathTracer.DebugView, "0 image, 1 base colour, 2 normal, 3 roughness/metallic, 4/5 real-time diffuse/specular lighting.", 0, 5);
 
     GtaoSettings& gtao = renderer.GetGtaoSettings();
     CVar::RegisterBool ("gtao.enabled", &gtao.Enabled, "Ground-truth ambient occlusion (screen space).");
@@ -183,6 +289,10 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("ssr.sssr.variancethreshold", &ssr.SssrTemporalVarianceThreshold, "FidelityFX: variance above which a skipped pixel is re-traced.", 0.0f, 0.01f);
     CVar::RegisterFloat("ssr.sssr.temporalstability", &ssr.SssrTemporalStability, "FidelityFX: history clipping; higher is steadier, lower ghosts less.", 0.0f, 1.0f);
 
+    // ------------------------------------------------------------ shading model
+    ShadingSettings& shading = renderer.GetShadingSettings();
+    CVar::RegisterBool ("r.disneybrdf", &shading.DisneyBrdf, "Disney principled BRDF (off: Lambert + Cook-Torrance).");
+
     // ---------------------------------------------------- subsurface scattering
     SubsurfaceSettings& sss = renderer.GetSubsurfaceSettings();
     CVar::RegisterBool ("sss.enabled", &sss.Enabled, "Subsurface scattering for materials that enable it.");
@@ -192,13 +302,45 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterBool ("sss.transmission", &sss.Transmission, "Light transmitted through thin parts.");
     CVar::RegisterFloat("sss.transmissionintensity", &sss.TransmissionIntensity, "Multiplier on transmitted light.", 0.0f, 10.0f);
     CVar::RegisterInt  ("sss.rtsamples", &sss.RtSamples, "Ray-traced surface probes per pixel.", 1, 64);
+    CVar::RegisterBool ("sss.restir", &sss.RtRestir, "ReSTIR temporal reuse of the ray-traced probes.");
+    CVar::RegisterInt  ("sss.restir.history", &sss.RtHistoryLength, "ReSTIR: frames of probes the history may stand for.", 1, 64);
     CVar::RegisterInt  ("sss.debugview", &sss.DebugView, "0 = composite, 1 = scattered diffuse, 2 = profile mask.", 0, 2);
+
+    // --------------------------------- DPLE (Deterministic Photoreal Lighting Enhancer)
+    // The full set lives in Windows > DPLE...; these are the switches worth binding to a
+    // key or flipping from the in-game console while comparing.
+    DpleSettings& dple = renderer.GetDpleSettings();
+    CVar::RegisterBool ("dple.enabled", &dple.Enabled, "Deterministic Photoreal Lighting Enhancer, after AA/upscaling.");
+    CVar::RegisterInt  ("dple.divisor", &dple.WorkingResolutionDivisor, "AO/contact shadow resolution divisor relative to the output (1-4).", 1, 4);
+    CVar::RegisterInt  ("dple.debugview", &dple.DebugView,
+        "0 off, 1 ambient visibility, 2 contact shadows, 3 indirect fraction, 4 material class, "
+        "5 AO radii, 6 G-Buffer UV, 7 specular share, 8 micro-specular gain.", 0, 8);
+    CVar::RegisterBool ("dple.ao", &dple.EnableAmbientOcclusion, "DPLE multiscale ambient occlusion.");
+    CVar::RegisterBool ("dple.contactshadows", &dple.EnableContactShadows, "DPLE sun contact shadows.");
+    CVar::RegisterBool ("dple.materialresponse", &dple.EnableMaterialResponse, "DPLE per-material occlusion response.");
+    CVar::RegisterBool ("dple.microspecular", &dple.EnableMicroSpecular, "DPLE specular occlusion and micro-specular gain.");
+    CVar::RegisterBool ("dple.temporal", &dple.EnableTemporalReconstruction, "DPLE temporal accumulation of its own signals.");
+    CVar::RegisterBool ("dple.denoise", &dple.EnableSpatialDenoise, "DPLE bilateral spatial denoise.");
+    CVar::RegisterBool ("dple.detail", &dple.EnableDetailEnhancement, "DPLE frequency-separated detail enhancement.");
 
     // ----------------------------------------------------------- anti-aliasing
     TaaSettings& taa = renderer.GetTaaSettings();
-    CVar::RegisterBool ("taa.enabled", &taa.Enabled, "Temporal anti-aliasing.");
-    CVar::RegisterFloat("taa.blendfactor", &taa.BlendFactor, "Weight of the current frame; lower accumulates longer.", 0.0f, 1.0f);
+    // Unreal's temporal AA; its console variable names are noted against each.
+    CVar::RegisterBool ("taa.enabled", &taa.Enabled, "Temporal anti-aliasing (Unreal Engine 5's TemporalAA).",
+        [&taa] { taa.ResetHistory = true; });
+    CVar::RegisterEnum ("taa.quality", &taa.Quality, "r.TemporalAA.Quality.",
+        { "low", "medium", "high", "mediumhigh" }, 0, [&taa] { taa.ResetHistory = true; });
+    CVar::RegisterFloat("taa.currentframeweight", &taa.CurrentFrameWeight,
+        "r.TemporalAACurrentFrameWeight: weight of the new frame once history has converged; lower accumulates longer.", 0.001f, 1.0f);
+    CVar::RegisterInt  ("taa.samples", &taa.Samples, "r.TemporalAASamples: length of the jitter sequence at 100% screen percentage.", 1, 255);
+    CVar::RegisterFloat("taa.filtersize", &taa.FilterSize, "r.TemporalAAFilterSize: reconstruction filter width in pixels.", 0.1f, 3.0f);
+    CVar::RegisterBool ("taa.catmullrom", &taa.CatmullRomFilter, "r.TemporalAACatmullRom: Catmull-Rom reconstruction weights.");
     CVar::RegisterFloat("taa.jitterscale", &taa.JitterScale, "Sub-pixel jitter magnitude in pixels; 0 disables jitter.", 0.0f, 4.0f);
+    CVar::RegisterBool ("taa.upsampling", &taa.Upscaling,
+        "r.TemporalAA.Upsampling: render at taa.screenpercentage and let TAA upscale. DLSS/FSR/XeSS take precedence.",
+        [&taa] { taa.ResetHistory = true; });
+    CVar::RegisterFloat("taa.screenpercentage", &taa.ScreenPercentage, "r.ScreenPercentage while upsampling, per axis.", 25.0f, 100.0f);
+    CVar::RegisterBool ("taa.reset", &taa.ResetHistory, "Set to drop TAA's accumulated history on the next frame.");
 
     SMAASettings& smaa = renderer.GetSmaaSettings();
     CVar::RegisterBool ("smaa.enabled", &smaa.Enabled, "SMAA spatial anti-aliasing.");
@@ -207,6 +349,33 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("smaa.maxsearchstepsdiag", &smaa.MaxSearchStepsDiag, "Diagonal edge search length.", 0.0f, 20.0f);
     CVar::RegisterFloat("smaa.cornerrounding", &smaa.CornerRounding, "How much sharp corners are rounded, as a percentage.", 0.0f, 100.0f);
     CVar::RegisterEnum ("smaa.debugview", &smaa.DebugView, "SMAA debug visualisation.", { "off", "edges", "blendweights" }, 0);
+
+    AnalyticEdgeAASettings& edgeAa = renderer.GetAnalyticEdgeAaSettings();
+    CVar::RegisterBool ("edgeaa.enabled", &edgeAa.Enabled,
+        "Analytic Edge AA: exact triangle-coverage anti-aliasing of geometric edges. Needs SM 6.1; off under MSAA and DLSS/FSR/XeSS.");
+    CVar::RegisterFloat("edgeaa.depththreshold", &edgeAa.DepthThreshold,
+        "Relative depth step (in 1/viewZ, beyond the neighbouring plane) that counts as a geometric edge.", 0.0001f, 1.0f);
+    CVar::RegisterFloat("edgeaa.creaseangle", &edgeAa.CreaseAngleDegrees,
+        "Normal angle in degrees that counts as a crease edge; 180 disables the normal test.", 1.0f, 180.0f);
+    CVar::RegisterEnum ("edgeaa.debugview", &edgeAa.DebugView, "Analytic Edge AA debug visualisation.",
+        { "off", "classification", "coverage" }, 0);
+
+    // A mode change is picked up on the next frame: the render size is re-queried every frame.
+    AarSettings& aar = renderer.GetAarSettings();
+    CVar::RegisterBool ("aar.enabled", &aar.Enabled,
+        "AAR, Analytic-Aware Reconstruction: spatial upscaler guided by the triangle edges. DLSS/FSR/XeSS/TAAU take precedence; needs SM 6.1, not under MSAA.");
+    CVar::RegisterEnum ("aar.mode", &aar.Mode, "AAR render scale per axis: 100 / 80 / 75 / 66.7 %.",
+        { "native", "ultraquality", "quality", "balanced" }, 2);
+    CVar::RegisterFloat("aar.depththreshold", &aar.DepthThreshold,
+        "Relative depth step (in 1/viewZ, beyond the neighbouring plane) that counts as a geometric edge.", 0.0001f, 1.0f);
+    CVar::RegisterFloat("aar.creaseangle", &aar.CreaseAngleDegrees,
+        "Normal angle in degrees that counts as a crease edge; 180 disables the normal test.", 1.0f, 180.0f);
+    CVar::RegisterFloat("aar.depthsigma", &aar.DepthSigma,
+        "Relative 1/viewZ deviation from a surface's plane at which a sample's reconstruction weight falls to e^-0.5.", 0.0001f, 1.0f);
+    CVar::RegisterFloat("aar.normalpower", &aar.NormalPower,
+        "Exponent on normal agreement in the reconstruction weights; 0 ignores normals.", 0.0f, 64.0f);
+    CVar::RegisterEnum ("aar.debugview", &aar.DebugView, "AAR debug visualisation.",
+        { "off", "path", "coverage" }, 0);
 
     MsaaSettings& msaa = renderer.GetMsaaSettings();
     CVar::RegisterBool("msaa.enabled", &msaa.Enabled, "Multi-sample the G-Buffer. Costs SampleCount times the G-Buffer bandwidth.");
@@ -239,9 +408,27 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterBool ("fsr.framegen.debug.view", &fsr.FrameGenerationDebugView,
         "Shows frame generation's internal buffers instead of the image.");
 
+    XessSettings& xess = renderer.GetXessSettings();
+    CVar::RegisterBool ("xess.enabled", &xess.Enabled, "Intel XeSS super resolution. DLSS and FSR take precedence when on.",
+        [&xess] { xess.ResetHistory = true; });
+    CVar::RegisterEnum ("xess.mode", &xess.Mode,
+        "XeSS quality preset (render scale 1.0 / 1.3 / 1.5 / 1.7 / 2.0 / 2.3 / 3.0x).",
+        { "nativeaa", "ultraqualityplus", "ultraquality", "quality", "balanced", "performance", "ultraperformance" }, 0,
+        [&xess] { xess.ResetHistory = true; });
+    CVar::RegisterBool ("xess.reset", &xess.ResetHistory, "Set to drop XeSS's accumulated history on the next frame.");
+    CVar::RegisterBool ("xess.framegen", &xess.FrameGeneration,
+        "XeSS frame generation: presents generated frames between rendered ones. Replaces the swap chain on the next frame.");
+    CVar::RegisterInt  ("xess.framegen.frames", &xess.InterpolatedFrames,
+        "Generated frames per rendered frame; more than one needs an Intel Arc GPU.", 1, 8);
+    CVar::RegisterBool ("xess.framegen.uicomposition", &xess.UiComposition,
+        "Composite the game UI over generated frames instead of interpolating it.");
+    CVar::RegisterBool ("xess.lowlatency", &xess.LowLatency, "Xe Low Latency. Always on with XeSS frame generation.");
+
     SharpenSettings& sharpen = renderer.GetSharpenSettings();
     CVar::RegisterBool ("sharpen.image.enabled", &sharpen.ImageSharpeningEnabled, "Post-process image sharpening.");
-    CVar::RegisterFloat("sharpen.image.strength", &sharpen.ImageSharpeningStrength, "Image sharpening strength.", 0.0f, 1.5f,
+    CVar::RegisterFloat("sharpen.image.radius", &sharpen.ImageSharpeningRadius, "Image sharpening radius in pixels.", 1.0f, 8.0f,
+        [&sharpen] { sharpen.Validate(); });
+    CVar::RegisterFloat("sharpen.image.strength", &sharpen.ImageSharpeningStrength, "Image sharpening strength.", 0.0f, 3.0f,
         [&sharpen] { sharpen.Validate(); });
     CVar::RegisterBool ("sharpen.texture.enabled", &sharpen.TextureSharpeningEnabled, "Applies a negative mip bias when sampling textures.");
     CVar::RegisterFloat("sharpen.texture.miplodbias", &sharpen.TextureMipLODBias, "Mip LOD bias; more negative is sharper and noisier.", -3.0f, 0.0f,
@@ -255,6 +442,37 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("bloom.knee", &bloom.Knee, "Softness of the threshold.", 0.0f, 1.0f);
     CVar::RegisterFloat("bloom.radius", &bloom.Radius, "Upsample filter radius.", 0.0f, 8.0f);
     CVar::RegisterInt  ("bloom.miplevels", &bloom.MipLevels, "Mip levels in the bloom chain.", 1, 12);
+    CVar::RegisterEnum ("bloom.method", reinterpret_cast<int*>(&bloom.Method),
+        "How bloom is produced: the mip chain, or FFT convolution with a glare kernel.", { "mipchain", "fft" });
+    CVar::RegisterInt  ("bloom.fft.resolution", &bloom.FftResolution, "FFT grid size (256, 512 or 1024).", 256, 1024);
+    CVar::RegisterFloat("bloom.fft.kernelsize", &bloom.FftKernelSize, "Glare reach as a fraction of the frame width.", 0.02f, 1.0f);
+    CVar::RegisterFloat("bloom.fft.halostrength", &bloom.FftHaloStrength, "Share of the glare in the wide halo.", 0.0f, 1.0f);
+    CVar::RegisterFloat("bloom.fft.halofalloff", &bloom.FftHaloFalloff, "Power-law exponent of the halo.", 0.5f, 6.0f);
+    CVar::RegisterFloat("bloom.fft.streaks", &bloom.FftStreakStrength, "Aperture diffraction spikes in the kernel.", 0.0f, 1.0f);
+    CVar::RegisterInt  ("bloom.fft.blades", &bloom.FftApertureBlades, "Aperture blade count for the spikes.", 3, 16);
+    CVar::RegisterFloat("bloom.fft.rotation", &bloom.FftApertureRotation, "Aperture rotation in degrees.", 0.0f, 360.0f);
+    CVar::RegisterFloat("bloom.fft.chromatic", &bloom.FftChromaticSpread, "Wavelength spread of the glare.", 0.0f, 2.0f);
+
+    LensFlareSettings& flare = renderer.GetLensFlareSettings();
+    CVar::RegisterBool ("lensflare.enabled", &flare.Enabled, "Physically based lens flares.");
+    CVar::RegisterString("lensflare.lens", &flare.Lens, "Lens prescription under Data/LensFlares/Lenses (file name without .xml).");
+    CVar::RegisterFloat("lensflare.intensity", &flare.Intensity, "Overall flare intensity.", 0.0f, 100.0f);
+    CVar::RegisterFloat("lensflare.ghostintensity", &flare.GhostIntensity, "Ghost intensity; 1 = a real coated lens.", 0.0f, 100000.0f);
+    CVar::RegisterFloat("lensflare.fnumber", &flare.FNumber, "f-number of the virtual lens; 0 = the lens file's.", 0.0f, 64.0f);
+    CVar::RegisterInt  ("lensflare.blades", &flare.ApertureBlades, "Aperture blade count.", 3, 16);
+    CVar::RegisterFloat("lensflare.rotation", &flare.ApertureRotation, "Aperture rotation in degrees.", 0.0f, 360.0f);
+    CVar::RegisterFloat("lensflare.roundness", &flare.ApertureRoundness, "0 = straight blades, 1 = circular iris.", 0.0f, 1.0f);
+    CVar::RegisterInt  ("lensflare.maxghosts", &flare.MaxGhosts, "Brightest ghosts drawn per light.", 0, 256);
+    CVar::RegisterInt  ("lensflare.raygrid", &flare.RayGridSize, "Rays per side of each ghost's grid.", 8, 64);
+    CVar::RegisterInt  ("lensflare.wavelengths", &flare.Wavelengths, "Wavelengths traced per ghost.", 1, 6);
+    CVar::RegisterFloat("lensflare.starburst", &flare.StarburstIntensity, "Starburst intensity.", 0.0f, 100.0f);
+    CVar::RegisterFloat("lensflare.starburstsize", &flare.StarburstSize, "Starburst height as a fraction of the screen.", 0.01f, 2.0f);
+    CVar::RegisterBool ("lensflare.sun", &flare.SunFlares, "The sun flares.");
+    CVar::RegisterBool ("lensflare.lights", &flare.LocalLightFlares, "Level lights flare.");
+    CVar::RegisterInt  ("lensflare.maxlights", &flare.MaxLights, "Most lights flaring at once, the sun included.", 1, 8);
+    CVar::RegisterFloat("lensflare.lightthreshold", &flare.LocalLightThreshold, "Minimum light on the lens for a level light to flare.", 0.0f, 100.0f);
+    CVar::RegisterFloat("lensflare.occlusiontolerance", &flare.OcclusionDepthTolerance, "Depth slack (m) before a light counts as hidden.", 0.0f, 10.0f);
+    CVar::RegisterBool ("lensflare.cloudocclusion", &flare.SunCloudOcclusion, "Clouds and fog dim the sun's flare.");
 
     ChromaticAberrationSettings& chroma = renderer.GetChromaticAberrationSettings();
     CVar::RegisterBool ("chroma.enabled", &chroma.Enabled, "Chromatic aberration.");
@@ -311,6 +529,25 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("tod.skycolor.r", &tod.SkyColorR, "Manual sky colour, red (linear).", 0.0f, 10.0f);
     CVar::RegisterFloat("tod.skycolor.g", &tod.SkyColorG, "Manual sky colour, green (linear).", 0.0f, 10.0f);
     CVar::RegisterFloat("tod.skycolor.b", &tod.SkyColorB, "Manual sky colour, blue (linear).", 0.0f, 10.0f);
+    CVar::RegisterFloat("tod.latitude", &tod.Latitude, "Latitude in degrees north; the noon sun stands at 90 minus this.", -89.0f, 89.0f);
+    CVar::RegisterFloat("tod.northoffset", &tod.NorthOffset, "Rotates the sun path, moon and stars about the vertical, in degrees.", -180.0f, 180.0f);
+    CVar::RegisterFloat("tod.nightskyintensitylux", &tod.NightSkyIntensityLux, "Sky ambient at night, in lux.", 0.0f, 20000.0f);
+    CVar::RegisterBool ("tod.moon", &tod.MoonEnabled, "The moon lights the scene while the sun is down.");
+    CVar::RegisterFloat("tod.moonphase", &tod.MoonPhase, "Moon phase: 0 new, 0.5 full.", 0.0f, 1.0f);
+    CVar::RegisterFloat("tod.moonintensitylux", &tod.MoonIntensityLux, "Full-moon illuminance in lux.", 0.0f, 20000.0f);
+    CVar::RegisterFloat("tod.moonsize", &tod.MoonSize, "Apparent size of the moon disc.", 0.1f, 10.0f);
+    CVar::RegisterBool ("tod.stars", &tod.StarsEnabled, "Star field in the night sky.");
+    CVar::RegisterEnum ("tod.starfield", &tod.StarField, "Where the stars come from.",
+        { "procedural", "texture", "both" }, 0);
+    CVar::RegisterFloat("tod.starintensity", &tod.StarIntensity, "Star brightness multiplier.", 0.0f, 20.0f);
+    CVar::RegisterBool ("tod.controlexposure", &tod.ControlExposure, "Time of day decides the tonemapper's EV100.");
+    CVar::RegisterFloat("tod.dayev100", &tod.DayEv100, "EV100 with the sun high.", -16.0f, 16.0f);
+    CVar::RegisterFloat("tod.sunsetev100", &tod.SunsetEv100, "EV100 with the sun on the horizon.", -16.0f, 16.0f);
+    CVar::RegisterBool ("tod.eyeadaptation", &tod.EyeAdaptation, "Adapt the time-of-day exposure to what the camera sees.");
+    CVar::RegisterFloat("tod.adaptationstrength", &tod.AdaptationStrength, "Fraction of the metered difference eye adaptation follows.", 0.0f, 1.0f);
+    CVar::RegisterFloat("tod.adaptationev100min", &tod.AdaptationEv100Min, "Brightest EV100 eye adaptation may reach.", -16.0f, 16.0f);
+    CVar::RegisterFloat("tod.adaptationev100max", &tod.AdaptationEv100Max, "Darkest EV100 eye adaptation may reach.", -16.0f, 16.0f);
+    CVar::RegisterFloat("tod.nightev100", &tod.NightEv100, "EV100 once the sun is 12 degrees down.", -16.0f, 16.0f);
 
     WindSettings& wind = renderer.GetWindSettings();
     CVar::RegisterBool ("wind.enabled", &wind.Enabled, "Scene-wide wind, shared by rain and vegetation.");
@@ -401,6 +638,42 @@ void RegisterEngineCVars(DX12SceneRenderer& renderer)
     CVar::RegisterFloat("shadow.point.seamblenddistance", &pointShadows.SeamBlendDistance, "Blend width across cube-face seams.", 0.0f, 1.0f);
     CVar::RegisterInt  ("shadow.point.filterradius", &pointShadows.FilterRadius, "PCF radius in texels.", 0, 8);
     CVar::RegisterInt  ("shadow.point.debugview", &pointShadows.DebugView, "Point-shadow debug visualisation.", 0, 4);
+
+    // ----------------------------------------------------------------- lights
+    CVar::RegisterBool ("lights.clustered", &renderer.GetClusteredLights(), "Clustered light lists for the deferred pass, fog and RTGI; off walks every light everywhere (same image, for comparison).");
+    CVar::RegisterFloat("lights.gridcell", &renderer.GetLightGridCellSize(), "Cell size, in metres, of the world grid that lists the lights for GI bounce hits.", 0.5f, 64.0f);
+
+    VirtualShadowMapSettings& vsm = renderer.GetVirtualShadowMapSettings();
+    CVar::RegisterBool ("shadow.vsm.enabled", &vsm.Enabled, "Shadow the sun (and lights) with the virtual shadow map instead of the single 2K map.");
+    CVar::RegisterBool ("shadow.vsm.locallights", &vsm.LocalLights, "Shadow point, spot and rect lights through the virtual shadow map instead of the cubemap atlas.");
+    CVar::RegisterBool ("shadow.vsm.soft", &vsm.SoftShadows, "Soft shadows (PCSS) for the sun and local lights; off = the fixed 4x4 filter.");
+    CVar::RegisterFloat("shadow.vsm.soft.sunsize", &vsm.SunAngularDiameter, "Sun angular diameter in degrees (real sun ~0.53); 0 = hard.", 0.0f, 10.0f);
+    CVar::RegisterFloat("shadow.vsm.soft.lightsoftness", &vsm.LocalLightSoftness, "Multiplier on local lights' emitter size for their shadows.", 0.0f, 8.0f);
+    CVar::RegisterFloat("shadow.vsm.soft.minlightsize", &vsm.MinLocalLightSize, "Emitter radius assumed for smaller lights, in metres; 0 keeps them hard.", 0.0f, 0.5f);
+    CVar::RegisterFloat("shadow.vsm.soft.maxpenumbra", &vsm.MaxPenumbra, "Widest penumbra kept, in metres.", 0.05f, 4.0f);
+    CVar::RegisterFloat("shadow.vsm.lightresolutionbias", &vsm.LocalResolutionBias, "Local-light cube mip bias; +1 halves the resolution.", -2.0f, 3.0f);
+    CVar::RegisterBool ("shadow.vsm.budget", &vsm.ShadowBudget, "Only the most important lights cast shadows; off = every shadow-casting light.");
+    CVar::RegisterInt  ("shadow.vsm.budget.maxlights", &vsm.MaxShadowedLights, "Lights that cast shadows at once under the budget.", 1, 16);
+    CVar::RegisterFloat("shadow.vsm.budget.fade", &vsm.ShadowFadeSeconds, "Seconds a shadow takes to fade in or out of the budget.", 0.0f, 5.0f);
+    CVar::RegisterBool ("shadow.vsm.importanceres", &vsm.ImportanceResolution, "Less important lights read a coarser shadow cube.");
+    CVar::RegisterInt  ("shadow.vsm.importanceres.full", &vsm.FullResolutionLights, "Most important lights kept at full shadow resolution.", 0, 16);
+    CVar::RegisterFloat("shadow.vsm.importanceres.bias", &vsm.ReducedResolutionBias, "Mip bias for the other lights; +1 halves the resolution.", 0.0f, 3.0f);
+    CVar::RegisterBool ("shadow.vsm.cheapfilter", &vsm.CheapDistantFiltering, "2x2 instead of 4x4 shadow filter far away and for the reduced lights.");
+    CVar::RegisterFloat("shadow.vsm.cheapfilter.distance", &vsm.CheapFilterDistance, "Camera distance beyond which the 2x2 filter is used, in metres.", 0.0f, 1000.0f);
+    CVar::RegisterFloat("shadow.vsm.resolutionbias", &vsm.ResolutionLodBias, "Clipmap level bias; +1 halves the resolution.", -2.0f, 3.0f);
+    CVar::RegisterFloat("shadow.vsm.firsttexel", &vsm.FirstLevelTexelSize, "Finest level's texel size, in metres.", 0.0005f, 0.05f);
+    CVar::RegisterInt  ("shadow.vsm.levels", &vsm.LevelCount, "Clipmap levels in use.", 1, 16);
+    CVar::RegisterInt  ("shadow.vsm.poolpages", &vsm.PhysicalPages, "Physical 128x128 pages. Changing this rebuilds the pool.", 256, 4096);
+    CVar::RegisterInt  ("shadow.vsm.pagesperframe", &vsm.MaxPagesPerFrame, "Most pages rendered per frame.", 1, 240);
+    CVar::RegisterFloat("shadow.vsm.normaloffset", &vsm.NormalOffset, "Receiver normal offset, in texels.", 0.0f, 8.0f);
+    CVar::RegisterFloat("shadow.vsm.bias", &vsm.ConstantBias, "Receiver depth bias, in texels.", 0.0f, 16.0f);
+    CVar::RegisterFloat("shadow.vsm.slopebias", &vsm.SlopeScaledDepthBias, "Caster slope-scaled depth bias.", 0.0f, 16.0f);
+    CVar::RegisterFloat("shadow.vsm.depthrange", &vsm.DepthRange, "Light-space depth kept either side of the camera, in metres.", 10.0f, 100000.0f);
+    CVar::RegisterFloat("shadow.vsm.rotationthreshold", &vsm.LightRotationThreshold, "Sun rotation in degrees that re-renders the pages.", 0.0f, 10.0f);
+    CVar::RegisterBool ("shadow.vsm.terrain", &vsm.TerrainShadows, "Terrain casts into the virtual shadow map.");
+    CVar::RegisterBool ("shadow.vsm.terraindisplacement", &vsm.TerrainDisplacementShadows, "Terrain casts tessellated and displaced (expensive).");
+    CVar::RegisterBool ("shadow.vsm.nocache", &vsm.DisableCaching, "Re-render every page in use every frame.");
+    CVar::RegisterInt  ("shadow.vsm.debugview", &vsm.DebugView, "0 lighting, 1 clipmap level, 2 sun visibility.", 0, 2);
 
     PTERO_LOG_INFO("CVar", "%llu cvars registered. Type 'list' in the console to see them.",
                    static_cast<unsigned long long>(CVar::Count()));

@@ -70,6 +70,173 @@ namespace
         const float alpha = (selected ? 235.0f : 110.0f) * alphaScale;
         return UI_COL32(channel(r * 255.0f), channel(g * 255.0f), channel(b * 255.0f), channel(alpha));
     }
+
+    // Projects a world-space segment to viewport pixels, clipped against the near plane.
+    // TryProjectWorldToViewport rejects any point off screen, so a segment drawn through
+    // it vanishes as soon as either end leaves the view - which, for a volume tens of
+    // metres across seen from inside or close up, is nearly every edge. Here only the
+    // part behind the camera is cut; the rest may run off screen and the draw list clips
+    // it to the viewport.
+    bool ProjectClippedSegment(
+        const XMMATRIX& viewProjection,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
+        const XMFLOAT3& a,
+        const XMFLOAT3& b,
+        UiVec2& outA,
+        UiVec2& outB)
+    {
+        constexpr float kNearW = 0.01f;
+
+        XMVECTOR clipA = XMVector4Transform(XMVectorSetW(XMLoadFloat3(&a), 1.0f), viewProjection);
+        XMVECTOR clipB = XMVector4Transform(XMVectorSetW(XMLoadFloat3(&b), 1.0f), viewProjection);
+        const float wA = XMVectorGetW(clipA);
+        const float wB = XMVectorGetW(clipB);
+        if (wA < kNearW && wB < kNearW)
+            return false;
+        if (wA < kNearW)
+            clipA = XMVectorLerp(clipA, clipB, (kNearW - wA) / (wB - wA));
+        else if (wB < kNearW)
+            clipB = XMVectorLerp(clipB, clipA, (kNearW - wB) / (wA - wB));
+
+        const auto toViewport = [&](const XMVECTOR& clip)
+        {
+            const float w = XMVectorGetW(clip);
+            const float ndcX = XMVectorGetX(clip) / w;
+            const float ndcY = XMVectorGetY(clip) / w;
+            return UiVec2(
+                viewportOrigin.x + (ndcX * 0.5f + 0.5f) * viewportSize.x,
+                viewportOrigin.y + (0.5f - ndcY * 0.5f) * viewportSize.y);
+        };
+        outA = toViewport(clipA);
+        outB = toViewport(clipB);
+
+        // Then to the viewport rectangle (Liang-Barsky): a point just past the near
+        // plane projects hundreds of thousands of pixels out, which is no coordinate to
+        // hand the painter.
+        const float minX = viewportOrigin.x, maxX = viewportOrigin.x + viewportSize.x;
+        const float minY = viewportOrigin.y, maxY = viewportOrigin.y + viewportSize.y;
+        const float dx = outB.x - outA.x;
+        const float dy = outB.y - outA.y;
+        float t0 = 0.0f;
+        float t1 = 1.0f;
+        const float p[4] = { -dx, dx, -dy, dy };
+        const float q[4] = { outA.x - minX, maxX - outA.x, outA.y - minY, maxY - outA.y };
+        for (int edge = 0; edge < 4; ++edge)
+        {
+            if (std::abs(p[edge]) < 1e-6f)
+            {
+                if (q[edge] < 0.0f)
+                    return false;
+                continue;
+            }
+            const float t = q[edge] / p[edge];
+            if (p[edge] < 0.0f)
+                t0 = (std::max)(t0, t);
+            else
+                t1 = (std::min)(t1, t);
+            if (t0 > t1)
+                return false;
+        }
+
+        const UiVec2 start = outA;
+        outA = UiVec2(start.x + dx * t0, start.y + dy * t0);
+        outB = UiVec2(start.x + dx * t1, start.y + dy * t1);
+        return true;
+    }
+}
+
+void Editor::DrawVegetationAreaBounds(
+    const UiVec2& viewportOrigin,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera) const
+{
+    UiDrawList* drawList = QtUi::GetWindowDrawList();
+    const XMMATRIX viewProjection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+
+    for (std::size_t entityIndex = 0; entityIndex < mEntities.size(); ++entityIndex)
+    {
+        const Entity& entity = mEntities[entityIndex];
+        if (!entity.VegetationArea.has_value())
+            continue;
+
+        const VegetationAreaComponent& area = *entity.VegetationArea;
+        const bool selected = IsEntitySelected(static_cast<int>(entityIndex));
+        // A selected area always shows its volume: it is the thing being placed.
+        if (!area.ShowBounds && !selected)
+            continue;
+
+        // Green adds vegetation, red carves it out - the same colours the scatter
+        // debug view has always used.
+        const int alpha = selected ? 240 : 150;
+        const UiU32 color = area.IsExclusionVolume
+            ? UI_COL32(242, 90, 76, alpha)
+            : UI_COL32(102, 217, 89, alpha);
+        const float thickness = selected ? 2.0f : 1.3f;
+
+        // The scatter's convention: rotation and translation only, no entity scale, so
+        // the outline is exactly the volume vegetation is placed in.
+        const XMMATRIX rotation = PteroTransform::ComposeRotation(entity.Transform.Rotation);
+        const XMVECTOR origin = XMLoadFloat3(&entity.Transform.Position);
+        const auto toWorld = [&](float x, float y, float z)
+        {
+            XMFLOAT3 world{};
+            XMStoreFloat3(&world, XMVectorAdd(origin, XMVector3TransformNormal(XMVectorSet(x, y, z, 0.0f), rotation)));
+            return world;
+        };
+        const auto line = [&](const XMFLOAT3& a, const XMFLOAT3& b)
+        {
+            UiVec2 sa{};
+            UiVec2 sb{};
+            if (ProjectClippedSegment(viewProjection, viewportOrigin, viewportSize, a, b, sa, sb))
+                drawList->AddLine(sa, sb, color, thickness);
+        };
+        // A prism: the footprint outline at the bottom and top of the volume, joined
+        // at every corner.
+        const auto prism = [&](const std::vector<XMFLOAT2>& footprint, float halfHeight)
+        {
+            const std::size_t count = footprint.size();
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const XMFLOAT2& p = footprint[i];
+                const XMFLOAT2& q = footprint[(i + 1) % count];
+                line(toWorld(p.x, p.y, -halfHeight), toWorld(q.x, q.y, -halfHeight));
+                line(toWorld(p.x, p.y,  halfHeight), toWorld(q.x, q.y,  halfHeight));
+                line(toWorld(p.x, p.y, -halfHeight), toWorld(p.x, p.y,  halfHeight));
+            }
+        };
+
+        switch (area.Shape)
+        {
+        case VegetationAreaShape::Box:
+            prism({ { -area.ExtentX, -area.ExtentY }, { area.ExtentX, -area.ExtentY },
+                    {  area.ExtentX,  area.ExtentY }, { -area.ExtentX, area.ExtentY } },
+                  area.ExtentZ);
+            break;
+
+        case VegetationAreaShape::Sphere:
+        {
+            const float radius = area.ExtentX;
+            const int segments = selected ? kSelectedSegments * 2 : kSelectedSegments;
+            for (int step = 0; step < segments; ++step)
+            {
+                const float a0 = XM_2PI * static_cast<float>(step) / static_cast<float>(segments);
+                const float a1 = XM_2PI * static_cast<float>(step + 1) / static_cast<float>(segments);
+                const float c0 = std::cos(a0) * radius, s0 = std::sin(a0) * radius;
+                const float c1 = std::cos(a1) * radius, s1 = std::sin(a1) * radius;
+                line(toWorld(c0, s0, 0.0f), toWorld(c1, s1, 0.0f));
+                line(toWorld(c0, 0.0f, s0), toWorld(c1, 0.0f, s1));
+                line(toWorld(0.0f, c0, s0), toWorld(0.0f, c1, s1));
+            }
+            break;
+        }
+
+        case VegetationAreaShape::Polygon:
+            if (area.PolygonPoints.size() >= 2)
+                prism(area.PolygonPoints, area.ExtentZ);
+            break;
+        }
+    }
 }
 
 void Editor::DrawLightShapeGizmos(
@@ -85,19 +252,16 @@ void Editor::DrawLightShapeGizmos(
         return;
 
     UiDrawList* drawList = QtUi::GetWindowDrawList();
+    const XMMATRIX viewProjection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
 
     const auto line = [&](const XMFLOAT3& a, const XMFLOAT3& b, UiU32 color, float thickness)
     {
         UiVec2 sa{};
         UiVec2 sb{};
-        // Unclamped: a segment with an endpoint behind the camera would
-        // otherwise be clamped to the viewport edge and drawn as a line that
-        // does not exist.
-        if (TryProjectWorldToViewport(a, viewportOrigin, viewportSize, camera, sa, false)
-            && TryProjectWorldToViewport(b, viewportOrigin, viewportSize, camera, sb, false))
-        {
+        // Clipped rather than clamped: a segment with an endpoint behind the camera
+        // clamped to the viewport edge would be drawn as a line that does not exist.
+        if (ProjectClippedSegment(viewProjection, viewportOrigin, viewportSize, a, b, sa, sb))
             drawList->AddLine(sa, sb, color, thickness);
-        }
     };
 
     // A circle of `radius` around `center`, spanned by two orthogonal unit
@@ -245,5 +409,80 @@ void Editor::DrawLightShapeGizmos(
             break;
         }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Camera frustums.
+//
+// A camera entity has no mesh, so without this it is an invisible point. The
+// outline is the camera's real framing - its field of view and sensor aspect,
+// drawn a metre out from the lens - so a shot can be lined up from outside the
+// camera as well as by piloting it. A small triangle on the top edge marks up,
+// which a frustum alone cannot tell apart from down.
+// ---------------------------------------------------------------------------
+
+void Editor::DrawCameraFrustums(
+    const UiVec2& viewportOrigin,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera) const
+{
+    if (!mShowViewportPlacementIcons)
+        return;
+
+    UiDrawList* drawList = QtUi::GetWindowDrawList();
+    const XMMATRIX viewProjection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    const auto line = [&](const XMVECTOR& a, const XMVECTOR& b, UiU32 color, float thickness)
+    {
+        XMFLOAT3 fa{};
+        XMFLOAT3 fb{};
+        XMStoreFloat3(&fa, a);
+        XMStoreFloat3(&fb, b);
+        UiVec2 sa{};
+        UiVec2 sb{};
+        if (ProjectClippedSegment(viewProjection, viewportOrigin, viewportSize, fa, fb, sa, sb))
+            drawList->AddLine(sa, sb, color, thickness);
+    };
+
+    for (std::size_t i = 0; i < mEntities.size(); ++i)
+    {
+        const Entity& entity = mEntities[i];
+        if (!entity.Camera)
+            continue;
+        // The camera being flown is the viewpoint itself; its outline would only frame
+        // the screen edge.
+        if (entity.Id != 0 && entity.Id == mPilotedCameraId)
+            continue;
+
+        const bool selected = IsEntitySelected(static_cast<int>(i));
+        const UiU32 color = selected ? UI_COL32(255, 228, 120, 255) : UI_COL32(170, 200, 235, 200);
+        const float thickness = selected ? 2.0f : 1.25f;
+
+        // The camera looks along local +Y with local +Z up (see CameraComponent).
+        const XMMATRIX rotation = PteroTransform::ComposeRotation(entity.Transform.Rotation);
+        const XMVECTOR right = XMVector3TransformNormal(g_XMIdentityR0, rotation);
+        const XMVECTOR forward = XMVector3TransformNormal(g_XMIdentityR1, rotation);
+        const XMVECTOR up = XMVector3TransformNormal(g_XMIdentityR2, rotation);
+        const XMVECTOR apex = XMLoadFloat3(&entity.Transform.Position);
+
+        const CameraComponent& lens = *entity.Camera;
+        constexpr float kDistance = 1.0f;
+        const float halfHeight = kDistance * std::tan(lens.VerticalFovDegrees() * 0.5f * XM_PI / 180.0f);
+        const float halfWidth = halfHeight * (lens.SensorWidthMm / (std::max)(lens.SensorHeightMm, 0.1f));
+        const XMVECTOR center = apex + forward * kDistance;
+        const XMVECTOR corners[4] = {
+            center - right * halfWidth + up * halfHeight,
+            center + right * halfWidth + up * halfHeight,
+            center + right * halfWidth - up * halfHeight,
+            center - right * halfWidth - up * halfHeight,
+        };
+        for (int c = 0; c < 4; ++c)
+        {
+            line(apex, corners[c], color, thickness);
+            line(corners[c], corners[(c + 1) % 4], color, thickness);
+        }
+        const XMVECTOR upTip = center + up * (halfHeight * 1.35f);
+        line(corners[0] + right * (halfWidth * 0.6f), upTip, color, thickness);
+        line(corners[1] - right * (halfWidth * 0.6f), upTip, color, thickness);
     }
 }

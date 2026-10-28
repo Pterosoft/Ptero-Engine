@@ -2,7 +2,8 @@
 //
 // This is a trimmed copy of EditorMain.cpp's bootstrap (window creation, loading
 // Renderer_DX12.dll dynamically, driving the render loop) with all editor chrome removed:
-// no menu, no accelerators, no About box, no "unsaved changes" prompt, no splash screen.
+// no menu, no accelerators, no About box, no "unsaved changes" prompt. Its splash screen is
+// the game's own (GameSplash.h), embedded by the Build Game dialog, not the editor's.
 // It always runs in the standalone-game path that EditorMain.cpp only takes when launched
 // with "--game <level>" - see RendererDX12_ConfigureStandaloneGame in DX12RendererAPI.cpp.
 //
@@ -21,9 +22,14 @@
 #include <objbase.h>
 
 #include "AudioManager.h"
+#include "GameSplash.h"
+#include "PterosoftGameLicense.h"
+#include "SteamSupport.h"
 #include "System/PackageFormat.h"
 #include "System/PackagedDataApi.h"
 #include "System/PackagingKeyObfuscation.h"
+
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -78,11 +84,49 @@ namespace
     bool gIsClosing = false;
     HWND gMainWindowHandle = nullptr;
     std::wstring gWindowTitle = L"Ptero Game";
+    // The start level, relative to Data: Game Settings' StartupLevel ("Levels/House.json").
+    std::wstring gLevelPath;
 
     const wchar_t* kWindowClassName = L"PteroGameLauncherWindowClass";
 
+    // Pterosoft Launcher's ticket verification endpoint. Compiled in on purpose: the SDK's
+    // contract is that the URL never comes from anything the player can edit.
+    const wchar_t* kPterosoftVerifyUrl = L"https://pterolauncher.pterosoftstudio.com/wp-json/pterosoft/v1/games/verify";
+
+    // Game Settings' PterosoftProductId (0 = not a Pterosoft Launcher build) gates the game
+    // on the one-shot ticket the launcher passes in PTEROSOFT_GAME_TICKET; see
+    // "Pterosoft Launcher/GAME-DRM.md". There is no offline grace period by design.
+    bool VerifyPterosoftLicense(std::uint32_t productId, std::wstring& outError)
+    {
+        if (productId == 0)
+            return true;
+
+        switch (pterosoft::verifyOnlineAtLaunch(kPterosoftVerifyUrl, productId))
+        {
+        case pterosoft::LicenseResult::Authorized:
+            return true;
+        case pterosoft::LicenseResult::StartThroughLauncher:
+            outError = L"Please start this game from Pterosoft Launcher.";
+            break;
+        case pterosoft::LicenseResult::ServiceUnavailable:
+            outError = L"Game access could not be verified because the Pterosoft service could not be reached.\n\n"
+                L"An internet connection is required. Check your connection and start the game again from Pterosoft Launcher.";
+            break;
+        case pterosoft::LicenseResult::AccessDenied:
+            outError = L"Pterosoft could not confirm that your account owns this game, or the launch has expired.\n\n"
+                L"Start the game again from Pterosoft Launcher while signed in to the account that owns it.";
+            break;
+        case pterosoft::LicenseResult::InvalidConfiguration:
+            outError = L"This build has an invalid Pterosoft licensing configuration.";
+            break;
+        }
+        return false;
+    }
+
     void ReportFatalError(const std::wstring& message)
     {
+        // A topmost splash would sit over the message box.
+        GameSplash::Close();
         MessageBoxW(gMainWindowHandle, message.c_str(), L"Game startup", MB_OK | MB_ICONERROR);
     }
 
@@ -346,16 +390,77 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     // Decrypt the level once up front: a key that does not match the archives would
     // otherwise only surface as a pile of "missing asset" errors deep inside the renderer.
     {
-        constexpr const char* kLevel = "Levels/Farkle.json";
-        const long long levelSize = PteroData_FileSize(kLevel);
-        std::vector<unsigned char> levelBytes(levelSize > 0 ? static_cast<size_t>(levelSize) : 0);
-        if (levelSize < 0 || !PteroData_ReadFile(kLevel, levelBytes.data(), levelBytes.size()))
+        // Game Settings (editor: Windows > Game Settings) names the level to open, and
+        // the Steam App ID when the game ships on Steam.
+        std::string level;
+        std::uint32_t steamAppId = 0;
+        std::uint32_t pterosoftProductId = 0;
+        const char* kSettings = "Game/GameSettings.json";
+        const long long settingsSize = PteroData_FileSize(kSettings);
+        if (settingsSize > 0)
         {
-            ReportFatalError(L"The game content is missing or damaged (Content\\Levels.ppak could not be read). "
-                L"Rebuild the game with Release > Build Game in the editor.");
+            std::string text(static_cast<size_t>(settingsSize), '\0');
+            if (PteroData_ReadFile(kSettings, text.data(), text.size()))
+            {
+                const nlohmann::json settings = nlohmann::json::parse(text, nullptr, false);
+                if (settings.is_object())
+                {
+                    level = settings.value("StartupLevel", std::string());
+                    const auto appId = settings.find("SteamAppId");
+                    if (appId != settings.end() && appId->is_number_unsigned())
+                        steamAppId = appId->get<std::uint32_t>();
+                    const auto productId = settings.find("PterosoftProductId");
+                    if (productId != settings.end() && productId->is_number_unsigned())
+                        pterosoftProductId = productId->get<std::uint32_t>();
+                }
+            }
+        }
+
+        // Before any window exists: launched outside Steam, the game exits here and
+        // Steam starts it again through the client.
+        std::wstring steamError;
+        switch (SteamSupport::Start(steamAppId, steamError))
+        {
+        case SteamSupport::StartResult::Relaunching:
+            return 0;
+        case SteamSupport::StartResult::Failed:
+            ReportFatalError(steamError);
+            return 1;
+        case SteamSupport::StartResult::Continue:
+            break;
+        }
+
+        // Also before any window: the ticket expires two minutes after the launcher issues
+        // it, and the check is a few bounded HTTPS round trips.
+        std::wstring licenseError;
+        if (!VerifyPterosoftLicense(pterosoftProductId, licenseError))
+        {
+            MessageBoxW(nullptr, licenseError.c_str(), L"Pterosoft Launcher", MB_OK | MB_ICONWARNING);
+            return 1;
+        }
+        if (level.empty())
+        {
+            ReportFatalError(L"No startup level is set. In the editor, open Windows > Game Settings, "
+                L"pick a Startup Level, Save, and rebuild the game with Release > Build Game.");
+            return 1;
+        }
+        gLevelPath = std::filesystem::path(level).wstring();
+
+        const long long levelSize = PteroData_FileSize(level.c_str());
+        std::vector<unsigned char> levelBytes(levelSize > 0 ? static_cast<size_t>(levelSize) : 0);
+        if (levelSize < 0 || !PteroData_ReadFile(level.c_str(), levelBytes.data(), levelBytes.size()))
+        {
+            const std::wstring wideLevel(level.begin(), level.end());
+            ReportFatalError(L"The startup level " + wideLevel + L" is missing or damaged in the game content. "
+                L"Check that its folder is packaged, and rebuild the game with Release > Build Game in the editor.");
             return 1;
         }
     }
+
+    // From here on the game is really starting (not relaunching through Steam, not missing
+    // its level), so the splash goes up and covers the renderer's start-up until the first
+    // frame is on screen.
+    GameSplash::Show(hInstance);
 
     gWindowTitle = ReadGameTitle(exeDirectory);
 
@@ -382,7 +487,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     gRendererModule = LoadLibraryW(L"Renderer_DX12.dll");
     if (!gRendererModule)
     {
-        ReportFatalError(L"Could not load Renderer_DX12.dll.");
+        // ERROR_MOD_NOT_FOUND here almost always means one of the renderer's own imports
+        // (NRD.dll, the VC++ runtime, ...) is missing, not the renderer itself.
+        const DWORD loadError = GetLastError();
+        ReportFatalError(L"Could not load Renderer_DX12.dll (Win32 error " + std::to_wstring(loadError) + L")." +
+            (loadError == ERROR_MOD_NOT_FOUND
+                ? L"\n\nA DLL it depends on is missing. Make sure every file from the game folder was installed."
+                : L""));
         DestroyWindow(hWnd);
         return 1;
     }
@@ -407,7 +518,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         return 1;
     }
 
-    const fs::path levelPath = exeDirectory / L"Data" / L"Levels" / L"Farkle.json";
+    const fs::path levelPath = exeDirectory / L"Data" / gLevelPath;
     configureStandaloneGame(levelPath.c_str());
 
     if (!gRendererInitialize(hWnd))
@@ -434,10 +545,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
 
     // RendererDX12_Initialize has already put the window into the player's saved display
     // mode (borderless over the monitor by default); maximizing here would undo that.
+    // Shown now so the swap chain presents into a visible window; the topmost splash stays
+    // over it until that first frame is in.
     ShowWindow(hWnd, SW_SHOW);
     UpdateWindow(hWnd);
     SetForegroundWindow(hWnd);
     SetFocus(hWnd);
+    bool splashUp = true;
 
     MSG msg{};
     while (!gIsClosing)
@@ -463,6 +577,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         if (gIsClosing)
             break;
 
+        SteamSupport::RunCallbacks();
+
         if (gRendererReady && gRendererRender)
         {
             const auto audioStart = std::chrono::steady_clock::now();
@@ -472,6 +588,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
             if (gRendererSetLoopTimings)
                 gRendererSetLoopTimings(pumpMilliseconds, audioMilliseconds, messageCount, 0);
             gRendererRender();
+            // The first frame is the slow one - the scene renderer starts inside it - and
+            // what it presents is the game's own shader-preparation screen.
+            if (splashUp)
+            {
+                splashUp = false;
+                GameSplash::Close();
+                SetForegroundWindow(hWnd);
+            }
         }
         else if (!processedMessage)
         {
@@ -491,6 +615,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
         if (auto waitForGpu = reinterpret_cast<WaitForGpuFn>(GetProcAddress(gRendererModule, "DX12Context_WaitForGPU")))
             waitForGpu();
     }
+
+    // Tells the Steam client the game has stopped (play time, overlay); cheap, unlike
+    // the renderer and audio teardown skipped below.
+    SteamSupport::Shutdown();
 
     // Hard process termination, same rationale as EditorMain.cpp: some FMOD plugins raise
     // a fatal-exit exception under ExitProcess(), and renderer/audio teardown can block.

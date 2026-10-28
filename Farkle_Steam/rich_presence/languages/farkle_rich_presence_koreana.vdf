@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"koreana"
+	"Tokens"
+	{
+		"#Menu"	"선술집에 있음"
+		"#VsAI"	"AI와 대전 중 · %score%"
+		"#Searching"	"대전 상대를 찾는 중"
+		"#Waiting"	"공개 테이블에서 기다리는 중"
+		"#WaitingFriends"	"친구를 기다리는 중"
+		"#Online"	"%opponent% 님과 온라인 대전 중 · %score%"
+	}
+}

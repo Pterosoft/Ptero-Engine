@@ -154,4 +154,21 @@ float PteroLightFalloffDistance(PteroLightData light, float dist)
     return sqrt(dist * dist + emitterExtent * emitterExtent);
 }
 
+// The deferred pass's distance falloff for `light` at `dist` from its resolved
+// emitting point (PteroResolveLightShape): the window that ends at Radius times
+// the inverse-power law, a spherical source pulled toward the surface by its
+// radius. The GI passes light their hits with this too, so a bounce carries the
+// light the direct pass and the path tracer deliver. The window alone, which
+// they used to use, is near 1 across a room for a light with a large Radius.
+float PteroLightDistanceFalloff(PteroLightData light, float dist)
+{
+    if (light.SourceRadius > 1e-4f && (int)light.LightType != PTERO_LIGHT_TYPE_RECT)
+        dist = max(dist - min(light.SourceRadius, light.Radius * 0.5f), 0.0f);
+
+    const float normalizedDistance = saturate(dist / max(light.Radius, 1e-4f));
+    float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
+    rangeMask *= rangeMask;
+    return rangeMask * pow(PteroLightFalloffDistance(light, dist), -max(light.FalloffExponent, 0.001f));
+}
+
 #endif // PTERO_LIGHT_SHAPES_HLSLI

@@ -1,0 +1,86 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "displacementMidLevel": 0.5,
+    "displacementScale": 0.05000000074505806,
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightReference": 1.0,
+    "heightScale": 0.10000000149011612,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "cobblestone_pavement",
+    "normalFlipGreen": false,
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "roughnessFactor": 1.0,
+    "specularFactor": 0.5,
+    "subsurfaceColor": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
+    ],
+    "subsurfaceFalloff": [
+        1.0,
+        0.3700000047683716,
+        0.30000001192092896
+    ],
+    "subsurfaceRadiusMm": 3.0,
+    "subsurfaceTranslucency": 0.800000011920929,
+    "tessellationFadeDistance": 60.0,
+    "tessellationMaxFactor": 16.0,
+    "tessellationTargetPixels": 8.0,
+    "textures": {
+        "ambientOcclusion": "Textures/cobblestone_pavement/cobblestone_pavement_ao_4k.dds",
+        "baseColor": "Textures/cobblestone_pavement/cobblestone_pavement_diff_4k.dds",
+        "emissive": "",
+        "height": "Textures/cobblestone_pavement/cobblestone_pavement_ao_4k.dds",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Textures/cobblestone_pavement/cobblestone_pavement_nor_dx_4k.dds",
+        "opacity": "",
+        "roughness": "Textures/cobblestone_pavement/cobblestone_pavement_rough_4k.dds"
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useParallaxOcclusion": true,
+    "useSubsurfaceScattering": false,
+    "useTessellation": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
+    ]
+}

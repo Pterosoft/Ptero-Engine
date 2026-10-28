@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "EditorMain.h"
 #include "SplashScreen.h"
+#include "SupportDialog.h"
 #include "AudioManager.h"
 #include <string>
 #include <sstream>
@@ -217,7 +218,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
         LocalFree(arguments);
     }
-    if (!gStandaloneLevel.empty()) nCmdShow=SW_SHOWMAXIMIZED;
+    // The editor and standalone play both open maximized, whatever the shortcut asks for.
+    nCmdShow=SW_SHOWMAXIMIZED;
 
     // Show the splash screen before doing any heavyweight initialization.
     SplashScreen::Show(hInstance);
@@ -492,6 +494,15 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    // Force the first WM_PAINT only after renderer startup finishes so the
    // initial frame comes from DX12/ImGui instead of the default white brush.
    RedrawWindow(hWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE);
+
+#ifdef PTERO_PUBLIC_RELEASE
+   // Public builds ask for Patreon support once the editor is up. Never in --game:
+   // that is someone playing a level, not someone using the editor.
+   if (gStandaloneLevel.empty())
+   {
+       SupportDialog::Show(hInstance, hWnd);
+   }
+#endif
 
    return TRUE;
 }

@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"arabic"
+	"Tokens"
+	{
+		"#Menu"	"في الحانة"
+		"#VsAI"	"يلعب ضد الذكاء الاصطناعي · %score%"
+		"#Searching"	"يبحث عن مباراة"
+		"#Waiting"	"ينتظر على طاولة مفتوحة"
+		"#WaitingFriends"	"ينتظر الأصدقاء"
+		"#Online"	"يلعب عبر الإنترنت ضد %opponent% · %score%"
+	}
+}

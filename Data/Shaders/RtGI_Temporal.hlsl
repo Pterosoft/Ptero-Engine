@@ -31,8 +31,10 @@ RWTexture2D<float4>                   u_GIOutput      : register(u1);
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
+    // A trace pixel; the reservoirs and the output are on the trace grid.
     const uint2 pixel = DTid.xy;
-    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+    const uint2 traceSize = TraceSize();
+    if (any(pixel >= traceSize))
         return;
 
     const uint curIdx = PixelIndex(pixel);
@@ -65,8 +67,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         return;
     }
 
-    uint2 prevPixel = uint2(prevUV * float2(g_FrameWidth, g_FrameHeight));
-    prevPixel = clamp(prevPixel, uint2(0, 0), uint2(g_FrameWidth - 1, g_FrameHeight - 1));
+    uint2 prevPixel = uint2(prevUV * float2(traceSize));
+    prevPixel = clamp(prevPixel, uint2(0, 0), traceSize - 1u);
 
     const uint histIdx = PixelIndex(prevPixel);
     GIReservoir hist = UnpackReservoir(t_HistoryReservoir[histIdx]);

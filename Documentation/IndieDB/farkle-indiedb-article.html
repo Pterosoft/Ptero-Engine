@@ -1,0 +1,73 @@
+<p>Greetings, travellers!</p>
+<p><strong>Farkle: Tavern Dice</strong> came out on Steam on <strong>21 October 2026</strong>. It's the classic push-your-luck dice game, played by candlelight in a medieval tavern. A lot has happened at the table since then, so here's where things stand: the release, the engine update that followed it, the game's new languages, and what comes next.</p>
+<h2>The tavern is open</h2>
+<p>Every turn starts with six dice. Roll, set aside the scoring dice, and decide whether to bank your points or push your luck with the rest. Roll nothing that scores and you <strong>Farkle</strong>, losing everything from that turn. First to 3,000 points wins (you can change the target in the settings). The rules are simple. The decisions are not.</p>
+<ul>
+  <li>A detailed 3D medieval tavern with firelight, wooden beams, hanging garlic, physical dice and a crackling hearth</li>
+  <li>Authentic medieval music from the period itself</li>
+  <li>A computer opponent that will happily take your points</li>
+  <li>Full graphics, audio and game settings, from low-end to path-traced</li>
+</ul>
+<p>Farkle is built entirely in <strong>Ptero-Engine</strong>, our own DirectX 12 engine, from the renderer and lighting to the editor and visual scripting. Shipping a real game on Steam with it means a lot to us.</p>
+<h2>A new engine foundation</h2>
+<p>The first item on our roadmap is already done. Farkle now runs on a new version of Ptero-Engine, and the tavern has been rebuilt with it:</p>
+<ul>
+  <li><strong>Virtualized geometry</strong>: models stream at the detail your screen can actually show, so close-ups stay crisp without detail levels popping</li>
+  <li><strong>Virtual shadow maps</strong>: much sharper, more stable shadows from every candle and from the fire, right down to the dice</li>
+  <li><strong>Better global illumination</strong>: improved RTGI and probe lighting with the old probe caching artifacts fixed. Virtualized geometry and virtual shadow maps are now lit correctly by GI</li>
+  <li><strong>Voxel GI</strong>: a new global illumination mode that <strong>does not need a ray tracing GPU</strong>, so more players get bounced light</li>
+  <li><strong>Path tracing</strong>, for the tavern at its most beautiful</li>
+  <li><strong>New bloom and lens flares</strong>, so firelight and candles glow the way a camera would see them</li>
+  <li><strong>Intel XeSS</strong> alongside DLSS and FSR, plus <strong>frame generation</strong> with FSR or XeSS on supported systems</li>
+  <li>Refined volumetric fog, faster level loading, and a long list of smaller lighting fixes</li>
+</ul>
+<h3>Ptero-SR and Ptero-AA</h3>
+<p>We also built two techniques of our own. Most upscalers only see colours: when a triangle edge falls halfway across a low-resolution pixel, it becomes an in-between colour that can only be blurred or sharpened back afterwards, often with halos.</p>
+<p><strong>Ptero Reconstruction</strong> works from the geometry instead. During rendering the engine keeps the exact triangle edges inside each pixel, so every output pixel on an edge gets its exact coverage. Colours are rebuilt only from samples on the same side of the edge and on the same surface, so they never bleed into each other.</p>
+<ul>
+  <li><strong>Ptero-SR</strong> is a spatial upscaler (Native, Quality and Balanced). It produces clean, stable edges at full resolution with no ghosting from previous frames.</li>
+  <li><strong>Ptero-AA</strong> is native-resolution anti-aliasing that uses the same exact edge coverage, with no temporal pass, for a sharp, smear-free image.</li>
+</ul>
+<p>Both need a GPU with Shader Model 6.1. Without it the options are hidden, and DLSS, FSR, XeSS, TAA, SMAA and MSAA are all still available.</p>
+<h3>48 Steam Achievements</h3>
+<p>The update also added <strong>48 Steam Achievements</strong>. Some are earned at the table, like rolling a straight, scoring six of a kind or winning after trailing by 1,500. Some reward the nights that go wrong, like farkling on your very first roll. Others take the long game (100 matches, 10 wins in a row) or the graphics menu (win on all-Low, then on Ultra with path tracing). A few are hidden. Some will find you late at night.</p>
+<h3>Under the hood</h3>
+<p>For the engine-minded among you, this generation of Ptero-Engine also brings:</p>
+<ul>
+  <li>Subsurface scattering (with an experimental ray-traced mode) and stochastic screen-space reflections</li>
+  <li>Stars and a moon in the night sky, and exposure (EV) control across the time of day</li>
+  <li>A new editor GUI with support for custom GUI designs</li>
+  <li>An RmlUi-based game UI, which is what all of Farkle's menus are built with</li>
+  <li>New Node Graph nodes that came straight out of making Farkle</li>
+  <li>Game packaging and WebM video playback</li>
+  <li>UDIM textures tracked in level loading</li>
+</ul>
+<h2>A tavern in 16 languages</h2>
+<p>We want everyone to feel at home at the table, so localization has been our main focus since the engine update. It's now live on Steam: Farkle: Tavern Dice can be played in <strong>16 languages</strong>:</p>
+<p>English, German, French, Italian, Spanish, Portuguese (Brazil), Portuguese (Portugal), Polish, Czech, Ukrainian, Greek, Turkish, Arabic, Simplified Chinese, Japanese and Korean.</p>
+<p>This needed some engine work, not only translation files:</p>
+<ul>
+  <li>Every menu, the HUD, the turn messages and the result screens are translated as the UI is built. Numbers follow your language's digit grouping</li>
+  <li>The game picks its language automatically: first your Steam language for the game, then your Windows language. You can change it at any time in Settings → Game</li>
+  <li>Font fallback covers Greek, Cyrillic, Arabic, Chinese, Japanese and Korean, so no text turns into empty boxes</li>
+  <li>Arabic is shaped and laid out right-to-left in the engine</li>
+</ul>
+<p>Our website, <a href="https://farkle.pterosoftstudio.com/">farkle.pterosoftstudio.com</a>, including the news, the roadmap and a new press kit, is already available in all 16 languages.</p>
+<p>The translations haven't been reviewed by native speakers yet. If you play in one of these languages and something reads oddly, please tell us in the <a href="https://steamcommunity.com/app/5368450/discussions/">Steam discussions</a>. We'll fix it.</p>
+<h2>The road ahead</h2>
+<p>With the engine and languages done, here's what's next:</p>
+<ol>
+  <li><strong>Company at the table</strong>: leaderboards and multiplayer, so you can play against friends and rivals as well as the computer.</li>
+  <li><strong>Something to work toward</strong>: a progression system and an in-game store, with goals to chase across many nights at the tavern.</li>
+  <li><strong>More music by the fire</strong>: music extensions that build on the authentic medieval soundtrack already playing by the hearth.</li>
+</ol>
+<p>We'll keep sharing progress here, on Steam and on our website as each one takes shape.</p>
+<h2>Pull up a chair</h2>
+<p>If you've already played, thank you. A <strong>Steam review</strong> helps a small indie release like ours more than you might think. If you haven't, the table is waiting.</p>
+<ul>
+  <li>Steam: <a href="https://store.steampowered.com/app/5368450/">store.steampowered.com/app/5368450</a></li>
+  <li>Website and press kit: <a href="https://farkle.pterosoftstudio.com/">farkle.pterosoftstudio.com</a></li>
+  <li>Feedback and bug reports: <a href="https://steamcommunity.com/app/5368450/discussions/">Steam Community discussions</a></li>
+</ul>
+<p>Fortune favours one more roll.</p>
+<p>— Pterosoft Studio</p>

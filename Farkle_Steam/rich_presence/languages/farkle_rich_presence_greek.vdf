@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"greek"
+	"Tokens"
+	{
+		"#Menu"	"Στην ταβέρνα"
+		"#VsAI"	"Παίζει με την ΤΝ · %score%"
+		"#Searching"	"Ψάχνει παρτίδα"
+		"#Waiting"	"Περιμένει σε ανοιχτό τραπέζι"
+		"#WaitingFriends"	"Περιμένει φίλους"
+		"#Online"	"Παίζει online με: %opponent% · %score%"
+	}
+}

@@ -10,6 +10,8 @@
 //   - A miss, or the part of a hit its confidence rejects, reflects nothing instead of an
 //     environment map. The result is therefore premultiplied by confidence: the composite
 //     adds it on top of the ambient specular the deferred resolve already applied.
+//     With voxel GI running (gFallbackScale > 0) that part takes its cone traced
+//     reflection instead, and the composite removes the copy the deferred resolve added.
 //
 // ffx_sssr.h's occupancy early-out uses WaveActiveCountBits, so this needs SM6.
 
@@ -20,8 +22,9 @@ Texture2D<float>  gDepthHierarchy   : register(t1);
 Texture2D<float4> gNormal           : register(t2);   // 0.5 * n + 0.5
 Texture2D<float>  gRoughness        : register(t3);   // perceptual
 Texture2D<float2> gBlueNoiseTexture : register(t4);
-StructuredBuffer<uint> gRayList     : register(t5);
-StructuredBuffer<uint> gIndirectArgs : register(t6);   // layout in Sssr_Common.hlsli
+Texture2D<float4> gFallbackReflection : register(t5);   // unweighted voxel GI reflection
+StructuredBuffer<uint> gRayList     : register(t6);
+StructuredBuffer<uint> gIndirectArgs : register(t7);   // layout in Sssr_Common.hlsli
 
 RWTexture2D<float4> gIntersectionOutput : register(u0);
 
@@ -153,6 +156,10 @@ void CSMain(uint groupIndex : SV_GroupIndex, uint2 groupId : SV_GroupID)
     if (confidence > 0.0f)
     {
         reflectionRadiance = gLitScene.Load(int3(screenSize * hit.xy, 0)).rgb * confidence;
+    }
+    if (gFallbackScale > 0.0f && confidence < 1.0f)
+    {
+        reflectionRadiance += gFallbackReflection.Load(int3(coords, 0)).rgb * (gFallbackScale * (1.0f - confidence));
     }
 
     // A NaN or Inf in the scene colour would spread through the whole denoiser footprint.

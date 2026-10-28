@@ -1,0 +1,105 @@
+2026-10-21 13:51:17.971: [INFO] CurrentProfilePath: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:51:17.971: [INFO] Profiles total count: 1
+2026-10-21 13:51:17.972: [INFO] Profile: name=Profile 1 path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:51:17.956Z
+2026-10-21 13:51:17.972: [INFO] LastUsedProfileDir: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:51:17.972: [INFO] MostRecentlyActiveProfile: name=Profile 1 path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:51:17.956Z
+2026-10-21 13:51:17.972: [INFO] OnDoneLoading sync enabled: 0
+2026-10-21 13:51:17.972: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-10-21 13:51:17.972: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-10-21 13:51:17.972: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:51:18.041: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 0
+2026-10-21 13:51:18.398: [INFO] VisibilityChanged: 0
+2026-10-21 13:51:21.343: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 0
+2026-10-21 13:51:21.349: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:21.356: [INFO] Primary account changed.
+2026-10-21 13:51:21.356: [INFO] OnPrimaryAccountChanged PrimaryAccountChangeEvent::Type::kSet
+2026-10-21 13:51:21.369: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:21.391: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.093: [INFO] CurrentProfilePath: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:51:33.093: [INFO] Profiles total count: 1
+2026-10-21 13:51:33.093: [INFO] Profile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:51:33.077Z
+2026-10-21 13:51:33.093: [INFO] LastUsedProfileDir: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:51:33.093: [INFO] MostRecentlyActiveProfile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:51:33.077Z
+2026-10-21 13:51:33.093: [INFO] OnDoneLoading sync enabled: 0
+2026-10-21 13:51:33.093: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-10-21 13:51:33.093: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-10-21 13:51:33.093: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:51:33.097: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.158: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.249: [INFO] VisibilityChanged: 0
+2026-10-21 13:51:33.793: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.803: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.810: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.814: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.817: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.820: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:51:33.823: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:33.828: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:34.225: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:34.236: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:34.415: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:34.536: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:51:34.540: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:51:34.545: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:51:36.525: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:53:02.452: [INFO] CurrentProfilePath: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:02.452: [INFO] Profiles total count: 1
+2026-10-21 13:53:02.452: [INFO] Profile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:02.426Z
+2026-10-21 13:53:02.452: [INFO] LastUsedProfileDir: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:02.452: [INFO] MostRecentlyActiveProfile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:02.426Z
+2026-10-21 13:53:02.452: [INFO] OnDoneLoading sync enabled: 0
+2026-10-21 13:53:02.452: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-10-21 13:53:02.452: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-10-21 13:53:02.452: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:53:02.456: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:02.478: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:02.479: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:02.480: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:02.482: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:02.490: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:02.529: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:02.530: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:02.851: [INFO] VisibilityChanged: 0
+2026-10-21 13:53:02.874: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:02.892: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:02.916: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:05.443: [INFO] BookmarksSnapshot Shutdown total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:53:31.295: [INFO] CurrentProfilePath: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:31.295: [INFO] Profiles total count: 1
+2026-10-21 13:53:31.296: [INFO] Profile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:31.281Z
+2026-10-21 13:53:31.296: [INFO] LastUsedProfileDir: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:31.296: [INFO] MostRecentlyActiveProfile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:31.281Z
+2026-10-21 13:53:31.296: [INFO] OnDoneLoading sync enabled: 0
+2026-10-21 13:53:31.296: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-10-21 13:53:31.296: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-10-21 13:53:31.296: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:53:31.298: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:31.316: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:31.317: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:31.318: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:31.319: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:31.329: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:31.330: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:31.341: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:31.569: [INFO] VisibilityChanged: 0
+2026-10-21 13:53:31.716: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:31.737: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:56.832: [INFO] CurrentProfilePath: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:56.832: [INFO] Profiles total count: 1
+2026-10-21 13:53:56.832: [INFO] Profile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:56.813Z
+2026-10-21 13:53:56.832: [INFO] LastUsedProfileDir: K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default
+2026-10-21 13:53:56.832: [INFO] MostRecentlyActiveProfile: name=Personal path=K:\Farkle\Steamworks\Achievements\Tools\build\edge-profile\Default lastActive=2026-10-21T13:53:56.813Z
+2026-10-21 13:53:56.832: [INFO] OnDoneLoading sync enabled: 0
+2026-10-21 13:53:56.832: [INFO] BookmarkModelLoaded, ids_reassigned: 0
+2026-10-21 13:53:56.832: [INFO] BookmarksLoadDropped droppedNodes=0
+2026-10-21 13:53:56.832: [INFO] BookmarksSnapshot Startup total=0 bar=0 other=0 mobile=0 showBar=0 showBarNTP=1
+2026-10-21 13:53:56.855: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:56.856: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 3
+2026-10-21 13:53:56.857: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:56.858: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 5
+2026-10-21 13:53:56.867: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:56.868: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:56.905: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:57.109: [INFO] VisibilityChanged: 0
+2026-10-21 13:53:57.245: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6
+2026-10-21 13:53:57.282: [INFO] RecordSyncInitDuration has_sync_been_enabled: 0 state: 6

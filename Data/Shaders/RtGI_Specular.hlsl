@@ -11,10 +11,13 @@
 //   7. Write the result to the specular output buffer for compositing in the deferred pass.
 
 #include "RtGI_Common.hlsli"
+#include "RtGI_Vsm.hlsli"
 
 // Same F0 the deferred resolve uses, so the material's reflectivity knob reaches the
 // ray-traced reflections rather than only the direct highlight.
 #include "SurfaceSpecular.hlsli"
+#include "RtTransform.hlsli"
+#include "RtMaterialSurface.hlsli"
 
 // ─── Additional bindings beyond the base 5 root parameters ───────────────────
 // These match the extended root signature used by the specular pass (params 1-13).
@@ -43,6 +46,8 @@ StructuredBuffer<uint>            t_SpecIndices      : register(t4);
 StructuredBuffer<GpuInstanceInfo> t_SpecInstanceInfo : register(t5);
 StructuredBuffer<GpuMaterialRange> t_SpecMaterialRanges : register(t7);
 Texture2D<float4>                 t_SpecBaseTextures[32] : register(t8);
+// Tint and texture averages, one per material range (RtMaterialSurface.hlsli).
+StructuredBuffer<GpuMaterialSurface> t_SpecMaterialSurfaces : register(t42);
 
 // ─── G-Buffer inputs ──────────────────────────────────────────────────────────
 Texture2D<float4> t_Albedo      : register(t0);   // RGB albedo / A=unused
@@ -138,31 +143,93 @@ float3 ShadeSpecHit(float3 hitPos, float3 hitNormal, float3 geoNormal, float3 al
 
     if (g_NextEventEstimation != 0 && sunNdotL > 0.0f && geoNdotL > 0.0f)
     {
-        float bias = max(0.01f, 0.02f * rsqrt(max(geoNdotL, 0.05f)));
-        float3 org = hitPos + geoNormal * bias + sunDir * bias;
-        sunVis     = TraceShadowRay(org, sunDir, max(1e4f - bias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
+        // The shadow map first; the ray only where it has no fine enough page.
+        sunVis = RtgiVsmSunVisibility(hitPos, geoNormal);
+        if (sunVis < 0.0f)
+        {
+            float bias = max(0.01f, 0.02f * rsqrt(max(geoNdotL, 0.05f)));
+            float3 org = hitPos + geoNormal * bias + sunDir * bias;
+            sunVis     = TraceShadowRay(org, sunDir, max(1e4f - bias * 2.0f, 1.0f)) ? 1.0f : 0.0f;
+        }
     }
 
     float3 direct = albedo * g_SunColor * sunNdotL * sunVis;
-    float  sky    = saturate(dot(hitNormal, float3(0, 0, 1)) * 0.5f + 0.5f);
-    float3 ambient = albedo * g_SkyColor * sky * 0.3f;
-    return direct + ambient;
+
+    // The scene lights, as RTGI's EvaluateSecondaryPointLights lights its hits. No
+    // sky ambient: an unshadowed sky term lit every reflected surface, a closed
+    // room's included.
+    // The lights the world grid cell around the hit lists (LightClusters.hlsli).
+    const uint cell = PteroGridCellBase(hitPos);
+    [loop]
+    for (uint word = 0; word < gLightClusters.WordCount; ++word)
+    {
+      uint bits = PteroGridCellWord(cell, word);
+      [loop]
+      while (bits != 0u)
+      {
+        const uint i = word * 32u + firstbitlow(bits);
+        bits &= bits - 1u;
+        const PteroLightData light = RtgiSceneLight(i);
+        const PteroResolvedLight shape = PteroResolveLightShape(light, hitPos);
+        if (shape.ShapeMask <= 0.0f)
+            continue;
+
+        const float3 toLight = shape.Position - hitPos;
+        const float distSq = dot(toLight, toLight);
+        if (distSq * light.InvRadiusSq >= 1.0f)
+            continue;
+
+        const float lightDistance = sqrt(max(distSq, 1e-6f));
+        const float3 lightDir = toLight / lightDistance;
+        const float pointNdotL = saturate(dot(hitNormal, lightDir));
+        if (pointNdotL <= 0.0f)
+            continue;
+
+        float visibility = 1.0f;
+        if (g_NextEventEstimation != 0)
+        {
+            const float geoPointNdotL = max(abs(dot(geoNormal, lightDir)), 1e-3f);
+            const float bias = max(0.01f, 0.02f * rsqrt(max(geoPointNdotL, 0.05f)));
+            const float maxShadowDistance = max(lightDistance - bias * 2.0f, 0.0f);
+            if (maxShadowDistance > 0.0f)
+            {
+                const float3 lightSideNormal = geoNormal * (dot(geoNormal, lightDir) >= 0.0f ? 1.0f : -1.0f);
+                visibility = RtgiVsmLocalVisibility(light, hitPos, lightSideNormal);
+                if (visibility < 0.0f)
+                    visibility = TraceShadowRay(hitPos + lightSideNormal * bias + lightDir * bias, lightDir, maxShadowDistance) ? 1.0f : 0.0f;
+            }
+        }
+
+        const float falloff = PteroLightDistanceFalloff(light, lightDistance) * shape.ShapeMask;
+        direct += albedo * light.Color * pointNdotL * falloff * visibility;
+      }
+    }
+    return direct;
 }
 
-GpuMaterialRange ResolveMaterialRange(GpuInstanceInfo info, uint primIdx)
+// `rangeIndex` is the range's index in the material buffers, or INVALID_TEXTURE_INDEX
+// when no range covers the primitive.
+GpuMaterialRange ResolveMaterialRange(GpuInstanceInfo info, uint primIdx, out uint rangeIndex)
 {
     [loop]
     for (uint r = 0; r < info.materialRangeCount; ++r)
     {
         GpuMaterialRange range = t_SpecMaterialRanges[info.materialRangeOffset + r];
         if (primIdx >= range.startPrimitive && primIdx < range.startPrimitive + range.primitiveCount)
+        {
+            rangeIndex = info.materialRangeOffset + r;
             return range;
+        }
     }
 
+    rangeIndex = INVALID_TEXTURE_INDEX;
     GpuMaterialRange fallback = (GpuMaterialRange)0;
     fallback.baseColorR = 1.0f;
     fallback.baseColorG = 1.0f;
     fallback.baseColorB = 1.0f;
+    // Zero would name the first texture in the table.
+    fallback.baseColorTextureIndex = INVALID_TEXTURE_INDEX;
+    fallback.opacityTextureIndex = INVALID_TEXTURE_INDEX;
     return fallback;
 }
 
@@ -181,12 +248,12 @@ float4 SampleMaterialTexture(uint textureIndex, float2 uv, float lod, float4 fal
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sky radiance for reflection rays that miss all geometry.
+// Sky radiance for reflection rays that miss all geometry: the sky that is drawn,
+// without the sun disc, which the analytic specular already accounts for.
 // ─────────────────────────────────────────────────────────────────────────────
 float3 SkyRadiance(float3 dir)
 {
-    float t = saturate(dir.z);
-    return lerp(g_SkyColor * 0.7f, g_SkyColor, t);
+    return PteroSkyRadiance(g_Sky, normalize(dir));
 }
 
 uint HashUint(uint x)
@@ -224,9 +291,13 @@ float ComputeReflectionRayBias(float3 worldPos, float3 N, float3 reflDir, float 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
-    const uint2 pixel = DTid.xy;
-    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+    // One thread per pixel of the specular grid (full or half resolution); it
+    // shades the frame pixel `pixel` stands for and writes at its own position.
+    // At half resolution RtGI_Upsample.hlsl fills the frame in from that grid.
+    const uint2 outPixel = DTid.xy;
+    if (any(outPixel >= ReducedSize(g_SpecularScale)))
         return;
+    const uint2 pixel = ReducedToFramePixel(outPixel, g_SpecularScale);
 
     // ── Sample G-Buffer ──────────────────────────────────────────────────────
     float4 normalDepthSample = t_NormalDepth.Load(int3(pixel, 0));
@@ -235,7 +306,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     // Sky pixels → write zero specular and exit.
     if (depth <= 0.0f || depth >= 1.0f)
     {
-        u_SpecularOutput[pixel] = float4(0, 0, 0, 0);
+        u_SpecularOutput[outPixel] = float4(0, 0, 0, 0);
         return;
     }
 
@@ -246,7 +317,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     // Surfaces rougher than the threshold skip dedicated specular rays.
     if (roughness > saturate(g_SpecularRoughnessThreshold))
     {
-        u_SpecularOutput[pixel] = float4(0, 0, 0, 0);
+        u_SpecularOutput[outPixel] = float4(0, 0, 0, 0);
         return;
     }
 
@@ -274,7 +345,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     float NdotL = dot(N, reflDir);
     if (NdotL <= 0.0f)
     {
-        u_SpecularOutput[pixel] = float4(0, 0, 0, 0);
+        u_SpecularOutput[outPixel] = float4(0, 0, 0, 0);
         return;
     }
 
@@ -320,12 +391,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
                      + bary.x * float2(v1.u, v1.v)
                      + bary.y * float2(v2.u, v2.v);
         float3x4 o2w = rq.CommittedObjectToWorld3x4();
-        float3x3 o2wRot = float3x3(
-            float3(o2w[0][0], o2w[1][0], o2w[2][0]),
-            float3(o2w[0][1], o2w[1][1], o2w[2][1]),
-            float3(o2w[0][2], o2w[1][2], o2w[2][2]));
 
-        float3 worldNormal = normalize(mul(o2wRot, localNormal));
+        float3 worldNormal = normalize(PteroObjectToWorldNormal(o2w, localNormal));
         if (dot(worldNormal, -reflDir) < 0.0f)
             worldNormal = -worldNormal;
 
@@ -340,20 +407,24 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         if (dot(geoNormal, -reflDir) < 0.0f)
             geoNormal = -geoNormal;
 
-        const GpuMaterialRange materialRange = ResolveMaterialRange(info, primIdx);
+        uint materialRangeIndex;
+        const GpuMaterialRange materialRange = ResolveMaterialRange(info, primIdx, materialRangeIndex);
         const float4 fallbackBaseColor = float4(materialRange.baseColorR, materialRange.baseColorG, materialRange.baseColorB, 1.0f);
         const bool useTexturedHit = (materialRange.baseColorTextureIndex != INVALID_TEXTURE_INDEX);
         float3 hitAlbedo = fallbackBaseColor.rgb;
-        if (useTexturedHit)
+        if (useTexturedHit && materialRangeIndex != INVALID_TEXTURE_INDEX)
         {
             const float lod = clamp(ComputeSpecularTextureLod(tHit, clampedRoughness), 1.5f, 8.0f);
             const float3 sampledAlbedo = SampleMaterialTexture(materialRange.baseColorTextureIndex, hitUv, lod, fallbackBaseColor).rgb;
             const float sampledLuma = dot(sampledAlbedo, float3(0.2126f, 0.7152f, 0.0722f));
             const float fallbackLuma = dot(fallbackBaseColor.rgb, float3(0.2126f, 0.7152f, 0.0722f));
-            hitAlbedo = (sampledLuma > 0.01f || fallbackLuma <= 0.01f) ? sampledAlbedo : fallbackBaseColor.rgb;
+            // A black sample where the material is not black is a texture that has not
+            // arrived yet; the factor x average (fallbackBaseColor) stands in for it.
+            // Otherwise the tint times the texture - the sample alone dropped the tint.
+            if (sampledLuma > 0.01f || fallbackLuma <= 0.01f)
+                hitAlbedo = PteroHitBaseColor(t_SpecMaterialSurfaces[materialRangeIndex], true, sampledAlbedo);
         }
         incomingRadiance = ShadeSpecHit(hitPos, worldNormal, geoNormal, hitAlbedo);
-        incomingRadiance = max(incomingRadiance, hitAlbedo * lerp(0.45f, 1.0f, metallic));
     }
     else
     {
@@ -373,15 +444,15 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
 
     float3 F = F_Schlick(VdotH, F0);
     float  G = G_Smith(NdotV, NdotL, clampedRoughness);
-    // Keep reflections visibly present even while the ray-traced specular path is being tuned.
+    // The GGX sample weight (F G VdotH / (NdotH NdotV) for a half vector drawn
+    // from D NdotH), with no floor under it: the floors that used to keep the
+    // reflections visible lit them past the energy the surface reflects.
     float3 specWeight = F * G * VdotH / max(NdotH * NdotV, 0.0001f);
-    specWeight = max(specWeight, F * (0.75f + (1.0f - clampedRoughness) * 1.25f));
 
     // Clamp for firefly suppression (reuse RadianceClamp).
     float3 specular = incomingRadiance * specWeight;
-    specular = max(specular, incomingRadiance * (0.25f + metallic * 0.75f) * saturate(1.0f - clampedRoughness * 0.35f));
     if (g_RadianceClamp > 0.0f)
         specular = min(specular, g_RadianceClamp);
 
-    u_SpecularOutput[pixel] = float4(specular, 1.0f);
+    u_SpecularOutput[outPixel] = float4(specular, 1.0f);
 }

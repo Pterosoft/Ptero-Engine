@@ -170,6 +170,7 @@ As you type, matching cvars drop down beneath the field with their descriptions 
 | `rtao.debugview` | int | `0` | `0 .. 4` | RTAO debug visualisation. |
 | `rtao.enabled` | bool | `false` |  | Ray-traced ambient occlusion. |
 | `rtao.intensity` | float | `1.0` | `0.0 .. 4.0` | Multiplier on the occlusion term. |
+| `rtao.locallightocclusion` | float | `0.5` | `0.0 .. 1.0` | How much RTAO darkens point, spot and rect lights' direct light. |
 | `rtao.maxraylength` | float | `1.0` | `0.01 .. 100.0` | Longest occlusion ray, in metres. |
 | `rtao.power` | float | `1.5` | `0.1 .. 8.0` | Exponent applied to the occlusion term. |
 | `rtao.raybias` | float | `0.005` | `0.0 .. 1.0` | Ray origin offset along the normal. |
@@ -226,6 +227,31 @@ As you type, matching cvars drop down beneath the field with their descriptions 
 | `smaa.enabled` | bool | `false` |  | SMAA spatial anti-aliasing. |
 | `smaa.maxsearchsteps` | float | `16.0` | `0.0 .. 112.0` | Horizontal/vertical edge search length. |
 | `smaa.maxsearchstepsdiag` | float | `8.0` | `0.0 .. 20.0` | Diagonal edge search length. |
+
+### Analytic Edge AA
+
+Frequency-aware anti-aliasing of geometric edges. The G-Buffer stores the screen-space edges of the triangle that won each pixel (from SM 6.1 `SV_Barycentrics`); a resolve after the opaque lighting finds the pixels where the geometry breaks and gives them the exact area each triangle covers, by clipping the pixel square against those edges. Interior, shading and texture detail is left to TAA / SMAA, which combine with it. Off under MSAA and DLSS / FSR / XeSS, and unavailable without SM 6.1 barycentrics.
+
+| CVar | Type | Default | Range | Meaning |
+|---|---|---|---|---|
+| `edgeaa.creaseangle` | float | `60.0` | `1.0 .. 180.0` | Normal angle in degrees that counts as a crease edge; 180 disables the normal test. |
+| `edgeaa.debugview` | enum | `off` | `off \| classification \| coverage` | Analytic Edge AA debug visualisation. |
+| `edgeaa.depththreshold` | float | `0.01` | `0.0001 .. 1.0` | Relative depth step (in 1/viewZ, beyond the neighbouring plane) that counts as a geometric edge. |
+| `edgeaa.enabled` | bool | `false` |  | Analytic Edge AA: exact triangle-coverage anti-aliasing of geometric edges. |
+
+### AAR (Analytic-Aware Reconstruction)
+
+Spatial upscaler built on the same triangle edges. The scene renders at the mode's scale; output pixels crossed by a geometric edge get the exact share of their footprint each surface covers (the union of the front surface's triangles, clipped against the output pixel), with each surface's colour rebuilt only from its own render samples. Every other output pixel gets a Catmull-Rom weighted by depth (against the target surface's plane) and normal, so it never filters across surfaces. No history and no jitter. Takes the upscaler slot after DLSS, FSR, XeSS and TAAU, and replaces TAA, SMAA and Analytic Edge AA while it runs. Needs SM 6.1 barycentrics; not under MSAA.
+
+| CVar | Type | Default | Range | Meaning |
+|---|---|---|---|---|
+| `aar.creaseangle` | float | `60.0` | `1.0 .. 180.0` | Normal angle in degrees that counts as a crease edge; 180 disables the normal test. |
+| `aar.debugview` | enum | `off` | `off \| path \| coverage` | AAR debug visualisation. |
+| `aar.depthsigma` | float | `0.02` | `0.0001 .. 1.0` | Relative 1/viewZ deviation from a surface's plane at which a sample's reconstruction weight falls to e^-0.5. |
+| `aar.depththreshold` | float | `0.01` | `0.0001 .. 1.0` | Relative depth step (in 1/viewZ, beyond the neighbouring plane) that counts as a geometric edge. |
+| `aar.enabled` | bool | `false` |  | AAR, Analytic-Aware Reconstruction: spatial upscaler guided by the triangle edges. |
+| `aar.mode` | enum | `quality` | `native \| ultraquality \| quality \| balanced` | Render scale per axis: 100 / 80 / 75 / 66.7 %. |
+| `aar.normalpower` | float | `4.0` | `0.0 .. 64.0` | Exponent on normal agreement in the reconstruction weights; 0 ignores normals. |
 
 ### MSAA
 
@@ -503,4 +529,19 @@ As you type, matching cvars drop down beneath the field with their descriptions 
 | `shadow.point.normaloffset` | float | `1.0` | `0.0 .. 16.0` | Offsets the lookup along the normal, in texels. |
 | `shadow.point.seamblenddistance` | float | `0.05` | `0.0 .. 1.0` | Blend width across cube-face seams. |
 | `shadow.point.slopescaleddepthbias` | float | `2.0` | `0.0 .. 16.0` | Depth bias proportional to the surface slope. |
+
+### Ray-traced shadows
+
+| CVar | Type | Default | Range | Meaning |
+|---|---|---|---|---|
+| `shadow.rt.debugview` | int | `0` | `0 .. 4` | 1 sun visibility, 2 raw sun rays, 3 local light visibility, 4 raw local light rays. |
+| `shadow.rt.enabled` | bool | `false` |  | Ray-traced sun shadows instead of the shadow map. |
+| `shadow.rt.filterradius` | int | `8` | `0 .. 16` | Widest sun penumbra blur, in pixels. |
+| `shadow.rt.lightsoftness` | float | `1.0` | `0.0 .. 4.0` | Multiplier on local lights' emitter size for their shadows. |
+| `shadow.rt.locallights` | bool | `true` |  | Also ray trace point, spot and rect light shadows (8 per pixel). |
+| `shadow.rt.maxraylength` | float | `500.0` | `1.0 .. 10000.0` | Longest sun shadow ray, in metres. |
+| `shadow.rt.raybias` | float | `0.01` | `0.0 .. 0.5` | Ray origin offset along the normal, in metres. |
+| `shadow.rt.raysperpixel` | int | `1` | `1 .. 8` | Shadow rays per pixel per light per frame. |
+| `shadow.rt.sunsize` | float | `0.53` | `0.0 .. 10.0` | Sun angular diameter in degrees (real sun ~0.53); 0 = hard. |
+| `shadow.rt.temporalblend` | float | `0.1` | `0.02 .. 1.0` | Weight of the current frame in the sun shadow history. |
 

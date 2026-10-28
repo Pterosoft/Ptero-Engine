@@ -8,7 +8,10 @@
 //   2 - added subMeshCount field and PteroSubMeshEntry table between the header and vertex data
 //   3 - added lodCount and appended extra LOD payloads after the base mesh payload
 //   4 - appended embedded collision hull payloads after the mesh LOD payloads
-static constexpr std::uint32_t kPteroMeshVersion = 4;
+//   5 - same layout; the vertices are now in the engine's frame - metres, Z up, left-handed -
+//       whatever units and up axis the source FBX declared. Older files were raw FBX units
+//       (usually centimetres) with only Z negated, so they are re-cooked from the FBX.
+static constexpr std::uint32_t kPteroMeshVersion = 5;
 
 // Records a contiguous range of the shared index buffer that belongs to one FBX material slot.
 // materialId is the zero-based FBX material index assigned to the polygons in this sub-mesh.

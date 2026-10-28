@@ -74,7 +74,20 @@ void CSMain(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupIn
                 : LogMin;
 
             averageLuminance = exp2(averageLogLuminance);
-            targetEv = AutoExposureLogLuminanceToEv100(averageLogLuminance, GreyPoint);
+            if (RelativeMode != 0)
+            {
+                const float offStops = averageLogLuminance - ReferenceLogLuminance;
+                const float beyond = sign(offStops) * max(abs(offStops) - max(DeadZone, 0.0f), 0.0f);
+                targetEv = ReferenceEv + beyond * max(Strength, 0.0f);
+            }
+            else
+            {
+                targetEv = AutoExposureLogLuminanceToEv100(averageLogLuminance, GreyPoint);
+            }
+        }
+        else if (RelativeMode != 0)
+        {
+            targetEv = ReferenceEv;
         }
 
         targetEv = clamp(targetEv, min(MinEv100, MaxEv100), max(MinEv100, MaxEv100));

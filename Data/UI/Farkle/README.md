@@ -5,11 +5,13 @@ The following native RmlUi documents use the same bundled fonts and skin atlas a
 | Document | Purpose |
 | --- | --- |
 | `menu.rml` | Play, Settings, Credits, Exit; no save slots, Continue, or Load Game |
-| `settings-graphics.rml` | Resolution; fullscreen/windowed/borderless; texture, model, GI quality; ambient occlusion, volumetric fog and shadows (each can be Off) |
-| `settings-image.rml` | TAA/MSAA/SMAA; None/DLSS/FSR with quality and sharpening; frame generation; chromatic aberration |
+| `settings-graphics.rml` | Resolution; fullscreen/windowed/borderless; texture, model, GI quality; GI method (level / RTGI / probe / voxel); virtual geometry; path tracing (Off / Real Time / Reference); ambient occlusion, reflections, subsurface scattering, volumetric fog and shadows (each can be Off) |
+| `settings-image.rml` | TAA/MSAA/SMAA; None/DLSS/FSR with quality and sharpening; frame generation; bloom and lens flares (each can be Off); chromatic aberration |
 | `settings-sound.rml` | Overall, sound, and music volume only |
-| `settings-game.rml` | Custom winning score (default 3000), English language, FPS/latency overlay |
+| `settings-game.rml` | Custom winning score (default 3000), language (the website's 16), FPS/latency overlay |
 | `credits.rml` | Engine, UI library, and font credits |
+| `shader-preload.rml` | Standalone startup, first screen: the shader cache warm-up with a progress bar, entry count and the shader in hand |
+| `loading.rml` | Standalone startup, second screen: reading and streaming the level, then the warm-up frames; one of its `tip-N` lines is shown at random |
 | `game.rml` | Player HUD: compact score card, scoring reference, larger dice, selected dice and actions; no testing log or editor exit label |
 | `farkle.rml`, `menu-editor.rml` | Preserved editor/testing versions |
 
@@ -30,27 +32,42 @@ Navigation is queued and loaded outside DOM event dispatch. The renderer attache
 | Resolution | Listed from the monitor's own display modes (landscape, ≥1280×720). Sizes the window's client area in Windowed; switches the monitor to it in Fullscreen. |
 | Display Mode | Windowed / Borderless (over the monitor) / Fullscreen (monitor mode switch, restored on exit; falls back to Borderless if refused). F11 still toggles window ↔ borderless. |
 | Texture Quality | Extra mip bias on top of texture sharpening: Low +2, Medium +1, High 0, Ultra −0.5. |
-| Model Quality | Scales LOD switch distances: Low 2×, Medium 1.5×, High 1×, Ultra 0.6×. |
-| GI Quality | Off disables GI. Tiers scale Radiance Cascades rays/probe spacing or RTGI rays/bounces, whichever the level uses. A level without GI stays without it. |
-| Ambient Occlusion | Off disables the level's GTAO/RTAO. Low/Medium/Ultra set GTAO quality 0/1/3; High is the level's own. |
+| Model Quality | Scales LOD switch distances: Low 2×, Medium 1.5×, High 1×, Ultra 0.6×. For virtualized meshes it scales the allowed cluster error instead: 4× / 2× / 1× / 0.5× the level's pixel threshold. |
+| Virtual Geometry | On keeps the level's virtualized geometry; Off draws those meshes with their authored LODs. The editor's viewing aids (virtualize all, debug views, frozen culling) are always off in play. |
+| GI Quality | Off disables GI (RTGI, probe GI and voxel GI, including voxel GI's no-ray-tracing fallback). Tiers scale Radiance Cascades rays/probe spacing, RTGI rays/bounces, probe GI rays per probe (½× / ¾× / 1× / 2×) or voxel GI resolution/cones, whichever runs. A level without GI stays without it. |
+| GI Method | Level Default (whatever the level authored) / RTGI / Probe GI / Voxel GI. The chosen method is switched on and the other two off; it uses the level's own settings for that method. RTGI and Probe GI are only offered with DXR, and a method whose renderer failed to start is not offered. Inactive while GI is Off or path tracing is on. |
+| Path Tracing | Off / Real Time / Reference; only Off is offered without DXR 1.1. Real Time replaces the GI with NRD-denoised paths and holds up in motion; Reference path traces the whole lit scene and converges only while the camera is still. GI Quality is inactive while either is on. Bounces and samples are the path tracer's own defaults. |
+| Ambient Occlusion | Off disables AO (both methods). Low/Medium/Ultra set GTAO quality 0/1/3, or RTAO rays per pixel to at most 4 / at most 8 / at least 32; High is the level's own. |
+| AO Method | Screen-Space (GTAO, default) / Ray Traced (RTAO). The chosen method is switched on with the level's own tuning and the other off. Ray Traced is only offered with DXR; a saved Ray Traced falls back to Screen-Space on a GPU without it, with a note. Inactive while AO is Off. |
+| Reflections | Off removes the level's screen-space reflections. Tiers scale the trace budget of the technique the level uses (ray-march steps, or FidelityFX SSSR traversal steps, start mip and rays per quad). A level without SSR stays without. |
+| Subsurface Scattering | Off renders subsurface materials as plain diffuse. Low: screen space, 11 taps. Medium: screen space, 17 taps (25 if the level ray traces). High: the level's own. Ultra: 25 taps, at least 16 ray-traced probes. Never switches a level to ray tracing. |
 | Volumetric Fog | Off removes the fog. The tiers change froxel tile size and depth slices only; whether the level has fog stays the level's. |
 | Shadows | Off: nothing casts (sun map cleared, no point-light cubes). Tiers: point-light cube size / filter radius 512/1, 1024/1, level default, 2048/3. |
+| Ray-Traced Shadows | Off (default) keeps the shadow maps. Sun traces the sun's shadow with DXR (denoised, penumbra from the sun's size); Sun + Lights also traces up to 8 shadow-casting point, spot and rect lights per pixel, the rest keeping their maps. Sun size, softness and rays stay the level's. Only offered with DXR (a saved choice falls back to Off with a note); inactive while Shadows is Off. See `Documentation/RayTracedShadowsAndAO.md`. |
 | Anti-Aliasing | TAA, SMAA or MSAA. Inactive while an upscaler is chosen (TAA and MSAA are then off). |
-| Upscaler | None / DLSS / FSR, listing only what the GPU and installed runtimes support. |
-| Upscaler Quality | Native (AA only) / Quality / Balanced / Performance / Ultra Performance, for DLSS and FSR alike. |
-| Upscaler Sharpening | Off / Low / Medium / High (0 / 0.25 / 0.5 / 0.8). FSR applies it through RCAS; after DLSS the engine's image sharpen pass does. |
+| Upscaler | None / DLSS / FSR / XeSS / TAA Upsampling / AAR, listing only what the GPU and installed runtimes support. AAR (Analytic-Aware Reconstruction) is the engine's spatial upscaler guided by the triangle edges; it needs Shader Model 6.1 barycentrics. |
+| Upscaler Quality | Native (AA only) / Quality / Balanced / Performance / Ultra Performance, for DLSS and FSR alike. AAR maps them to 100 % / 75 % / 66.7 %, and stops at Balanced. |
+| Upscaler Sharpening | Off / Low / Medium / High (0 / 0.25 / 0.5 / 0.8). FSR applies it through RCAS; after DLSS the engine's image sharpen pass does. AAR ignores it: sharpening would halo the edges it reconstructs exactly. |
 | Frame Generation | FSR frame generation; only offered when the FidelityFX frame-generation API is available. |
+| Bloom | Off removes it. Low uses the mip chain (≤4 mips) even on an FFT level; Medium caps the FFT grid at 256; High is the level's own; Ultra uses a 1024 FFT grid (or one more mip). A level without bloom stays without. |
+| Lens Flares | Off removes them. Low: ¼ of the ghosts, 16-ray grid, monochrome, one light at a time. Medium: ½ the ghosts, 24-ray grid, ≤2 lights. High: the level's own. Ultra: 1.5× ray grid, 6 wavelengths. A level without flares stays without. |
 | Chromatic Aberration | On is the level's own look; Off removes it. |
 | Show FPS & Latency | Overlay (`Data/UI/stats-overlay.rml`): FPS and frame time averaged over 0.25 s, and render latency - frame start (input sampled) to GPU completion, from GPU timestamps. |
 | Volumes | Overall = FMOD master bus; Music = the music channel; Sound = every other event instance. The slider value is squared into gain. |
+
+**Startup screens** (`DX12RendererAPI.cpp`, `loading.rcss`). The standalone game no longer warms the shader cache under the splash. After the renderer is up it shows `shader-preload.rml` and compiles (or loads from `Cache/Shaders`) about 30 ms of entries per frame. It then switches to `loading.rml` and reads the level on the editor's worker thread (`BeginLoadSceneFromFile`). Meshes and textures stream in time-boxed slices, and the warm-up frames run until the level renders smoothly. Reading and streaming fill the first 85 % of the bar and warm-up the rest; the bar never moves backwards. `StartGame` closes the screen before the intro or the game's own UI. The host fills `progress-fill` (width), `progress-percent`, `progress-status` and `progress-detail`, so a restyled screen must keep those ids. Both screens are opaque: the scene is held back until the game starts, so `verify-menus.exe` reports its transparent-margin check as failed on them by design.
 
 Settings are saved to `settings.cfg` in the game's own folder (next to `game.cfg`; `Binaries/` for editor play sessions).
 
 Anything the system cannot honour is corrected, the page shows the corrected value, and the status line says why. Stopping play restores every renderer and audio setting the session changed, so the editor never inherits a preset.
 
+**Languages** (`Source/Renderer_DX12/UiLocalization.cpp`, `Localization/<code>.json`). Documents and the game keep writing English; every text node is translated as RmlUi builds it, through `RmlUiSystemInterface::TranslateString`. A translation file maps English to the language, with numbers as `{0}`, `{1}`... (`"You banked {0}"`), which come back with the language's digit grouping. Unknown text stays English, and a status made of several sentences is translated one sentence at a time. The choice is saved as `ui-language`; until the player picks one it follows Steam's language for the game (when not English), then Windows'. Applying a new language rebuilds the page. Missing glyphs come from EB Garamond (Latin, Greek, Cyrillic), then Windows' Tahoma/Segoe UI (Arabic) and Microsoft YaHei, Yu Gothic and Malgun Gothic (Chinese, Japanese, Korean). Arabic is shaped and put in right-to-left order in code, per text node: authored line breaks read correctly, but a long line that wraps reads its lines bottom-up, and text stays left-aligned. After changing any player-facing text, run `node Tools/check-translations.mjs`: it lists every key that a language is missing.
+
 For another host, keep one controller instance, call `Attach(document)` after loading, `Detach()` before closing, and consume `TakePage()` outside event dispatch. Fill `Options` with hardware-dependent choices before attaching, `Load` saved values, and assign `Apply` to apply them (correcting in place as needed) and return a plain user-facing status string. All text, select inputs, sliders, buttons and dice remain native editable elements; there is no JavaScript requirement.
 
 ## Validation
+
+`Tools/make-splash.ps1` renders the game's splash screen, `Data/Media/farkle_splash.png` (1600 × 900; pick it under Release > Build Game > Splash Screen). It sets the title and subtitle as text alone (the masthead's fonts and gold, with a soft dark halo for legibility instead of the wooden sign), a tagline between two fleurs and a gold frame over a tavern screenshot, using this folder's fonts and atlas. Re-run it with `-Screenshot <path>` after the environment changes. The default is `Screenshots/screenshot_20261022_181742.png`, and a shot that isn't 16:9 is cropped evenly.
 
 `Tools/build-menu-preview.cmd` builds a software preview helper against the installed RmlUi SDK. `Tools/preview-menus.py` validates and renders all six screens at two sizes, plus the populated dice state. It checks native parsing, missing textures, visible button hit targets, margins, AA dependencies, slider labels, Reset, custom/invalid winning scores, host-supplied option lists, host corrections after Apply, and loading of saved values. `Tools/check-integration.cmd` performs C++ syntax checks of the modified implementation files. These checks do not launch the engine or constitute a DirectX playtest.
 

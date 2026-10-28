@@ -17,6 +17,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "t_Wall_2",
@@ -52,6 +53,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "t_Wall_1",

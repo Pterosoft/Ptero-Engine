@@ -11,14 +11,19 @@
 #include "DX12ShaderCompiler.h"
 #include "TextureManager.h"
 #include "Components.h"
+#include "ShadowPageView.h"
+#include "SubsurfaceScattering.h"
 
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <memory>
+#include <set>
+#include <string_view>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -38,12 +43,24 @@ extern "C"
     bool __stdcall DX12Context_WaitForGPU();
 }
 
+class VirtualGeometryRenderer;
+namespace VirtualGeometry { struct BuiltMesh; }
+
 class EntityMeshRenderer
 {
 public:
+    // Material texture slots t0-t9, bound to root tables 3..12 one each. Public because
+    // the virtualized-geometry pass binds materials through this renderer and has to lay
+    // out its own root signature to match.
+    static constexpr unsigned int kMaterialTextureSlotCount = 10;
+
     // Call once after the DX12 device is ready.  commandList is used to record
     // the initial pipeline creation (no geometry upload happens here yet).
     bool Initialize(ID3D12GraphicsCommandList* commandList);
+
+    // The material texture cache, shared with the ray tracer so a texture both
+    // draw and trace use is only in VRAM once.
+    TextureManager& GetTextureManager() { return mTextureManager; }
 
     // Called every frame before Render().  Gives the renderer the current entity
     // list so it can upload new meshes and retire stale GPU buffers.
@@ -74,6 +91,21 @@ public:
         ID3D12PipelineState*       pipelineState,
         const DirectX::XMFLOAT4X4& lightViewProjection);
 
+    // Depth-only draws into the pages of a paged shadow map (VirtualShadowMapRenderer).
+    // Page i draws the entities drawEntities[drawOffsets[i] .. drawOffsets[i + 1]) into
+    // pages[i]'s viewport. rootSignature must take the MVP as 16 root constants in
+    // parameter 0 (b0, ShadowDepth.hlsl's gLightMVP). Entities whose mesh is not on the
+    // GPU yet are appended to outNotReady, so the caller can render their pages again.
+    void RenderDepthOnlyPages(
+        ID3D12GraphicsCommandList*        commandList,
+        ID3D12RootSignature*              rootSignature,
+        ID3D12PipelineState*              pipelineState,
+        const std::vector<ShadowPageView>& pages,
+        const std::vector<std::uint32_t>& drawOffsets,
+        const std::vector<std::uint32_t>& drawEntities,
+        std::vector<std::uint32_t>&       outNotReady,
+        std::uint32_t&                    outDrawCount);
+
     void RenderPointLightShadowDepth(
         ID3D12GraphicsCommandList* commandList,
         ID3D12RootSignature*       rootSignature,
@@ -81,6 +113,26 @@ public:
         const DirectX::XMFLOAT4X4& lightViewProjection,
         const DirectX::XMFLOAT3&   lightPosition,
         float                      farPlane);
+
+    // Draws every mesh entity whose bounds touch the box [regionMin, regionMax]
+    // for voxelization (VoxelGIRenderer). The caller has bound its root
+    // signature, pipeline, descriptor heap, viewport and outputs; the root
+    // signature must take the model matrix (pre-transposed, as gModel) as 16
+    // root constants in parameter 0, and keep the G-Buffer pass's parameters
+    // 1 and 3-10, which each sub-material is bound to exactly as for the
+    // G-Buffer. A virtualized entity is drawn from a cut through its cluster DAG
+    // at about half of `voxelSize` of error (VirtualGeometryCut.h) when
+    // `virtualGeometry` has one built for it - a voxel cannot hold more detail -
+    // and every other entity from its mesh LOD `lodIndex`, clamped to the mesh's
+    // coarsest. Returns the draw count.
+    std::uint32_t RenderVoxelization(
+        ID3D12GraphicsCommandList*     commandList,
+        const DirectX::XMFLOAT3&       regionMin,
+        const DirectX::XMFLOAT3&       regionMax,
+        std::size_t                    lodIndex,
+        float                          voxelSize,
+        const VirtualGeometryRenderer* virtualGeometry,
+        const DirectX::XMFLOAT3&       cameraPosition);
 
     void Shutdown();
 
@@ -109,8 +161,10 @@ public:
     {
         ++mFrameCounter;
         mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
+        mMaterialSlotCursor = 0;
         RetireExpiredBuffers();
         EvictUnusedMeshes();
+        EvictUnusedBinds();
     }
 
     bool ConsumeSceneContentChangedFlag()
@@ -121,6 +175,10 @@ public:
     }
 
     bool IsSceneContentDirty() const { return mSceneContentChanged; }
+
+    // Screen pixels spanned by one metre at one metre's distance, i.e.
+    // (viewport height / 2) / tan(fovY / 2).  Drives adaptive tessellation.
+    void SetTessellationPixelScale(float pixelScale) { mTessPixelScale = pixelScale; }
 
     void SetWireframeEnabled(bool enabled)
     {
@@ -146,19 +204,68 @@ public:
     void SetLodDistanceScale(float scale) { mLodDistanceScale = (std::max)(scale, 0.1f); }
     float GetLodDistanceScale() const { return mLodDistanceScale; }
 
-    void SetTextureMipLODBias(float bias)
-    {
-        if ((std::fabs)(mTextureMipLODBias - bias) > 0.001f)
-        {
-            mTextureMipLODBias = bias;
-            mPipelineReady = false;
-        }
-    }
+    // Reaches the shaders through the material constants (MaterialConstants::TextureMipBias),
+    // so a change - an upscaler switching quality mode - rebuilds nothing. Baked into the
+    // static sampler as it used to be, every change recreated the root signature and every
+    // G-Buffer and shadow pipeline mid-game, and the driver could stall for good on it.
+    void SetTextureMipLODBias(float bias) { mTextureMipLODBias = bias; }
 
     const char* GetLastErrorMessage() const
     {
         return mLastError.empty() ? nullptr : mLastError.c_str();
     }
+
+    // ---- Virtualized geometry (VirtualGeometryRenderer) ---------------------
+    // Mask bits; VirtualGeometryRenderer::kDrawnInGBuffer / kDrawnInShadows.
+    static constexpr std::uint8_t kVirtualizedInGBuffer = 1u << 0;
+    static constexpr std::uint8_t kVirtualizedInShadows = 1u << 1;
+    //
+    // Per entity index, VirtualGeometryRenderer's kDrawnInGBuffer /
+    // kDrawnInShadows bits: entities that renderer draws itself in the
+    // G-Buffer or shadow passes, and that this one must therefore skip there.
+    // Null, or an index past the end, means "draw it here".
+    void SetVirtualizedEntityMask(const std::vector<std::uint8_t>* mask) { mVirtualizedMask = mask; }
+
+    // Whether a material can be drawn by the virtualized path, whose draws have
+    // no tessellation stages. Materials that displace stay on this renderer.
+    bool CanDrawVirtualized(const std::string& materialPath) const;
+
+    // Binds one sub-material's textures (root tables 3-10) and material
+    // constants (root CBV 1) exactly as this renderer's own G-Buffer draws
+    // do, for a pipeline built on the same root parameter layout. The
+    // udimTile (0 = none) picks the tile a <UDIM> material's textures resolve
+    // to, as the per-tile draws in Render() do. The
+    // constants take the next slot of this frame's material buffer, shared
+    // with Render(), so the two can draw in either order within a frame.
+    void BindVirtualGeometryMaterial(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& materialPath,
+        std::uint32_t materialId,
+        std::uint32_t udimTile,
+        const DirectX::XMFLOAT3& cameraPosition);
+
+    // The frame's rain constants (b2), for pipelines sharing GBuffer.hlsl's pixel shader.
+    D3D12_GPU_VIRTUAL_ADDRESS GetRainSurfaceConstantsAddress();
+
+    // ---- Level-load texture streaming ----------------------------------------
+    // One texture a draw of these entities will bind, as the draw will ask for it.
+    struct TextureRequest
+    {
+        std::string     Path;
+        TextureSemantic Semantic = TextureSemantic::Auto;
+    };
+
+    // Every texture the entities' materials bind that is not on the GPU yet, UDIM
+    // sets expanded to the tiles their meshes use, each path once.
+    void CollectTextureRequests(const std::vector<Entity>& entities, std::vector<TextureRequest>& outRequests) const;
+    void PreloadTexture(const TextureRequest& request) { mTextureManager.LoadDDS(request.Path, request.Semantic); }
+
+    // While set, draws bind the fallback for any texture not already loaded instead
+    // of reading it on the spot, so a level's textures can stream in over several
+    // frames (CollectTextureRequests / PreloadTexture) rather than in its first draw.
+    void SetDeferTextureLoads(bool defer) { mDeferTextureLoads = defer; }
+
+    float GetTextureMipLODBias() const { return mTextureMipLODBias; }
 
     // Writes the GPU address range of every mesh buffer currently in the cache.
     //
@@ -184,6 +291,9 @@ private:
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         UINT                     IndexCount = 0;
         std::size_t              LodIndex = 0;
+        // Object-space bounds of this LOD's vertices, for region culling.
+        DirectX::XMFLOAT3        BoundsMin{};
+        DirectX::XMFLOAT3        BoundsMax{};
         // The MeshAsset pointer used when these buffers were built; used to
         // detect when the mesh has been replaced and buffers must be rebuilt.
         const Mesh*              SourceMesh = nullptr;
@@ -250,7 +360,10 @@ private:
     struct alignas(256) MaterialConstants
     {
         DirectX::XMFLOAT4 BaseColorTint   = { 1.f, 1.f, 1.f, 1.f };
-        DirectX::XMFLOAT3 EmissiveColor   = { 0.f, 0.f, 0.f };  float _Pad0 = 0.f;
+        DirectX::XMFLOAT3 EmissiveColor   = { 0.f, 0.f, 0.f };
+        // Texture mip bias (GBuffer.hlsl, gTextureMipBias): the sharpening or upscaler
+        // bias, applied through the UV gradients rather than baked into the sampler.
+        float TextureMipBias = 0.f;
         float  MetallicFactor   = 1.f;
         float  RoughnessFactor  = 1.f;
         float  NormalScale      = 1.f;
@@ -274,7 +387,11 @@ private:
         int    UseTransparentBlend = 0;
         // 1 = negate the normal map's green channel (OpenGL-convention map).
         int    FlipNormalGreen  = 0;
-        float  _Pad2[2]         = {};
+        // Iris adjust (GBuffer.hlsl ApplyIrisAdjust): halves packed two to a word into
+        // what used to be padding. The warp radius (IrisRadiiPacked's high half) at 0
+        // turns it off, which is what the zero defaults give.
+        std::uint32_t IrisCenterPacked = 0;   // half2 centre UV
+        std::uint32_t IrisOffsetPacked = 0;   // half2 offset UV
         // UV transform: rotate about (0.5, 0.5), then scale by tiling, then offset.
         // The rotation is pre-resolved to sin/cos so the shader does no trigonometry.
         DirectX::XMFLOAT2 UvTiling = { 1.f, 1.f };
@@ -292,9 +409,34 @@ private:
         // Height value that sits at the polygon surface; 1 = white is the top of the
         // volume, which is what a plain 0-1 height map wants.
         float  ParallaxReferenceHeight = 1.f;
-        std::byte Padding[80]{};
+        // Tessellation + displacement (GBuffer.hlsl HSMain/DSMain).
+        int    UseTessellation      = 0;
+        float  TessMaxFactor        = 16.f;
+        float  TessTargetPixels     = 8.f;
+        float  TessFadeDistance     = 60.f;
+        float  DisplacementScale    = 0.05f;
+        float  DisplacementMidLevel = 0.5f;
+        float  TessPixelScale       = 1000.f;
+        std::uint32_t IrisRadiiPacked = 0;    // half2 iris radius, warp radius
+        // Disney principled BRDF lobes (PrincipledBrdf.hlsli); all off at 0.
+        float  PrincipledSubsurface     = 0.f;
+        float  PrincipledSpecularTint   = 0.f;
+        float  PrincipledSheen          = 0.f;
+        float  PrincipledSheenTint      = 0.5f;
+        float  PrincipledClearcoat      = 0.f;
+        float  PrincipledClearcoatGloss = 1.f;
+        float  PrincipledAnisotropic    = 0.f;
+        // t8: R clearcoat, G sheen, B anisotropic, A flatten - each scales its slider.
+        int    HasPrincipledMap         = 0;
+        // t9: the anisotropy direction in the UV frame (RG, 0.5 = zero).
+        int    HasAnisotropyDirectionMap = 0;
+        std::uint32_t IrisScalesPacked  = 0;  // half2 iris scale, pupil scale
+        std::uint32_t PupilRadiusPacked = 0;  // half pupil radius
+        float  _Pad5                    = 0.f;
     };
     static_assert(sizeof(MaterialConstants) == 256);
+    static_assert(offsetof(MaterialConstants, PrincipledSubsurface) % 16 == 0,
+        "The principled block must start a cbuffer row, as it does in GBuffer.hlsl.");
 
     struct alignas(256) RainSurfaceConstants
     {
@@ -312,12 +454,24 @@ private:
         std::string baseColor;
         std::string normal;
         std::string packedMaterial;
+        // Channel layout of packedMaterial, as the shaders read gHasPackedMaterialMap:
+        // 1 = the engine's RMA ("metallicRoughness" slot), 2 = ORM ("orm" slot).
+        int packedLayout = 1;
         std::string metallic;
         std::string roughness;
         std::string ao;
         std::string emissive;
         std::string opacity;
         std::string height;
+        // Disney principled mask (R clearcoat, G sheen, B anisotropic, A flatten) and the
+        // anisotropy direction map (RG flow in the UV frame).
+        std::string principledMask;
+        std::string anisotropyDirection;
+        // Set when any path above is a UDIM set: the path keeps the <UDIM> token and the
+        // geometry pass draws each tile of the sub-mesh with the token replaced (see Udim.h).
+        // udimFirstTile is the lowest tile found on disk, for consumers that need one texture.
+        bool hasUdim = false;
+        std::uint32_t udimFirstTile = 0;
         // Scalar factors from JSON (default to 1 so they are safe even if not present).
         float baseColorTintR  = 1.f;
         float baseColorTintG  = 1.f;
@@ -345,6 +499,13 @@ private:
         int   parallaxMaxSteps     = 32;
         float parallaxFadeDistance = 30.f;
         float parallaxReferenceHeight = 1.f;
+        // Tessellation + displacement (MaterialDefinition::UseTessellation and friends).
+        bool  useTessellation      = false;
+        float tessMaxFactor        = 16.f;
+        float tessTargetPixels     = 8.f;
+        float tessFadeDistance     = 60.f;
+        float displacementScale    = 0.05f;
+        float displacementMidLevel = 0.5f;
         // Subsurface scattering (MaterialDefinition::UseSubsurfaceScattering and friends).
         bool  useSubsurfaceScattering = false;
         float subsurfaceColorR   = 0.48f;
@@ -355,6 +516,25 @@ private:
         float subsurfaceFalloffB = 0.3f;
         float subsurfaceRadiusMm = 3.0f;
         float subsurfaceTranslucency = 0.8f;
+        // Iris adjust (MaterialDefinition::UseIrisAdjust and friends).
+        bool  useIrisAdjust   = false;
+        float irisCenterU     = 0.5f;
+        float irisCenterV     = 0.5f;
+        float irisRadius      = 0.12f;
+        float irisOffsetU     = 0.0f;
+        float irisOffsetV     = 0.0f;
+        float irisScale       = 1.0f;
+        float pupilRadius     = 0.04f;
+        float pupilScale      = 1.0f;
+        float irisWarpRadius  = 0.28f;
+        // Disney principled BRDF (MaterialDefinition::SubsurfaceFlatten and friends).
+        float principledSubsurface     = 0.0f;
+        float principledSpecularTint   = 0.0f;
+        float principledAnisotropic    = 0.0f;
+        float principledSheen          = 0.0f;
+        float principledSheenTint      = 0.5f;
+        float principledClearcoat      = 0.0f;
+        float principledClearcoatGloss = 1.0f;
     };
 
     bool CreatePipeline(DXGI_FORMAT albedoFormat, DXGI_FORMAT normalFormat,
@@ -372,6 +552,135 @@ private:
     bool EnsureMaterialConstantBuffer(std::size_t requiredDrawCount);
     bool EnsurePointShadowFaceConstantBuffer();
     bool EnsureRainSurfaceConstantBuffer();
+
+    // Texture slots t0-t9: baseColor, normal, metallic, roughness, ao, emissive,
+    // opacity, height, the Disney principled mask and the anisotropy direction map, and
+    // how each is decoded.
+    static constexpr std::size_t kTextureSlotCount = kMaterialTextureSlotCount;
+    static constexpr TextureSemantic kTextureSlotSemantics[kTextureSlotCount] = {
+        TextureSemantic::Color,
+        TextureSemantic::Normal,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::Color,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
+    };
+
+    // The file each slot reads for a sub-material. Returns whether the packed map
+    // stands in for metallic, roughness and ao.
+    static bool ResolveTextureSlots(
+        const SubMaterialTextures& texPaths, std::array<std::string, kTextureSlotCount>& outPaths);
+
+    bool mDeferTextureLoads = false;
+
+    // Everything binding one sub-material (one UDIM tile of it) needs that does not
+    // change from draw to draw: its constants, its eight descriptors and whether it
+    // tessellates. Building this means copying the material's ten path strings,
+    // resolving UDIM tokens and eight texture-cache lookups - done per draw, per
+    // frame, it was most of the virtualized G-Buffer's recording time on a
+    // UDIM-heavy level, where every tile of every sub-material is its own bin.
+    struct PreparedMaterial
+    {
+        MaterialConstants Constants{};  // camera, tessellation scale and SSS slot filled per draw
+        D3D12_GPU_DESCRIPTOR_HANDLE Handles[kTextureSlotCount]{};
+        std::shared_ptr<GpuTexture> Textures[kTextureSlotCount];
+        bool Tessellate = false;
+        bool UseSubsurface = false;
+        SubsurfaceProfileDesc SubsurfaceProfile{};
+        // A slot left on the fallback only because its texture is still streaming.
+        bool Incomplete = false;
+        std::chrono::steady_clock::time_point BuiltAt{};
+        std::uint64_t LastUsedFrame = 0;
+    };
+    void PrepareSubMaterial(const SubMaterialTextures& texPaths, PreparedMaterial& out);
+    bool ApplyPreparedMaterial(
+        ID3D12GraphicsCommandList* commandList,
+        const PreparedMaterial& prepared,
+        MaterialConstants& matOut,
+        const DirectX::XMFLOAT3& cameraPosition);
+
+    // Binds sub-material materialId of materialPath (udimTile 0 = not a UDIM draw)
+    // from the cache below. Returns whether it asks for the tessellated pipeline.
+    bool BindMaterialCached(
+        ID3D12GraphicsCommandList* commandList,
+        const std::string& materialPath,
+        std::uint32_t materialId,
+        std::uint32_t udimTile,
+        MaterialConstants& matOut,
+        const DirectX::XMFLOAT3& cameraPosition);
+
+    struct BindCacheKey
+    {
+        std::string   MaterialPath;
+        std::uint32_t MaterialId = 0;
+        std::uint32_t UdimTile = 0;
+    };
+    // Looked up without building a key string each draw.
+    struct BindCacheKeyView
+    {
+        std::string_view MaterialPath;
+        std::uint32_t    MaterialId = 0;
+        std::uint32_t    UdimTile = 0;
+    };
+    struct BindCacheLess
+    {
+        using is_transparent = void;
+        template <typename A, typename B>
+        bool operator()(const A& a, const B& b) const
+        {
+            if (a.MaterialId != b.MaterialId) return a.MaterialId < b.MaterialId;
+            if (a.UdimTile != b.UdimTile) return a.UdimTile < b.UdimTile;
+            return std::string_view(a.MaterialPath) < std::string_view(b.MaterialPath);
+        }
+    };
+    std::map<BindCacheKey, PreparedMaterial, BindCacheLess> mBindCache;
+
+    // Entries hold their textures, so ones no draw has asked for in a while go:
+    // otherwise a previous level's tiles would stay resident for the session.
+    void EvictUnusedBinds()
+    {
+        if (mFrameCounter % 120 != 0) return;
+        for (auto it = mBindCache.begin(); it != mBindCache.end(); )
+        {
+            if (mFrameCounter - it->second.LastUsedFrame > kFramesInFlight + 120)
+                it = mBindCache.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    // Binds a sub-material's eight texture slots (root tables 3-10) and fills
+    // its constants. Returns whether the material asks for the tessellated
+    // pipeline; switching to it is the caller's business.
+    bool BindSubMaterial(
+        ID3D12GraphicsCommandList* commandList,
+        const SubMaterialTextures& texPaths,
+        MaterialConstants& matOut,
+        const DirectX::XMFLOAT3& cameraPosition);
+
+    // The sub-material a draw of `materialId` uses: its own entry, or, when
+    // the file has none for it, the first entry with any texture - the
+    // fallback the ordinary draw has always applied. Null when there is neither.
+    static const SubMaterialTextures* PickSubMaterial(
+        const std::unordered_map<uint32_t, SubMaterialTextures>& allTextures, uint32_t materialId);
+
+    bool IsDrawnVirtualized(std::size_t entityIndex, std::uint8_t passBit) const
+    {
+        return mVirtualizedMask != nullptr
+            && entityIndex < mVirtualizedMask->size()
+            && ((*mVirtualizedMask)[entityIndex] & passBit) != 0;
+    }
+
+    const std::vector<std::uint8_t>* mVirtualizedMask = nullptr;
+
+    // Next free slot in this frame's region of mMaterialCB. Render() and
+    // BindVirtualGeometryMaterial() both allocate from it, so neither can
+    // overwrite constants the other's draws still reference.
+    std::size_t mMaterialSlotCursor = 0;
 
     // Resolve all texture paths for every sub-material in a JSON file.
     //
@@ -415,6 +724,32 @@ private:
     // erased mid-frame while in-flight frames were still drawing from it.
     using MeshCacheKey = std::pair<const Mesh*, std::size_t>;   // asset, LOD
     std::map<MeshCacheKey, EntityGpuMesh> mGpuMeshes;
+
+    // The voxelizer's copies of virtualized meshes: a cut through the cluster DAG
+    // per asset and error step (VirtualGeometryCut.h), so a dense scan is voxelized
+    // from about as many triangles as the voxels can show rather than all of them.
+    // Owned and evicted like mGpuMeshes. A cut that could not be extracted is kept
+    // as Failed, so the voxelizer falls back to the LODs without retrying every
+    // frame.
+    struct VoxelCutMesh
+    {
+        struct Range { std::uint32_t StartIndex, IndexCount, MaterialId, UdimTile; };
+        Microsoft::WRL::ComPtr<ID3D12Resource> VertexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> IndexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW VertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
+        DirectX::XMFLOAT3        BoundsMin{};
+        DirectX::XMFLOAT3        BoundsMax{};
+        std::vector<Range>       Ranges;
+        std::shared_ptr<const Mesh> SourceMeshOwner;
+        std::uint64_t            LastUsedFrame = 0;
+        bool                     Failed = false;
+    };
+    using VoxelCutKey = std::pair<const Mesh*, std::int16_t>;   // asset, cut step
+    std::map<VoxelCutKey, VoxelCutMesh> mVoxelCutMeshes;
+    // The cut, uploaded on first use; null when it cannot be had.
+    const VoxelCutMesh* EnsureVoxelCutMesh(ID3D12GraphicsCommandList* commandList,
+        const std::shared_ptr<Mesh>& meshAsset, const VirtualGeometry::BuiltMesh& dag, std::int16_t cutStep);
     std::unordered_set<std::size_t> mLoggedDrawEntities;
 
     // Per-frame constant storage.
@@ -492,6 +827,19 @@ private:
                 ++it;
             }
         }
+        for (auto it = mVoxelCutMeshes.begin(); it != mVoxelCutMeshes.end(); )
+        {
+            if (mFrameCounter - it->second.LastUsedFrame > kMeshEvictionFrames)
+            {
+                RetireBuffer(std::move(it->second.VertexBuffer), "evicted voxel cut vertex buffer");
+                RetireBuffer(std::move(it->second.IndexBuffer), "evicted voxel cut index buffer");
+                it = mVoxelCutMeshes.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
     }
 
     std::uint64_t mFrameCounter = 0;
@@ -521,6 +869,13 @@ private:
 
     DX12Shader mVertexShader;
     DX12Shader mPixelShader;
+    // Tessellated variant, used per draw for materials with Tessellation enabled.
+    DX12Shader mTessVertexShader;
+    DX12Shader mHullShader;
+    DX12Shader mDomainShader;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessPipelineState;
+    // (viewport height / 2) / tan(fovY / 2); see SetTessellationPixelScale.
+    float mTessPixelScale = 1000.0f;
 
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPipelineState;

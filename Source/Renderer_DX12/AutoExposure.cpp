@@ -335,7 +335,8 @@ bool AutoExposure::Apply(
     ID3D12Resource*             inputResource,
     D3D12_CPU_DESCRIPTOR_HANDLE inputCpuSrv,
     const AgxTonemapSettings&   settings,
-    float                       deltaTimeSeconds)
+    float                       deltaTimeSeconds,
+    const RelativeTarget*       relativeTarget)
 {
     if (!mIsInitialized || !commandList || !inputResource || !mMappedCb)
         return false;
@@ -387,6 +388,15 @@ bool AutoExposure::Apply(
         cb.DeltaTimeSeconds = std::clamp(deltaTimeSeconds, 0.0f, 0.1f);
         cb.GreyPoint        = (std::max)(settings.AutoExposureGreyPoint, 1e-4f);
         cb.MeteringMask     = std::clamp(settings.AutoExposureMeteringMask, 0.0f, 1.0f);
+
+        if (relativeTarget != nullptr)
+        {
+            cb.RelativeMode          = 1u;
+            cb.ReferenceEv           = relativeTarget->ReferenceEv;
+            cb.ReferenceLogLuminance = relativeTarget->ReferenceLogLuminance;
+            cb.Strength              = (std::max)(relativeTarget->Strength, 0.0f);
+            cb.DeadZone              = (std::max)(relativeTarget->DeadZone, 0.0f);
+        }
 
         std::memcpy(static_cast<std::byte*>(mMappedCb) + mCbStride * mFrameSlot,
                     &cb, sizeof(cb));

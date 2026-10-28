@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"portuguese"
+	"Tokens"
+	{
+		"#Menu"	"Na taverna"
+		"#VsAI"	"A jogar contra a IA · %score%"
+		"#Searching"	"À procura de uma partida"
+		"#Waiting"	"À espera numa mesa aberta"
+		"#WaitingFriends"	"À espera dos amigos"
+		"#Online"	"A jogar online contra %opponent% · %score%"
+	}
+}

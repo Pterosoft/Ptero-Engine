@@ -17,6 +17,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "M_AgedOak_Timber",
@@ -52,6 +53,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "M_ForgedIron",
@@ -87,6 +89,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "M_Plaster_UNUSED",
@@ -122,6 +125,7 @@
                 0.0,
                 0.0
             ],
+            "heightReference": 1.0,
             "heightScale": 0.05000000074505806,
             "metallicFactor": 1.0,
             "name": "M_Stone",

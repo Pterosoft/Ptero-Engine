@@ -1,0 +1,24 @@
+{
+   "background": {
+      "service_worker": "background.js"
+   },
+   "content_security_policy": {
+      "extension_pages": "default-src 'self'"
+   },
+   "default_locale": "en",
+   "description": "__MSG_appDescription__",
+   "host_permissions": [ "\u003Call_urls>", "http://*/*", "https://*/*" ],
+   "icons": {
+      "32": "PAD-ico_32.png",
+      "48": "PAD-ico_48.png",
+      "56": "PAD-ico_56.png",
+      "64": "PAD-ico_64.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx1N/yU7r55jxrOxGTb28HkTfV535hfje7LA5ASz8eY3yxoCoH9qQ/PS1gomlR4kVogsnda/oQtTocdhksQ3gLq1E+K16/dXDz19BxcpT/rmUIRMnQQyleKGEfoklaUz/No7kaHFXSnH171nlNbQxy3pK4aW1WZyMnvG5KQW25HdckG6oj0X4JUkEKNXtijnmK+NdWrSUbJQOcGR8Wg+wM30qmpx+3dUYM/ZCA2ReMXO6Cwzfzf1Ze/lZzDKYyB/jGYCRA/SFJINaoRrUHr/0PHpe5W3KwsEkjySDuHVStNBRp9Vz5vEmSEeNeinfPnkSkxFYTJQJY/AAKFD+m/8ttwIDAQAB",
+   "manifest_version": 3,
+   "minimum_chrome_version": "88.0",
+   "name": "__MSG_appName__",
+   "permissions": [ "scripting", "debugger", "tabs", "browsingData", "nativeMessaging", "webNavigation" ],
+   "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
+   "version": "2.73.0.36"
+}

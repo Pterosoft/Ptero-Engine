@@ -8,6 +8,7 @@ extern "C" {
 }
 
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 #ifndef M_PI
@@ -16,42 +17,82 @@ extern "C" {
 
 namespace
 {
-    // Convert a time-of-day value [0,24) to solar elevation in radians.
-    // We use a simplified model: solar noon = max elevation of 60° (mid-latitude summer),
-    // sunrise ≈ 6h, sunset ≈ 18h.  This gives a plausible diurnal arc without
-    // requiring latitude/longitude input.
-    float TimeToSolarElevation(float timeHours)
+    constexpr float kPi       = 3.14159265358979f;
+    constexpr float kDegToRad = kPi / 180.0f;
+
+    float SmoothStep(float edge0, float edge1, float x)
     {
-        // Map [0,24) to a normalised day fraction centred on noon (0.5).
-        // sin-based model: elevation = maxElevation * sin(pi * (t - sunrise) / dayLength)
-        constexpr float kSunrise    = 6.0f;
-        constexpr float kSunset     = 18.0f;
-        constexpr float kDayLength  = kSunset - kSunrise;
-        constexpr float kMaxElevDeg = 60.0f; // approximate mid-latitude summer noon
-
-        if (timeHours <= kSunrise || timeHours >= kSunset)
-            return -0.1f; // slightly below horizon
-
-        const float t = (timeHours - kSunrise) / kDayLength; // [0,1]
-        const float sinE = std::sin(static_cast<float>(M_PI) * t);
-        return sinE * (kMaxElevDeg * static_cast<float>(M_PI / 180.0));
+        const float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
     }
 
-    // Compute sun direction from elevation (radians).
-    // We fix the azimuth to south (Y+ in Z-up space) for simplicity.
-    void ElevationToDirection(float elevRad,
-        float& outX, float& outY, float& outZ)
+    float Lerp(float a, float b, float t) { return a + (b - a) * t; }
+
+    // The sky as a rotation. A body at hour angle h and declination d sits at
+    // c = (cos d cos h, cos d sin h, sin d) in equatorial coordinates, and
+    // world = Rows * c places it over the observer: the latitude tilts the
+    // celestial pole up from the northern horizon, then NorthOffset turns
+    // east/north onto world X/Y.
+    //
+    // The observer frame is east = +X, north = +Y, up = +Z. The sun is kept at
+    // an equinox (declination 0), so it rises due east at 06:00, stands due
+    // south at noon at 90 - latitude degrees - toward -Y, where the old
+    // elevation-only sun always sat - and sets due west at 18:00. The old model
+    // only raised and lowered the sun on the southern meridian, so 09:00 and
+    // 15:00 lit the scene identically and the sun never crossed the sky.
+    struct SkyFrame
     {
-        // Direction from scene toward the sun.
-        outX = 0.0f;
-        outY = -std::cos(elevRad); // south horizon component (pointing away from scene)
-        outZ = std::sin(elevRad);  // up component
-        // Normalise (already unit length for pure elevation, but be safe).
-        float len = std::sqrt(outX * outX + outY * outY + outZ * outZ);
-        if (len > 1e-6f) { outX /= len; outY /= len; outZ /= len; }
-        // Negate: convention is direction FROM sun TO scene (like a directional light vector).
-        outX = -outX; outY = -outY; outZ = -outZ;
-    }
+        float Rows[3][3];
+
+        SkyFrame(float latitudeDeg, float northOffsetDeg)
+        {
+            const float lat = std::clamp(latitudeDeg, -89.0f, 89.0f) * kDegToRad;
+            const float sinLat = std::sin(lat), cosLat = std::cos(lat);
+            // Equatorial -> east / north / up.
+            const float east[3]  = { 0.0f, -1.0f, 0.0f };
+            const float north[3] = { -sinLat, 0.0f, cosLat };
+            const float up[3]    = { cosLat, 0.0f, sinLat };
+
+            const float a = northOffsetDeg * kDegToRad;
+            const float cosA = std::cos(a), sinA = std::sin(a);
+            for (int i = 0; i < 3; ++i)
+            {
+                Rows[0][i] = cosA * east[i] - sinA * north[i];
+                Rows[1][i] = sinA * east[i] + cosA * north[i];
+                Rows[2][i] = up[i];
+            }
+        }
+
+        // Unit vector from the scene toward a body at hour angle h, declination d.
+        void Toward(float hourAngle, float declination, float out[3]) const
+        {
+            const float c[3] =
+            {
+                std::cos(declination) * std::cos(hourAngle),
+                std::cos(declination) * std::sin(hourAngle),
+                std::sin(declination)
+            };
+            for (int i = 0; i < 3; ++i)
+                out[i] = Rows[i][0] * c[0] + Rows[i][1] * c[1] + Rows[i][2] * c[2];
+        }
+
+        // World -> the frame the stars are fixed in, at the given solar hour
+        // angle. Stars keep pace with the sun (solar rather than sidereal time),
+        // which is indistinguishable within a night and keeps a given hour's
+        // sky the same on every visit.
+        void StarRotation(float hourAngle, float out[9]) const
+        {
+            const float cosH = std::cos(hourAngle), sinH = std::sin(hourAngle);
+            for (int k = 0; k < 3; ++k)
+            {
+                // Columns of Rows are the equatorial axes in world space.
+                const float col0 = Rows[k][0], col1 = Rows[k][1], col2 = Rows[k][2];
+                out[0 + k] =  cosH * col0 + sinH * col1;
+                out[3 + k] = -sinH * col0 + cosH * col1;
+                out[6 + k] = col2;
+            }
+        }
+    };
 
     // Normalise an RGB triplet so the brightest channel = 1.
     // Returns false if the colour is black.
@@ -68,10 +109,12 @@ namespace
     // Sample the sky model at several zenith/azimuth directions and
     // return the average radiance as an RGB triplet.
     void SampleAverageSkyRadiance(
-        ArHosekSkyModelState* states[3],
+        ArHosekSkyModelState* state,
         double solarElevation,
         float& outR, float& outG, float& outB)
     {
+        // The RGB state carries all three channels.
+        ArHosekSkyModelState* const states[3] = { state, state, state };
         // Sample a uniform set of directions over the hemisphere.
         // theta = zenith angle (0 = straight up), gamma = angle from sun.
         // We use a simple ring pattern for a quick average.
@@ -120,67 +163,310 @@ namespace
     }
 }
 
+namespace
+{
+    // The Hosek-Wilkie sky lit by a body at the given elevation. Below the horizon
+    // the model is undefined, so it is evaluated just above it; the caller fades
+    // it out from there.
+    struct SkyModelEvaluation
+    {
+        bool  Valid = false;
+        // Hemisphere-average colour, normalised so the brightest channel is 1.
+        float Colour[3] = { 0.25f, 0.45f, 1.0f };
+        // The coefficients A..I per channel, for the sky pass.
+        float Model[9][3] = {};
+        // Per channel, what turns the model's F(theta, gamma) into radiance relative
+        // to the hemisphere average - 1 means "as bright as the average sky".
+        float RadianceOverAverage[3] = {};
+    };
+
+    SkyModelEvaluation EvaluateSkyModel(const TimeOfDaySettings& settings, float elevRad)
+    {
+        SkyModelEvaluation evaluation;
+        const double elevation = static_cast<double>((std::max)(elevRad, 0.2f * kDegToRad));
+
+        // Clamp turbidity to valid SDK range [1, 10].
+        const double turbidity = settings.Turbidity < 1.0f ? 1.0 : (settings.Turbidity > 10.0f ? 10.0 : static_cast<double>(settings.Turbidity));
+        const double albedo    = settings.GroundAlbedo < 0.0f ? 0.0 : (settings.GroundAlbedo > 1.0f ? 1.0 : static_cast<double>(settings.GroundAlbedo));
+
+        // Initialise the RGB (3-channel) sky model; one state holds all three.
+        ArHosekSkyModelState* state = arhosek_rgb_skymodelstate_alloc_init(turbidity, albedo, elevation);
+        if (!state)
+            return evaluation;
+
+        float skyR = 0, skyG = 0, skyB = 0;
+        SampleAverageSkyRadiance(state, elevation, skyR, skyG, skyB);
+        const float average[3] = { skyR, skyG, skyB };
+        if (NormaliseRGB(skyR, skyG, skyB))
+        {
+            evaluation.Valid = true;
+            evaluation.Colour[0] = skyR; evaluation.Colour[1] = skyG; evaluation.Colour[2] = skyB;
+            for (int c = 0; c < 3; ++c)
+            {
+                for (int k = 0; k < 9; ++k)
+                    evaluation.Model[k][c] = static_cast<float>(state->configs[c][k]);
+                evaluation.RadianceOverAverage[c] = static_cast<float>(state->radiances[c]) / (std::max)(average[c], 1e-12f);
+            }
+        }
+
+        arhosekskymodelstate_free(state);
+        return evaluation;
+    }
+
+    // Normalised Hosek-Wilkie daylight colours at the given solar elevation, and
+    // the daylight sky model for the sky pass (see EvaluateSkyModel).
+    // radianceOverAverage is left at zero if the model fails.
+    void EvaluateDaylightColours(const TimeOfDaySettings& settings, float elevRad, HosekWilkieResult& result,
+                                 float radianceOverAverage[3])
+    {
+        const double elevation = static_cast<double>((std::max)(elevRad, 0.2f * kDegToRad));
+
+        // --- Sun disc colour from Rayleigh scattering approximation ---
+        // Sampling sky radiance at gamma=0 returns blue-dominated scattered sky colour,
+        // not the actual sun disc chromaticity. Instead derive disc colour from elevation:
+        // at the horizon (long atmospheric path) the sun is deep orange; near zenith it is white.
+        const float t = static_cast<float>(std::sin(elevation)); // 0 at horizon, ~1 at zenith
+        result.SunR = 1.0f;
+        result.SunG = 0.70f + 0.30f * t;  // 0.70 at horizon -> 1.00 at zenith
+        result.SunB = 0.35f + 0.65f * t;  // 0.35 at horizon -> 1.00 at zenith
+
+        const SkyModelEvaluation sky = EvaluateSkyModel(settings, elevRad);
+        result.SkyR = sky.Colour[0]; result.SkyG = sky.Colour[1]; result.SkyB = sky.Colour[2];
+        if (!sky.Valid)
+            return;
+        std::memcpy(result.SkyModel, sky.Model, sizeof(sky.Model));
+        for (int c = 0; c < 3; ++c)
+            radianceOverAverage[c] = sky.RadianceOverAverage[c];
+    }
+
+    // The exposure the hour asks for: DayEv100 with the sun 25 degrees up or
+    // more, SunsetEv100 with it on the horizon, NightEv100 from 12 degrees below
+    // (the end of nautical twilight).
+    float ExposureForElevation(const TimeOfDaySettings& settings, float elevRad)
+    {
+        if (elevRad >= 0.0f)
+            return Lerp(settings.SunsetEv100, settings.DayEv100, SmoothStep(0.0f, 25.0f * kDegToRad, elevRad));
+        return Lerp(settings.NightEv100, settings.SunsetEv100, SmoothStep(-12.0f * kDegToRad, 0.0f, elevRad));
+    }
+}
+
 HosekWilkieResult EvaluateHosekWilkie(const TimeOfDaySettings& settings)
 {
     HosekWilkieResult result{};
 
-    const float elevRad = TimeToSolarElevation(settings.TimeOfDay);
-    result.SolarElevationRad = elevRad;
-    result.SunAboveHorizon   = elevRad > 0.0f;
+    // ---- Where the sun and the moon are --------------------------------------
+    const SkyFrame sky(settings.Latitude, settings.NorthOffset);
 
-    ElevationToDirection(elevRad,
-        result.SunDirX, result.SunDirY, result.SunDirZ);
+    const float hours = std::fmod(std::fmod(settings.TimeOfDay, 24.0f) + 24.0f, 24.0f);
+    const float sunHourAngle = (hours - 12.0f) / 24.0f * 2.0f * kPi;
 
-    if (!result.SunAboveHorizon)
+    float towardSun[3];
+    sky.Toward(sunHourAngle, 0.0f, towardSun);
+    const float sunElev = std::asin(std::clamp(towardSun[2], -1.0f, 1.0f));
+
+    // The moon trails the sun by its phase: new moon rides with the sun, a full
+    // moon sits opposite it. Its lit fraction follows from the same angle.
+    const float phase = settings.MoonPhase - std::floor(settings.MoonPhase);
+    float towardMoon[3];
+    sky.Toward(sunHourAngle - phase * 2.0f * kPi, 0.0f, towardMoon);
+    const float moonElev = std::asin(std::clamp(towardMoon[2], -1.0f, 1.0f));
+
+    result.SolarElevationRad = sunElev;
+    result.SunAboveHorizon   = sunElev > 0.0f;
+    result.SolarDirX = -towardSun[0];  result.SolarDirY = -towardSun[1];  result.SolarDirZ = -towardSun[2];
+    result.MoonDirX  = -towardMoon[0]; result.MoonDirY  = -towardMoon[1]; result.MoonDirZ  = -towardMoon[2];
+    result.MoonElevationRad = moonElev;
+    result.MoonIllumination = 0.5f * (1.0f - std::cos(phase * 2.0f * kPi));
+    sky.StarRotation(sunHourAngle, result.StarRotation);
+
+    float skyRadianceOverAverage[3] = {};
+    EvaluateDaylightColours(settings, sunElev, result, skyRadianceOverAverage);
+
+    // ---- Exposure --------------------------------------------------------------
+    // Evaluated whether or not it drives the tonemapper: the GI pre-exposure
+    // follows the same curve either way, so night GI keeps daylight magnitudes
+    // even with a hand-set exposure.
+    const float ev100 = ExposureForElevation(settings, sunElev);
+    result.Ev100 = ev100;
+    result.ControlsExposure = settings.Enabled && settings.ControlExposure;
+    result.PreExposure = settings.Enabled
+        ? std::clamp(std::exp2(settings.DayEv100 - ev100), 1.0f / 256.0f, 65536.0f)
+        : 1.0f;
+
+    // Time of day off: no sun, moon, sky or stars. The directions above are
+    // still valid for anything that wants one.
+    if (!settings.Enabled)
     {
-        // Night / twilight defaults.
-        result.SkyR = 0.02f; result.SkyG = 0.03f; result.SkyB = 0.08f;
-        result.SunR = 0.80f; result.SunG = 0.40f; result.SunB = 0.10f;
+        result.SunDirX = result.SolarDirX; result.SunDirY = result.SolarDirY; result.SunDirZ = result.SolarDirZ;
         return result;
     }
 
-    // Clamp turbidity to valid SDK range [1, 10].
-    const double turbidity = settings.Turbidity < 1.0f ? 1.0 : (settings.Turbidity > 10.0f ? 10.0 : static_cast<double>(settings.Turbidity));
-    const double albedo    = settings.GroundAlbedo < 0.0f ? 0.0 : (settings.GroundAlbedo > 1.0f ? 1.0 : static_cast<double>(settings.GroundAlbedo));
-    const double elevation = static_cast<double>(elevRad);
-
-    // Initialise the RGB (3-channel) sky model.
-    ArHosekSkyModelState* states[3] =
+    // ---- Sun ---------------------------------------------------------------------
+    // Fades out as the disc goes under, so the light does not snap off at 0 degrees
+    // while it still grazes walls facing it.
+    const float sunFade = SmoothStep(-0.5f * kDegToRad, 4.0f * kDegToRad, sunElev);
+    const float sunLux  = (std::max)(settings.SunIntensityLux, 0.0f) / kTimeOfDayRefSunLux;
+    const float sunColour[3] =
     {
-        arhosek_rgb_skymodelstate_alloc_init(turbidity, albedo, elevation),
-        arhosek_rgb_skymodelstate_alloc_init(turbidity, albedo, elevation),
-        arhosek_rgb_skymodelstate_alloc_init(turbidity, albedo, elevation)
+        settings.OverrideSunColor ? settings.SunColorR : result.SunR,
+        settings.OverrideSunColor ? settings.SunColorG : result.SunG,
+        settings.OverrideSunColor ? settings.SunColorB : result.SunB,
     };
 
-    if (!states[0] || !states[1] || !states[2])
+    // ---- Moon --------------------------------------------------------------------
+    // Takes over as the directional light only once the sun is down. Both lights
+    // are black at the handover (the sun below -0.5 degrees, the moon above -1),
+    // so the light direction can jump from one to the other without a pop.
+    const float nightness = 1.0f - SmoothStep(-8.0f * kDegToRad, -1.0f * kDegToRad, sunElev);
+    result.Nightness = nightness;
+    const float moonUp    = SmoothStep(-0.5f * kDegToRad, 4.0f * kDegToRad, moonElev);
+    const float moonLux   = settings.MoonEnabled
+        ? (std::max)(settings.MoonIntensityLux, 0.0f) / kTimeOfDayRefSunLux : 0.0f;
+    const float moonLight = moonLux * result.MoonIllumination * moonUp * nightness;
+
+    result.KeyLightIsMoon = settings.MoonEnabled && sunElev < -0.75f * kDegToRad;
+    if (result.KeyLightIsMoon)
     {
-        for (int i = 0; i < 3; ++i)
-            if (states[i]) arhosekskymodelstate_free(states[i]);
-        return result; // return defaults
+        result.SunDirX = result.MoonDirX; result.SunDirY = result.MoonDirY; result.SunDirZ = result.MoonDirZ;
+        result.LightR = settings.MoonColorR * moonLight;
+        result.LightG = settings.MoonColorG * moonLight;
+        result.LightB = settings.MoonColorB * moonLight;
+    }
+    else
+    {
+        result.SunDirX = result.SolarDirX; result.SunDirY = result.SolarDirY; result.SunDirZ = result.SolarDirZ;
+        result.LightR = sunColour[0] * sunLux * sunFade;
+        result.LightG = sunColour[1] * sunLux * sunFade;
+        result.LightB = sunColour[2] * sunLux * sunFade;
     }
 
-    // --- Sky colour ---
-    float skyR = 0, skyG = 0, skyB = 0;
-    SampleAverageSkyRadiance(states, elevation, skyR, skyG, skyB);
-    result.SkyR = skyR; result.SkyG = skyG; result.SkyB = skyB;
-    if (!NormaliseRGB(result.SkyR, result.SkyG, result.SkyB))
+    // ---- Sky ambient -------------------------------------------------------------
+    // Full daylight from 25 degrees up, as before; below that it falls away roughly
+    // as the real sky does and hands over to the night sky by the end of nautical
+    // twilight. The daylight colour is pulled toward deep blue once the sun is under.
+    const float dayWeight = SmoothStep(-12.0f * kDegToRad, 25.0f * kDegToRad, sunElev);
+    const float daylight  = dayWeight * dayWeight;
+    result.DaylightWeight = daylight;
+
+    float dayColour[3] =
     {
-        result.SkyR = 0.25f; result.SkyG = 0.45f; result.SkyB = 1.0f; // fallback
-    }
-
-    // --- Sun disc colour from Rayleigh scattering approximation ---
-    // Sampling sky radiance at gamma=0 returns blue-dominated scattered sky colour,
-    // not the actual sun disc chromaticity. Instead derive disc colour from elevation:
-    // at the horizon (long atmospheric path) the sun is deep orange; near zenith it is white.
-    const float t = static_cast<float>(std::sin(elevation)); // 0 at horizon, ~1 at zenith
-    result.SunR = 1.0f;
-    result.SunG = 0.70f + 0.30f * t;  // 0.70 at horizon -> 1.00 at zenith
-    result.SunB = 0.35f + 0.65f * t;  // 0.35 at horizon -> 1.00 at zenith
-    // Already normalised (SunR == 1.0 always).
-
-
+        settings.OverrideSkyColor ? settings.SkyColorR : result.SkyR,
+        settings.OverrideSkyColor ? settings.SkyColorG : result.SkyG,
+        settings.OverrideSkyColor ? settings.SkyColorB : result.SkyB,
+    };
+    const float blueHour = SmoothStep(0.0f, -6.0f * kDegToRad, sunElev);
+    const float blueHourColour[3] = { 0.30f, 0.42f, 1.00f };
     for (int i = 0; i < 3; ++i)
-        arhosekskymodelstate_free(states[i]);
+        dayColour[i] = Lerp(dayColour[i], blueHourColour[i], blueHour);
+
+    const float skyLux   = (std::max)(settings.SkyIntensityLux, 0.0f) / kTimeOfDayRefSkyLux;
+    const float nightLux = (std::max)(settings.NightSkyIntensityLux, 0.0f) / kTimeOfDayRefSkyLux;
+    const float nightColour[3] = { settings.NightSkyColorR, settings.NightSkyColorG, settings.NightSkyColorB };
+    result.AmbientR = dayColour[0] * skyLux * daylight + nightColour[0] * nightLux * (1.0f - daylight);
+    result.AmbientG = dayColour[1] * skyLux * daylight + nightColour[1] * nightLux * (1.0f - daylight);
+    result.AmbientB = dayColour[2] * skyLux * daylight + nightColour[2] * nightLux * (1.0f - daylight);
+
+    // ---- The ground below the horizon ----------------------------------------------
+    // Lit as the deferred pass lights a level, open floor of GroundAlbedo: albedo x
+    // (ambient + key light x cos). The sky pass draws it under the horizon and the GI
+    // passes' escaped rays bounce it, rather than the horizon's blue carried on down.
+    const float groundAlbedo = std::clamp(settings.GroundAlbedo, 0.0f, 1.0f);
+    const float keyLightUp = (std::max)(-result.SunDirZ, 0.0f);
+    result.GroundRadiance[0] = groundAlbedo * (result.AmbientR + result.LightR * keyLightUp);
+    result.GroundRadiance[1] = groundAlbedo * (result.AmbientG + result.LightG * keyLightUp);
+    result.GroundRadiance[2] = groundAlbedo * (result.AmbientB + result.LightB * keyLightUp);
+
+    // ---- Sky pass: the sky itself --------------------------------------------------
+    // The model gives the sky's shape - the bright circumsolar aureole, the darker
+    // zenith, the pale horizon - and the daylight ambient its level and colour, so
+    // the sky averages out to exactly the light it casts (override and blue hour
+    // included). Through twilight the shape stays the sun-on-the-horizon one and
+    // fades with the daylight; the night gradient takes over underneath.
+    for (int c = 0; c < 3; ++c)
+        result.DaySkyScale[c] = dayColour[c] * skyLux * daylight * skyRadianceOverAverage[c];
+    result.NightSkyR = nightColour[0] * nightLux * (1.0f - daylight);
+    result.NightSkyG = nightColour[1] * nightLux * (1.0f - daylight);
+    result.NightSkyB = nightColour[2] * nightLux * (1.0f - daylight);
+
+    // ---- Sky pass: discs and stars -----------------------------------------------
+    // The sun itself, fading as its disc goes under: the light it delivers, for
+    // the glare pass, and the disc the sky draws - bright enough to clip to
+    // white, not its true radiance (see kSunDiscRadianceScale).
+    const float sunDiscFade = SmoothStep(-1.0f * kDegToRad, 0.5f * kDegToRad, sunElev);
+    for (int c = 0; c < 3; ++c)
+        result.SunIlluminance[c] = sunColour[c] * sunLux * sunDiscFade;
+    result.SunDiscR = result.SunIlluminance[0] * kSunDiscRadianceScale;
+    result.SunDiscG = result.SunIlluminance[1] * kSunDiscRadianceScale;
+    result.SunDiscB = result.SunIlluminance[2] * kSunDiscRadianceScale;
+
+    // The moon disc is several times its illuminance (MoonDiscBrightness), so at
+    // night exposure it is the brightest thing in the sky rather than a grey orb.
+    // It is added to the sky rather than drawn over it, so in daylight it is the
+    // faint pale moon it should be and never a dark hole.
+    const float moonDiscFade = SmoothStep(-1.0f * kDegToRad, 0.5f * kDegToRad, moonElev);
+    const float moonDisc = moonLux * (std::max)(settings.MoonDiscBrightness, 0.0f) * moonDiscFade;
+    result.MoonDiscR = settings.MoonColorR * moonDisc;
+    result.MoonDiscG = settings.MoonColorG * moonDisc;
+    result.MoonDiscB = settings.MoonColorB * moonDisc;
+
+    // The light the drawn moon actually sends: its radiance over its solid angle,
+    // times the lit share of the face and the surface's mean albedo and limb
+    // darkening (~0.85). The moon glare spreads this, so its glow stays in
+    // proportion to the disc - unlike the sun's, whose disc is deliberately drawn
+    // dimmer than the light it gives.
+    const float moonRadius = kMoonAngularRadiusRad * std::clamp(settings.MoonSize, 0.1f, 10.0f);
+    const float moonHalfRadiusSin = std::sin(0.5f * moonRadius);
+    const float moonSolidAngle = 4.0f * kPi * moonHalfRadiusSin * moonHalfRadiusSin;
+    const float moonDiscLight = moonSolidAngle * result.MoonIllumination * 0.85f;
+    result.MoonDiscRadius = moonRadius;
+    result.MoonIlluminance[0] = result.MoonDiscR * moonDiscLight;
+    result.MoonIlluminance[1] = result.MoonDiscG * moonDiscLight;
+    result.MoonIlluminance[2] = result.MoonDiscB * moonDiscLight;
+
+    // ---- Sky pass: the moonlit sky ----------------------------------------------------
+    // Moonlight scatters exactly as sunlight does, so the moonlit sky is the daylight
+    // sky for the moon's elevation - aureole, blue zenith and all - scaled down by how
+    // much fainter the moon's light is than the sun's, and tinted by it. MoonlitSky
+    // turns it down from there (see TimeOfDaySettings). Fades out as the moon sets.
+    const float moonlitStrength = (std::max)(settings.MoonlitSky, 0.0f)
+        * SmoothStep(-2.0f * kDegToRad, 2.0f * kDegToRad, moonElev);
+    const float moonToSun = moonLux * result.MoonIllumination / (std::max)(sunLux, 1.0e-3f);
+    if (moonlitStrength > 0.0f && moonToSun > 0.0f)
+    {
+        const SkyModelEvaluation moonSky = EvaluateSkyModel(settings, moonElev);
+        if (moonSky.Valid)
+        {
+            const float moonColour[3] = { settings.MoonColorR, settings.MoonColorG, settings.MoonColorB };
+            std::memcpy(result.MoonSkyModel, moonSky.Model, sizeof(moonSky.Model));
+            float* ambient[3] = { &result.AmbientR, &result.AmbientG, &result.AmbientB };
+            for (int c = 0; c < 3; ++c)
+            {
+                // Its hemisphere average - the scale is relative to that - which is
+                // also the light it casts: added to the ambient, so the deferred
+                // ambient and every GI pass are lit by the sky that is drawn.
+                const float average = moonSky.Colour[c] * moonColour[c] * skyLux * moonToSun * moonlitStrength;
+                result.MoonSkyScale[c] = average * moonSky.RadianceOverAverage[c];
+                *ambient[c] += average;
+            }
+        }
+    }
+
+    // Stars come out through nautical twilight, and scale with the night sky so
+    // the two stay in proportion however bright the night is authored.
+    result.StarVisibility = settings.StarsEnabled
+        ? SmoothStep(-4.0f * kDegToRad, -14.0f * kDegToRad, sunElev) : 0.0f;
+    result.StarRadiance = nightLux * 30.0f * (std::max)(settings.StarIntensity, 0.0f);
+
+    // What an open outdoor view should meter at: ground of typical albedo under
+    // the directional light and the sky, averaged with the sky itself. Only the
+    // ratio to what the camera actually meters matters, and differences under a
+    // stop are ignored, so this needs to be about right, not exact.
+    const auto luma = [](float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; };
+    const float horizontalIlluminance =
+        luma(result.LightR, result.LightG, result.LightB) * (std::max)(-result.SunDirZ, 0.0f)
+        + luma(result.AmbientR, result.AmbientG, result.AmbientB);
+    constexpr float kTypicalAlbedo = 0.3f;
+    result.AdaptationReferenceLogLuminance = std::log2((std::max)(kTypicalAlbedo * horizontalIlluminance, 1e-8f));
 
     return result;
 }

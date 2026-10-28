@@ -5,13 +5,22 @@
 #include "TerrainRenderer.h"
 #include "TaaSettings.h"
 #include "SMAASettings.h"
+#include "AnalyticEdgeAASettings.h"
+#include "AarSettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
 #include "FsrSettings.h"
+#include "XessSettings.h"
 #include "SubsurfaceSettings.h"
+#include "ShadingSettings.h"
+#include "DpleSettings.h"
+#include "LensFlareSettings.h"
+#include "RtShadowSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RadianceCascadesSettings.h"
+#include "RadianceProbeSettings.h"
+#include "VoxelGISettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
@@ -24,6 +33,7 @@
 #include "AudioManager.h"
 #include "..\Ptero-Engine\EditorCamera.h"
 #include "System/NodeGraphEditor.h"
+#include "../Editor/Sequencer/SequencerEditor.h"
 
 #include "../QtUi/QtUi.h"
 
@@ -34,6 +44,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -93,6 +104,8 @@ public:
     };
 
     Editor();
+    // Out of line: mSequencerHost's type is only complete in EditorCinematics.cpp.
+    ~Editor();
 
     bool Initialize(ID3D12GraphicsCommandList* commandList);
     void Shutdown();
@@ -199,6 +212,28 @@ public:
         return &mShowUiEditorPanel;
     }
 
+    // Opens the Particle Editor window, on a .particle file (Data-relative) when one is
+    // given - from the Asset Browser, or an emitter's Properties.
+    void OpenParticleEditor(const std::string& relativePath = {});
+
+    // --- Cinematics (EditorCinematics.cpp) ------------------------------------------
+    // Hands the viewport's fly controls to a camera entity: the view moves the camera, and
+    // the camera's lens sets the view's field of view. 0 stops piloting.
+    void PilotCamera(std::uint64_t entityId);
+    void StopPilotingCamera() { PilotCamera(0); }
+    std::uint64_t GetPilotedCamera() const { return mPilotedCameraId; }
+    // The viewport menu's cinematic camera entries (Lock, Pilot Selected, Stop Piloting).
+    void DrawCinematicViewportMenuItems();
+    // Adds a camera entity where the viewport looks from. Returns its id.
+    std::uint64_t CreateCameraAtView(const std::string& name);
+
+    // Render Sequence (EditorCinematics.cpp). The job runs one step per frame from the
+    // render loop, which hands it the final image texture to capture from.
+    bool StartCinematicRender(const CinematicRenderSettings& settings, std::string& error);
+    void CancelCinematicRender();
+    CinematicRenderStatus GetCinematicRenderStatus() const;
+    void UpdateCinematicRender(struct ID3D12Resource* finalImage);
+
     bool SaveSceneToFile(const std::string& filepath);
     bool LoadSceneFromFile(const std::string& filepath);
     bool BeginLoadSceneFromFile(const std::string& filepath);
@@ -206,6 +241,12 @@ public:
     bool SaveSceneAs(HWND ownerWindowHandle);
     bool OpenScene(HWND ownerWindowHandle);
     bool NewScene(HWND ownerWindowHandle);
+    // Levels opened or saved recently, newest first, remembered across sessions.
+    const std::vector<std::string>& GetRecentLevels();
+    // Opens one of them, asking about unsaved changes first like Open does. A file that
+    // no longer exists is dropped from the list instead.
+    bool OpenRecentLevel(HWND ownerWindowHandle, const std::string& filepath);
+    void ClearRecentLevels();
     // Shows the unsaved-changes prompt if there is anything to lose. Returns
     // false only when the user cancels, meaning the caller must not proceed.
     // Public because closing the editor has to ask the same question New and
@@ -234,15 +275,30 @@ public:
     float GetSceneLoadProgress() const;
     std::string GetSceneLoadStatusMessage() const;
     // Parsing the level file is only the start of a load: the render loop then has to
-    // read every entity's mesh. It does that a time-boxed slice per frame, so the
-    // window keeps pumping messages, and reports back here so the loading overlay
-    // stays up and counts the meshes instead of closing at 100% on the parse alone.
+    // read every entity's mesh, and after them every texture those meshes' materials
+    // bind (each UDIM tile separately). It does both a time-boxed slice per frame, so
+    // the window keeps pumping messages, and reports back here so the loading overlay
+    // stays up and counts them instead of closing at 100% on the parse alone. The
+    // texture counts only mean something once every mesh is resolved.
     bool IsStreamingSceneAssets() const { return mSceneAssetsStreaming; }
-    void SetSceneAssetStreamingProgress(size_t resolvedMeshes, size_t totalMeshes);
+    // Bumped each time a load starts streaming, so the render loop can tell a new
+    // level from the one it was already streaming.
+    std::uint64_t GetSceneStreamGeneration() const { return mSceneStreamGeneration; }
+    void SetSceneAssetStreamingProgress(
+        size_t resolvedMeshes, size_t totalMeshes, size_t loadedTextures, size_t totalTextures);
     // Separate from SetSceneSettings so the long list there does not have to grow
     // at every call site; saved and restored with the level all the same.
     void SetFsrSettings(FsrSettings* fsrSettings) { mFsrSettings = fsrSettings; }
+    void SetAnalyticEdgeAaSettings(AnalyticEdgeAASettings* analyticEdgeAaSettings) { mAnalyticEdgeAaSettings = analyticEdgeAaSettings; }
+    void SetAarSettings(AarSettings* aarSettings) { mAarSettings = aarSettings; }
+    void SetXessSettings(XessSettings* xessSettings) { mXessSettings = xessSettings; }
     void SetSubsurfaceSettings(SubsurfaceSettings* subsurfaceSettings) { mSubsurfaceSettings = subsurfaceSettings; }
+    void SetShadingSettings(ShadingSettings* shadingSettings) { mShadingSettings = shadingSettings; }
+    void SetDpleSettings(DpleSettings* dpleSettings) { mDpleSettings = dpleSettings; }
+    void SetLensFlareSettings(LensFlareSettings* lensFlareSettings) { mLensFlareSettings = lensFlareSettings; }
+    void SetRtShadowSettings(RtShadowSettings* rtShadowSettings) { mRtShadowSettings = rtShadowSettings; }
+    void SetRadianceProbeSettings(RadianceProbeSettings* radianceProbeSettings) { mRadianceProbeSettings = radianceProbeSettings; }
+    void SetVoxelGiSettings(VoxelGISettings* voxelGiSettings) { mVoxelGiSettings = voxelGiSettings; }
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
@@ -328,16 +384,12 @@ public:
         bool showStatistics,
         AudioManager* audioManager);
 
-    void DrawToolbar(
-        D3D12_GPU_DESCRIPTOR_HANDLE selectIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE moveIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE rotateIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE scaleIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE wireframeIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE proxyIcon,
-        D3D12_GPU_DESCRIPTOR_HANDLE gameIcon);
+    void DrawToolbar();
 
     void DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioManager);
+    // Draws the Properties panel for the primary entity, then copies whatever it
+    // changed there onto the rest of the selection. See ShareablePropertiesOf.
+    void DrawPropertiesPanelForSelection(Entity* selectedEntity, AudioManager* audioManager);
     void DrawAudioManagerWindow(AudioManager* audioManager);
     void DrawResourceDebugWindow();
     void DrawViewportResolutionWindow();
@@ -348,6 +400,9 @@ public:
         Entity* selectedEntity);
 
     Entity* GetSelectedEntity();
+    // Every selected entity, primary included, in level order. The pointers are only
+    // good until the entity list next changes.
+    std::vector<Entity*> GetSelectedEntities();
     std::vector<Entity>& GetEntities() { return mEntities; }
 
     // Screenshot functionality
@@ -429,6 +484,10 @@ private:
         float PixelsPerWorldUnit = 1.0f;
         float SecondaryPixelsPerWorldUnit = 1.0f;
         float StartAngle = 0.0f;
+        // The rest of the selection, captured when the drag starts. The gizmo sits on
+        // the primary entity; these follow it by the same move, rotation or scale.
+        std::vector<int> GroupIndices;
+        std::vector<TransformComponent> GroupStartTransforms;
     };
 
     struct SceneLoadData
@@ -440,13 +499,20 @@ private:
         TimeOfDaySettings TimeOfDay{};
         TaaSettings Taa{};
         SMAASettings Smaa{};
+        AnalyticEdgeAASettings AnalyticEdgeAa{};
+        AarSettings Aar{};
         SharpenSettings Sharpen{};
         DlssSettings Dlss{};
         FsrSettings Fsr{};
+        XessSettings Xess{};
         SubsurfaceSettings Subsurface{};
+        ShadingSettings Shading{};
+        DpleSettings Dple{};
         GlobalIlluminationMode GlobalIlluminationMode = GlobalIlluminationMode::Rtgi;
         RtGISettings Rtgi{};
         RadianceCascadesSettings RadianceCascades{};
+        RadianceProbeSettings RadianceProbes{};
+        VoxelGISettings VoxelGi{};
         RtAOSettings Rtao{};
         GtaoSettings Gtao{};
         SsrSettings Ssr{};
@@ -455,6 +521,8 @@ private:
         VolumetricFogSettings VolumetricFog{};
         VolumetricCloudSettings VolumetricCloud{};
         BloomSettings Bloom{};
+        LensFlareSettings LensFlare{};
+        RtShadowSettings RtShadows{};
         bool HasCameraPosition = false;
         bool HasCameraRotation = false;
         bool HasTimeOfDay = false;
@@ -491,9 +559,10 @@ private:
     DirectX::XMFLOAT3 mSavedCameraRotation = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 
     // Light style editor, shared by the point light inspector and the particle
-    // system's proxy light so the two cannot drift apart. Sets mSceneDirty on
-    // any change; idSuffix disambiguates the widget ids between the two uses.
-    void DrawLightStyleControls(
+    // system's proxy light so the two cannot drift apart. Returns true on
+    // any change and leaves marking the scene to the caller; idSuffix
+    // disambiguates the widget ids between the two uses.
+    bool DrawLightStyleControls(
         const char*   idSuffix,
         LightStyleId& style,
         float&        styleSpeed,
@@ -502,6 +571,81 @@ private:
         std::string&  customStylePattern);
 
     void DrawComponentsPanel();
+
+    // --- Cinematics (EditorCinematics.cpp) -----------------------------------
+    // The Sequencer's view of the editor (entities, selection, cameras); created by
+    // InitializeCinematics, which also hands it to the Sequencer.
+    friend class EditorSequencerHost;
+    std::unique_ptr<class EditorSequencerHost> mSequencerHost;
+    void InitializeCinematics();
+    void ShutdownCinematics();
+    // Called by the scene renderer each frame after the fly camera has moved: piloting
+    // writes the view into the piloted camera entity, the cinematic lock overrides the
+    // view with the cut camera's.
+    void UpdateCinematicViewportCamera(EditorCamera& camera);
+    void DrawCameraProperties(Entity& entity);
+    // Physics section of the Properties panel: add, edit or remove a Rigid Body.
+    void DrawRigidBodyProperties(Entity& entity);
+    // Each camera's frustum outline in the viewport, gated like the light gizmos.
+    void DrawCameraFrustums(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+    Entity* FindEntityById(std::uint64_t entityId);
+    bool mCinematicCameraHookInstalled = false;
+    std::uint64_t mPilotedCameraId = 0;
+    float mFovBeforePilot = 0.0f;
+    // Piloting starts by moving the view to the camera, and ends by giving the view its
+    // own field of view back; both happen in the camera hook, which owns the camera.
+    bool mPilotSnapPending = false;
+    bool mPilotRestorePending = false;
+    // What the pilot last wrote into the camera entity and last set on the view. A change
+    // to the entity it did not make (the sequence scrubbed, an undo) moves the view to
+    // the camera; a change to the view it did not make (the user flew) moves the camera.
+    // Comparing the two directly instead would write the view back over every animated
+    // pose - and with Auto Key on, key it.
+    TransformComponent mPilotLastTransform;
+    DirectX::XMFLOAT3 mPilotLastViewPosition{};
+    DirectX::XMFLOAT3 mPilotLastViewRotation{};
+    // Draws the render frame over the viewport while Camera View is active.
+    void DrawCinematicFrameGuide(const UiVec2& viewportOrigin, const UiVec2& viewportSize) const;
+    // A camera's vertical field of view, widened when the viewport is narrower than the
+    // render frame so the letterboxed frame shows exactly what the render will.
+    float FitFovToRenderFrame(float verticalFovRadians) const;
+    std::unique_ptr<struct CinematicRenderJob> mRenderJob;
+    // How the last render ended, reported until the next one starts.
+    CinematicRenderStatus mLastRenderStatus;
+    void FinishCinematicRender(bool succeeded, const std::string& message);
+    // The view the lock replaced, put back when the lock lets go.
+    bool mCinematicLockActive = false;
+    DirectX::XMFLOAT3 mViewBeforeLockPosition{};
+    DirectX::XMFLOAT3 mViewBeforeLockRotation{};
+    float mViewBeforeLockFov = 0.0f;
+
+    // --- Particle effects (EditorParticles.cpp) ------------------------------
+    // Every setting of a particle effect, shared by the Particle Editor and the
+    // inline (legacy) settings in the Properties panel. Returns true on any change
+    // and leaves marking the scene or the effect dirty to the caller.
+    // Defined in Editor.cpp, beside the other inspector widgets it uses.
+    bool DrawParticleEffectControls(ParticleSystemComponent& effect);
+    // The Properties panel section of a Particle System entity.
+    void DrawParticleSystemProperties(Entity& entity);
+    void DrawParticleEditorWindow();
+    // The unsaved-changes prompt the Particle Editor shows, inside itself above the effect,
+    // before it throws edits away.
+    void DrawParticleEditorPrompt();
+    // Copies `effect` onto every emitter in the level that uses `path`, so edits in the
+    // Particle Editor show in the viewport as they are made.
+    void PushParticleEffectToEntities(const std::string& path, const ParticleSystemComponent& effect);
+    // Re-reads every .particle file the level uses, then lays the Particle Editor's
+    // unsaved edits back on top. After undo, redo or a level load, whose entity copies
+    // may carry effect settings older than the file or the edit in progress.
+    void ResyncParticleEffects();
+    bool SaveParticleEditorEffect(const std::string& relativePath);
+    void OpenParticleEditorFile(const std::string& relativePath);
+    void NewParticleEditorEffect(const ParticleSystemComponent& from, std::uint64_t assignToEntityId,
+                                 const std::string& suggestedName);
+    // Carries out the action the prompt was holding once the edits are saved or dropped.
+    void RunPendingParticleEditorAction();
+    const std::vector<std::string>& ParticleEffectFiles(bool rescan = false);
+
     // Defined in EditorConsole.cpp.
     void DrawConsolePanel();
     // Defined in EditorUiViewer.cpp.
@@ -527,6 +671,9 @@ private:
     // point, the cone of a spot, the quad of a rect. Defined in
     // EditorLightGizmos.cpp; gated on the placement-icon switch.
     void DrawLightShapeGizmos(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+    // Outline of every vegetation area's volume (Show bounds, or selected), drawn over
+    // the scene so terrain cannot hide it. Also in EditorLightGizmos.cpp.
+    void DrawVegetationAreaBounds(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
     // World length that projects to about kGizmoScreenLength pixels at the
     // pivot. Zero when the pivot is behind the near plane, which means the
     // gizmo cannot be drawn or hit-tested at all this frame.
@@ -546,7 +693,31 @@ private:
         const UiVec2& viewportSize,
         const EditorCamera& camera,
         DirectX::XMFLOAT3& outWorldPosition) const;
+    // World-space ray through a viewport pixel (origin on the near plane).
+    bool TryGetViewportRay(
+        const UiVec2& mousePosition,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
+        const EditorCamera& camera,
+        DirectX::XMFLOAT3& outOrigin,
+        DirectX::XMFLOAT3& outDirection) const;
+    // Where the cursor ray meets a terrain surface; false when it misses.
+    bool TryPickTerrainUnderCursor(
+        const UiVec2& mousePosition,
+        const UiVec2& viewportOrigin,
+        const UiVec2& viewportSize,
+        const EditorCamera& camera,
+        DirectX::XMFLOAT3& outWorldPosition) const;
+    // Flush a finished brush stroke (disk writes, vegetation re-scatter).
+    void EndTerrainBrushStroke();
     bool IsEntitySelected(int entityIndex) const;
+    // Click selection for the viewport and the Level Explorer. Plain replaces the
+    // selection with entityIndex (or clears it for -1); additive (Ctrl held) toggles
+    // entityIndex in and out of it and leaves everything else selected.
+    void SelectEntity(int entityIndex, bool additive);
+    // The selection as sorted, valid, unique indices - including the primary entity
+    // when a path set mSelectedEntityIndex without the list.
+    std::vector<int> GetSelectedEntityIndices() const;
     void HandleViewportInteraction(
         const UiVec2& viewportOrigin,
         const UiVec2& viewportSize,
@@ -561,6 +732,11 @@ private:
     void FinishViewportSelection(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera);
     void CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition);
     void DrawViewportStatisticsOverlay() const;
+    // The viewport bar's View Mode menu: the G-Buffer views and every renderer system's
+    // debug view in one place, one at a time.
+    void DrawViewModeMenu();
+    // Names the tiles of the G-Buffer overview drawn over the viewport image.
+    void DrawGBufferOverviewLabels(const UiVec2& viewportOrigin, const UiVec2& viewportSize) const;
     void SetViewportStatisticsText(const char* text);
     void HandleKeyboardShortcuts();
     void ResetScene();
@@ -584,6 +760,7 @@ private:
     mutable bool mTerrainPrototypeSelected = false;
     mutable bool mWaterPrototypeSelected = false;
     mutable bool mVegetationPrototypeSelected = false;
+    mutable bool mCameraPrototypeSelected = false;
     // Hides the side panels and tool windows so the viewport fills the window.
     // Toggled by F11 or the toolbar button; the toolbar itself stays visible.
     bool mViewportFullscreen = false;
@@ -596,6 +773,30 @@ private:
     bool mShowResourceDebugPanel = false;
     bool mShowConsolePanel = true;
     bool mShowUiEditorPanel = false;
+
+    // The Particle Editor's document: one .particle effect being edited.
+    struct ParticleEditorState
+    {
+        std::string Path;                 // Data-relative; empty for a new, never-saved effect
+        ParticleSystemComponent Effect;   // the working copy, pushed live to the level's emitters
+        bool Dirty = false;
+        char SaveAsName[96] = "";
+        std::string Status;
+        bool StatusIsError = false;
+        // A legacy emitter to switch over to the effect once it has been saved.
+        std::uint64_t AssignEntityId = 0;
+        // What the unsaved-changes prompt is holding back.
+        enum class Pending { None, Open, New, Close } PendingAction = Pending::None;
+        std::string PendingPath;                 // Open
+        ParticleSystemComponent PendingFrom;     // New: the settings to start from
+        std::uint64_t PendingAssignEntityId = 0; // New
+        std::string PendingName;                 // New
+    };
+    ParticleEditorState mParticleEditor;
+    bool mShowParticleEditor = false;
+    bool mParticleEditorWasOpen = false;
+    std::vector<std::string> mParticleEffectFiles;
+    bool mParticleEffectFilesScanned = false;
 
     // UI Editor state. All buffer sizes are generous rather than tight: these
     // hold RML ids, property names and CSS values, none of which is worth
@@ -638,13 +839,6 @@ private:
     IconTexture mDecalIcon;
     IconTexture mRainIcon;
     IconTexture mParticleSystemIcon;
-    IconTexture mSelectIcon;
-    IconTexture mMoveIcon;
-    IconTexture mRotateIcon;
-    IconTexture mScaleIcon;
-    IconTexture mWireframeIcon;
-    IconTexture mProxyIcon;
-    IconTexture mGameIcon;
 
     // Sticky message from the last failed play attempt, shown on the Play button tooltip.
     std::string mGameStartErrorMessage;
@@ -653,7 +847,12 @@ private:
     std::string mGeometryIconStatus;
     std::string mCurrentSceneFilePath;
     std::string mLastSceneStatusMessage;
-    std::optional<Entity> mCopiedEntity;
+    // Read from the settings store on first use, which has to wait for QtUi to exist.
+    std::vector<std::string> mRecentLevels;
+    bool mRecentLevelsLoaded = false;
+    void AddRecentLevel(const std::string& filepath);
+    // Every entity the last Copy took, in level order; Paste appends them all.
+    std::vector<Entity> mCopiedEntities;
     // One recoverable state of the level. Entities carry shared_ptr handles to
     // their mesh assets, so copying the vector copies component values and
     // shares the geometry - a snapshot is strings and POD, not megabytes.
@@ -708,13 +907,20 @@ private:
     TimeOfDaySettings* mTimeOfDaySettings = nullptr;
     TaaSettings* mTaaSettings = nullptr;
     SMAASettings* mSmaaSettings = nullptr;
+    AnalyticEdgeAASettings* mAnalyticEdgeAaSettings = nullptr;
+    AarSettings* mAarSettings = nullptr;
     SharpenSettings* mSharpenSettings = nullptr;
     DlssSettings* mDlssSettings = nullptr;
     FsrSettings* mFsrSettings = nullptr;
+    XessSettings* mXessSettings = nullptr;
     SubsurfaceSettings* mSubsurfaceSettings = nullptr;
+    ShadingSettings* mShadingSettings = nullptr;
+    DpleSettings* mDpleSettings = nullptr;
     GlobalIlluminationMode* mGlobalIlluminationMode = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
     RadianceCascadesSettings* mRadianceCascadesSettings = nullptr;
+    RadianceProbeSettings* mRadianceProbeSettings = nullptr;
+    VoxelGISettings* mVoxelGiSettings = nullptr;
     RtAOSettings* mRtaoSettings = nullptr;
     GtaoSettings* mGtaoSettings = nullptr;
     SsrSettings* mSsrSettings = nullptr;
@@ -723,10 +929,16 @@ private:
     VolumetricFogSettings* mVolumetricFogSettings = nullptr;
     VolumetricCloudSettings* mVolumetricCloudSettings = nullptr;
     BloomSettings* mBloomSettings = nullptr;
+    LensFlareSettings* mLensFlareSettings = nullptr;
+    RtShadowSettings* mRtShadowSettings = nullptr;
     ProgressCallback mProgressCallback = nullptr;
     TerrainRenderer* mTerrainRenderer = nullptr;
     class DX12SceneRenderer* mSceneRenderer = nullptr;
     bool mTerrainBrushModeActive = false;
+    // The left button went down in the viewport in brush mode and is still
+    // held; the brush applies every frame until it is released.
+    bool mTerrainStrokeActive = false;
+    bool mTerrainStrokeApplied = false;
     std::string mLastTerrainBrushMessage;
 
     const char* mSceneStatusMessage = nullptr;
@@ -763,9 +975,12 @@ private:
     SceneLoadState mSceneLoadState;
     std::thread mSceneLoadWorker;
     bool mSceneAssetsStreaming = false;
-    // Set on the frame every mesh is resolved; the overlay stays one frame longer so
-    // the textures those meshes pull in on their first draw also load under it.
+    // Set on the frame every mesh and texture is in; the overlay stays one frame
+    // longer so whatever the first full draw still pulls in also loads under it.
     bool mSceneAssetsFinishing = false;
     size_t mSceneAssetsResolved = 0;
     size_t mSceneAssetsTotal = 0;
+    size_t mSceneTexturesLoaded = 0;
+    size_t mSceneTexturesTotal = 0;
+    std::uint64_t mSceneStreamGeneration = 0;
 };

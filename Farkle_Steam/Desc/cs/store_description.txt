@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice oživuje klasickou kostkovou hru v atmosférické středověké krčmě.
+Házej kostkami, sbírej body a rozhodni se, jak moc chceš pokoušet štěstí. Každý úspěšný hod ti nabídne další volbu: uložit body a hrát na jistotu, nebo hodit znovu a riskovat ztrátu všeho, co jsi v tomto tahu získal.
+Pravidla jsou jednoduchá. Rozhodnutí už ne.
+
+[IMAGE: roll.png]
+Každý tah začíná se šesti kostkami. Odkládej bodující kombinace a se zbývajícími kostkami házej dál, abys navyšoval své skóre.
+Riziko je ale vždycky ve hře.
+Pokud hod nepřinese žádnou bodující kostku, máš Farkle a přicházíš o všechny neuložené body z tohoto tahu.
+Někdy je nejbezpečnější přestat.
+Někdy za to další hod stojí.
+A někdy mají kostky vlastní plány.
+
+[IMAGE: gameplay.png]
+Farkle stojí na jednoduchém principu pokoušení štěstí, který tě neustále staví před volbu mezi rizikem a odměnou.
+Pravidla se naučíš rychle a můžeš se soustředit na to podstatné:
+[list]
+[*]Hoď šesti kostkami a hledej bodující kombinace
+[*]Ponech si bodující kostky a se zbytkem házej znovu
+[*]Pokračuj v tahu a buduj vyšší skóre
+[*]Ulož body dřív, než o ně přijdeš
+[*]Rozhodni se, kdy možná odměna stojí za riziko
+[/list]
+Každý hod může změnit průběh hry.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice je víc než tradiční rozhraní stolní hry.
+Hra se odehrává v detailní středověké krčmě ve 3D, navržené tak, aby každá partie působila jako skutečná hra v kostky u stolu.
+Teplé světlo, dřevěné interiéry, zvuky krčmy a fyzické kostky vytvářejí pohlcující středověkou atmosféru. Soundtrack navíc obsahuje autentickou středověkou hudbu přímo z dané historické doby – skutečnou hudbu té éry, nikoli jen moderní skladby inspirované středověkem.
+Spolu s atmosférou krčmy a vizuálním zpracováním hudba zasazuje každou partii do živého středověkého světa.
+
+[IMAGE: learn.png]
+Žádné složité systémy k zapamatování, žádná obří kniha pravidel.
+Farkle je o pravděpodobnosti, rozhodování a o tom, kdy přestat.
+Opatrný hráč může své skóre budovat postupně.
+Odvážný hráč může riskovat vše kvůli jednomu velkému tahu.
+Ani jeden přístup nezaručuje vítězství.
+Někdy prostě musíš hodit kostkami.
+
+[IMAGE: features.png]
+[list]
+[*]Klasická kostková hra inspirovaná Farkle
+[*]Mechanika pokoušení štěstí s rizikem a odměnou
+[*]Plně renderované 3D kostky
+[*]Atmosférické prostředí středověké krčmy
+[*]Jednoduchá pravidla a snadno naučitelná hratelnost
+[*]Strategická rozhodnutí v každém tahu
+[*]Vhodné pro krátké i delší partie
+[/list]
+Posaď se ke stolu, vezmi kostky do ruky a zjisti, jak moc chceš pokoušet štěstí.

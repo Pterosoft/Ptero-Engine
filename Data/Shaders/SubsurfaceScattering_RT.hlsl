@@ -28,10 +28,15 @@
 // estimate from shadow maps - and a shadow ray from where it enters decides whether
 // anything else is in the way. A ray that leaves without re-entering anything means an
 // open sheet (a leaf, an ear modelled as a shell), which counts as zero thickness.
+//
+// Entry points: main() is the plain per-pixel estimate. With ReSTIR on, the same probes
+// feed CSRestirTemporal instead (see the section at the end), which reuses them across
+// frames.
 
 #define PTERO_SSS_CB_REGISTER b0
 #include "Subsurface.hlsli"
 #include "SurfaceSpecular.hlsli"
+#include "RtTransform.hlsli"
 
 Texture2D<float4>               gSssDiffuse     : register(t1); // lighting pass diffuse, alpha = mask
 Texture2D<float4>               gSssNormalDepth : register(t2); // G-Buffer RT1
@@ -48,8 +53,9 @@ StructuredBuffer<uint>            gSssIndices      : register(t6);
 StructuredBuffer<GpuInstanceInfo> gSssInstanceInfo : register(t7);
 
 // The lighting pass's shadow maps and comparison sampler.
-Texture2D                gSssSunShadowMap    : register(t8);
+Texture2D                gSssSunShadowMap    : register(t8);  // or the virtual shadow map's page pool (sun and local lights)
 Texture2DArray           gSssPointShadowMaps : register(t9);
+StructuredBuffer<uint>   gSssVsmPageTable    : register(t10); // virtual shadow map pages -> pool tiles
 SamplerComparisonState   gSssShadowSampler   : register(s0);
 
 // The five Gaussians of the reflectance profile. The SDK drops the narrowest (0.233 at
@@ -251,10 +257,6 @@ bool TraceSurface(float3 origin, float3 direction, float tMax, float3 referenceN
     const float3 weights = float3(1.0f - bary.x - bary.y, bary.x, bary.y);
 
     const float3x4 o2w = query.CommittedObjectToWorld3x4();
-    const float3x3 o2wRot = float3x3(
-        float3(o2w[0][0], o2w[1][0], o2w[2][0]),
-        float3(o2w[0][1], o2w[1][1], o2w[2][1]),
-        float3(o2w[0][2], o2w[1][2], o2w[2][2]));
 
     float3 vertexPos[3];
     float3 vertexNrm[3];
@@ -264,7 +266,7 @@ bool TraceSurface(float3 origin, float3 direction, float tMax, float3 referenceN
         const GpuPackedVertex v = gSssVertices[info.vertexOffset + gSssIndices[info.indexOffset + primitive * 3u + k]];
         const float4 local = float4(v.px, v.py, v.pz, 1.0f);
         vertexPos[k] = float3(dot(o2w[0], local), dot(o2w[1], local), dot(o2w[2], local));
-        vertexNrm[k] = mul(o2wRot, float3(v.nx, v.ny, v.nz));
+        vertexNrm[k] = PteroObjectToWorldNormal(o2w, float3(v.nx, v.ny, v.nz));
     }
 
     float3 geo = cross(vertexPos[1] - vertexPos[0], vertexPos[2] - vertexPos[0]);
@@ -324,10 +326,19 @@ float3 LightRadianceAt(PteroLightData light, float3 position, out float3 L, out 
 // are what the rest of the frame is shadowed by, and the scattered light has to agree
 // with it. Rays are still used where they are the right tool: placing the samples on the
 // real surface, and measuring transmission thickness.
-float SunShadowVisibility(float3 worldPos)
+float SunShadowVisibility(float3 worldPos, float3 normal)
 {
     if (gSssHasSunShadow == 0u)
         return 1.0f;
+
+    [branch]
+    if (gSssVsm.Active != 0u)
+    {
+        int usedLevel;
+        return gSssVsm.Enabled != 0u
+            ? PteroVsmVisibility(gSssVsm, gSssVsmPageTable, gSssSunShadowMap, worldPos, normal, gSssCameraPos, usedLevel)
+            : 1.0f;
+    }
 
     const float4 lightClip = mul(float4(worldPos, 1.0f), gSssLightViewProj);
     const float3 projCoords = lightClip.xyz / lightClip.w;
@@ -350,10 +361,16 @@ float SunShadowVisibility(float3 worldPos)
 
 float PointShadowVisibility(PteroLightData light, float3 worldPos, float3 normal)
 {
-    if (gSssHasPointShadows == 0u || light.CastShadows < 0.5f)
+    if (light.CastShadows < 0.5f)
         return 1.0f;
     const int shadowIndex = (int)light.ShadowIndex;
-    if (shadowIndex < 0 || shadowIndex >= 4)
+    // Virtual shadow map: the shadow index is the light's slot in it.
+    [branch]
+    if (gSssVsm.LocalEnabled != 0u)
+        return shadowIndex < 0 ? 1.0f
+            : PteroVsmLocalVisibility(gSssVsm, gSssVsmPageTable, gSssSunShadowMap, (uint)shadowIndex, worldPos,
+                                      normal, gSssCameraPos, 1.0f);
+    if (gSssHasPointShadows == 0u || shadowIndex < 0 || shadowIndex >= 4)
         return 1.0f;
 
     const float radius = max(light.Radius, 1e-4f);
@@ -417,10 +434,15 @@ float PointShadowVisibility(PteroLightData light, float3 worldPos, float3 normal
 // it exists everywhere on the mesh - off screen, behind the silhouette, under the chin -
 // not only where the camera happens to see.
 //
-// shadingNormal is the pixel's G-Buffer normal (normal map included), not the hit's
-// interpolated vertex normal: the samples lie within the scatter radius of the pixel, and
-// on a scanned or remeshed asset the vertex normals follow the scan terraces the normal
-// map was baked to hide, which striped the result. ignoreDistance skips occluders closer
+// shadingNormal is the pixel's own surface normal without its normal map
+// (PixelGeometricNormal), not the hit's interpolated vertex normal: the samples lie within
+// the scatter radius of the pixel, and on a scanned or remeshed asset the vertex normals
+// follow the scan terraces the normal map was baked to hide, which striped the result.
+// Not the G-Buffer normal either: light scattered under the skin enters at the sample,
+// with the surface's orientation there, so pore-scale normal detail is what scattering
+// softens. Lit with the normal-mapped normal, every pore kept its own N.L through the
+// scatter, and flipping the map's green channel changed the scattered light completely.
+// The unscattered share (1 - strength) keeps the normal map. ignoreDistance skips occluders closer
 // than that for the same reason - terrace steps shadowing each other - at a scale where a
 // genuine contact shadow would not be resolvable anyway.
 float3 WorldSpaceIrradiance(SurfaceHit surface, float3 shadingNormal, float ignoreDistance)
@@ -435,7 +457,7 @@ float3 WorldSpaceIrradiance(SurfaceHit surface, float3 shadingNormal, float igno
     const float3 L_sun = normalize(-gSssSunDirection);
     const float sunNdotL = saturate(dot(shadingNormal, L_sun));
     if (sunNdotL > 0.0f && dot(gSssSunColor, gSssSunColor) > 0.0f)
-        irradiance += gSssSunColor * sunNdotL * SunShadowVisibility(surface.RawPosition);
+        irradiance += gSssSunColor * sunNdotL * SunShadowVisibility(surface.RawPosition, shadingNormal);
 
     [loop]
     for (int li = 0; li < gSssNumLights && li < PTERO_SSS_MAX_LIGHTS; ++li)
@@ -466,8 +488,8 @@ bool ProbeSurface(float3 discPoint, float3 N, float reach, out SurfaceHit surfac
 float3 TracedTransmission(PteroSssProfile profile, float3 position, float3 N, float3 L,
                           float maxDistance, float3 lightRadiance, float3 albedo, float maxThickness)
 {
-    // The SDK's wrap term: nothing comes through once the light is well in front.
-    if (dot(L, N) >= 0.3f)
+    // Light from behind only (PteroSssTransmission).
+    if (dot(L, N) >= 0.0f)
         return 0.0f.xxx;
 
     // Start well inside the surface, not just under it. A millimetre-scale start let the
@@ -492,6 +514,54 @@ float3 TracedTransmission(PteroSssProfile profile, float3 position, float3 N, fl
     // A miss: the ray left through an open sheet and nothing else is in the way.
 
     return PteroSssTransmission(profile, thickness, N, L, lightRadiance, albedo);
+}
+
+// PteroSssDepthNormal at this pixel, from the G-Buffer depth; facing the camera like N.
+float3 PixelGeometricNormal(uint2 pixel, float3 P, float3 N)
+{
+    const int2 maxPixel = int2(gSssRenderSize) - 1;
+    float3 neighbours[4];
+    const int2 offsets[4] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1) };
+    [unroll]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        const int2 q = clamp(int2(pixel) + offsets[k], int2(0, 0), maxPixel);
+        neighbours[k] = ReconstructWorldPosition(uint2(q), gSssNormalDepth.Load(int3(q, 0)).z);
+    }
+    return PteroSssDepthNormal(P, neighbours[0], neighbours[1], neighbours[2], neighbours[3], N);
+}
+
+// Transmitted light from the sun and every scene light at a pixel, before fog. N is the
+// surface's own normal (PixelGeometricNormal), not the normal-mapped one.
+float3 PixelTransmission(PteroSssProfile profile, float3 P, float3 N, float3 albedo)
+{
+    const float maxThickness = PteroSssMaxTransmissionThickness(profile);
+    if (gSssTransmission == 0u || maxThickness <= 0.0f)
+        return 0.0f.xxx;
+
+    const float3 L_sun = normalize(-gSssSunDirection);
+    float3 transmitted = TracedTransmission(profile, P, N, L_sun, 1.0e4f, gSssSunColor, albedo, maxThickness);
+
+    [loop]
+    for (int li = 0; li < gSssNumLights && li < PTERO_SSS_MAX_LIGHTS; ++li)
+    {
+        const PteroLightData light = gSssLights[li];
+        const PteroResolvedLight shape = PteroResolveLightShape(light, P);
+        const float3 toLight = shape.Position - P;
+        const float dist = max(length(toLight), 1e-4f);
+        if (dist >= light.Radius || shape.ShapeMask <= 0.0f)
+            continue;
+
+        const float normalizedDistance = saturate(dist / max(light.Radius, 1e-4f));
+        float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
+        rangeMask *= rangeMask;
+        const float falloffTerm = rangeMask * shape.ShapeMask
+            * pow(PteroLightFalloffDistance(light, dist), -max(light.FalloffExponent, 0.001f));
+
+        transmitted += TracedTransmission(profile, P, N, toLight / dist, dist,
+                                          light.Color * falloffTerm, albedo, maxThickness);
+    }
+    return transmitted;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +596,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     float3 T, B;
     BuildBasis(N, T, B);
+    // What the scattered light is lit with (see WorldSpaceIrradiance).
+    const float3 scatterNormal = PixelGeometricNormal(pixel, P, N);
 
     uint rng = PcgHash(pixel.x + pixel.y * 8192u) ^ PcgHash(gSssFrameIndex * 9781u + 17u);
     const uint sampleCount = clamp(gSssRtSamples, 1u, 64u);
@@ -570,7 +642,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             continue;
 
         const float3 weight = channelDensity / mixturePdf;
-        weightedSum += WorldSpaceIrradiance(surface, N, shadowIgnoreDistance) * weight;
+        weightedSum += WorldSpaceIrradiance(surface, scatterNormal, shadowIgnoreDistance) * weight;
         weightTotal += weight;
     }
 
@@ -595,32 +667,486 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     float3 result = lerp(diffuseM.rgb, scatteredDirect, strength);
 
     // ---- Transmission ----
-    const float maxThickness = PteroSssMaxTransmissionThickness(profile);
-    if (gSssTransmission != 0u && maxThickness > 0.0f)
+    result += PixelTransmission(profile, P, scatterNormal, albedo) * fogTransmittance;
+
+    gSssOutput[pixel] = float4(max(result, 0.0f.xxx), 1.0f);
+}
+
+// ===========================================================================
+// ReSTIR temporal reuse (gSssRestir != 0): CSRestirTemporal
+// ===========================================================================
+// main() averages a dozen fresh probes per pixel and forgets them. Here the same probes
+// are candidates for reservoirs (Bitterli et al. 2020) that are merged with the pixel's
+// reprojected history every frame, for the cost of its probes plus, per colour channel,
+// one more probe and one lighting evaluation for the history's sample.
+//
+// Measured against main() on a GPU harness (5 cm sphere, skin-like 12 mm profile, a point
+// light 1.7 cm off the surface, 8 probes, history length 5): per-frame noise is about half
+// of main()'s under TAA jitter or an orbiting camera, about a third on a perfectly still
+// one, with no measurable bias (under 0.2%), and a moving light shows from its first frame.
+//
+// Samples are disc points. A sample is stored as its offset u on the receiver's tangent
+// disc - exactly what main() draws - and is re-projected onto the mesh from the current
+// receiver every time it is reused: the history's u is a disc point of this pixel too, so
+// the shift between the two receivers has a Jacobian of one and the history is judged
+// against the profile around this pixel, not around wherever the previous frame's pixel
+// was. Reusing the previous frame's surface point instead (an identity shift) fails once
+// the receiver moves by more than the profile's core - for skin's green and blue under a
+// millimetre - which TAA jitter alone does every frame.
+//
+// Everything is in disc measure, as in main(): the integrand at disc point u is
+// f_c(u) = R_c(|x(u) - P|) E_c(x(u)), with x(u) the surface the probe finds. The history's
+// sample is lit again at its new surface point with this pixel's normal and shadow maps,
+// so the shading never lags; how much its irradiance changed since it was stored sets how
+// far the history is trusted (a moving light, or a shift onto differently lit geometry,
+// hands the fresh probes the weight they need - without it the history's M kept 95% of the
+// weight on samples drawn for lighting that was gone).
+//
+// One reservoir per colour channel. The channel profiles differ by a factor of three in
+// width (skin: red scatters furthest), and a single sample chosen for their mean is a poor
+// sample for each of them - the harness measured a noise floor no amount of reuse moved.
+// The three share the candidate stream (the same probes, the same M) and the receiver.
+//
+// Normalisation. main() divides by the sum of its sample weights, which keeps energy at
+// mesh edges, where probes miss, and on curved surfaces, where the profile does not
+// integrate to one over the real surface. Here the two halves are estimated separately:
+// the numerator from the reservoirs, the denominator D_c = integral of R_c over the disc
+// from the pixel's own fresh probes, as a control variate (see the candidate loop).
+//
+// Keep the history short. Every reuse rescales the history's estimate by the ratio of
+// the new to the old target at its one sample; on a moving receiver - and with TAA jitter
+// every receiver moves - those ratios chain over the history's lifetime into an error
+// that is correlated over many frames rather than averaged away. With 20 frames of
+// history the harness's noise under jitter was worse than main()'s; with 5 it is half.
+// A perfectly still, unjittered view would profit from more (a third of the noise at 20).
+//
+// No spatial reuse. With the identity shift it was measured to add noise with every
+// neighbour (their profiles barely overlap this one's); with the disc shift it costs a
+// probe and a lighting evaluation per neighbour and channel, about what more probes cost.
+//
+// The history ping-pongs between two buffers: read gSssReservoirIn (the previous frame's
+// reservoirs), write gSssReservoirOut.
+
+// 48 bytes per pixel. Per channel c (dwords 3c .. 3c+2): the disc offset u (half2, in the
+// receiver's BuildBasis frame), E_c as lit (half), W. Then the receiver's device depth,
+// its normal (16-bit octahedral), and M (12 bits) with the profile slot (4 bits).
+struct PackedSssReservoir
+{
+    uint4 A;
+    uint4 B;
+    uint4 C;
+};
+RWStructuredBuffer<PackedSssReservoir> gSssReservoirOut : register(u1);
+RWStructuredBuffer<PackedSssReservoir> gSssReservoirIn  : register(u3);
+
+static const uint  kSssMaxM = 4095u;
+// The history is reused only if its receiver's normal is this close to this pixel's.
+static const float kSssReuseNormalDot = 0.9f;
+
+struct SssSample
+{
+    float2 Disc;        // offset on the receiver's tangent disc, metres (T, B)
+    float3 Position;    // the surface point the receiver's probe found for it
+    float  Irradiance;  // E_c there
+    float  W;           // unbiased contribution weight, per disc mm^2 (profile units)
+};
+
+struct SssReservoir
+{
+    SssSample C[3];
+    uint      M;
+};
+
+SssSample EmptySssSample()
+{
+    SssSample s;
+    s.Disc = 0.0f.xx;
+    s.Position = 0.0f.xxx;
+    s.Irradiance = 0.0f;
+    s.W = 0.0f;
+    return s;
+}
+
+uint PackOct(float3 n, uint bits)
+{
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8f);
+    const float2 oct = n.z >= 0.0f ? n.xy : (1.0f - abs(n.yx)) * (float2(n.xy >= 0.0f) * 2.0f - 1.0f);
+    const float scale = (float)((1u << bits) - 1u);
+    const uint2 q = uint2(round(saturate(oct * 0.5f + 0.5f) * scale));
+    return q.x | (q.y << bits);
+}
+
+float3 UnpackOct(uint packed, uint bits)
+{
+    const uint mask = (1u << bits) - 1u;
+    const float2 encoded = float2(packed & mask, (packed >> bits) & mask) / (float)mask;
+    return DecodeOctNormal(encoded);
+}
+
+uint PackedWord(PackedSssReservoir p, uint i)
+{
+    return i < 4u ? p.A[i] : (i < 8u ? p.B[i - 4u] : p.C[i - 8u]);
+}
+
+uint PackedSlot(PackedSssReservoir p)             { return (p.C.w >> 12) & 0xFu; }
+uint PackedM(PackedSssReservoir p)                { return p.C.w & kSssMaxM; }
+float PackedReceiverDepth(PackedSssReservoir p)   { return asfloat(p.C.y); }
+float3 PackedReceiverNormal(PackedSssReservoir p) { return UnpackOct(p.C.z, 16u); }
+
+PackedSssReservoir PackSssReservoir(SssReservoir r, float3 receiverNormal, float receiverDepth, uint slot)
+{
+    uint words[12];
+    [unroll]
+    for (uint c = 0u; c < 3u; ++c)
     {
-        const float3 L_sun = normalize(-gSssSunDirection);
-        result += TracedTransmission(profile, P, N, L_sun, 1.0e4f, gSssSunColor, albedo, maxThickness) * fogTransmittance;
+        const SssSample s = r.C[c];
+        words[3u * c + 0u] = f32tof16(s.Disc.x) | (f32tof16(s.Disc.y) << 16);
+        words[3u * c + 1u] = f32tof16(clamp(s.Irradiance, 0.0f, 65000.0f));
+        words[3u * c + 2u] = asuint(isfinite(s.W) ? max(s.W, 0.0f) : 0.0f);
+    }
+    words[9] = asuint(receiverDepth);
+    words[10] = PackOct(receiverNormal, 16u);
+    words[11] = min(r.M, kSssMaxM) | ((slot & 0xFu) << 12);
 
-        [loop]
-        for (int li = 0; li < gSssNumLights && li < PTERO_SSS_MAX_LIGHTS; ++li)
+    PackedSssReservoir p;
+    p.A = uint4(words[0], words[1], words[2], words[3]);
+    p.B = uint4(words[4], words[5], words[6], words[7]);
+    p.C = uint4(words[8], words[9], words[10], words[11]);
+    return p;
+}
+
+PackedSssReservoir EmptyPackedSssReservoir()
+{
+    PackedSssReservoir p;
+    p.A = uint4(0u, 0u, 0u, 0u);
+    p.B = uint4(0u, 0u, 0u, 0u);
+    p.C = uint4(0u, 0u, 0u, 0u);
+    return p;
+}
+
+// Positions are not stored: a reused sample is projected again from its new receiver.
+SssReservoir UnpackSssReservoir(PackedSssReservoir p)
+{
+    SssReservoir r;
+    [unroll]
+    for (uint c = 0u; c < 3u; ++c)
+    {
+        const uint w0 = PackedWord(p, 3u * c);
+        r.C[c].Disc = float2(f16tof32(w0), f16tof32(w0 >> 16));
+        r.C[c].Position = 0.0f.xxx;
+        r.C[c].Irradiance = f16tof32(PackedWord(p, 3u * c + 1u));
+        r.C[c].W = asfloat(PackedWord(p, 3u * c + 2u));
+    }
+    r.M = PackedM(p);
+    return r;
+}
+
+float3 ReconstructWorldPositionWith(float4x4 invViewProj, uint2 pixel, float deviceDepth)
+{
+    const float2 uv = (float2(pixel) + 0.5f) * gSssInvRenderSize;
+    const float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, deviceDepth, 1.0f);
+    const float4 world = mul(ndc, invViewProj);
+    return world.xyz / world.w;
+}
+
+// The per-channel profile of one material, with the parts of ChannelDensity that do not
+// depend on the radius worked out once per pixel.
+struct ProfileShape
+{
+    float3 Falloff;   // 0.001 + falloff
+    float3 InvNorm;   // 1 / (falloff^2 * mass inside the range)
+};
+
+ProfileShape MakeProfileShape(float3 falloff)
+{
+    ProfileShape s;
+    s.Falloff = 0.001f + falloff;
+    float3 mass = 0.0f.xxx;
+    [unroll]
+    for (uint k = 0u; k < kProfileTerms; ++k)
+    {
+        mass += kProfileWeight[k] * float3(TermMassInRange(k, falloff.r),
+                                           TermMassInRange(k, falloff.g),
+                                           TermMassInRange(k, falloff.b));
+    }
+    s.InvNorm = 1.0f / (s.Falloff * s.Falloff * max(mass, 1e-8f.xxx));
+    return s;
+}
+
+// ChannelDensity for all three channels at once (per mm^2), radius already clamped.
+float3 ProfileDensityRgb(ProfileShape s, float rMm)
+{
+    const float3 rr = rMm / s.Falloff;
+    const float3 rr2 = rr * rr;
+    float3 density = 0.0f.xxx;
+    [unroll]
+    for (uint k = 0u; k < kProfileTerms; ++k)
+        density += kProfileWeight[k] * exp(-rr2 / (2.0f * kProfileVariance[k])) / (2.0f * kPi * kProfileVariance[k]);
+    return density * s.InvNorm;
+}
+
+// Everything about a subsurface receiver pixel the pass needs.
+struct ScatterReceiver
+{
+    PteroSssProfile Profile;
+    ProfileShape    Shape;
+    float3 P;
+    float3 N;              // facing the camera
+    float3 T;              // tangent disc frame (BuildBasis)
+    float3 B;
+    float  DeviceDepth;
+    float  LinearDepth;
+    float  MetresPerMm;
+    float  RangeMetres;    // the profile range in metres
+};
+
+ScatterReceiver MakeReceiver(uint2 pixel, float4 normalDepth, uint slot)
+{
+    ScatterReceiver s;
+    s.Profile = gSssProfiles[slot];
+    s.Shape = MakeProfileShape(max(s.Profile.FalloffTranslucency.rgb, 0.0f.xxx));
+    s.MetresPerMm = s.Profile.ColorRadius.a / kProfileRangeMm;
+    s.RangeMetres = s.Profile.ColorRadius.a;
+    s.DeviceDepth = normalDepth.z;
+    s.LinearDepth = PteroSssLinearDepth(normalDepth.z);
+    s.P = ReconstructWorldPosition(pixel, normalDepth.z);
+    s.N = DecodeOctNormal(normalDepth.xy);
+    if (dot(s.N, gSssCameraPos - s.P) < 0.0f)
+        s.N = -s.N;
+    BuildBasis(s.N, s.T, s.B);
+    return s;
+}
+
+// The profile over the actual distance travelled, clamped to the range as main() does.
+float3 ProfileAt(ScatterReceiver s, float3 x)
+{
+    const float distanceMm = min(length(x - s.P) / max(s.MetresPerMm, 1e-8f), kProfileRangeMm);
+    return ProfileDensityRgb(s.Shape, distanceMm);
+}
+
+// Projects disc offset u onto the mesh from this receiver, with the probe pair main() fires.
+bool ProjectDisc(ScatterReceiver s, float2 u, out SurfaceHit surface)
+{
+    const float3 discPoint = s.P + s.T * u.x + s.B * u.y;
+    return ProbeSurface(discPoint, s.N, max(length(u) * 1.5f, 0.002f), surface);
+}
+
+// Weighted reservoir sampling step. Returns true when the candidate was taken.
+bool StreamSample(inout float weightSum, float weight, inout uint rng)
+{
+    weightSum += weight;
+    return weight > 0.0f && NextRandom(rng) * weightSum <= weight;
+}
+
+[numthreads(8, 8, 1)]
+void CSRestirTemporal(uint3 dispatchId : SV_DispatchThreadID)
+{
+    const uint2 pixel = dispatchId.xy;
+    if (any(pixel >= (uint2)gSssRenderSize))
+        return;
+    const uint index = pixel.y * (uint)gSssRenderSize.x + pixel.x;
+
+    const float4 diffuseM = gSssDiffuse.Load(int3(pixel, 0));
+    const float4 normalDepth = gSssNormalDepth.Load(int3(pixel, 0));
+    const uint slot = PteroDecodeSubsurfaceSlot(normalDepth.w);
+    if (diffuseM.a < 0.5f || !PteroSssSlotActive(slot))
+    {
+        gSssReservoirOut[index] = EmptyPackedSssReservoir();
+        gSssOutput[pixel] = float4(diffuseM.rgb, 0.0f);
+        return;
+    }
+
+    const ScatterReceiver s = MakeReceiver(pixel, normalDepth, slot);
+    // What the scattered light is lit with (see WorldSpaceIrradiance).
+    const float3 scatterNormal = PixelGeometricNormal(pixel, s.P, s.N);
+    const float3 albedo = gSssAlbedo.Load(int3(pixel, 0)).rgb;
+
+    uint rng = PcgHash(pixel.x + pixel.y * 8192u) ^ PcgHash(gSssFrameIndex * 9781u + 17u);
+    const uint sampleCount = clamp(gSssRtSamples, 1u, 64u);
+    const float rotation = NextRandom(rng);
+    const uint channelOffset = (uint)(NextRandom(rng) * 3.0f);
+    const float shadowIgnoreDistance = 0.002f * s.LinearDepth + 0.5f * s.RangeMetres;
+
+    // ---- Candidates: the probes main() fires, streamed through three reservoirs ----
+    SssReservoir r;
+    float weightSum[3] = { 0.0f, 0.0f, 0.0f };
+    float selectedTarget[3] = { 0.0f, 0.0f, 0.0f };
+    [unroll]
+    for (uint c0 = 0u; c0 < 3u; ++c0)
+        r.C[c0] = EmptySssSample();
+    // D_c - 1, as a control variate: the profile over the disc radius integrates to exactly
+    // one (ChannelDensity is normalised over the disc), so only what the real surface does
+    // differently is estimated - the mass of probes that missed (mesh edges) and the
+    // difference between distance travelled and disc radius (curvature). Estimating D
+    // directly was as noisy as the numerator for the narrow channels: the probes are drawn
+    // for the mixture of all three profiles. And dividing a smooth reservoir numerator by
+    // a noisy D is biased high (E[1/D] > 1/E[D]) - by 2-4% on the harness.
+    float3 normalisation = 0.0f.xxx;
+
+    [loop]
+    for (uint i = 0u; i < sampleCount; ++i)
+    {
+        const uint channel = (i + channelOffset) % 3u;
+        const float rMm = SampleChannelRadius(s.Shape.Falloff[channel] - 0.001f, NextRandom(rng), NextRandom(rng));
+        const float phi = 2.0f * kPi * frac((i + 0.5f) / sampleCount + rotation);
+        const float2 u = float2(cos(phi), sin(phi)) * (rMm * s.MetresPerMm);
+
+        // Density of the disc point (per disc mm^2): one-sample MIS over the channels.
+        // The per-channel profile at the disc radius is the control variate's integrand.
+        const float3 sourcePdf3 = ProfileDensityRgb(s.Shape, rMm);
+        const float sourcePdf = (sourcePdf3.r + sourcePdf3.g + sourcePdf3.b) / 3.0f;
+        if (sourcePdf <= 0.0f)
+            continue;
+
+        SurfaceHit surface;
+        if (!ProjectDisc(s, u, surface))
         {
-            const PteroLightData light = gSssLights[li];
-            const PteroResolvedLight shape = PteroResolveLightShape(light, P);
-            const float3 toLight = shape.Position - P;
-            const float dist = max(length(toLight), 1e-4f);
-            if (dist >= light.Radius || shape.ShapeMask <= 0.0f)
-                continue;
+            normalisation -= sourcePdf3 / sourcePdf;
+            continue;
+        }
 
-            const float normalizedDistance = saturate(dist / max(light.Radius, 1e-4f));
-            float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
-            rangeMask *= rangeMask;
-            const float falloffTerm = rangeMask * shape.ShapeMask
-                * pow(PteroLightFalloffDistance(light, dist), -max(light.FalloffExponent, 0.001f));
+        const float3 profile = ProfileAt(s, surface.Position);
+        normalisation += (profile - sourcePdf3) / sourcePdf;
 
-            result += TracedTransmission(profile, P, N, toLight / dist, dist,
-                                         light.Color * falloffTerm, albedo, maxThickness) * fogTransmittance;
+        const float3 irradiance = WorldSpaceIrradiance(surface, scatterNormal, shadowIgnoreDistance);
+        const float3 target = profile * irradiance;
+        [unroll]
+        for (uint c = 0u; c < 3u; ++c)
+        {
+            if (StreamSample(weightSum[c], target[c] / sourcePdf, rng))
+            {
+                r.C[c].Disc = u;
+                r.C[c].Position = surface.Position;
+                r.C[c].Irradiance = irradiance[c];
+                selectedTarget[c] = target[c];
+            }
         }
     }
+    r.M = sampleCount;
+    normalisation = 1.0f + normalisation / (float)sampleCount;
+
+    // ---- Temporal reuse ----
+    bool historyValid = false;
+    SssReservoir history = (SssReservoir)0;
+    uint historyM = 0u;
+    if (gSssRestirTemporal != 0u)
+    {
+        const float4 prevClip = mul(float4(s.P, 1.0f), gSssPrevViewProj);
+        if (prevClip.w > 1e-5f)
+        {
+            const float2 prevNdc = prevClip.xy / prevClip.w;
+            const float2 prevUv = float2(prevNdc.x * 0.5f + 0.5f, 0.5f - prevNdc.y * 0.5f);
+            if (all(prevUv >= 0.0f.xx) && all(prevUv < 1.0f.xx))
+            {
+                const uint2 prevPixel = min(uint2(prevUv * gSssRenderSize), (uint2)gSssRenderSize - 1u);
+                const PackedSssReservoir packed = gSssReservoirIn[prevPixel.y * (uint)gSssRenderSize.x + prevPixel.x];
+                historyM = min(PackedM(packed), gSssRestirHistoryCap);
+                if (historyM > 0u && PackedSlot(packed) == slot)
+                {
+                    // Same surface: the previous receiver is close and faces the same way.
+                    const float3 prevP = ReconstructWorldPositionWith(gSssPrevInvViewProj, prevPixel, PackedReceiverDepth(packed));
+                    const float tolerance = 0.5f * s.RangeMetres + 0.004f * s.LinearDepth;
+                    historyValid = length(prevP - s.P) <= tolerance
+                                && dot(PackedReceiverNormal(packed), s.N) > kSssReuseNormalDot;
+                    if (historyValid)
+                        history = UnpackSssReservoir(packed);
+                }
+            }
+        }
+    }
+
+    // Candidates each channel's reservoir stands for after the merge.
+    float channelM[3] = { (float)r.M, (float)r.M, (float)r.M };
+    uint mergedM = r.M;
+    if (historyValid)
+    {
+        // Shift each channel's history sample to this receiver and light it there.
+        // Channels that kept the same disc point share one probe and one evaluation.
+        float2 shiftedDisc = float2(1e30f, 1e30f);
+        bool shiftedHit = false;
+        SurfaceHit shifted = (SurfaceHit)0;
+        float3 shiftedIrradiance = 0.0f.xxx;
+        float3 shiftedProfile = 0.0f.xxx;
+        float minConfidence = 1.0f;
+
+        [unroll]
+        for (uint c = 0u; c < 3u; ++c)
+        {
+            const SssSample past = history.C[c];
+            // The history is trusted only as far as its sample's light is unchanged. A
+            // history with no sample, or one that lands off this receiver's surface, can
+            // say nothing about that, so it is dropped rather than counted as M candidates
+            // that all found darkness: after a light moved onto a dark region, those M
+            // divided the fresh probes' light by twenty.
+            float confidence = 0.0f;
+            if (past.W > 0.0f)
+            {
+                if (any(past.Disc != shiftedDisc))
+                {
+                    shiftedDisc = past.Disc;
+                    shiftedHit = ProjectDisc(s, past.Disc, shifted);
+                    if (shiftedHit)
+                    {
+                        shiftedIrradiance = WorldSpaceIrradiance(shifted, scatterNormal, shadowIgnoreDistance);
+                        shiftedProfile = ProfileAt(s, shifted.Position);
+                    }
+                }
+                if (shiftedHit)
+                {
+                    // Trust the history in proportion to how little the light at its
+                    // sample changed since it was stored.
+                    const float before = past.Irradiance;
+                    const float now = shiftedIrradiance[c];
+                    confidence = max(before, now) > 0.0f ? min(before, now) / max(before, now) : 1.0f;
+
+                    // Streaming merge (Bitterli et al., Alg. 4): the fresh candidates are in
+                    // weightSum already (p(y) W M of their reservoir); the history enters with
+                    // its target here times its W and confidence-scaled M.
+                    const float target = shiftedProfile[c] * now;
+                    if (StreamSample(weightSum[c], target * past.W * (float)historyM * confidence, rng))
+                    {
+                        r.C[c].Disc = past.Disc;
+                        r.C[c].Position = shifted.Position;
+                        r.C[c].Irradiance = now;
+                        selectedTarget[c] = target;
+                    }
+                }
+            }
+            channelM[c] += (float)historyM * confidence;
+            minConfidence = min(minConfidence, confidence);
+        }
+        mergedM = r.M + (uint)round((float)historyM * minConfidence);
+    }
+
+    [unroll]
+    for (uint c1 = 0u; c1 < 3u; ++c1)
+        r.C[c1].W = selectedTarget[c1] > 0.0f ? weightSum[c1] / (channelM[c1] * selectedTarget[c1]) : 0.0f;
+    r.M = min(mergedM, kSssMaxM);
+
+    // ---- Shade: numerator from the reservoirs, denominator from the probes ----
+    // Every chosen sample was lit this frame (a fresh probe, or a history sample just
+    // re-projected and relit), so f(y) W is this frame's light.
+    float3 numerator = 0.0f.xxx;
+    [unroll]
+    for (uint c2 = 0u; c2 < 3u; ++c2)
+        numerator[c2] = selectedTarget[c2] * r.C[c2].W;
+
+    gSssReservoirOut[index] = PackSssReservoir(r, s.N, s.DeviceDepth, slot);
+
+    const float3 strength = saturate(s.Profile.ColorRadius.rgb);
+    const float fogTransmittance = saturate(diffuseM.a * 2.0f - 1.0f);
+
+    // As in main(): the pixel's direct diffuse is replaced by the scattered light, and a
+    // channel whose probes found (almost) no surface keeps its own light.
+    float3 scatteredDirect = diffuseM.rgb;
+    [unroll]
+    for (uint c3 = 0u; c3 < 3u; ++c3)
+    {
+        if (normalisation[c3] > 0.05f)
+            scatteredDirect[c3] = albedo[c3] * (numerator[c3] / normalisation[c3]) * fogTransmittance;
+    }
+    float3 result = lerp(diffuseM.rgb, scatteredDirect, strength);
+    result += PixelTransmission(s.Profile, s.P, scatterNormal, albedo) * fogTransmittance;
 
     gSssOutput[pixel] = float4(max(result, 0.0f.xxx), 1.0f);
 }

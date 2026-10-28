@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Source Files\Unreal">
+      <UniqueIdentifier>{6b1f7c52-3a0e-4c8e-9d7a-2f4e5b8c1a90}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Unreal">
+      <UniqueIdentifier>{9c2d4e61-7b3f-4a1d-8e5c-0f6a2b9d3c71}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\DDS">
       <UniqueIdentifier>{bd321b1f-477d-4a7c-a94a-a9b792c00874}</UniqueIdentifier>
     </Filter>
@@ -48,6 +54,24 @@
     <ClInclude Include="include\System\TextureImporter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="include\System\UnrealAssetImporter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Unreal\UnrealPackage.h">
+      <Filter>Header Files\Unreal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Unreal\UnrealOodle.h">
+      <Filter>Header Files\Unreal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Unreal\UnrealTexture.h">
+      <Filter>Header Files\Unreal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Unreal\UnrealStaticMesh.h">
+      <Filter>Header Files\Unreal</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Unreal\UnrealMaterial.h">
+      <Filter>Header Files\Unreal</Filter>
+    </ClInclude>
     <ClInclude Include="include\System\CollisionGenerator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -76,6 +100,24 @@
     </ClCompile>
     <ClCompile Include="src\TextureImporter.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UnrealAssetImporter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Unreal\UnrealPackage.cpp">
+      <Filter>Source Files\Unreal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Unreal\UnrealOodle.cpp">
+      <Filter>Source Files\Unreal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Unreal\UnrealTexture.cpp">
+      <Filter>Source Files\Unreal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Unreal\UnrealStaticMesh.cpp">
+      <Filter>Source Files\Unreal</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Unreal\UnrealMaterial.cpp">
+      <Filter>Source Files\Unreal</Filter>
     </ClCompile>
     <ClCompile Include="..\SDKs\DirectXTex\DirectXTex\BC.cpp">
       <Filter>Source Files\DDS</Filter>

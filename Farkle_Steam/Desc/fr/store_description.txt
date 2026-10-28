@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice donne vie au célèbre jeu de dés dans une taverne médiévale pleine d'atmosphère.
+Lancez les dés, accumulez des points et décidez jusqu'où vous êtes prêt à tenter votre chance. Chaque lancer réussi vous offre un nouveau choix : mettre vos points en banque et jouer la sécurité, ou relancer au risque de perdre tout ce que vous avez gagné pendant ce tour.
+Les règles sont simples. Les décisions, beaucoup moins.
+
+[IMAGE: roll.png]
+Chaque tour commence avec six dés. Mettez de côté les combinaisons qui rapportent des points et relancez les dés restants pour continuer à faire grimper votre score.
+Mais le risque est toujours là.
+Si un lancer ne donne aucun dé qui rapporte des points, c'est le Farkle : vous perdez tous les points non sécurisés de ce tour.
+Parfois, le choix le plus sûr est de s'arrêter.
+Parfois, un lancer de plus vaut le risque.
+Et parfois, les dés en ont décidé autrement.
+
+[IMAGE: gameplay.png]
+Farkle repose sur un système simple de « quitte ou double » qui vous place sans cesse face à des choix entre risque et récompense.
+Apprenez les règles en un instant et concentrez-vous sur l'essentiel :
+[list]
+[*]Lancez six dés et cherchez des combinaisons qui rapportent des points
+[*]Gardez les dés qui rapportent des points et relancez les autres
+[*]Prolongez votre tour pour obtenir de plus gros scores
+[*]Mettez vos points en banque avant de les perdre
+[*]Décidez quand la récompense potentielle vaut le risque
+[/list]
+Chaque lancer peut changer le cours de la partie.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice va bien au-delà d'une simple interface de jeu de table.
+Le jeu se déroule dans une taverne médiévale en 3D richement détaillée, pensée pour que chaque partie donne l'impression de s'attabler pour une vraie partie de dés.
+Lumière chaleureuse, intérieurs en bois, ambiance sonore de taverne et dés physiques créent une atmosphère médiévale immersive. La bande-son propose en outre d'authentiques musiques médiévales issues de l'époque elle-même : de la vraie musique de ce temps-là, et pas seulement des compositions modernes d'inspiration médiévale.
+Associée à l'ambiance de la taverne et à la direction artistique, la musique ancre chaque partie dans un univers médiéval vivant.
+
+[IMAGE: learn.png]
+Pas de systèmes compliqués à mémoriser, pas de livre de règles interminable.
+Farkle, c'est une affaire de probabilités, de décisions et de savoir s'arrêter à temps.
+Un joueur prudent peut bâtir son score pas à pas.
+Un joueur audacieux peut tout risquer pour un tour spectaculaire.
+Aucune approche ne garantit la victoire.
+Parfois, il faut simplement lancer les dés.
+
+[IMAGE: features.png]
+[list]
+[*]Gameplay de dés classique inspiré du Farkle
+[*]Mécaniques de prise de risque et de récompense
+[*]Dés entièrement modélisés en 3D
+[*]Taverne médiévale pleine d'atmosphère
+[*]Règles simples et prise en main rapide
+[*]Décisions stratégiques à chaque tour
+[*]Conçu pour des sessions courtes comme pour des parties plus longues
+[/list]
+Prenez place à la table, saisissez les dés et voyez jusqu'où vous êtes prêt à tenter votre chance.

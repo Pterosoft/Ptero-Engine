@@ -84,7 +84,10 @@ namespace PteroTransform
 
 struct TransformComponent
 {
-    static constexpr float MeshWorldScale = 0.1f;
+    // Cooked meshes are in metres (.ptero version 5 converts every FBX's units on import),
+    // so no correction is needed. This was 0.1 while meshes were cooked in raw FBX units,
+    // which only half-fixed centimetre files and left them 10x too large.
+    static constexpr float MeshWorldScale = 1.0f;
 
     DirectX::XMFLOAT3 Position{ 0.0f, 0.0f, 0.0f };
     DirectX::XMFLOAT3 Rotation{ 0.0f, 0.0f, 0.0f };
@@ -93,7 +96,6 @@ struct TransformComponent
     DirectX::XMMATRIX GetTransform() const
     {
         // Compose the entity transform from the editor-facing position, Euler rotation, and scale values.
-        // Imported meshes render 10x too large in this renderer, so apply a fixed global mesh scale.
         const DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(
             Scale.x * MeshWorldScale,
             Scale.y * MeshWorldScale,
@@ -116,6 +118,12 @@ struct MeshComponent
     float LodUsageScale = 1.0f;
     // -1 = automatic, otherwise force a specific LOD level for debugging.
     int DebugForcedLod = -1;
+    // Draw through virtualized geometry (VirtualGeometryRenderer): the mesh is
+    // turned into a cluster hierarchy and its detail follows its size on
+    // screen, cluster by cluster, instead of switching between the LODs above.
+    // For dense meshes - scans, sculpts, kitbash - where LOD 0 is far more
+    // triangles than a distant view can show.
+    bool VirtualizedGeometry = false;
 };
 
 struct NameComponent
@@ -170,6 +178,11 @@ struct PointLightComponent
 
     // Whether this light contributes scattering to volumetric fog.
     bool AffectVolumetricFog = true;
+    // How strongly it lights the fog, as a multiplier on the scattering it would
+    // physically give. Only the fog's copy of the light is scaled, so a light can
+    // throw a strong beam through haze, or barely any, without the walls it lights
+    // changing at all.
+    float VolumetricFogIntensity = 1.0f;
 
     // Whether this light contributes to indirect lighting - the ray-traced GI
     // bounce, the radiance probes and the radiance cascades.
@@ -242,6 +255,48 @@ struct PointLightComponent
     std::string CustomStylePattern = "mmnmmommommnonmmonqnmmo";
 };
 
+// A camera placed in the level: what cinematics cut between, and what the viewport can
+// be locked to or piloted as.
+//
+// A camera looks along its entity's local +Y - the PlayerStart convention - with +Z up,
+// so with only Rotation.x (tilt) and Rotation.z (heading) set it maps exactly onto the
+// engine's pitch/yaw view: pitch = Rotation.x, yaw = -Rotation.z. Roll (Rotation.y) is
+// carried by the data but the renderer's view has no roll yet, so it does not show.
+//
+// The lens is physical: focal length over a sensor gives the field of view, so a shot
+// matched to a real lens frames the same. Field of view stays an editable property of
+// its own, derived from and written back through the focal length.
+//
+// Depth-of-field settings (aperture, focus distance) are deliberately absent until the
+// renderer has a depth-of-field pass to consume them.
+struct CameraComponent
+{
+    float FocalLengthMm = 35.0f;
+    // Full-frame 35 mm by default.
+    float SensorWidthMm = 36.0f;
+    float SensorHeightMm = 24.0f;
+    float NearClip = 0.1f;
+
+    // Procedural handheld shake: angular amplitude in degrees and how many wobbles per
+    // second. Driven by sequence time when a sequence owns the camera, so a rendered
+    // frame shakes identically every time.
+    float ShakeAmplitudeDegrees = 0.0f;
+    float ShakeFrequency = 1.5f;
+
+    // Vertical, which is what the renderer's projection takes.
+    float VerticalFovDegrees() const
+    {
+        const float focal = (std::max)(FocalLengthMm, 0.1f);
+        return 2.0f * std::atan(SensorHeightMm * 0.5f / focal) * 57.29577951308232f;
+    }
+
+    void SetVerticalFovDegrees(float degrees)
+    {
+        const float clamped = std::clamp(degrees, 1.0f, 170.0f);
+        FocalLengthMm = SensorHeightMm * 0.5f / std::tan(clamped * 0.5f * 0.017453292519943295f);
+    }
+};
+
 struct AudioEmitterComponent
 {
     std::string EventPath;
@@ -263,6 +318,50 @@ struct DecalComponent
     float SizeX = 1.0f;
     float SizeY = 1.0f;
     float SizeZ = 1.0f;
+};
+
+// RigidBodyComponent: puts the entity in the Jolt simulation (Physics.dll) during play.
+//
+// Every mesh entity already collides as static level geometry without one; this component
+// is for what should move (Dynamic, Kinematic) or for a static collider that needs a
+// simpler or different shape than its mesh. The simulation only runs while playing, and
+// the entities are restored when the session ends, so nothing it moves is ever saved.
+enum class RigidBodyMotion : int
+{
+    Static    = 0,  // never moves; collides with what does
+    Dynamic   = 1,  // driven by gravity, contacts and forces
+    Kinematic = 2,  // moved by the game (Set Transform); pushes dynamic bodies, is never pushed
+};
+
+enum class RigidBodyShape : int
+{
+    // Convex decomposition hulls when the mesh has them (Tools > Generate Collisions),
+    // otherwise the convex hull of the mesh for a dynamic body, or the exact triangles
+    // for a static or kinematic one.
+    Auto         = 0,
+    Box          = 1,  // fitted to the mesh bounds
+    Sphere       = 2,  // fitted to the mesh bounds
+    Capsule      = 3,  // fitted to the mesh bounds, along local Z
+    ConvexHull   = 4,  // hull of the finest LOD
+    TriangleMesh = 5,  // exact triangles of the finest LOD; never dynamic (falls back to the hull)
+};
+
+struct RigidBodyComponent
+{
+    RigidBodyMotion Motion = RigidBodyMotion::Dynamic;
+    RigidBodyShape  Shape  = RigidBodyShape::Auto;
+
+    // Kilograms. 0 derives the mass from the shape's volume at the density of water.
+    float Mass           = 10.0f;
+    float Friction       = 0.5f;
+    float Restitution    = 0.1f;   // bounciness, 0..1
+    float LinearDamping  = 0.05f;
+    float AngularDamping = 0.05f;
+    float GravityScale   = 1.0f;
+
+    // Continuous collision detection, for small fast bodies that would tunnel through walls.
+    bool ContinuousCollision = false;
+    bool StartAsleep         = false;
 };
 
 // RainComponent: places a camera-relative rain particle simulation at this entity's location.
@@ -316,8 +415,14 @@ enum class ParticleFacingMode : int
 };
 
 // A single particle system placed in the level.  The simulation itself runs on
-// the GPU (see ParticleRenderer / Particle_Update.hlsl); everything here is the
-// artist-facing description of it and is saved straight into the level file.
+// the GPU (see ParticleRenderer / Particle_Update.hlsl); everything below
+// Enabled and ParticlePath is the artist-facing description of the effect.
+//
+// That description normally lives in a .particle file (JSON, authored in the
+// Particle Editor) which ParticlePath names; the level stores only the path and
+// Enabled, and the fields here are a loaded copy the renderer reads every frame.
+// A component with no ParticlePath is a legacy one whose settings were saved
+// inline in the level, and it still loads and saves that way.
 //
 // The *look* - texture, blend mode, emissive colour, soft-particle depth fade -
 // lives in the assigned particle material, so several emitters can share one
@@ -325,6 +430,10 @@ enum class ParticleFacingMode : int
 struct ParticleSystemComponent
 {
     bool Enabled = true;
+
+    // Data-relative .particle file ("Particles/Fire.particle"). Empty for a
+    // legacy system whose settings are stored inline in the level.
+    std::string ParticlePath;
 
     // Data-relative .json material.  Should have "isParticleMaterial": true;
     // its base colour texture is the sprite (or flipbook atlas) and its
@@ -487,6 +596,8 @@ struct ParticleSystemComponent
     // Feed the proxy light into the volumetric fog, giving the fire a visible
     // glow in smoke or mist.
     bool LightAffectVolumetricFog = true;
+    // Multiplier on that glow; scales the fog's copy of the proxy light only.
+    float LightVolumetricFogIntensity = 1.0f;
 
     // Animated brightness curve for the proxy light.  Defaults to Fire, which
     // is the whole point: the room's lighting and its GI flicker together with
@@ -504,7 +615,7 @@ struct ParticleSystemComponent
 
 // Hard ceiling on particles across all systems in a level, so a mistyped rate
 // on one emitter cannot exhaust VRAM.
-inline constexpr int kParticleMaxPerSystem = 65536;
+inline constexpr int kParticleMaxPerSystem = 131072; // 64 bytes each: 8 MB per system at most
 inline constexpr int kParticleMaxSystems   = 16;
 
 // TerrainComponent: a heightmap-driven patch of ground that lives at the
@@ -520,19 +631,37 @@ inline constexpr int kParticleMaxSystems   = 16;
 // RGBA vertex-colour channel.
 struct TerrainPaintLayer
 {
-    // Data-relative .dds diffuse texture for this layer.  Empty = solid tint.
+    // Data-relative .material for this layer: base colour, normal, roughness,
+    // metallic, AO and height / displacement all blend with the other layers.
+    // Takes precedence over DiffuseTexturePath.
+    std::string MaterialPath;
+
+    // Data-relative .dds diffuse texture for a layer without a material (the
+    // original texture-only layers).  Empty = solid tint.
     std::string DiffuseTexturePath;
 
-    // How many times the texture repeats across the whole patch.  Higher =
-    // finer detail.  Tuned per layer so grass and rock can tile differently.
+    // Metres covered by one repeat of the layer's textures (the material's own
+    // UV tiling multiplies on top).  0 = derive from the legacy TileScale.
+    float TileSizeMeters = 0.0f;
+
+    // Legacy: repeats across the whole patch.  Only read when TileSizeMeters
+    // is 0, i.e. for layers saved before tile sizes were in metres.
     float TileScale = 16.0f;
 
-    // Multiplied with the sampled texture (also acts as the colour when no
-    // texture is assigned).
+    // Multiplied with the base colour (also acts as the colour when there is
+    // no texture).
     float TintR = 1.0f;
     float TintG = 1.0f;
     float TintB = 1.0f;
     float TintA = 1.0f;
+
+    // Metres per repeat for this layer on a patch of the given size.
+    float EffectiveTileSize(float worldSize) const
+    {
+        if (TileSizeMeters > 0.0f)
+            return TileSizeMeters;
+        return worldSize / (TileScale > 0.0f ? TileScale : 1.0f);
+    }
 };
 
 // Hard cap on simultaneous paint layers (weights are packed into the RGBA
@@ -548,6 +677,12 @@ struct TerrainComponent
     // Cached/derived DDS path (R16_UNORM) written by the importer.  May be
     // empty until the first import runs.
     std::string HeightmapDdsPath;
+
+    // Sculpted heights (16-bit LE .raw, Width x Height, Data-relative),
+    // written at the end of every brush stroke.  When set it takes precedence
+    // over HeightmapRawPath, which is never overwritten - the source image
+    // stays pristine and clearing this path reverts the sculpting.
+    std::string SculptedHeightmapPath;
 
     // Optional Data-relative material JSON used for the terrain surface.
     // The terrain renderer currently consumes baseColor, baseColorTint,
@@ -567,6 +702,22 @@ struct TerrainComponent
     // Vertical offset added after the scale (useful for placing a terrain
     // patch at a non-zero elevation).
     float HeightOffset = 0.0f;
+
+    // Metres covered by one repeat of the terrain material's textures, before
+    // the material's own UV tiling is applied on top.
+    float MaterialTileSize = 4.0f;
+
+    // Hide visible texture repetition by blending randomly offset copies of
+    // every map (two samples per map instead of one).
+    bool BreakUpTiling = true;
+
+    // Paint-layer transitions follow the layers' height maps: the higher
+    // surface wins where two layers meet (sand settles between rocks rather
+    // than cross-fading with them).  Layers without a height map count as
+    // mid-height.
+    bool  HeightBlend = true;
+    // 0 = soft, height barely matters; 1 = hard, crisp height-driven edges.
+    float HeightBlendSharpness = 0.6f;
 
     // Convenience: editor-side brush state.  These fields are saved with the
     // level so the artist picks up exactly where they left off.
@@ -843,8 +994,10 @@ struct Entity
     TransformComponent Transform;
     std::optional<MeshComponent> Mesh;
     std::optional<PointLightComponent> PointLight;
+    std::optional<CameraComponent> Camera;
     std::optional<AudioEmitterComponent> AudioEmitter;
     std::optional<DecalComponent> Decal;
+    std::optional<RigidBodyComponent> RigidBody;
     std::optional<RainComponent> Rain;
     std::optional<ParticleSystemComponent> ParticleSystem;
     std::optional<TerrainComponent> Terrain;
@@ -1036,7 +1189,8 @@ inline void to_json(nlohmann::json& j, const MeshComponent& mc)
         { "MeshPath", mc.MeshPath },
         { "MaterialPath", mc.MaterialPath },
         { "LodUsageScale", mc.LodUsageScale },
-        { "DebugForcedLod", mc.DebugForcedLod }
+        { "DebugForcedLod", mc.DebugForcedLod },
+        { "VirtualizedGeometry", mc.VirtualizedGeometry }
     };
 }
 
@@ -1046,6 +1200,7 @@ inline void from_json(const nlohmann::json& j, MeshComponent& mc)
     mc.MaterialPath = j.value("MaterialPath", std::string{});
     mc.LodUsageScale = j.value("LodUsageScale", 1.0f);
     mc.DebugForcedLod = j.value("DebugForcedLod", -1);
+    mc.VirtualizedGeometry = j.value("VirtualizedGeometry", false);
 }
 
 // PointLightComponent – all fields are plain scalars so a single macro handles both directions.
@@ -1065,6 +1220,7 @@ inline void to_json(nlohmann::json& j, const PointLightComponent& pl)
         { "ColorB",            pl.ColorB            },
         { "CastShadows",       pl.CastShadows       },
         { "AffectVolumetricFog", pl.AffectVolumetricFog },
+        { "VolumetricFogIntensity", pl.VolumetricFogIntensity },
         { "AffectGlobalIllumination", pl.AffectGlobalIllumination },
         { "GiContribution",    pl.GiContribution    },
         { "SourceRadius",      pl.SourceRadius      },
@@ -1102,6 +1258,7 @@ inline void from_json(const nlohmann::json& j, PointLightComponent& pl)
     pl.ColorB            = j.value("ColorB",            1.0f);
     pl.CastShadows       = j.value("CastShadows",       true);
     pl.AffectVolumetricFog = j.value("AffectVolumetricFog", true);
+    pl.VolumetricFogIntensity = (std::max)(j.value("VolumetricFogIntensity", 1.0f), 0.0f);
     pl.AffectGlobalIllumination = j.value("AffectGlobalIllumination", true);
     pl.GiContribution    = j.value("GiContribution",    1.0f);
     pl.SourceRadius      = j.value("SourceRadius",      0.0f);
@@ -1128,6 +1285,29 @@ inline void from_json(const nlohmann::json& j, PointLightComponent& pl)
     if (pl.RectWidth  < 0.001f) pl.RectWidth  = 0.001f;
     if (pl.RectHeight < 0.001f) pl.RectHeight = 0.001f;
     if (pl.GiContribution < 0.0f) pl.GiContribution = 0.0f;
+}
+
+inline void to_json(nlohmann::json& j, const CameraComponent& camera)
+{
+    j = nlohmann::json{
+        { "FocalLengthMm", camera.FocalLengthMm },
+        { "SensorWidthMm", camera.SensorWidthMm },
+        { "SensorHeightMm", camera.SensorHeightMm },
+        { "NearClip", camera.NearClip },
+        { "ShakeAmplitudeDegrees", camera.ShakeAmplitudeDegrees },
+        { "ShakeFrequency", camera.ShakeFrequency }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, CameraComponent& camera)
+{
+    const CameraComponent defaults;
+    camera.FocalLengthMm = (std::max)(j.value("FocalLengthMm", defaults.FocalLengthMm), 1.0f);
+    camera.SensorWidthMm = (std::max)(j.value("SensorWidthMm", defaults.SensorWidthMm), 1.0f);
+    camera.SensorHeightMm = (std::max)(j.value("SensorHeightMm", defaults.SensorHeightMm), 1.0f);
+    camera.NearClip = (std::max)(j.value("NearClip", defaults.NearClip), 0.001f);
+    camera.ShakeAmplitudeDegrees = (std::max)(j.value("ShakeAmplitudeDegrees", defaults.ShakeAmplitudeDegrees), 0.0f);
+    camera.ShakeFrequency = (std::max)(j.value("ShakeFrequency", defaults.ShakeFrequency), 0.0f);
 }
 
 inline void to_json(nlohmann::json& j, const AudioEmitterComponent& ae)
@@ -1160,6 +1340,37 @@ inline void from_json(const nlohmann::json& j, DecalComponent& dc)
     dc.SizeX        = j.value("SizeX",        1.0f);
     dc.SizeY        = j.value("SizeY",        1.0f);
     dc.SizeZ        = j.value("SizeZ",        1.0f);
+}
+
+inline void to_json(nlohmann::json& j, const RigidBodyComponent& rb)
+{
+    j = nlohmann::json{
+        { "Motion",              static_cast<int>(rb.Motion) },
+        { "Shape",               static_cast<int>(rb.Shape)  },
+        { "Mass",                rb.Mass                     },
+        { "Friction",            rb.Friction                 },
+        { "Restitution",         rb.Restitution              },
+        { "LinearDamping",       rb.LinearDamping            },
+        { "AngularDamping",      rb.AngularDamping           },
+        { "GravityScale",        rb.GravityScale             },
+        { "ContinuousCollision", rb.ContinuousCollision      },
+        { "StartAsleep",         rb.StartAsleep              }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, RigidBodyComponent& rb)
+{
+    const RigidBodyComponent defaults;
+    rb.Motion = static_cast<RigidBodyMotion>(std::clamp(j.value("Motion", static_cast<int>(defaults.Motion)), 0, 2));
+    rb.Shape  = static_cast<RigidBodyShape>(std::clamp(j.value("Shape", static_cast<int>(defaults.Shape)), 0, 5));
+    rb.Mass                = j.value("Mass",                defaults.Mass);
+    rb.Friction            = j.value("Friction",            defaults.Friction);
+    rb.Restitution         = j.value("Restitution",         defaults.Restitution);
+    rb.LinearDamping       = j.value("LinearDamping",       defaults.LinearDamping);
+    rb.AngularDamping      = j.value("AngularDamping",      defaults.AngularDamping);
+    rb.GravityScale        = j.value("GravityScale",        defaults.GravityScale);
+    rb.ContinuousCollision = j.value("ContinuousCollision", defaults.ContinuousCollision);
+    rb.StartAsleep         = j.value("StartAsleep",         defaults.StartAsleep);
 }
 
 inline void to_json(nlohmann::json& j, const RainComponent& rc)
@@ -1202,10 +1413,12 @@ inline void from_json(const nlohmann::json& j, RainComponent& rc)
     rc.Enabled          = j.value("Enabled",          true);
 }
 
-inline void to_json(nlohmann::json& j, const ParticleSystemComponent& ps)
+// The effect half of a particle system: every setting except Enabled and
+// ParticlePath.  This is the body of a .particle file, and also what a legacy
+// level stores inline in its ParticleSystemComponent.
+inline nlohmann::json ParticleEffectToJson(const ParticleSystemComponent& ps)
 {
-    j = nlohmann::json{
-        { "Enabled",                  ps.Enabled                  },
+    return nlohmann::json{
         { "MaterialPath",             ps.MaterialPath             },
         { "SpawnRate",                ps.SpawnRate                },
         { "Lifetime",                 ps.Lifetime                 },
@@ -1262,6 +1475,7 @@ inline void to_json(nlohmann::json& j, const ParticleSystemComponent& ps)
         { "GiContribution",           ps.GiContribution           },
         { "LightCastShadows",         ps.LightCastShadows         },
         { "LightAffectVolumetricFog", ps.LightAffectVolumetricFog },
+        { "LightVolumetricFogIntensity", ps.LightVolumetricFogIntensity },
         { "LightStyle",               static_cast<int>(ps.LightStyle) },
         { "LightStyleSpeed",          ps.LightStyleSpeed          },
         { "LightStyleAmplitude",      ps.LightStyleAmplitude      },
@@ -1271,9 +1485,10 @@ inline void to_json(nlohmann::json& j, const ParticleSystemComponent& ps)
     };
 }
 
-inline void from_json(const nlohmann::json& j, ParticleSystemComponent& ps)
+// Reads the effect settings into ps, leaving Enabled and ParticlePath alone.
+// Missing keys take the defaults, so an old or hand-trimmed file still loads.
+inline void ParticleEffectFromJson(const nlohmann::json& j, ParticleSystemComponent& ps)
 {
-    ps.Enabled                  = j.value("Enabled",                  true);
     ps.MaterialPath             = j.value("MaterialPath",             std::string{ "Materials/Fire.json" });
     ps.SpawnRate                = j.value("SpawnRate",                120.0f);
     ps.Lifetime                 = j.value("Lifetime",                 1.6f);
@@ -1332,6 +1547,7 @@ inline void from_json(const nlohmann::json& j, ParticleSystemComponent& ps)
     ps.GiContribution           = j.value("GiContribution",           1.0f);
     ps.LightCastShadows         = j.value("LightCastShadows",         false);
     ps.LightAffectVolumetricFog = j.value("LightAffectVolumetricFog", true);
+    ps.LightVolumetricFogIntensity = (std::max)(j.value("LightVolumetricFogIntensity", 1.0f), 0.0f);
 
     const int lightStyleIndex = j.value("LightStyle", static_cast<int>(LightStyleId::Fire));
     ps.LightStyle = (lightStyleIndex >= 0 && lightStyleIndex < kLightStyleCount)
@@ -1373,10 +1589,45 @@ inline void from_json(const nlohmann::json& j, ParticleSystemComponent& ps)
     if (ps.EndSize < 0.0f)            ps.EndSize = 0.0f;
 }
 
+// Copies the effect settings of one component onto another, keeping the
+// target's own Enabled flag and ParticlePath.  Used to push a .particle file,
+// or a live edit of one, onto every entity that uses it.
+inline void CopyParticleEffect(const ParticleSystemComponent& source, ParticleSystemComponent& target)
+{
+    const bool enabled = target.Enabled;
+    std::string path = std::move(target.ParticlePath);
+    target = source;
+    target.Enabled = enabled;
+    target.ParticlePath = std::move(path);
+}
+
+// In a level: a system that uses a .particle file stores only Enabled and the
+// path - the file is loaded separately (see ParticleEffects).  A legacy system
+// with no path keeps its settings inline, exactly as before.
+inline void to_json(nlohmann::json& j, const ParticleSystemComponent& ps)
+{
+    if (ps.ParticlePath.empty())
+        j = ParticleEffectToJson(ps);
+    else
+        j = nlohmann::json{ { "ParticlePath", ps.ParticlePath } };
+    j["Enabled"] = ps.Enabled;
+}
+
+inline void from_json(const nlohmann::json& j, ParticleSystemComponent& ps)
+{
+    ps.Enabled      = j.value("Enabled",      true);
+    ps.ParticlePath = j.value("ParticlePath", std::string{});
+    // Inline settings are read either way: they are the whole description for a
+    // legacy system, and harmless defaults until the file is loaded otherwise.
+    ParticleEffectFromJson(j, ps);
+}
+
 inline void to_json(nlohmann::json& j, const TerrainPaintLayer& layer)
 {
     j = nlohmann::json{
+        { "MaterialPath",       layer.MaterialPath       },
         { "DiffuseTexturePath", layer.DiffuseTexturePath },
+        { "TileSizeMeters",     layer.TileSizeMeters     },
         { "TileScale",          layer.TileScale          },
         { "TintR",              layer.TintR              },
         { "TintG",              layer.TintG              },
@@ -1387,7 +1638,9 @@ inline void to_json(nlohmann::json& j, const TerrainPaintLayer& layer)
 
 inline void from_json(const nlohmann::json& j, TerrainPaintLayer& layer)
 {
+    layer.MaterialPath       = j.value("MaterialPath", std::string{});
     layer.DiffuseTexturePath = j.value("DiffuseTexturePath", std::string{});
+    layer.TileSizeMeters     = j.value("TileSizeMeters", 0.0f);
     layer.TileScale          = j.value("TileScale", 16.0f);
     layer.TintR              = j.value("TintR", 1.0f);
     layer.TintG              = j.value("TintG", 1.0f);
@@ -1400,12 +1653,17 @@ inline void to_json(nlohmann::json& j, const TerrainComponent& tc)
     j = nlohmann::json{
         { "HeightmapRawPath",        tc.HeightmapRawPath        },
         { "HeightmapDdsPath",        tc.HeightmapDdsPath        },
+        { "SculptedHeightmapPath",   tc.SculptedHeightmapPath   },
         { "MaterialPath",            tc.MaterialPath            },
         { "Width",                   tc.Width                   },
         { "Height",                  tc.Height                  },
         { "WorldSize",               tc.WorldSize               },
         { "HeightScale",             tc.HeightScale             },
         { "HeightOffset",            tc.HeightOffset            },
+        { "MaterialTileSize",        tc.MaterialTileSize        },
+        { "BreakUpTiling",           tc.BreakUpTiling           },
+        { "HeightBlend",             tc.HeightBlend             },
+        { "HeightBlendSharpness",    tc.HeightBlendSharpness    },
         { "BrushType",               static_cast<int>(tc.Brush) },
         { "BrushRadius",             tc.BrushRadius             },
         { "BrushStrength",           tc.BrushStrength           },
@@ -1421,12 +1679,17 @@ inline void from_json(const nlohmann::json& j, TerrainComponent& tc)
 {
     tc.HeightmapRawPath     = j.value("HeightmapRawPath",  std::string{});
     tc.HeightmapDdsPath     = j.value("HeightmapDdsPath",  std::string{});
-    tc.MaterialPath         = j.value("MaterialPath",      std::string{});
+    tc.SculptedHeightmapPath = j.value("SculptedHeightmapPath", std::string{});
+    tc.MaterialPath        = j.value("MaterialPath",      std::string{});
     tc.Width                = j.value("Width",             0);
     tc.Height               = j.value("Height",            0);
     tc.WorldSize            = j.value("WorldSize",         1024.0f);
     tc.HeightScale          = j.value("HeightScale",       256.0f);
     tc.HeightOffset         = j.value("HeightOffset",      0.0f);
+    tc.MaterialTileSize     = j.value("MaterialTileSize",  4.0f);
+    tc.BreakUpTiling        = j.value("BreakUpTiling",     true);
+    tc.HeightBlend          = j.value("HeightBlend",       true);
+    tc.HeightBlendSharpness = j.value("HeightBlendSharpness", 0.6f);
     tc.Brush                = static_cast<TerrainComponent::BrushType>(
                                  j.value("BrushType", static_cast<int>(TerrainComponent::BrushType::Raise)));
     tc.BrushRadius          = j.value("BrushRadius",       8.0f);

@@ -1,0 +1,13 @@
+"lang"
+{
+	"Language"	"english"
+	"Tokens"
+	{
+		"#Menu"	"In the tavern"
+		"#VsAI"	"Playing against the AI · %score%"
+		"#Searching"	"Looking for a match"
+		"#Waiting"	"Waiting at an open table"
+		"#WaitingFriends"	"Waiting for friends to join"
+		"#Online"	"Playing online against %opponent% · %score%"
+	}
+}
