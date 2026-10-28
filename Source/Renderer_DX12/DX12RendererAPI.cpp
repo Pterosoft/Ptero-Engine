@@ -4,6 +4,7 @@
 #include "DX12ShaderCompiler.h"
 #include "Editor.h"
 #include "EngineCVars.h"
+#include "FrameCapture.h"
 #include "System/CVar.h"
 #include "System/PteroLog.h"
 #include "RendererStatisticsText.h"
@@ -67,6 +68,10 @@ extern "C"
     IDXGISwapChain* __stdcall DX12Context_GetSwapChain();
     bool __stdcall DX12Context_IsFrameGenerationSwapChain();
     bool __stdcall DX12Context_SetFrameGenerationSwapChain(bool enable);
+    bool __stdcall DX12Context_SetFrameGenerationProxy(int proxyKind);
+    int __stdcall DX12Context_GetFrameGenerationProxy();
+    bool __stdcall DX12Context_SetXellLowLatency(bool enable);
+    bool __stdcall DX12Context_IsXellLowLatencyActive();
     HWND __stdcall DX12Context_GetWindowHandle();
     ID3D12Device* __stdcall DX12Context_GetDevice();
     ID3D12CommandQueue* __stdcall DX12Context_GetCommandQueue();
@@ -88,6 +93,11 @@ namespace
     // index that is used to index gBackBufferHasBeenPresented.
     constexpr int EditorFrameCount = 3;
     constexpr DXGI_FORMAT BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // Must match FrameGenerationProxy in DX12Context.cpp.
+    constexpr int kFrameGenerationProxyNone = 0;
+    constexpr int kFrameGenerationProxyFsr  = 1;
+    constexpr int kFrameGenerationProxyXess = 2;
 
     bool gQtUiReady = false;
 
@@ -912,23 +922,55 @@ namespace
         std::string FirstFailure;
     };
 
+    // The startup shader warm-up in steps: Begin lists every entry point, Step compiles
+    // (or loads from the cache) one of them, Finish reports. The editor runs it all at
+    // once under its splash; a standalone game spreads it over frames behind
+    // shader-preload.rml so the player sees it move.
+    struct StartupShaderPrecompile
+    {
+        std::filesystem::path ShadersDirectory;
+        std::vector<ShaderCompileRequest> Requests;
+        std::size_t Next = 0;
+        StartupShaderPrecompileResult Result;
+
+        bool Begin();
+        bool IsDone() const { return Next >= Requests.size(); }
+        // The entry Step will compile next, relative to Data/Shaders.
+        std::wstring NextName() const;
+        void Step();
+        void Finish();
+    };
+
     StartupShaderPrecompileResult PrecompileStartupShaders()
+    {
+        StartupShaderPrecompile precompile;
+        if (precompile.Begin())
+        {
+            while (!precompile.IsDone())
+                precompile.Step();
+        }
+        precompile.Finish();
+        return precompile.Result;
+    }
+
+    bool StartupShaderPrecompile::Begin()
     {
         namespace fs = std::filesystem;
 
-        StartupShaderPrecompileResult result{};
-        const fs::path shadersDirectory = FindShadersDirectoryUpward();
+        StartupShaderPrecompileResult& result = Result;
+        ShadersDirectory = FindShadersDirectoryUpward();
+        const fs::path& shadersDirectory = ShadersDirectory;
         if (shadersDirectory.empty())
         {
             ReportProgress(L"Shader startup compile skipped: Data\\Shaders was not found.");
             result.FirstFailure = "Data\\Shaders was not found during startup shader precompile.";
-            return result;
+            return false;
         }
 
         const std::wstring startMessage = L"Loading startup shader cache from " + shadersDirectory.wstring() + L"...";
         ReportProgress(startMessage.c_str());
 
-        std::vector<ShaderCompileRequest> requests;
+        std::vector<ShaderCompileRequest>& requests = Requests;
         std::set<std::wstring> uniqueKeys;
         const std::vector<std::wstring> includeDirectories
         {
@@ -982,46 +1024,60 @@ namespace
         }
 
         result.Requests = static_cast<uint32_t>(requests.size());
+        Next = 0;
+        return true;
+    }
 
-        for (const ShaderCompileRequest& request : requests)
+    std::wstring StartupShaderPrecompile::NextName() const
+    {
+        if (IsDone())
+            return {};
+        const ShaderCompileRequest& request = Requests[Next];
+        const std::filesystem::path requestPath(request.FilePath);
+        std::filesystem::path relativePath = requestPath.lexically_relative(ShadersDirectory);
+        if (relativePath.empty())
+            relativePath = requestPath.filename();
+        return relativePath.wstring() + L" :: " + request.EntryPoint;
+    }
+
+    void StartupShaderPrecompile::Step()
+    {
+        if (IsDone())
+            return;
+
+        StartupShaderPrecompileResult& result = Result;
+        const ShaderCompileRequest& request = Requests[Next];
+        const std::wstring name = NextName();
+        ++Next;
+
+        const std::wstring compileMessage = L"Loading shader " + name + L" [" + request.TargetProfile + L"]...";
+        ReportProgress(compileMessage.c_str());
+
+        DX12Shader shader;
+        if (shader.Compile(request))
         {
-            const fs::path requestPath(request.FilePath);
-            fs::path relativePath = requestPath.lexically_relative(shadersDirectory);
-            if (relativePath.empty())
-            {
-                relativePath = requestPath.filename();
-            }
-
-            const std::wstring compileMessage =
-                L"Loading shader " + relativePath.wstring()
-                + L" :: " + request.EntryPoint
-                + L" [" + request.TargetProfile + L"]...";
-            ReportProgress(compileMessage.c_str());
-
-            DX12Shader shader;
-            if (shader.Compile(request))
-            {
-                if (shader.WasLoadedFromCache())
-                {
-                    ++result.LoadedFromCache;
-                }
-                else
-                {
-                    ++result.Compiled;
-                }
-                continue;
-            }
-
-            ++result.Failed;
-            if (result.FirstFailure.empty())
-            {
-                result.FirstFailure =
-                    ToNarrowString(relativePath.wstring())
-                    + " :: " + ToNarrowString(request.EntryPoint)
-                    + " [" + ToNarrowString(request.TargetProfile) + "]: "
-                    + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown shader compiler error");
-            }
+            if (shader.WasLoadedFromCache())
+                ++result.LoadedFromCache;
+            else
+                ++result.Compiled;
+            return;
         }
+
+        ++result.Failed;
+        if (result.FirstFailure.empty())
+        {
+            result.FirstFailure =
+                ToNarrowString(name)
+                + " [" + ToNarrowString(request.TargetProfile) + "]: "
+                + (shader.GetLastErrorMessage() ? shader.GetLastErrorMessage() : "unknown shader compiler error");
+        }
+    }
+
+    void StartupShaderPrecompile::Finish()
+    {
+        const StartupShaderPrecompileResult& result = Result;
+        if (ShadersDirectory.empty())
+            return;
 
         std::wostringstream summary;
         summary << L"Startup shader cache ready: "
@@ -1042,8 +1098,6 @@ namespace
             OutputDebugStringA(result.FirstFailure.c_str());
             OutputDebugStringA("\n");
         }
-
-        return result;
     }
 
     std::string CompileShadersFromMainMenu()
@@ -1070,382 +1124,91 @@ namespace
         return summary.str();
     }
 
-    float HalfToFloat(uint16_t value)
+    // ---- Standalone startup screens ----------------------------------------------
+    // A standalone game starts in four steps, each behind a screen of its own rather
+    // than a black window: the shader warm-up (Farkle/shader-preload.rml), then the level
+    // file read on the editor's worker, its meshes and textures streamed in time-boxed
+    // slices, and the warm-up frames (all three Farkle/loading.rml). StartGame takes the
+    // screen down.
+    StartupShaderPrecompile gStandaloneShaders;
+    bool gStandaloneShadersBegun = false;
+    bool gStandaloneLevelRequested = false;
+    std::uint64_t gStandaloneStreamGeneration = 0;
+    // Per frame. A cached entry loads in well under a millisecond; a cold compile can take
+    // far longer than this on its own, so at least one is always done.
+    constexpr std::chrono::milliseconds kShaderPreloadFrameBudget{ 30 };
+    // Share of the loading bar that reading and streaming the level fill; the warm-up
+    // frames fill the rest.
+    constexpr float kLevelLoadingShare = 0.85f;
+
+    // One frame of the standalone shader warm-up. True once every entry is done.
+    bool AdvanceStandaloneShaderPreload()
     {
-        const uint32_t sign = (static_cast<uint32_t>(value & 0x8000u)) << 16;
-        uint32_t exponent = (value >> 10) & 0x1Fu;
-        uint32_t mantissa = value & 0x03FFu;
-
-        uint32_t bits = 0;
-        if (exponent == 0)
+        if (!gStandaloneShadersBegun)
         {
-            if (mantissa == 0)
+            gStandaloneShadersBegun = true;
+            gSceneRenderer->ShowStartupScreen("Farkle/shader-preload.rml");
+            gSceneRenderer->SetStartupScreenProgress(0.0f, "Preparing shaders...", " ");
+            if (!gStandaloneShaders.Begin())
             {
-                bits = sign;
+                gStandaloneShaders.Finish();
+                return true;
             }
-            else
-            {
-                exponent = 1;
-                while ((mantissa & 0x0400u) == 0)
-                {
-                    mantissa <<= 1;
-                    --exponent;
-                }
-
-                mantissa &= 0x03FFu;
-                bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
-            }
-        }
-        else if (exponent == 0x1Fu)
-        {
-            bits = sign | 0x7F800000u | (mantissa << 13);
-        }
-        else
-        {
-            bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
+            // The screen is shown for a frame before the first compile can hold it up.
+            return false;
         }
 
-        float result = 0.0f;
-        std::memcpy(&result, &bits, sizeof(result));
-        return result;
+        const auto sliceStart = std::chrono::steady_clock::now();
+        do
+        {
+            gStandaloneShaders.Step();
+        } while (!gStandaloneShaders.IsDone() && std::chrono::steady_clock::now() - sliceStart < kShaderPreloadFrameBudget);
+
+        const StartupShaderPrecompileResult& result = gStandaloneShaders.Result;
+        const std::size_t total = gStandaloneShaders.Requests.size();
+        const std::size_t done = gStandaloneShaders.Next;
+        // Mostly cache hits on a later launch; the first one compiles everything.
+        const std::string status = (result.Compiled > 0 ? "Compiling shaders " : "Loading shaders ")
+            + std::to_string(done) + " / " + std::to_string(total);
+        const std::string detail = gStandaloneShaders.IsDone()
+            ? std::to_string(result.LoadedFromCache) + " from cache, " + std::to_string(result.Compiled) + " compiled"
+            : ToNarrowString(gStandaloneShaders.NextName());
+        gSceneRenderer->SetStartupScreenProgress(total > 0 ? static_cast<float>(done) / static_cast<float>(total) : 1.0f, status, detail);
+
+        if (!gStandaloneShaders.IsDone())
+            return false;
+
+        gStandaloneShaders.Finish();
+        if (result.Failed > 0)
+        {
+            std::ostringstream errorMessage;
+            errorMessage << "Startup shader cache warmup found " << result.Failed
+                << " failed shader entries. First failure: " << result.FirstFailure;
+            SetRendererError(errorMessage.str());
+        }
+        PTERO_LOG_INFO("Game", "Shader preload: %u from cache, %u compiled, %u failed.",
+            result.LoadedFromCache, result.Compiled, result.Failed);
+        return true;
     }
 
-    BYTE FloatToByte(float value)
+    // Shows loading.rml with one of its tips (tip-1, tip-2, ... - however many the
+    // document has) picked at random.
+    void ShowStandaloneLoadingScreen()
     {
-        const float clamped = (value < 0.0f) ? 0.0f : ((value > 1.0f) ? 1.0f : value);
-        return static_cast<BYTE>((clamped * 255.0f) + 0.5f);
+        if (!gSceneRenderer->ShowStartupScreen("Farkle/loading.rml"))
+            return;
+        RmlUiRenderer& ui = gSceneRenderer->GetRmlUiRenderer();
+        int tips = 0;
+        while (ui.SetElementClass("tip-" + std::to_string(tips + 1), "hidden", true))
+            ++tips;
+        if (tips > 0)
+        {
+            const auto seed = static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count());
+            ui.SetElementClass("tip-" + std::to_string(1 + static_cast<int>(seed % static_cast<unsigned>(tips))), "hidden", false);
+        }
+        gSceneRenderer->SetStartupScreenProgress(0.0f, "Reading the level...", " ");
     }
 
-    // Helper function to save a screenshot from a GPU resource to a PNG file
-    bool SaveScreenshotToPNG(ID3D12Resource* sourceTexture, const std::string& outputPath)
-    {
-        if (!sourceTexture || outputPath.empty())
-        {
-            return false;
-        }
-
-        const HRESULT coInitializeResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        const bool shouldUninitialize = SUCCEEDED(coInitializeResult);
-
-        ID3D12Device* device = DX12Context_GetDevice();
-        if (!device)
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        // Get the texture description
-        D3D12_RESOURCE_DESC textureDesc = sourceTexture->GetDesc();
-        const UINT width = static_cast<UINT>(textureDesc.Width);
-        const UINT height = static_cast<UINT>(textureDesc.Height);
-        const DXGI_FORMAT format = textureDesc.Format;
-
-        // Create a readback buffer
-        const UINT64 bufferSize = GetRequiredIntermediateSize(sourceTexture, 0, 1);
-
-        ComPtr<ID3D12Resource> readbackBuffer;
-        auto readbackHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
-        auto readbackDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
-
-        HRESULT hr = device->CreateCommittedResource(
-            &readbackHeapProps,
-            D3D12_HEAP_FLAG_NONE,
-            &readbackDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr,
-            IID_PPV_ARGS(&readbackBuffer));
-
-        if (FAILED(hr))
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        // Create command allocator and list for the copy operation
-        ComPtr<ID3D12CommandAllocator> commandAllocator;
-        ComPtr<ID3D12GraphicsCommandList> commandList;
-
-        hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
-        if (FAILED(hr))
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&commandList));
-        if (FAILED(hr))
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        // Transition source texture to COPY_SOURCE
-        auto toSource = CD3DX12_RESOURCE_BARRIER::Transition(
-            sourceTexture,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_COPY_SOURCE);
-        commandList->ResourceBarrier(1, &toSource);
-
-        // Copy texture to readback buffer
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-        UINT numRows = 0;
-        UINT64 rowSizeInBytes = 0;
-        UINT64 totalBytes = 0;
-        device->GetCopyableFootprints(&textureDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
-
-        D3D12_TEXTURE_COPY_LOCATION srcLocation{};
-        srcLocation.pResource = sourceTexture;
-        srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        srcLocation.SubresourceIndex = 0;
-
-        D3D12_TEXTURE_COPY_LOCATION dstLocation{};
-        dstLocation.pResource = readbackBuffer.Get();
-        dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        dstLocation.PlacedFootprint = footprint;
-
-        commandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
-
-        // Transition back to PIXEL_SHADER_RESOURCE
-        auto toShaderResource = CD3DX12_RESOURCE_BARRIER::Transition(
-            sourceTexture,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        commandList->ResourceBarrier(1, &toShaderResource);
-
-        commandList->Close();
-
-        // Execute and wait for completion
-        ID3D12CommandList* commandLists[] = { commandList.Get() };
-        ID3D12CommandQueue* commandQueue = DX12Context_GetCommandQueue();
-        commandQueue->ExecuteCommandLists(1, commandLists);
-
-        // Create fence for synchronization
-        ComPtr<ID3D12Fence> fence;
-        hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-        if (FAILED(hr))
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        HANDLE fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!fenceEvent)
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        commandQueue->Signal(fence.Get(), 1);
-        fence->SetEventOnCompletion(1, fenceEvent);
-        WaitForSingleObject(fenceEvent, INFINITE);
-        CloseHandle(fenceEvent);
-
-        // Map readback buffer and save to PNG using WIC
-        void* mappedData = nullptr;
-        D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(totalBytes) };
-        hr = readbackBuffer->Map(0, &readRange, &mappedData);
-        if (FAILED(hr) || !mappedData)
-        {
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-            return false;
-        }
-
-        // Initialize WIC
-        ComPtr<IWICImagingFactory> wicFactory;
-        ComPtr<IWICStream> stream;
-        ComPtr<IWICBitmapEncoder> encoder;
-        ComPtr<IWICBitmapFrameEncode> frame;
-        auto cleanupWicAndCom = [&]()
-        {
-            frame.Reset();
-            encoder.Reset();
-            stream.Reset();
-            wicFactory.Reset();
-            if (shouldUninitialize)
-            {
-                CoUninitialize();
-            }
-        };
-
-        hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wicFactory));
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        // Create WIC stream
-        hr = wicFactory->CreateStream(&stream);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        // Convert path to wide string
-        std::wstring wideOutputPath(outputPath.begin(), outputPath.end());
-        hr = stream->InitializeFromFilename(wideOutputPath.c_str(), GENERIC_WRITE);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        // Create PNG encoder
-        hr = wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        // Create frame
-        hr = encoder->CreateNewFrame(&frame, nullptr);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        hr = frame->Initialize(nullptr);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        hr = frame->SetSize(width, height);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        // Use BGRA for WIC PNG output so channel ordering matches encoder expectations.
-        WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
-        hr = frame->SetPixelFormat(&pixelFormat);
-        if (FAILED(hr))
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            cleanupWicAndCom();
-            return false;
-        }
-
-        const BYTE* sourceBytes = static_cast<const BYTE*>(mappedData);
-        const UINT outputStride = width * 4;
-        std::vector<BYTE> outputPixels(static_cast<size_t>(outputStride) * height);
-
-        if (format == DXGI_FORMAT_R16G16B16A16_FLOAT)
-        {
-            for (UINT y = 0; y < height; ++y)
-            {
-                const uint16_t* sourceRow = reinterpret_cast<const uint16_t*>(sourceBytes + (static_cast<size_t>(y) * footprint.Footprint.RowPitch));
-                BYTE* destinationRow = outputPixels.data() + (static_cast<size_t>(y) * outputStride);
-
-                for (UINT x = 0; x < width; ++x)
-                {
-                    const float r = HalfToFloat(sourceRow[x * 4 + 0]);
-                    const float g = HalfToFloat(sourceRow[x * 4 + 1]);
-                    const float b = HalfToFloat(sourceRow[x * 4 + 2]);
-                    const float a = HalfToFloat(sourceRow[x * 4 + 3]);
-
-                    destinationRow[x * 4 + 0] = FloatToByte(b);
-                    destinationRow[x * 4 + 1] = FloatToByte(g);
-                    destinationRow[x * 4 + 2] = FloatToByte(r);
-                    destinationRow[x * 4 + 3] = FloatToByte(a);
-                }
-            }
-        }
-        else if (format == DXGI_FORMAT_R8G8B8A8_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
-        {
-            for (UINT y = 0; y < height; ++y)
-            {
-                const BYTE* sourceRow = sourceBytes + (static_cast<size_t>(y) * footprint.Footprint.RowPitch);
-                BYTE* destinationRow = outputPixels.data() + (static_cast<size_t>(y) * outputStride);
-                for (UINT x = 0; x < width; ++x)
-                {
-                    destinationRow[x * 4 + 0] = sourceRow[x * 4 + 2];
-                    destinationRow[x * 4 + 1] = sourceRow[x * 4 + 1];
-                    destinationRow[x * 4 + 2] = sourceRow[x * 4 + 0];
-                    destinationRow[x * 4 + 3] = sourceRow[x * 4 + 3];
-                }
-            }
-        }
-        else if (format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
-        {
-            for (UINT y = 0; y < height; ++y)
-            {
-                const BYTE* sourceRow = sourceBytes + (static_cast<size_t>(y) * footprint.Footprint.RowPitch);
-                BYTE* destinationRow = outputPixels.data() + (static_cast<size_t>(y) * outputStride);
-                std::memcpy(destinationRow, sourceRow, outputStride);
-            }
-        }
-        else
-        {
-            readbackBuffer->Unmap(0, nullptr);
-            OutputDebugStringA("Unsupported screenshot texture format.\n");
-            cleanupWicAndCom();
-            return false;
-        }
-
-        readbackBuffer->Unmap(0, nullptr);
-
-        hr = frame->WritePixels(height, outputStride, static_cast<UINT>(outputPixels.size()), outputPixels.data());
-
-        if (FAILED(hr))
-        {
-            cleanupWicAndCom();
-            return false;
-        }
-
-        hr = frame->Commit();
-        if (FAILED(hr))
-        {
-            cleanupWicAndCom();
-            return false;
-        }
-
-        hr = encoder->Commit();
-        cleanupWicAndCom();
-
-        return SUCCEEDED(hr);
-    }
 }
 
 extern "C"
@@ -1471,6 +1234,9 @@ extern "C"
         gStandaloneLevelLoaded = gStandaloneStarted = false;
         gStandaloneWarmupBegin = gStandaloneLastWarmupFrame = {};
         gStandaloneSmoothFrames = 0;
+        gStandaloneShaders = {};
+        gStandaloneShadersBegun = gStandaloneLevelRequested = false;
+        gStandaloneStreamGeneration = 0;
         QtUi::SetStandaloneGame(!gStandaloneLevel.empty());
         // mShowConsolePanel defaults to true for the editor's own docking layout; a
         // standalone game must start with the console closed and only open it on tilde.
@@ -1522,13 +1288,19 @@ extern "C"
 
         DX12Context_StreamlineInitialize();
 
-        const StartupShaderPrecompileResult shaderPrecompileResult = PrecompileStartupShaders();
-        if (shaderPrecompileResult.Failed > 0)
+        // A standalone game warms the cache over its first frames instead, behind
+        // shader-preload.rml (AdvanceStandaloneShaderPreload), rather than under a splash
+        // that cannot say how far along it is.
+        if (!QtUi::IsStandaloneGame())
         {
-            std::ostringstream errorMessage;
-            errorMessage << "Startup shader cache warmup found " << shaderPrecompileResult.Failed
-                << " failed shader entries. First failure: " << shaderPrecompileResult.FirstFailure;
-            SetRendererError(errorMessage.str());
+            const StartupShaderPrecompileResult shaderPrecompileResult = PrecompileStartupShaders();
+            if (shaderPrecompileResult.Failed > 0)
+            {
+                std::ostringstream errorMessage;
+                errorMessage << "Startup shader cache warmup found " << shaderPrecompileResult.Failed
+                    << " failed shader entries. First failure: " << shaderPrecompileResult.FirstFailure;
+                SetRendererError(errorMessage.str());
+            }
         }
 
         ReportProgress(L"Initializing Qt viewport renderer...");
@@ -1631,6 +1403,9 @@ extern "C"
             // Frame generation is bound to the chain it was configured with, which
             // is about to be parked; it is recreated for the new one below.
             gSceneRenderer->GetFrameGeneration().Release();
+            // XeSS-FG's proxy is not parked with its window; the frame loop below
+            // installs a new one for the window taking over.
+            gSceneRenderer->GetXessFrameGeneration().Release();
             if (!DX12Context_SetPresentationWindow(QtUi::ViewportHandle()))
             {
                 const char* error=DX12Context_GetLastError();
@@ -1660,22 +1435,31 @@ extern "C"
         gRendererStatisticsText.SetViewportInfo(
             static_cast<UINT>(viewportRect.right), static_cast<UINT>(viewportRect.bottom), gSwapChainResizeCount);
 
-        // FSR frame generation presents through a proxy swap chain of its own, so
-        // turning it on or off replaces the chain. That can only happen here,
-        // between frames, and it drops every back buffer back to COMMON state.
+        // FSR and XeSS frame generation each present through a proxy swap chain of
+        // their own, so turning one on or off replaces the chain. That can only
+        // happen here, between frames, and it drops every back buffer back to
+        // COMMON state. FSR takes precedence when both are switched on.
         {
             FsrSettings& fsrSettings = gSceneRenderer->GetFsrSettings();
-            const bool wantProxy = gSceneRenderer->WantsFrameGenerationSwapChain();
-            if (wantProxy != DX12Context_IsFrameGenerationSwapChain())
+            XessSettings& xessSettings = gSceneRenderer->GetXessSettings();
+            const int wantedProxy = gSceneRenderer->WantsFrameGenerationSwapChain() ? kFrameGenerationProxyFsr
+                : gSceneRenderer->WantsXessFrameGenerationSwapChain() ? kFrameGenerationProxyXess
+                : kFrameGenerationProxyNone;
+            if (wantedProxy != DX12Context_GetFrameGenerationProxy())
             {
                 gSceneRenderer->GetFrameGeneration().Release();
-                if (!DX12Context_SetFrameGenerationSwapChain(wantProxy) && wantProxy)
+                gSceneRenderer->GetXessFrameGeneration().Release();
+                if (!DX12Context_SetFrameGenerationProxy(wantedProxy) && wantedProxy != kFrameGenerationProxyNone)
                 {
                     // Left with the plain chain. Switch the setting off rather than
                     // retrying a full GPU flush and chain rebuild every frame.
-                    fsrSettings.FrameGeneration = false;
+                    const bool fsr = wantedProxy == kFrameGenerationProxyFsr;
+                    if (fsr)
+                        fsrSettings.FrameGeneration = false;
+                    else
+                        xessSettings.FrameGeneration = false;
                     const char* contextError = DX12Context_GetLastError();
-                    PTERO_LOG_ERROR("FSR", "Frame generation switched off: %s",
+                    PTERO_LOG_ERROR(fsr ? "FSR" : "XeSS-FG", "Frame generation switched off: %s",
                         contextError ? contextError : "the proxy swap chain could not be created.");
                 }
                 gBackBufferHasBeenPresented.fill(false);
@@ -1690,6 +1474,13 @@ extern "C"
                 gSceneRenderer->GetSceneWidth(),
                 gSceneRenderer->GetSceneHeight(),
                 fsrSettings);
+
+            // Xe Low Latency: on when asked for, and always under XeSS frame
+            // generation, which cannot run without it.
+            const bool xessProxy = DX12Context_GetFrameGenerationProxy() == kFrameGenerationProxyXess;
+            if (xessSettings.LowLatency || xessProxy || DX12Context_IsXellLowLatencyActive())
+                DX12Context_SetXellLowLatency(xessSettings.LowLatency || xessProxy);
+            gSceneRenderer->GetXessFrameGeneration().Update(xessSettings);
         }
         if (!gSceneRenderer->ApplyPendingMsaaSettings())
         {
@@ -1754,15 +1545,22 @@ extern "C"
         const bool sceneReady = gSceneRenderer->Initialize(commandList);
         if (sceneReady)
         {
-            if (QtUi::IsStandaloneGame() && !gStandaloneLevelLoaded)
+            if (QtUi::IsStandaloneGame() && !gStandaloneLevelLoaded && !gStandaloneLevelRequested
+                && AdvanceStandaloneShaderPreload())
             {
                 gEditor.SetSceneRenderer(gSceneRenderer.get());
                 gEditor.SetTerrainRenderer(&gSceneRenderer->GetTerrainRenderer());
                 gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
+                gEditor.SetAnalyticEdgeAaSettings(&gSceneRenderer->GetAnalyticEdgeAaSettings());
+                gEditor.SetAarSettings(&gSceneRenderer->GetAarSettings());
+            gEditor.SetXessSettings(&gSceneRenderer->GetXessSettings());
                 gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
+                gEditor.SetShadingSettings(&gSceneRenderer->GetShadingSettings());
                 gEditor.SetDpleSettings(&gSceneRenderer->GetDpleSettings());
                 gEditor.SetLensFlareSettings(&gSceneRenderer->GetLensFlareSettings());
+                gEditor.SetRtShadowSettings(&gSceneRenderer->GetRtShadowSettings());
                 gEditor.SetRadianceProbeSettings(&gSceneRenderer->GetProbeSettings());
+                gEditor.SetVoxelGiSettings(&gSceneRenderer->GetVoxelGiSettings());
                 gEditor.SetSceneSettings(
                     &gSceneRenderer->GetTimeOfDaySettings(),
                     &gSceneRenderer->GetTaaSettings(),
@@ -1780,15 +1578,38 @@ extern "C"
                     &gSceneRenderer->GetVolumetricFogSettings(),
                     &gSceneRenderer->GetVolumetricCloudSettings(),
                     &gSceneRenderer->GetBloomSettings());
-                if (!gEditor.LoadSceneFromFile(gStandaloneLevel))
+                // Read on the editor's worker and streamed like an editor load, so the
+                // loading screen keeps drawing instead of the first frame stalling on the
+                // whole level.
+                ShowStandaloneLoadingScreen();
+                gStandaloneStreamGeneration = gEditor.GetSceneStreamGeneration();
+                if (!gEditor.BeginLoadSceneFromFile(gStandaloneLevel))
                     throw std::runtime_error("Could not load the startup level: " + gStandaloneLevel);
-                gEditor.SetShowViewportGrid(false);
-                gSceneRenderer->SetGridEnabled(false);
-                gStandaloneLevelLoaded = true;
-                // The player's saved graphics settings, now, so the warm-up frames below
-                // compile the pipelines the game will actually use. They also replace
-                // whatever upscaler/frame generation state the level was last saved with.
-                gSceneRenderer->PrepareStandaloneGameSettings();
+                gStandaloneLevelRequested = true;
+            }
+            else if (QtUi::IsStandaloneGame() && !gStandaloneLevelLoaded && gStandaloneLevelRequested)
+            {
+                // UpdateSceneLoading, at the top of the frame, moved a finished file in and
+                // started the streaming generation; a failed one never does.
+                if (gEditor.GetSceneStreamGeneration() != gStandaloneStreamGeneration)
+                {
+                    gEditor.SetShowViewportGrid(false);
+                    gSceneRenderer->SetGridEnabled(false);
+                    gStandaloneLevelLoaded = true;
+                    // The player's saved graphics settings, now, so the warm-up frames below
+                    // compile the pipelines the game will actually use. They also replace
+                    // whatever upscaler/frame generation state the level was last saved with.
+                    gSceneRenderer->PrepareStandaloneGameSettings();
+                }
+                else if (!gEditor.IsSceneLoading())
+                {
+                    throw std::runtime_error("Could not load the startup level: " + gStandaloneLevel);
+                }
+                else
+                {
+                    gSceneRenderer->SetStartupScreenProgress(kLevelLoadingShare * gEditor.GetSceneLoadProgress(),
+                        "Reading the level...", gEditor.GetSceneLoadStatusMessage());
+                }
             }
             // Vegetation layers reference meshes by path but have no entity to
             // hang a MeshComponent on, so they load through this callback
@@ -1977,7 +1798,14 @@ extern "C"
             // out a stable reference to it, so this only has to be wired up once.
             gSceneRenderer->SetNodeGraph(&gEditor.GetRuntimeNodeGraph());
 
-            if (QtUi::IsStandaloneGame() && !gStandaloneStarted)
+            if (QtUi::IsStandaloneGame() && gStandaloneLevelLoaded && !gStandaloneStarted && gEditor.IsSceneLoading())
+            {
+                const std::string message = gEditor.GetSceneLoadStatusMessage();
+                const char* status = message.rfind("Loading textures", 0) == 0 ? "Loading textures..."
+                    : message.rfind("Finishing", 0) == 0 ? "Finishing..." : "Loading models...";
+                gSceneRenderer->SetStartupScreenProgress(kLevelLoadingShare * gEditor.GetSceneLoadProgress(), status, message);
+            }
+            else if (QtUi::IsStandaloneGame() && gStandaloneLevelLoaded && !gStandaloneStarted)
             {
                 const auto now = std::chrono::steady_clock::now();
                 if (gStandaloneWarmupBegin == std::chrono::steady_clock::time_point{})
@@ -1991,6 +1819,15 @@ extern "C"
                     ? gStandaloneSmoothFrames + 1 : 0;
 
                 const bool warmedUp = gStandaloneSmoothFrames >= kWarmupSmoothFramesNeeded;
+                // Smooth frames can fall back to zero on a hitch, so the timeout counts too:
+                // whichever is further along fills the last stretch of the bar.
+                const float warmupFraction = (std::max)(
+                    static_cast<float>(gStandaloneSmoothFrames) / static_cast<float>(kWarmupSmoothFramesNeeded),
+                    std::chrono::duration<float>(now - gStandaloneWarmupBegin).count()
+                        / std::chrono::duration<float>(kWarmupTimeout).count());
+                gSceneRenderer->SetStartupScreenProgress(
+                    kLevelLoadingShare + (1.0f - kLevelLoadingShare) * (std::min)(1.0f, warmupFraction),
+                    "Warming up...", "Preparing the first frames");
                 if (warmedUp || now - gStandaloneWarmupBegin > kWarmupTimeout)
                 {
                     PTERO_LOG_INFO("Game", "Level warmed up in %.1f s%s; starting the intro.",
@@ -2105,7 +1942,9 @@ extern "C"
             gbufferIds.GiAccum  = gSceneRenderer->GetGiAccumTextureId();
             gbufferIds.PointShadowArray = gSceneRenderer->GetPointShadowDebugTextureId();
             const FsrRuntimeStatus fsrStatus = gSceneRenderer->GetFsrRuntimeStatus();
-            char vsmStatus[192] = "Inactive (off, or shadows disabled).";
+            const XessRuntimeStatus xessStatus = gSceneRenderer->GetXessRuntimeStatus();
+            const VoxelGIStatus voxelGiStatus = gSceneRenderer->GetVoxelGiStatus();
+            char vsmStatus[320] = "Inactive (off, or shadows disabled).";
             if (gSceneRenderer->IsVirtualShadowMapActive())
             {
                 const auto& vsmStats = gSceneRenderer->GetVirtualShadowMapStatistics();
@@ -2114,6 +1953,16 @@ extern "C"
                     vsmStats.ResidentPages, vsmStats.PoolPages, vsmStats.RequestedPages,
                     vsmStats.RenderedThisFrame, vsmStats.WaitingPages, vsmStats.LocalLights,
                     vsmStats.PoolOverflow > 0 ? " - pool full, raise Pool Pages" : "");
+            }
+            // The scene's light count and how they are clustered, on the same line.
+            {
+                const LightClusterGpuConstants& clusters = gSceneRenderer->GetLightClusterConstants();
+                const std::size_t used = std::strlen(vsmStatus);
+                std::snprintf(vsmStatus + used, sizeof(vsmStatus) - used,
+                    "\nScene lights: %d of %d; clusters %ux%ux%u%s",
+                    gSceneRenderer->GetSceneLightCount(), DeferredLightingPass::kMaxSceneLights,
+                    clusters.TilesX, clusters.TilesY, clusters.Slices,
+                    clusters.Enabled ? "" : " (off: every light everywhere)");
             }
             gUiBuildStart = std::chrono::steady_clock::now();
             if (!QtUi::IsGameWindowOpen()) RenderEditorMainMenu(
@@ -2133,22 +1982,32 @@ extern "C"
                 gEditor.GetShowResourceDebugPanelPointer(),
                 &gSceneRenderer->GetTaaSettings(),
                 &gSceneRenderer->GetSmaaSettings(),
+                &gSceneRenderer->GetAnalyticEdgeAaSettings(),
+                &gSceneRenderer->GetAarSettings(),
+                gSceneRenderer->GetAarStatus(),
                 &gSceneRenderer->GetMsaaSettings(),
                 &gSceneRenderer->GetSharpenSettings(),
                 &gSceneRenderer->GetDlssSettings(),
                 &gSceneRenderer->GetFsrSettings(),
                 &fsrStatus,
+                &gSceneRenderer->GetXessSettings(),
+                &xessStatus,
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetWindSettings(),
                 &gSceneRenderer->GetGlobalIlluminationMode(),
                 &gSceneRenderer->GetRtgiSettings(),
                 &gSceneRenderer->GetRadianceCascadesSettings(),
                 &gSceneRenderer->GetProbeSettings(),
+                &gSceneRenderer->GetVoxelGiSettings(),
+                &voxelGiStatus,
                 &gSceneRenderer->GetRtaoSettings(),
+                &gSceneRenderer->GetPathTracerSettings(),
+                gSceneRenderer->GetPathTracerStatus(),
                 &gSceneRenderer->GetGtaoSettings(),
                 &gSceneRenderer->GetSsrSettings(),
                 &gSceneRenderer->GetSubsurfaceSettings(),
                 gSceneRenderer->IsSubsurfaceRayTracingSupported(),
+                &gSceneRenderer->GetShadingSettings(),
                 &gSceneRenderer->GetChromaticAberrationSettings(),
                 &gSceneRenderer->GetAgxSettings(),
                 &gSceneRenderer->GetVolumetricFogSettings(),
@@ -2159,6 +2018,7 @@ extern "C"
                 &gSceneRenderer->GetPointShadowSettings(),
                 &gSceneRenderer->GetVirtualShadowMapSettings(),
                 vsmStatus,
+                &gSceneRenderer->GetRtShadowSettings(),
                 &gSceneRenderer->GetDpleSettings(),
                 gSceneRenderer->GetDpleErrorMessage(),
                 &gbufferIds,
@@ -2168,10 +2028,16 @@ extern "C"
             gSceneRenderer->SetViewDistanceMeters(viewDistanceMeters);
             gEditor.SetShowViewportGrid(gridEnabled);
             gEditor.SetFsrSettings(&gSceneRenderer->GetFsrSettings());
+            gEditor.SetAnalyticEdgeAaSettings(&gSceneRenderer->GetAnalyticEdgeAaSettings());
+            gEditor.SetAarSettings(&gSceneRenderer->GetAarSettings());
+            gEditor.SetXessSettings(&gSceneRenderer->GetXessSettings());
             gEditor.SetSubsurfaceSettings(&gSceneRenderer->GetSubsurfaceSettings());
+            gEditor.SetShadingSettings(&gSceneRenderer->GetShadingSettings());
             gEditor.SetDpleSettings(&gSceneRenderer->GetDpleSettings());
             gEditor.SetLensFlareSettings(&gSceneRenderer->GetLensFlareSettings());
+            gEditor.SetRtShadowSettings(&gSceneRenderer->GetRtShadowSettings());
             gEditor.SetRadianceProbeSettings(&gSceneRenderer->GetProbeSettings());
+            gEditor.SetVoxelGiSettings(&gSceneRenderer->GetVoxelGiSettings());
             gEditor.SetSceneSettings(
                 &gSceneRenderer->GetTimeOfDaySettings(),
                 &gSceneRenderer->GetTaaSettings(),
@@ -2202,7 +2068,7 @@ extern "C"
             int viewportContentWidth = 0;
             int viewportContentHeight = 0;
             if (!gSceneRenderer->GetDlssSettings().Enabled
-                && !gSceneRenderer->IsFsrUpscalerActive()
+                && !gSceneRenderer->UpscalerOwnsPostAaOutput()
                 && !gEditor.IsViewportResolutionFixed()
                 && gEditor.GetLastViewportContentResolution(viewportContentWidth, viewportContentHeight))
             {
@@ -2271,7 +2137,7 @@ extern "C"
                     outputPath.make_preferred();
 
                     ID3D12Resource* sceneTexture = gSceneRenderer->GetSceneColorTargetResource();
-                    if (sceneTexture && SaveScreenshotToPNG(sceneTexture, outputPath.string()))
+                    if (sceneTexture && FrameCapture::SaveTexture(sceneTexture, outputPath.string(), FrameCapture::ImageFormat::Png))
                     {
                         OutputDebugStringA(("Screenshot saved to: " + outputPath.string() + "\n").c_str());
                     }
@@ -2282,6 +2148,10 @@ extern "C"
                 }
                 gEditor.ClearScreenshotRequest();
             }
+
+            // Ptero Sequencer's Render Sequence: one step per frame - capture the image
+            // finished two frames ago, then pose the level for the next frame to render.
+            gEditor.UpdateCinematicRender(gSceneRenderer->GetSceneColorTargetResource());
 
             if (gUiBuildStart.time_since_epoch().count() != 0)
             {
@@ -2314,6 +2184,11 @@ extern "C"
             // keeps a copy of it, so it can tell the game UI drawn next apart from
             // the scene and keep the UI from being dragged along with scene motion.
             gSceneRenderer->GetFrameGeneration().FinishFrame(commandList, backBuffer, gSceneRenderer->GetFsrSettings());
+            {
+                UINT backBufferWidth = 0, backBufferHeight = 0;
+                DX12Context_GetRenderSize(&backBufferWidth, &backBufferHeight);
+                gSceneRenderer->GetXessFrameGeneration().FinishFrame(commandList, backBuffer, backBufferWidth, backBufferHeight);
+            }
             frameGenerationFinished = true;
 
             // A playing video covers the scene but stays under the game UI, so menus and
@@ -2325,7 +2200,8 @@ extern "C"
             // The game UI composites over the scene here rather than through the Qt UI
             // layer: the viewport is a native surface presented by this blit, and the Qt
             // draw list can only paint file-backed pixmaps, not live GPU textures.
-            if (gSceneRenderer->IsGameUiActive())
+            // The startup screens too, which sit over the black of a scene not yet shown.
+            if (gSceneRenderer->IsGameUiActive() || gSceneRenderer->IsStartupScreenActive())
             {
                 QtViewportRenderer::DrawOverlay(
                     commandList,
@@ -2342,7 +2218,10 @@ extern "C"
         // A frame that never reached the viewport blit presents without interpolation,
         // but still advances frame generation's frame counter.
         if (!frameGenerationFinished)
+        {
             gSceneRenderer->GetFrameGeneration().FinishFrame(nullptr, nullptr, gSceneRenderer->GetFsrSettings());
+            gSceneRenderer->GetXessFrameGeneration().FinishFrame(nullptr, nullptr, 0, 0);
+        }
 
         // Transition back to present state so swap chain can display the frame.
         auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -2443,6 +2322,9 @@ extern "C"
             return true;
         if (gSceneRenderer && gSceneRenderer->IsGameRunning()) gSceneRenderer->StopGame();
         gEditor.StopPlaySession();
+        // The open sequence is a separate asset with its own save, asked about first.
+        if (!SequencerEditor::ConfirmClose())
+            return false;
         return gEditor.ConfirmDiscardUnsavedScene(ownerWindowHandle);
     }
 
@@ -2490,4 +2372,10 @@ extern "C"
         const char* sceneError = gSceneRenderer ? gSceneRenderer->GetLastErrorMessage() : nullptr;
         return (sceneError != nullptr && sceneError[0] != '\0') ? sceneError : nullptr;
     }
+}
+
+// Editor::RecookMeshWithSkin: the next GetMesh must read the re-cooked files, not the cache.
+void Renderer_ForgetCachedMesh(const std::string& meshPath)
+{
+    gAssetManager.ForgetMesh(meshPath);
 }

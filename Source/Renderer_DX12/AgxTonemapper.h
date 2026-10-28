@@ -95,7 +95,8 @@ private:
 
         UINT  FrameWidth;
         UINT  FrameHeight;
-        float Pad1[2]{};
+        float NightDesaturation;
+        float Pad1[1]{};
     };
 
     // Pipeline

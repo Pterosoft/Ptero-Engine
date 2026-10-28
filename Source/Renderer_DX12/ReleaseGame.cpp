@@ -30,6 +30,11 @@ namespace ReleaseGame
         constexpr int kGameIconResourceId = 100;
         constexpr int kGameIconImageResourceId = 9000;
         constexpr int kPackagingKeyResourceId = 200;
+        constexpr int kSplashImageResourceId = 300;
+        // Largest splash stored in the exe. The launcher shows it at most this big, and
+        // nothing larger than a sizeable part of a 1080p screen is worth carrying.
+        constexpr size_t kSplashMaxWidth = 1600;
+        constexpr size_t kSplashMaxHeight = 1000;
 
 #pragma pack(push, 2)
         struct IconDirEntry
@@ -143,10 +148,69 @@ namespace ReleaseGame
             return true;
         }
 
-        // Injects (or replaces) the RT_GROUP_ICON/RT_ICON pair and the RT_RCDATA packaging
-        // key into a standalone copy of GameLauncherTemplate.exe. `iconPngBytes` may be
-        // null to leave whatever icon the exe already has untouched.
+        // Loads the splash image, keeps its alpha, shrinks it to fit kSplashMaxWidth x
+        // kSplashMaxHeight (never enlarging it), and encodes it as PNG for the exe.
+        bool BuildSplashImagePng(const std::wstring& sourceImagePath, std::vector<unsigned char>& outPngBytes, std::string& outError)
+        {
+            DirectX::TexMetadata metadata{};
+            DirectX::ScratchImage loadedImage;
+            HRESULT hr = DirectX::LoadFromWICFile(sourceImagePath.c_str(), DirectX::WIC_FLAGS_NONE, &metadata, loadedImage);
+            if (FAILED(hr))
+            {
+                outError = "Could not load the splash image (unsupported format?).";
+                return false;
+            }
+
+            DirectX::ScratchImage convertedImage;
+            const DirectX::Image* image = loadedImage.GetImage(0, 0, 0);
+            if (metadata.format != DXGI_FORMAT_R8G8B8A8_UNORM)
+            {
+                hr = DirectX::Convert(*image, DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, convertedImage);
+                if (FAILED(hr))
+                {
+                    outError = "Could not convert the splash image to RGBA.";
+                    return false;
+                }
+                image = convertedImage.GetImage(0, 0, 0);
+            }
+
+            DirectX::ScratchImage resizedImage;
+            const double scale = (std::min)(1.0, (std::min)(
+                static_cast<double>(kSplashMaxWidth) / static_cast<double>(image->width),
+                static_cast<double>(kSplashMaxHeight) / static_cast<double>(image->height)));
+            if (scale < 1.0)
+            {
+                const size_t width = (std::max)(size_t{ 1 }, static_cast<size_t>(image->width * scale + 0.5));
+                const size_t height = (std::max)(size_t{ 1 }, static_cast<size_t>(image->height * scale + 0.5));
+                hr = DirectX::Resize(*image, width, height, DirectX::TEX_FILTER_DEFAULT, resizedImage);
+                if (FAILED(hr))
+                {
+                    outError = "Could not resize the splash image.";
+                    return false;
+                }
+                image = resizedImage.GetImage(0, 0, 0);
+            }
+
+            DirectX::Blob pngBlob;
+            hr = DirectX::SaveToWICMemory(*image, DirectX::WIC_FLAGS_NONE, GUID_ContainerFormatPng, pngBlob);
+            if (FAILED(hr))
+            {
+                outError = "Could not encode the splash image as PNG.";
+                return false;
+            }
+
+            outPngBytes.assign(static_cast<unsigned char*>(pngBlob.GetBufferPointer()),
+                static_cast<unsigned char*>(pngBlob.GetBufferPointer()) + pngBlob.GetBufferSize());
+            return true;
+        }
+
+        // Injects (or replaces) the RT_GROUP_ICON/RT_ICON pair, the RT_RCDATA packaging key
+        // and the RT_RCDATA splash image into a standalone copy of GameLauncherTemplate.exe.
+        // `iconPngBytes` may be null to leave whatever icon the exe already has untouched;
+        // `splashPngBytes` null removes any splash, so the game starts without one.
         bool PatchExeResources(const std::wstring& exePath, const std::vector<unsigned char>* iconPngBytes,
+                               const std::vector<unsigned char>* splashPngBytes,
                                const Packaging::Key& key, std::string& outError)
         {
             HANDLE updateHandle = BeginUpdateResourceW(exePath.c_str(), FALSE);
@@ -197,9 +261,23 @@ namespace ReleaseGame
             ok = ok && UpdateResourceW(updateHandle, RT_RCDATA, MAKEINTRESOURCE(kPackagingKeyResourceId),
                 MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), obfuscatedKey.data(), static_cast<DWORD>(obfuscatedKey.size()));
 
+            if (splashPngBytes != nullptr && !splashPngBytes->empty())
+            {
+                ok = ok && UpdateResourceW(updateHandle, RT_RCDATA, MAKEINTRESOURCE(kSplashImageResourceId),
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                    const_cast<unsigned char*>(splashPngBytes->data()), static_cast<DWORD>(splashPngBytes->size()));
+            }
+            else
+            {
+                // Null data deletes the resource; the template never has one, so a failure
+                // here only means there was nothing to delete.
+                UpdateResourceW(updateHandle, RT_RCDATA, MAKEINTRESOURCE(kSplashImageResourceId),
+                    MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), nullptr, 0);
+            }
+
             if (!ok)
             {
-                outError = "UpdateResourceW failed while patching the icon/key into the exe.";
+                outError = "UpdateResourceW failed while patching the icon/key/splash into the exe.";
                 EndUpdateResourceW(updateHandle, TRUE); // discard
                 return false;
             }
@@ -234,7 +312,8 @@ namespace ReleaseGame
 
         // Renderer_DX12 statically compiles System's sources in (see Renderer_DX12.vcxproj),
         // so System.dll is not one of the modules the shipped game actually loads - these
-        // four are. Built in dependency order: Renderer_DX12 links Video.lib and Audio.lib.
+        // six are. Built in dependency order: Renderer_DX12 links Video.lib, Audio.lib,
+        // Physics.lib and Animations.lib.
         //
         // The renderer ships as its game-runtime flavour (PteroGameRuntime=true): the same
         // DLL minus Qt, built into x64\GameRuntime so it never replaces the editor's own.
@@ -248,6 +327,8 @@ namespace ReleaseGame
         const EngineModule kEngineModules[] = {
             { L"Video", L"Video.dll", L"Release", L"" },
             { L"Audio", L"Audio.dll", L"Release", L"" },
+            { L"Physics", L"Physics.dll", L"Release", L"" },
+            { L"Animations", L"Animations.dll", L"Release", L"" },
             { L"Game", L"Game.dll", L"Release", L"" },
             { L"Renderer_DX12", L"Renderer_DX12.dll", L"GameRuntime", L" /p:PteroGameRuntime=true" },
         };
@@ -378,15 +459,22 @@ namespace ReleaseGame
         // onLog. Serial by design (no /m): building the whole solution in parallel is known
         // to race on link order (see memory build-config-debug-x64-only), and each of these
         // is invoked as its own single-project build anyway, not the .slnx.
+        //
+        // `rebuild` runs /t:Rebuild, discarding the project's intermediates first.
+        // `outStaleIntermediates` reports a failure caused by intermediates an older compiler
+        // left behind - a precompiled header (C1853) or object file (C1047) that MSBuild's
+        // incremental check does not look at, so an ordinary retry fails the same way.
         bool RunMSBuildProject(const std::wstring& msbuildPath, const fs::path& vcxprojPath, const std::wstring& extraProperties,
-                               const LogCallback& onLog, std::string& outError)
+                               bool rebuild, const LogCallback& onLog, std::string& outError, bool& outStaleIntermediates)
         {
+            outStaleIntermediates = false;
             std::error_code tempError;
             const fs::path logFile = fs::temp_directory_path(tempError) /
                 (vcxprojPath.stem().wstring() + L"_release_build.log");
 
             const std::wstring commandLine = L"\"" + msbuildPath + L"\" \"" + vcxprojPath.wstring() +
-                L"\" /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal" + extraProperties;
+                L"\" /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal" +
+                (rebuild ? L" /t:Rebuild" : L"") + extraProperties;
 
             std::string startError;
             const int exitCode = RunProcessCapturingOutput(commandLine, vcxprojPath.parent_path(), logFile, startError);
@@ -401,6 +489,8 @@ namespace ReleaseGame
                 if (onLog) onLog("    " + line);
                 if (line.find("user-mapped section") != std::string::npos)
                     sawUserMappedSection = true;
+                if (line.find("error C1853") != std::string::npos || line.find("error C1047") != std::string::npos)
+                    outStaleIntermediates = true;
             }
 
             if (exitCode == -1)
@@ -447,11 +537,18 @@ namespace ReleaseGame
                 if (onLog) onLog("Building Release|x64: " + vcxprojPath.filename().string() + ToUtf8(extraProperties) + "...");
 
                 std::string buildError;
-                if (RunMSBuildProject(msbuildPath, vcxprojPath, extraProperties, onLog, buildError))
+                bool staleIntermediates = false;
+                if (RunMSBuildProject(msbuildPath, vcxprojPath, extraProperties, false, onLog, buildError, staleIntermediates))
                     return true;
 
                 if (onLog) onLog(buildError);
-                if (!RunMSBuildProject(msbuildPath, vcxprojPath, extraProperties, onLog, buildError))
+                // Built before with a compiler since updated: only a full rebuild replaces
+                // those files. Otherwise the same incremental build once more, for the
+                // intermittent failures.
+                if (staleIntermediates && onLog)
+                    onLog("Its intermediate files were made by an older compiler; rebuilding " +
+                        vcxprojPath.filename().string() + " from scratch...");
+                if (!RunMSBuildProject(msbuildPath, vcxprojPath, extraProperties, staleIntermediates, onLog, buildError, staleIntermediates))
                 {
                     outError = buildError;
                     return false;
@@ -468,6 +565,68 @@ namespace ReleaseGame
 
             const fs::path vcxprojPath = projectRoot / L"Source" / L"Ptero-Engine" / L"GameLauncher" / L"GameLauncher.vcxproj";
             return buildOneProject(vcxprojPath, L"");
+        }
+
+        // App-local copy of the Visual C++ runtime (MSVCP140/VCRUNTIME140/...), which every
+        // engine module and the launcher import. Microsoft supports this deployment, and it
+        // means the game never depends on the player (or a store reviewer) having a recent
+        // enough VC++ Redistributable installed - msvcp140_atomic_wait.dll in particular
+        // only exists in 14.28+. Taken from the newest VC\Redist\MSVC\<ver>\x64\Microsoft.VC*.CRT
+        // of the Visual Studio that owns MSBuild, which is always >= the toolset we built with.
+        bool CopyVisualCppRuntime(const fs::path& outputDirectory, const LogCallback& onLog, std::string& outError)
+        {
+            const std::wstring msbuildPath = FindMSBuildExecutable();
+            fs::path redistRoot;
+            std::error_code error;
+            for (fs::path dir = fs::path(msbuildPath).parent_path(); !msbuildPath.empty() && dir.has_relative_path(); dir = dir.parent_path())
+            {
+                if (fs::is_directory(dir / L"VC" / L"Redist" / L"MSVC", error))
+                {
+                    redistRoot = dir / L"VC" / L"Redist" / L"MSVC";
+                    break;
+                }
+            }
+
+            fs::path crtDirectory;
+            std::wstring bestVersion;
+            if (!redistRoot.empty())
+            {
+                for (const auto& versionEntry : fs::directory_iterator(redistRoot, error))
+                {
+                    const std::wstring version = versionEntry.path().filename().wstring();
+                    if (!versionEntry.is_directory() || version.empty() || !iswdigit(version[0]) || version <= bestVersion)
+                        continue;
+                    for (const auto& crtEntry : fs::directory_iterator(versionEntry.path() / L"x64", error))
+                    {
+                        const std::wstring name = crtEntry.path().filename().wstring();
+                        if (crtEntry.is_directory() && _wcsnicmp(name.c_str(), L"Microsoft.VC", 12) == 0 &&
+                            name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".CRT") == 0)
+                        {
+                            crtDirectory = crtEntry.path();
+                            bestVersion = version;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (crtDirectory.empty())
+            {
+                outError = "Could not find the Visual C++ runtime (VC\\Redist\\MSVC\\<version>\\x64\\Microsoft.VC*.CRT) "
+                    "next to MSBuild. Install the \"C++ x64/x86 build tools\" workload's redistributables in Visual Studio.";
+                return false;
+            }
+
+            const wchar_t* kRuntimeDlls[] = {
+                L"msvcp140.dll", L"msvcp140_1.dll", L"msvcp140_2.dll", L"msvcp140_atomic_wait.dll",
+                L"msvcp140_codecvt_ids.dll", L"vcruntime140.dll", L"vcruntime140_1.dll", L"concrt140.dll",
+            };
+            for (const wchar_t* dll : kRuntimeDlls)
+            {
+                if (!CopyFileLogged(crtDirectory / dll, outputDirectory / dll, onLog, true, outError))
+                    return false;
+            }
+            return true;
         }
 
         // Every module the shipped game actually loads at runtime, plus whatever
@@ -515,14 +674,29 @@ namespace ReleaseGame
                                  outputDirectory / L"dxc.exe", onLog, true, outError))
                 return false;
 
-            // Everything else already sitting in Binaries/ (dxcompiler/dxil, NRD,
+            // NRD.dll: Binaries/ holds the SDK's Debug build (what the Debug editor links),
+            // which imports the debug CRT (MSVCP140D/VCRUNTIME140D/ucrtbased). Those only
+            // exist on machines with Visual Studio, so shipping it made Renderer_DX12.dll
+            // fail to load everywhere else (Steam review, BuildID 25653211). Always ship the
+            // SDK's Release build instead - same version, same exports.
+            if (!CopyFileLogged(projectRoot / L"Source" / L"SDKs" / L"NRD" / L"_NRD_SDK" / L"Lib" / L"Release" / L"NRD.dll",
+                                 outputDirectory / L"NRD.dll", onLog, true, outError))
+                return false;
+
+            if (!CopyVisualCppRuntime(outputDirectory, onLog, outError))
+                return false;
+
+            // Everything else already sitting in Binaries/ (dxcompiler/dxil,
             // FidelityFX, FMOD, ...) that isn't one of the engine modules above or an
             // editor-only artifact such as Qt.
             static const std::vector<std::wstring> skipNames = {
+                L"NRD.dll", L"steam_api64.dll",
                 L"Editor.exe", L"Renderer_DX12.dll", L"Renderer_DX12.pdb", L"Renderer_DX12.lib", L"Renderer_DX12.exp",
                 L"Game.dll", L"Game.pdb", L"Game.lib", L"Game.exp",
                 L"Audio.dll", L"Audio.pdb", L"Audio.lib", L"Audio.exp",
                 L"Video.dll", L"Video.pdb", L"Video.lib", L"Video.exp",
+                L"Physics.dll", L"Physics.pdb", L"Physics.lib", L"Physics.exp",
+                L"Animations.dll", L"Animations.pdb", L"Animations.lib", L"Animations.exp",
                 L"System.dll", L"System.pdb", L"System.lib", L"System.exp",
                 L"Editor.pdb", L"GameLauncherTemplateDebug.exe", L"GameLauncherTemplateDebug.pdb", L"GameLauncherTemplateDebug.lib",
             };
@@ -546,6 +720,27 @@ namespace ReleaseGame
                 CopyFileLogged(entry.path(), outputDirectory / fileName, onLog, false, copyError);
             }
             return true;
+        }
+
+        // steam_api64.dll ships only with a Steam build (Game Settings' SteamAppId): the
+        // launcher delay-loads it, so other builds run without it. A build that is no
+        // longer a Steam one drops the copy an earlier build left behind.
+        bool CopySteamRuntime(const fs::path& projectRoot, const fs::path& outputDirectory, std::uint32_t steamAppId,
+                              const LogCallback& onLog, std::string& outError)
+        {
+            const fs::path shippedDll = outputDirectory / L"steam_api64.dll";
+            if (steamAppId == 0)
+            {
+                std::error_code removeError;
+                if (fs::remove(shippedDll, removeError) && onLog)
+                    onLog("Removed steam_api64.dll (no Steam App ID set).");
+                return true;
+            }
+
+            if (onLog)
+                onLog("Steam App ID " + std::to_string(steamAppId) + ": the game will only run through Steam.");
+            return CopyFileLogged(projectRoot / L"Source" / L"SDKs" / L"SteamWorkssdk" / L"redistributable_bin" / L"win64" / L"steam_api64.dll",
+                                  shippedDll, onLog, true, outError);
         }
 
         bool WriteGameConfig(const fs::path& outputDirectory, const std::wstring& gameName, std::string& outError)
@@ -664,6 +859,7 @@ namespace ReleaseGame
 
         // The launcher opens Game Settings' StartupLevel; without one the built game could
         // only show an error, so refuse here where it can still be fixed.
+        std::uint32_t steamAppId = 0;
         {
             GameProjectSettings settings;
             settings.Load(dataDirectory);
@@ -674,6 +870,10 @@ namespace ReleaseGame
                 return false;
             }
             log("Startup level: " + settings.StartupLevel);
+            steamAppId = settings.SteamAppId;
+            if (settings.PterosoftProductId != 0)
+                log("Pterosoft product " + std::to_string(settings.PterosoftProductId) +
+                    ": the game will only run through Pterosoft Launcher.");
         }
 
         if (options.BuildPackages)
@@ -742,12 +942,26 @@ namespace ReleaseGame
                 iconPngBytesPtr = &iconPngBytes;
             }
 
-            if (!PatchExeResources(outputExe.wstring(), iconPngBytesPtr, projectKey, error))
+            std::vector<unsigned char> splashPngBytes;
+            std::vector<unsigned char>* splashPngBytesPtr = nullptr;
+            if (!options.SplashSourcePath.empty())
+            {
+                if (!BuildSplashImagePng(options.SplashSourcePath, splashPngBytes, error))
+                {
+                    log("Error: " + error);
+                    return false;
+                }
+                splashPngBytesPtr = &splashPngBytes;
+            }
+
+            if (!PatchExeResources(outputExe.wstring(), iconPngBytesPtr, splashPngBytesPtr, projectKey, error))
             {
                 log("Error: " + error);
                 return false;
             }
-            log("Icon and packaging key embedded.");
+            log(splashPngBytesPtr != nullptr
+                ? "Icon, splash screen (" + std::to_string(splashPngBytes.size() / 1024) + " KB) and packaging key embedded."
+                : "Icon and packaging key embedded (no splash screen).");
 
             if (!WriteGameConfig(outputDirectory, options.GameName, error))
             {
@@ -756,6 +970,12 @@ namespace ReleaseGame
             }
 
             if (!GatherRuntimeBinaries(projectRoot, outputDirectory, log, error))
+            {
+                log("Error: " + error);
+                return false;
+            }
+
+            if (!CopySteamRuntime(projectRoot, outputDirectory, steamAppId, log, error))
             {
                 log("Error: " + error);
                 return false;

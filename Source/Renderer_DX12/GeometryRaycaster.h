@@ -56,11 +56,15 @@ public:
     // for assets without collision hulls - the scatter only needs roughly where the
     // ground is, but a player notices a stair its coarsest LOD melted into a ramp - and
     // no water surfaces, which are to look at rather than to stand on.
+    //
+    // `skipMovingRigidBodies` leaves out dynamic and kinematic rigid bodies, for when the
+    // physics simulation is running and will report them where they actually are.
     void Build(
         const std::vector<Entity>& entities,
         const DirectX::XMFLOAT3&   regionMin,
         const DirectX::XMFLOAT3&   regionMax,
-        bool                       forPlayer = false);
+        bool                       forPlayer = false,
+        bool                       skipMovingRigidBodies = false);
 
     void Clear();
 

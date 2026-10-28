@@ -13,19 +13,29 @@
 #include "PointShadowMapRenderer.h"
 #include "PointShadowSettings.h"
 #include "VirtualShadowMapRenderer.h"
+#include "LightClusterRenderer.h"
 #include "DeferredLightingPass.h"
 #include "TimeOfDaySettings.h"
 #include "RtGlobalIllumination.h"
 #include "RtGISettings.h"
 #include "SMAARenderer.h"
 #include "SMAASettings.h"
+#include "AnalyticEdgeAARenderer.h"
+#include "AnalyticEdgeAASettings.h"
+#include "AarRenderer.h"
+#include "AarSettings.h"
 #include "MsaaSettings.h"
 #include "RadianceCascadesRenderer.h"
 #include "RadianceCascadesSettings.h"
 #include "RadianceProbeRenderer.h"
+#include "VoxelGIRenderer.h"
 #include "RadianceProbeSettings.h"
 #include "RtAmbientOcclusion.h"
+#include "RtShadows.h"
+#include "PathTracer.h"
+#include "PathTracerSettings.h"
 #include "RtAOSettings.h"
+#include "RtShadowSettings.h"
 #include "AgxTonemapper.h"
 #include "AutoExposure.h"
 #include "AgxTonemapSettings.h"
@@ -45,13 +55,16 @@
 #include "DpleRenderer.h"
 #include "SubsurfaceScattering.h"
 #include "SubsurfaceSettings.h"
+#include "ShadingSettings.h"
 #include "BloomRenderer.h"
 #include "FftBloomRenderer.h"
 #include "LensFlareRenderer.h"
+#include "SkyGlareRenderer.h"
 #include "LensFlareSettings.h"
 #include "BloomSettings.h"
 #include "ImageSharpenRenderer.h"
 #include "SharpenSettings.h"
+#include "GBufferViewRenderer.h"
 #include "TerrainRenderer.h"
 #include "VegetationRenderer.h"
 #include "VirtualGeometryRenderer.h"
@@ -63,12 +76,19 @@
 #include "FsrRenderer.h"
 #include "FsrFrameGeneration.h"
 #include "FsrSettings.h"
+#include "XessRenderer.h"
+#include "XessFrameGeneration.h"
+#include "XessSettings.h"
 #include "MotionVectorRenderer.h"
 #include "GameHost.h"
+#include "System/SteamAchievements.h"
 #include "GameProjectSettings.h"
 #include "PlayerCollision.h"
+#include "ScenePhysics.h"
+#include "SceneAnimation.h"
 #include "RmlUiRenderer.h"
 #include "System/NodeGraphRuntime.h"
+#include "CinematicWorldHost.h"
 #include "VideoLayer.h"
 #include "..\Ptero-Engine\EditorCamera.h"
 #include "..\Ptero-Engine\RenderInterfaces.h"
@@ -77,6 +97,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -214,9 +235,9 @@ public:
     void  InvalidateEntityPipeline() { mEntityMeshRenderer.InvalidatePipeline(); }
     float& GetViewDistanceMetersRef() { return mViewDistanceMeters; }
 
-    // DLSS and FSR fill the same slot in the post chain, between TAA/SMAA and
-    // sharpening. DLSS takes it when both are switched on, so the two never run in
-    // the same frame.
+    // DLSS, FSR, XeSS, TAA upsampling (TAAU) and AAR fill the same slot in the post
+    // chain, between TAA/SMAA and sharpening. Only one runs a frame; when several
+    // are switched on the first of DLSS, FSR, XeSS, TAAU, AAR takes it.
     bool IsDlssUpscalerActive() const
     {
         return mDlssSettings.Enabled && mDlssRenderer.IsAvailable();
@@ -227,41 +248,92 @@ public:
         return !IsDlssUpscalerActive() && mFsrSettings.Enabled && mFsrRenderer.IsAvailable();
     }
 
-    // While an upscaler owns the slot, TAA and SMAA are skipped: it does their job.
+    bool IsXessUpscalerActive() const
+    {
+        return !IsDlssUpscalerActive() && !IsFsrUpscalerActive()
+            && mXessSettings.Enabled && mXessRenderer.IsAvailable();
+    }
+
+    // The vendor upscalers: they replace TAA outright and take motion vectors.
+    bool IsExternalUpscalerActive() const
+    {
+        return IsDlssUpscalerActive() || IsFsrUpscalerActive() || IsXessUpscalerActive();
+    }
+
+    // TAA itself upscaling from ScreenPercentage, Unreal's TAAU.
+    bool IsTaaUpscalerActive() const
+    {
+        return !IsExternalUpscalerActive() && mTaaSettings.Enabled && mTaaSettings.Upscaling
+            && mTaaRenderer.IsInitialized();
+    }
+
+    // AAR, Analytic-Aware Reconstruction: the spatial upscaler built on the G-Buffer's
+    // triangle edges (AarSettings.h). Needs the edges, so not without SM 6.1 barycentrics
+    // and not under MSAA.
+    bool IsAarUpscalerActive() const
+    {
+        return !IsExternalUpscalerActive() && !IsTaaUpscalerActive()
+            && mAarSettings.Enabled && !mAarInitFailed && !mMsaaSettings.Enabled
+            && AnalyticEdge::IsSupported();
+    }
+
+    // While an upscaler owns the slot, plain TAA and SMAA are skipped: it does their job.
     bool UpscalerOwnsPostAaOutput() const
     {
-        return IsDlssUpscalerActive() || IsFsrUpscalerActive();
+        return IsExternalUpscalerActive() || IsTaaUpscalerActive() || IsAarUpscalerActive();
     }
 
     bool IsUpscalerOutputAvailable() const
     {
         if (IsDlssUpscalerActive())
             return mDlssRenderer.IsInitialized() && !mDlssRenderer.IsEvaluationBypassed();
-        return IsFsrUpscalerActive() && mFsrRenderer.HasOutput();
+        if (IsFsrUpscalerActive())
+            return mFsrRenderer.HasOutput();
+        if (IsXessUpscalerActive())
+            return mXessRenderer.HasOutput();
+        if (IsAarUpscalerActive())
+            return mAarRenderer.HasOutput();
+        return IsTaaUpscalerActive();
     }
 
     ID3D12Resource* GetUpscalerOutputResource() const
     {
-        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputResource() : mFsrRenderer.GetOutputResource();
+        if (IsDlssUpscalerActive()) return mDlssRenderer.GetOutputResource();
+        if (IsFsrUpscalerActive())  return mFsrRenderer.GetOutputResource();
+        if (IsXessUpscalerActive()) return mXessRenderer.GetOutputResource();
+        if (IsAarUpscalerActive())  return mAarRenderer.GetOutputResource();
+        return mTaaRenderer.GetOutputResource();
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetUpscalerOutputCpuSrv() const
     {
-        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputCpuSrv() : mFsrRenderer.GetOutputCpuSrv();
+        if (IsDlssUpscalerActive()) return mDlssRenderer.GetOutputCpuSrv();
+        if (IsFsrUpscalerActive())  return mFsrRenderer.GetOutputCpuSrv();
+        if (IsXessUpscalerActive()) return mXessRenderer.GetOutputCpuSrv();
+        if (IsAarUpscalerActive())  return mAarRenderer.GetOutputCpuSrv();
+        return mTaaRenderer.GetOutputCpuSrv();
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE GetUpscalerOutputGpuSrv() const
     {
-        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputGpuSrv() : mFsrRenderer.GetOutputGpuSrv();
+        if (IsDlssUpscalerActive()) return mDlssRenderer.GetOutputGpuSrv();
+        if (IsFsrUpscalerActive())  return mFsrRenderer.GetOutputGpuSrv();
+        if (IsXessUpscalerActive()) return mXessRenderer.GetOutputGpuSrv();
+        if (IsAarUpscalerActive())  return mAarRenderer.GetOutputGpuSrv();
+        return mTaaRenderer.GetOutputGpuSrv();
     }
 
     UiTextureID GetUpscalerOutputTextureId() const
     {
-        return IsDlssUpscalerActive() ? mDlssRenderer.GetOutputTextureId() : mFsrRenderer.GetOutputTextureId();
+        if (IsDlssUpscalerActive()) return mDlssRenderer.GetOutputTextureId();
+        if (IsFsrUpscalerActive())  return mFsrRenderer.GetOutputTextureId();
+        if (IsXessUpscalerActive()) return mXessRenderer.GetOutputTextureId();
+        if (IsAarUpscalerActive())  return mAarRenderer.GetOutputTextureId();
+        return mTaaRenderer.GetOutputTextureId();
     }
 
     // Returns the final scene output for display:
-    //   AgX tonemapped → Bloom composited → sharpened image → DLSS/FSR upscaled → SMAA resolved → TAA resolved → raw scene colour (in priority order when enabled).
+    //   AgX tonemapped → Bloom composited → sharpened image → DLSS/FSR/XeSS/TAAU upscaled → SMAA resolved → TAA resolved → raw scene colour (in priority order when enabled).
     UiTextureID GetSceneTextureId() const
     {
         const bool upscalerOwnsPostAaOutput = UpscalerOwnsPostAaOutput();
@@ -270,6 +342,8 @@ public:
             && mImageSharpenRenderer.IsInitialized()
             && (!upscalerOwnsPostAaOutput || upscalerOutputAvailable);
 
+        if (IsGBufferViewActive())
+            return mGBufferViewRenderer.GetOutputTextureId();
         if (mRtaoSettings.DebugView > 0)
             return mSceneTextureId;
         // Chromatic aberration is the last thing applied, so when it runs its output is
@@ -299,6 +373,8 @@ public:
             && mImageSharpenRenderer.IsInitialized()
             && (!upscalerOwnsPostAaOutput || upscalerOutputAvailable);
 
+        if (IsGBufferViewActive())
+            return mGBufferViewRenderer.GetOutputGpuSrv();
         if (mRtaoSettings.DebugView > 0)
             return mSceneSrvGpuHandle;
         if (mChromaticAberrationSettings.Enabled && mChromaticAberrationRenderer.IsInitialized())
@@ -324,6 +400,16 @@ public:
     SMAASettings& GetSmaaSettings() { return mSmaaSettings; }
     const SMAASettings& GetSmaaSettings() const { return mSmaaSettings; }
 
+    AnalyticEdgeAASettings& GetAnalyticEdgeAaSettings() { return mAnalyticEdgeAaSettings; }
+    const AnalyticEdgeAASettings& GetAnalyticEdgeAaSettings() const { return mAnalyticEdgeAaSettings; }
+    // False when the GPU lacks SM 6.1 barycentrics, so the G-Buffer carries no edges.
+    bool IsAnalyticEdgeAaSupported() const { return AnalyticEdge::IsSupported(); }
+
+    AarSettings& GetAarSettings() { return mAarSettings; }
+    const AarSettings& GetAarSettings() const { return mAarSettings; }
+    // Why AAR is not running despite being enabled, or null.
+    const char* GetAarStatus() const;
+
     MsaaSettings& GetMsaaSettings() { return mMsaaSettings; }
     const MsaaSettings& GetMsaaSettings() const { return mMsaaSettings; }
 
@@ -347,8 +433,23 @@ public:
     RadianceProbeSettings& GetProbeSettings() { return mProbeSettings; }
     const RadianceProbeSettings& GetProbeSettings() const { return mProbeSettings; }
 
+    VoxelGISettings& GetVoxelGiSettings() { return mVoxelGiSettings; }
+    const VoxelGISettings& GetVoxelGiSettings() const { return mVoxelGiSettings; }
+    // Whether the GPU can run the ray traced GI paths (DXR 1.1 inline ray queries).
+    bool IsRayTracingSupported() const;
+    // What the voxel GI did last frame, for the settings panel.
+    VoxelGIStatus GetVoxelGiStatus() const;
+
     RtAOSettings& GetRtaoSettings() { return mRtaoSettings; }
     const RtAOSettings& GetRtaoSettings() const { return mRtaoSettings; }
+
+    RtShadowSettings& GetRtShadowSettings() { return mRtShadowSettings; }
+    const RtShadowSettings& GetRtShadowSettings() const { return mRtShadowSettings; }
+
+    PathTracerSettings& GetPathTracerSettings() { return mPathTracerSettings; }
+    const PathTracerSettings& GetPathTracerSettings() const { return mPathTracerSettings; }
+    // One line for the settings panel: samples so far, or why it is not running.
+    const char* GetPathTracerStatus() const { return mPathTracerStatus.c_str(); }
 
     AgxTonemapSettings& GetAgxSettings() { return mAgxSettings; }
     const AgxTonemapSettings& GetAgxSettings() const { return mAgxSettings; }
@@ -366,6 +467,8 @@ public:
     const SsrSettings& GetSsrSettings() const { return mSsrSettings; }
     SubsurfaceSettings& GetSubsurfaceSettings() { return mSubsurfaceSettings; }
     const SubsurfaceSettings& GetSubsurfaceSettings() const { return mSubsurfaceSettings; }
+    ShadingSettings& GetShadingSettings() { return mShadingSettings; }
+    const ShadingSettings& GetShadingSettings() const { return mShadingSettings; }
     DpleSettings& GetDpleSettings() { return mDpleSettings; }
     const DpleSettings& GetDpleSettings() const { return mDpleSettings; }
     // Why DPLE is not running although it is enabled, or null when it is fine.
@@ -408,12 +511,23 @@ public:
         return mLensFlareSettings.Enabled && mLensFlareRenderer.IsInitialized();
     }
 
-    bool IsBloomStageActive() const { return IsLensFlareActive() || IsBloomActive(); }
+    // The sun's and the moon's own glare (SkyGlareRenderer), between the bloom and the
+    // lens flare.
+    bool IsSkyGlareActive() const
+    {
+        return mTimeOfDaySettings.Enabled
+            && (mTimeOfDaySettings.SunGlare.Enabled || mTimeOfDaySettings.MoonGlare.Enabled)
+            && mSkyGlareRenderer.IsInitialized();
+    }
+
+    bool IsBloomStageActive() const { return IsLensFlareActive() || IsSkyGlareActive() || IsBloomActive(); }
 
     ID3D12Resource* GetBloomStageOutputResource() const
     {
         if (IsLensFlareActive())
             return mLensFlareRenderer.GetOutputResource();
+        if (IsSkyGlareActive())
+            return mSkyGlareRenderer.GetOutputResource();
         return mBloomSettings.Method == BloomMethod::FftConvolution
             ? mFftBloomRenderer.GetOutputResource() : mBloomRenderer.GetOutputResource();
     }
@@ -422,6 +536,8 @@ public:
     {
         if (IsLensFlareActive())
             return mLensFlareRenderer.GetOutputCpuSrv();
+        if (IsSkyGlareActive())
+            return mSkyGlareRenderer.GetOutputCpuSrv();
         return mBloomSettings.Method == BloomMethod::FftConvolution
             ? mFftBloomRenderer.GetOutputCpuSrv() : mBloomRenderer.GetOutputCpuSrv();
     }
@@ -430,6 +546,8 @@ public:
     {
         if (IsLensFlareActive())
             return mLensFlareRenderer.GetOutputGpuSrv();
+        if (IsSkyGlareActive())
+            return mSkyGlareRenderer.GetOutputGpuSrv();
         return mBloomSettings.Method == BloomMethod::FftConvolution
             ? mFftBloomRenderer.GetOutputGpuSrv() : mBloomRenderer.GetOutputGpuSrv();
     }
@@ -438,12 +556,21 @@ public:
     {
         if (IsLensFlareActive())
             return mLensFlareRenderer.GetOutputTextureId();
+        if (IsSkyGlareActive())
+            return mSkyGlareRenderer.GetOutputTextureId();
         return mBloomSettings.Method == BloomMethod::FftConvolution
             ? mFftBloomRenderer.GetOutputTextureId() : mBloomRenderer.GetOutputTextureId();
     }
 
     PointShadowSettings& GetPointShadowSettings() { return mPointShadowSettings; }
     const PointShadowSettings& GetPointShadowSettings() const { return mPointShadowSettings; }
+
+    // Clustered light lists (LightClusterRenderer): whether they are used, the bounce-hit
+    // grid's cell size, and what the last frame built.
+    bool& GetClusteredLights() { return mClusteredLights; }
+    float& GetLightGridCellSize() { return mLightGridCellSize; }
+    const LightClusterGpuConstants& GetLightClusterConstants() const { return mLightClusterRenderer.GetConstants(); }
+    int GetSceneLightCount() const { return mNumCachedPointLights; }
 
     VirtualShadowMapSettings& GetVirtualShadowMapSettings() { return mVirtualShadowMapSettings; }
     const VirtualShadowMapSettings& GetVirtualShadowMapSettings() const { return mVirtualShadowMapSettings; }
@@ -468,6 +595,21 @@ public:
 
     FsrRuntimeStatus GetFsrRuntimeStatus();
 
+    XessSettings& GetXessSettings() { return mXessSettings; }
+    const XessSettings& GetXessSettings() const { return mXessSettings; }
+
+    // Driven from the frame loop, like FSR's.
+    XessFrameGeneration& GetXessFrameGeneration() { return mXessFrameGeneration; }
+
+    // Whether the frame loop should install XeSS-FG's proxy swap chain. FSR frame
+    // generation takes precedence when both are switched on.
+    bool WantsXessFrameGenerationSwapChain()
+    {
+        return !WantsFrameGenerationSwapChain() && mXessSettings.FrameGeneration && mXessFrameGeneration.IsApiAvailable();
+    }
+
+    XessRuntimeStatus GetXessRuntimeStatus();
+
     UiTextureID GetPointShadowDebugTextureId() const
     {
         return static_cast<UiTextureID>(mPointShadowMapRenderer.GetShadowTextureArraySrvGpuHandle().ptr);
@@ -483,6 +625,8 @@ public:
     WaterRenderer& GetWaterRenderer() { return mWaterRenderer; }
     const WaterRenderer& GetWaterRenderer() const { return mWaterRenderer; }
     EntityMeshRenderer& GetEntityMeshRenderer() { return mEntityMeshRenderer; }
+    SceneAnimation& GetSceneAnimation() { return mSceneAnimation; }
+    const SceneAnimation& GetSceneAnimation() const { return mSceneAnimation; }
     VegetationRenderer& GetVegetationRenderer() { return mVegetationRenderer; }
     const VegetationRenderer& GetVegetationRenderer() const { return mVegetationRenderer; }
     VirtualGeometryRenderer& GetVirtualGeometryRenderer() { return mVirtualGeometryRenderer; }
@@ -528,6 +672,7 @@ public:
                 renderer->mCurrentPassOrder.push_back({ category, name });
                 mOrdinal = static_cast<UINT>(renderer->mCurrentPassOrder.size());
                 renderer->WriteGpuProgress(1, mOrdinal, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN);
+                mGpuQuery = renderer->BeginGpuPassTimestamp(category, name);
                 wchar_t label[96] = {};
                 const int written = swprintf_s(label, L"%hs: %hs", category, name);
                 if (written > 0)
@@ -544,6 +689,8 @@ public:
                 mCommandList->EndEvent();
                 mRenderer->WriteGpuProgress(2, mOrdinal, D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT);
             }
+            if (mRenderer != nullptr)
+                mRenderer->EndGpuPassTimestamp(mGpuQuery);
 
             if (mRenderer == nullptr)
                 return;
@@ -560,6 +707,7 @@ public:
         DX12SceneRenderer* mRenderer;
         ID3D12GraphicsCommandList* mCommandList = nullptr;
         UINT               mOrdinal = 0;
+        UINT               mGpuQuery = UINT_MAX;
         const char*        mCategory;
         const char*        mName;
         std::chrono::steady_clock::time_point mStart;
@@ -629,6 +777,16 @@ public:
         return mRmlUiRenderer.IsInitialized() && mRmlUiRenderer.IsPreviewActive();
     }
 
+    // Startup screens of a standalone game (Data/UI/Farkle/shader-preload.rml, then
+    // loading.rml), shown by the host before the play session exists - there is no
+    // Game.dll yet to drive the UI. Drawn through the same RmlUi target as the game UI and
+    // composited even while the scene itself is still held back. StartGame takes them down.
+    bool ShowStartupScreen(const std::string& document);
+    // fraction 0..1. Detail is the small line under the bar; empty leaves it as it is.
+    void SetStartupScreenProgress(float fraction, const std::string& status, const std::string& detail = {});
+    void HideStartupScreen();
+    bool IsStartupScreenActive() const { return mStartupScreenActive && mRmlUiRenderer.IsInitialized(); }
+
     RmlUiRenderer& GetRmlUiRenderer() { return mRmlUiRenderer; }
     const RmlUiRenderer& GetRmlUiRenderer() const { return mRmlUiRenderer; }
 
@@ -641,6 +799,21 @@ public:
     // then on, so the graph can keep being edited while it runs.
     void SetNodeGraph(const NodeGraphDocument* document) { mNodeGraphSource = document; }
     const NodeGraphRuntime& GetNodeGraphRuntime() const { return mNodeGraphRuntime; }
+
+    // The play session's cinematic runtime (Ptero Sequencer assets). Players started here
+    // live until the session stops.
+    CinematicSystem& GetCinematics() { return mCinematics; }
+
+    // Called every editor frame right after the fly camera has taken its input and before
+    // the view is built: the editor pilots camera entities and locks the view to a
+    // cinematic cut camera through this. Not called during a play session.
+    void SetEditorCameraHook(std::function<void(EditorCamera&)> hook) { mEditorCameraHook = std::move(hook); }
+
+    // Offline rendering (Render Sequence): every frame advances the scene clock - light
+    // styles, particles, water, exposure adaptation - by exactly this many seconds rather
+    // than by wall-clock time, so frame N of a render looks the same however long the GPU
+    // took over it. Zero returns to real time.
+    void SetFixedFrameDelta(float seconds) { mFixedFrameDeltaSeconds = (std::max)(0.0f, seconds); }
 
     const std::string& GetGameStartErrorMessage() const { return mGameHost.GetLastErrorMessage(); }
     const std::string& GetGameName() const { return mGameHost.GetGameName(); }
@@ -658,6 +831,16 @@ public:
     // Depth SRV lives on the scene renderer (R32_FLOAT view of the depth target).
     UiTextureID GetGBufferDepthTextureId()    const { return static_cast<UiTextureID>(mDepthDebugSrvGpuHandle.ptr != 0 ? mDepthDebugSrvGpuHandle.ptr : mDepthSrvGpuHandle.ptr); }
     UiTextureID GetGiAccumTextureId()         const { return static_cast<UiTextureID>(mRtgiRenderer.GetOutputSrv().ptr); }
+
+    // The viewport's G-Buffer view mode (View Mode > G-Buffer). While one is set the
+    // viewport shows that channel in place of the finished frame. Editor-only state,
+    // never saved with a level.
+    GBufferView GetGBufferView() const { return mGBufferView; }
+    void SetGBufferView(GBufferView view) { mGBufferView = view; }
+    bool IsGBufferViewActive() const
+    {
+        return mGBufferView != GBufferView::Off && mGBufferViewRenderer.IsInitialized();
+    }
 
     // Transitions the scene depth buffer to PIXEL_SHADER_RESOURCE so Ui can
     // sample it in the G-Buffer debug window.  Call before Ui::Render() and
@@ -727,8 +910,8 @@ private:
     float ComputeSceneBoundRadius() const;
 
     // The point lights that get a shadow cubemap this frame, in cubemap order:
-    // the first kMaxShadowCastingPointLights shadow casters among the first
-    // DeferredLightingPass::kMaxPointLights lights. When outShadowIndexPerLight
+    // the first kMaxShadowCastingPointLights shadow casters among the scene's
+    // entity lights. When outShadowIndexPerLight
     // is given it receives, per light in gather order, its cubemap index or -1.
     // One rule for the point-shadow pass and for the virtualized geometry
     // culled into those cubemaps, which must agree on the order.
@@ -750,6 +933,8 @@ private:
     // position is tracked here because the game is handed deltas, not absolute pixels.
     GameHost mGameHost;
     AudioManager* mAudioManager = nullptr;
+    // Steam achievements and stats behind the Node Graph's Achievements nodes.
+    SteamAchievements mAchievements;
 
     // Game-facing UI. It renders to its own target and is composited over the scene
     // image, so it is deliberately not part of the post-processing chain.
@@ -782,6 +967,7 @@ private:
             const std::string& className,
             bool enabled) override;
         bool SetUiElementVisible(const std::string& elementId, bool visible) override;
+        bool SetUiElementEnabled(const std::string& elementId, bool enabled) override;
 
         bool PlayVideo(const std::string& fileName, bool loop, const std::string& fit) override;
         void PauseVideo() override;
@@ -803,6 +989,15 @@ private:
         bool SetEntityProperty(std::uint64_t entityId, const std::string& property, double value) override;
         bool SetEntityAudioPlaying(std::uint64_t entityId, bool playing) override;
 
+        bool AddEntityImpulse(std::uint64_t entityId, const double impulse[3]) override;
+        bool AddEntityForce(std::uint64_t entityId, const double force[3]) override;
+        bool SetEntityVelocity(std::uint64_t entityId, const double velocity[3]) override;
+        bool GetEntityVelocity(std::uint64_t entityId, double velocity[3]) override;
+        bool SetEntityAngularVelocity(std::uint64_t entityId, const double velocity[3]) override;
+        bool Raycast(const double origin[3], const double direction[3], double maxDistance,
+                     NodeGraphRayHit& hit) override;
+        const std::vector<NodeGraphPhysicsHit>& GetPhysicsHits() override;
+
         NodeGraphCameraPose GetCamera() override;
         void SetCamera(const NodeGraphCameraPose& pose) override;
 
@@ -815,11 +1010,20 @@ private:
         bool PollUiClick(std::string& elementId) override;
         void ToggleFullscreen() override;
         bool IsStandalone() override;
+        bool GetGameSetting(const std::string& key, std::string& value) override;
 
         CharacterMovement* GetPlayerCharacter() override;
         void GetMouseDelta(double& x, double& y) override;
         void SetMouseCaptured(bool captured) override;
         bool IsMouseCaptured() override;
+
+        bool UnlockAchievement(const std::string& name) override;
+        bool IsAchievementUnlocked(const std::string& name) override;
+        bool ClearAchievement(const std::string& name) override;
+        bool ShowAchievementProgress(const std::string& name, int progress, int maximum) override;
+        bool GetStat(const std::string& name, int& value) override;
+        bool SetStat(const std::string& name, int value) override;
+        bool IsSteamRunning() override;
 
     private:
         Entity* FindEntity(std::uint64_t entityId);
@@ -833,12 +1037,42 @@ private:
     NodeGraphRuntime mNodeGraphRuntime;
     const NodeGraphDocument* mNodeGraphSource = nullptr;
 
+    // ---- Cinematics ---------------------------------------------------------------
+    // Sequences played during a session run against the session's entities. Ticked
+    // after the graphs (which may start them) and applied over the game camera: a
+    // cutscene's cut camera wins over the player's view for as long as it plays.
+    CinematicWorldHost mCinematicHost;
+    CinematicSystem mCinematics;
+    void UpdateCinematics(float deltaSeconds);
+    std::function<void(EditorCamera&)> mEditorCameraHook;
+    float mFixedFrameDeltaSeconds = 0.0f;
+
     // ---- Player (Game Settings) -------------------------------------------------
     // Read from Data/Game/GameSettings.json when play starts, so edits in the Game
     // Settings window apply from the next Play.
     GameProjectSettings mGameProjectSettings;
     // Static meshes and terrain, built at the start of each session for the character.
     PlayerCollision mPlayerCollision;
+    // The rigid body simulation (Physics.dll), built at the start of each session and
+    // stepped every game frame. Moving bodies live here rather than in mPlayerCollision.
+    ScenePhysics mScenePhysics;
+    // Every Animator's playback (Animations.dll); its palettes skin the meshes each frame.
+    SceneAnimation mSceneAnimation;
+    // Set by any character trace this frame: a character is walking, so the physics
+    // world gets a proxy capsule for it to shove bodies with.
+    mutable bool mPlayerTracedThisFrame = false;
+    // The latest physics step's collisions in the Node Graph's form, refreshed after each
+    // step and read by both graphs' On Rigid Body Hit on the following tick.
+    std::vector<NodeGraphPhysicsHit> mNodeGraphPhysicsHits;
+    // The character's world: mPlayerCollision plus the simulation's moving bodies.
+    bool TracePlayerWorld(const float origin[3], const float direction[3], float maxDistance,
+                          CharacterTraceHit& hit) const;
+    static bool TracePlayerWorldCallback(void* user, const float origin[3], const float direction[3],
+                                         float maxDistance, CharacterTraceHit* hit);
+    // Game.dll addresses entities by list index (GameServices::FindEntity); everything
+    // else by Entity::Id. 0 / -1 when there is no such entity.
+    std::uint64_t GameEntityId(int index) const;
+    int GameEntityIndex(std::uint64_t entityId) const;
     // The player when Game Settings picks a Node Graph controller: the engine owns the
     // character, the controller graph drives it through the Character nodes, and it is
     // stepped after the graphs tick. With the C++ controller Game.dll owns the character
@@ -887,12 +1121,15 @@ private:
     using GameSettingValues = std::map<std::string, std::string>;
     struct GameSettingsBaseline
     {
-        TaaSettings Taa; SMAASettings Smaa; MsaaSettings Msaa;
-        DlssSettings Dlss; FsrSettings Fsr;
+        TaaSettings Taa; SMAASettings Smaa; MsaaSettings Msaa; AnalyticEdgeAASettings AnalyticEdgeAa; AarSettings Aar;
+        DlssSettings Dlss; FsrSettings Fsr; XessSettings Xess;
         GlobalIlluminationMode GiMode = GlobalIlluminationMode::Disabled;
-        RtGISettings Rtgi; RadianceCascadesSettings Cascades;
-        VolumetricFogSettings Fog; PointShadowSettings PointShadows; VirtualShadowMapSettings VirtualShadows;
+        RtGISettings Rtgi; RadianceCascadesSettings Cascades; VoxelGISettings Voxel; RadianceProbeSettings Probes;
+        VolumetricFogSettings Fog; PointShadowSettings PointShadows; VirtualShadowMapSettings VirtualShadows; RtShadowSettings RtShadows;
         GtaoSettings Gtao; RtAOSettings Rtao; ChromaticAberrationSettings ChromaticAberration;
+        PathTracerSettings PathTracer;
+        VirtualGeometrySettings VirtualGeometry; SsrSettings Ssr; SubsurfaceSettings Subsurface;
+        BloomSettings Bloom; LensFlareSettings LensFlare;
     };
     // Captures the baseline, fills the menus' hardware-dependent options and hooks
     // Apply up. Standalone sessions also apply the settings saved on disk.
@@ -902,8 +1139,14 @@ private:
     // Applies every value; corrects in place any the hardware cannot honour and
     // returns a player-facing status line. Persists on success when asked.
     std::string ApplyGameSettings(GameSettingValues& values, bool persist);
+    // One applied value by its settings.cfg key, for GameServices::GetSetting. False (and
+    // empty) for a key the menus do not know.
+    bool GetGameSetting(const std::string& key, std::string& value);
     GameSettingsBaseline mGameSettingsBaseline;
     bool mGameSettingsActive = false;
+    // See ShowStartupScreen.
+    bool mStartupScreenActive = false;
+    int mStartupScreenPercent = -1;
     // Whether anything was applied this session, so stopping a session that applied
     // nothing leaves alone edits made in the editor's panels while it ran.
     bool mGameSettingsApplied = false;
@@ -1009,6 +1252,10 @@ private:
     DirectX::XMFLOAT4X4 mPreviousViewProjectionForRtgi{};
     DirectX::XMFLOAT4X4 mPreviousViewProjectionForRtao{};
     DirectX::XMFLOAT3   mPrevCameraPositionForRtgi{};
+    // The same for the ray-traced shadows' temporal pass; false until a frame has run.
+    DirectX::XMFLOAT4X4 mPreviousViewProjectionForRtShadows{};
+    DirectX::XMFLOAT3   mPrevCameraPositionForRtShadows{};
+    bool                mHasPreviousViewProjectionForRtShadows = false;
 
     // Non-jittered view and projection matrices stored separately so NRD can receive
     // them as worldToView and viewToClip without needing to decompose the combined VP.
@@ -1091,9 +1338,23 @@ private:
     TaaSettings mTaaSettings;
     SMAARenderer mSmaaRenderer;
     SMAASettings mSmaaSettings;
+    // Analytic Edge AA: exact-coverage resolve of geometric edges, before TAA / SMAA.
+    AnalyticEdgeAARenderer mAnalyticEdgeAaRenderer;
+    AnalyticEdgeAASettings mAnalyticEdgeAaSettings;
+    // Set once initialization has failed, so the frame loop does not retry it every frame.
+    bool mAnalyticEdgeAaInitFailed = false;
+    // AAR, Analytic-Aware Reconstruction: the spatial upscaler on the triangle edges.
+    AarRenderer mAarRenderer;
+    AarSettings mAarSettings;
+    bool mAarInitFailed = false;
+    bool mAarWasActive = false;
+    // Sizes AAR's textures; on failure switches it off for the session and logs why.
+    bool EnsureAarSize(UINT renderWidth, UINT renderHeight, UINT outputWidth, UINT outputHeight);
     MsaaSettings mMsaaSettings;
     float mMsaaResolveTimeMs = 0.0f;
     ImageSharpenRenderer mImageSharpenRenderer;
+    GBufferViewRenderer  mGBufferViewRenderer;
+    GBufferView          mGBufferView = GBufferView::Off;
     SharpenSettings mSharpenSettings;
     DlssRenderer mDlssRenderer;
     DlssSettings mDlssSettings;
@@ -1106,7 +1367,22 @@ private:
     UINT mFsrJitterIndex = 0;
     // DLSS jitter phase (Halton index), advanced once per frame while DLSS is on.
     UINT mDlssJitterIndex = 0;
+    XessRenderer mXessRenderer;
+    XessSettings mXessSettings;
+    XessFrameGeneration mXessFrameGeneration;
+    // XeSS's output and initialisation are dropped while it is off; this notices the edge.
+    bool mXessWasActive = false;
+    UINT mXessJitterIndex = 0;
+    // TAAU renders below the output size; this notices it being switched on or off.
+    bool mTaaUpscalerWasActive = false;
     MotionVectorRenderer mMotionVectorRenderer;
+
+    // Renders this frame's motion vectors once, for whichever of TAA, the
+    // upscalers and frame generation need them.
+    void RenderMotionVectors(ID3D12GraphicsCommandList* commandList, bool resetHistory);
+    // The exposure the tonemapper will apply this frame, as AgX settings, plus the
+    // eye adaptation target when the time of day drives it.
+    AgxTonemapSettings GetEffectiveAgxSettings(AutoExposure::RelativeTarget& adaptation, bool& eyeAdaptation) const;
 
     // Sky rendering and time-of-day lighting.
     SkyRenderer          mSkyRenderer;
@@ -1136,9 +1412,37 @@ private:
     RadianceProbeRenderer mProbeRenderer;
     RadianceProbeSettings mProbeSettings;
 
+    // Voxel cone traced GI: needs no ray tracing hardware, and stands in for RTGI
+    // and the probes on GPUs without it.
+    VoxelGIRenderer mVoxelGiRenderer;
+    VoxelGISettings mVoxelGiSettings;
+    bool mVoxelGiActive = false;
+    bool mVoxelGiFallbackActive = false;
+    // The radiance probe grid was traced this frame (it may be enabled but
+    // displaced by voxel GI, or waiting on the TLAS).
+    bool mProbeGridUpdated = false;
+    // DXR 1.1 support, queried once: -1 not yet asked, 0 no, 1 yes.
+    mutable int mRayTracingSupport = -1;
+
     // Ray Traced Ambient Occlusion.
     RtAmbientOcclusion   mRtaoRenderer;
     RtAOSettings         mRtaoSettings;
+
+    // Ray-traced sun and local light shadows.
+    RtShadows            mRtShadows;
+    RtShadowSettings     mRtShadowSettings;
+
+    // Progressive reference path tracer; replaces the lit scene while enabled.
+    PathTracer           mPathTracer;
+    PathTracerSettings   mPathTracerSettings;
+    std::string          mPathTracerStatus = "Off.";
+    bool                 mPathTracerRanLastFrame = false;
+    // The non-jittered view-projection the path tracer last ran with, for NRD's motion.
+    DirectX::XMFLOAT4X4  mPathTracerPrevViewProjection{};
+
+    // The terrain shadow signature the virtual shadow map was last given, and when.
+    std::uint64_t        mVsmTerrainSignature = 0;
+    double               mVsmTerrainSignatureTime = -1.0e9;
 
     // Screen-Space Ambient Occlusion (XeGTAO).
     XeGtaoRenderer       mGtaoRenderer;
@@ -1151,6 +1455,7 @@ private:
     bool                 mSssrInitFailed = false;
     SubsurfaceScatteringRenderer mSubsurfaceRenderer;
     SubsurfaceSettings   mSubsurfaceSettings;
+    ShadingSettings      mShadingSettings;
     // Deterministic Photoreal Lighting Enhancer, between AA/upscaling and sharpening.
     // Created on first use; a failed init is reported once and the pass stays off.
     DpleRenderer         mDpleRenderer;
@@ -1163,6 +1468,7 @@ private:
     BloomRenderer        mBloomRenderer;
     FftBloomRenderer     mFftBloomRenderer;
     BloomSettings        mBloomSettings;
+    SkyGlareRenderer     mSkyGlareRenderer;
     LensFlareRenderer    mLensFlareRenderer;
     LensFlareSettings    mLensFlareSettings;
 
@@ -1190,7 +1496,7 @@ private:
     // Cached point lights built each frame; shared with the RT GI dispatch.
     // This is the direct-lighting array: the point shadow pass writes shadow
     // indices into it and re-uploads it to the deferred pass.
-    DeferredLightingPass::PointLightGpu mCachedPointLights[DeferredLightingPass::kMaxPointLights]{};
+    DeferredLightingPass::PointLightGpu mCachedPointLights[DeferredLightingPass::kMaxSceneLights]{};
     int                                 mNumCachedPointLights = 0;
 
     // Which of those lights the fog is allowed to scatter, recorded while the
@@ -1198,20 +1504,71 @@ private:
     // before the fog dispatch rather than here, because the point shadow pass
     // has not assigned shadow indices yet and the fog needs them to shadow its
     // shafts.
-    bool                                mCachedPointLightAffectsFog[DeferredLightingPass::kMaxPointLights]{};
+    bool                                mCachedPointLightAffectsFog[DeferredLightingPass::kMaxSceneLights]{};
     // Per-light multiplier on the fog's copy of each light (VolumetricFogIntensity).
-    float                               mCachedPointLightFogScale[DeferredLightingPass::kMaxPointLights]{};
+    float                               mCachedPointLightFogScale[DeferredLightingPass::kMaxSceneLights]{};
 
     // The same lights weighted for indirect lighting only, so a particle
     // system's GI Contribution can tame a fire's bounce without dimming the
     // pool of light it throws on the floor. Rebuilt by BuildGiPointLights()
-    // after the shadow indices are assigned, and fed to the RTGI, radiance
-    // probe and radiance cascade passes in place of mCachedPointLights.
+    // after the shadow indices are assigned. mGiPointLights holds the legacy
+    // subset (below) for the radiance probe, cascade and voxel GI passes; RTGI
+    // reads every light's scale from the cluster extras instead.
     DeferredLightingPass::PointLightGpu mGiPointLights[DeferredLightingPass::kMaxPointLights]{};
-    float                               mPointLightGiScale[DeferredLightingPass::kMaxPointLights]{};
+    float                               mPointLightGiScale[DeferredLightingPass::kMaxSceneLights]{};
 
-    // Copies mCachedPointLights into mGiPointLights, applying mPointLightGiScale.
-    void BuildGiPointLights();
+    // The passes with a fixed 16-light constant-buffer array (probes, cascades, voxel
+    // GI, the path tracer, ray-traced subsurface, particles) get the
+    // kMaxPointLights most important lights: steady brightness over squared camera
+    // distance, the scene's own order kept when there are no more than that.
+    // mLegacyLightIndex maps each back to mCachedPointLights.
+    DeferredLightingPass::PointLightGpu mLegacyPointLights[DeferredLightingPass::kMaxPointLights]{};
+    int                                 mLegacyLightIndex[DeferredLightingPass::kMaxPointLights]{};
+    int                                 mNumLegacyPointLights = 0;
+
+    // Per scene light: x fog scale (0 = not in the fog), y GI scale with the GI's
+    // pre-exposure folded in. Uploaded with the lights by LightClusterRenderer.
+    DirectX::XMFLOAT4                   mLightClusterExtras[DeferredLightingPass::kMaxSceneLights]{};
+
+    // Once the shadow indices are final: builds the legacy subset, the GI copy of it,
+    // the cluster extras, uploads them to the deferred pass and the cluster renderer,
+    // and builds the clustered lists.
+    void BuildGiPointLights(ID3D12GraphicsCommandList* commandList);
+
+    // Every scene light and its clustered light lists, for the deferred resolve, the
+    // fog and RTGI (LightClusterRenderer.h).
+    LightClusterRenderer mLightClusterRenderer;
+    // Clustered light lists on (the default) or off: off, every pixel, froxel and bounce
+    // hit walks every scene light, for comparison. Same image either way.
+    bool  mClusteredLights = true;
+    // World grid cell size for the bounce-hit clusters, in metres.
+    float mLightGridCellSize = 4.0f;
+
+    // Each light's colour without its light style, recorded while the lights are
+    // gathered, and the copy of the array built from it for the reference path
+    // tracer: its accumulation restarts whenever a light changes, so a flickering
+    // candle would otherwise throw the image away every frame.
+    DirectX::XMFLOAT3                   mCachedPointLightSteadyColor[DeferredLightingPass::kMaxSceneLights]{};
+    DeferredLightingPass::PointLightGpu mPathTracerSteadyLights[DeferredLightingPass::kMaxPointLights]{};
+
+    // Each light's identity from frame to frame (entity Id based), recorded while the
+    // lights are gathered: the virtual shadow map keeps a light's cached pages under its
+    // key, and the shadow budget its fade.
+    std::uint64_t                       mCachedPointLightKeys[DeferredLightingPass::kMaxSceneLights]{};
+
+    // The shadow budget (VirtualShadowMapSettings::ShadowBudget): picks which shadow-
+    // casting lights the virtual shadow map shadows this frame and how strongly, fills
+    // outLights with them and outLightIndices with each one's index in mCachedPointLights.
+    void SelectShadowedLocalLights(std::vector<VirtualShadowMapRenderer::LocalLight>& outLights,
+                                   std::vector<int>& outLightIndices);
+    struct ShadowBudgetState
+    {
+        float         Fade = 0.0f;       // current shadow strength, 0..1
+        bool          Selected = false;  // in the budget's set (fading toward 1)
+        std::uint64_t LastFrame = 0;
+    };
+    std::unordered_map<std::uint64_t, ShadowBudgetState> mShadowBudget;
+    std::uint64_t mShadowBudgetFrame = 0;
 
     // ---- Per-pass CPU timing ----------------------------------------------
     // Entries accumulate into mPendingTimingSnapshot during Render() and are
@@ -1223,6 +1580,36 @@ private:
     void EndTimingFrame(float totalMilliseconds);
 
     RendererTimingSnapshot mPendingTimingSnapshot;
+
+    // ---- Per-pass GPU timing ----------------------------------------------
+    // Each PassTimer also brackets its pass with two timestamp queries, and the
+    // frame itself with a pair, resolved into a mapped readback buffer at the end
+    // of Render(). A slot is read back kGpuTimingSlots frames later, by which time
+    // the engine's three-frame queue has long retired it, so nothing waits.
+    static constexpr UINT kGpuTimingSlots = 6;
+    static constexpr UINT kGpuTimingMaxPasses = 255;
+    static constexpr UINT kGpuTimingQueriesPerSlot = 2 * (kGpuTimingMaxPasses + 1);
+    struct GpuTimingSlot
+    {
+        std::vector<std::pair<const char*, const char*>> Passes;
+        bool Pending = false;
+    };
+    UINT BeginGpuPassTimestamp(const char* category, const char* name);
+    void EndGpuPassTimestamp(UINT query);
+    void BeginGpuTimingFrame();
+    void EndGpuTimingFrame();
+
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> mGpuTimingHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource>  mGpuTimingReadback;
+    const UINT64* mGpuTimingMapped = nullptr;
+    UINT64 mGpuTimingFrequency = 0;
+    bool mGpuTimingInitFailed = false;
+    std::array<GpuTimingSlot, kGpuTimingSlots> mGpuTimingSlots;
+    UINT mGpuTimingSlot = 0;
+    bool mGpuTimingActive = false;
+    // The newest frame read back, merged into each published snapshot.
+    std::vector<RendererTimingEntry> mLatestGpuPassTimes;
+    float mLatestGpuFrameMilliseconds = 0.0f;
 
     // The command list Render() is recording, for the GPU event each PassTimer
     // emits. Null outside Render().

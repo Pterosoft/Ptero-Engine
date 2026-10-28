@@ -122,6 +122,8 @@ struct UiDrawList
     void AddTriangleFilled(UiVec2, UiVec2, UiVec2, UiU32);
     void AddCircle(UiVec2, float, UiU32, int = 0, float = 1);
     void AddCircleFilled(UiVec2, float, UiU32, int = 0);
+    // Top-left anchored, in the overlay's default font.
+    void AddText(UiVec2, UiU32, const char *);
     void AddPolyline(const UiVec2 *, int, UiU32, int, float);
     void AddImage(UiTextureID, UiVec2, UiVec2, UiVec2 = {0, 0}, UiVec2 = {1, 1}, UiU32 = 0xffffffff);
 };
@@ -327,6 +329,9 @@ void SeparatorText(const char *);
 void Text(const char *, ...);
 void TextWrapped(const char *, ...);
 void TextDisabled(const char *, ...);
+// TextDisabled that wraps at the window's width. For help paragraphs: an unwrapped one as
+// wide as its text widens the whole window, pushing SameLine items out of view.
+void TextDisabledWrapped(const char *, ...);
 void TextColored(UiVec4, const char *, ...);
 void BulletText(const char *, ...);
 void TextUnformatted(const char *, const char * = nullptr);

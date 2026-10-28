@@ -46,12 +46,12 @@ bool GameHost::LoadModule()
     }
 
     const std::uint32_t moduleApiVersion = mGetApiVersion();
-    if (moduleApiVersion != GameApiVersion)
+    if (moduleApiVersion < GameMinimumApiVersion || moduleApiVersion > GameApiVersion)
     {
         std::ostringstream errorBuilder;
         errorBuilder
             << "Game.dll reports API version " << moduleApiVersion
-            << " but the editor expects " << GameApiVersion
+            << " but the editor supports " << GameMinimumApiVersion << " to " << GameApiVersion
             << ". Rebuild the Game project.";
         mLastErrorMessage = errorBuilder.str();
         UnloadModule();

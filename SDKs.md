@@ -11,6 +11,7 @@ The folder names below are the ones the projects reference, so keep them exactly
 | DXC (DirectX Shader Compiler) | — | `dxc` | Runtime HLSL compilation |
 | FBX SDK | 2020.3.9 | `fbx` | FBX import (asset cooking) |
 | FMOD Studio API | 2.03.13 | `fmod` | Audio, including the Resonance Audio spatialiser plugin |
+| Jolt Physics | 5.6.0 | `JoltPhysics-5.6.0` | Rigid body simulation (Physics project; its sources are compiled into Physics.dll, no CMake build needed) |
 | libopus | 1.5.2 | `opus-1.5.2` | Opus audio decoding for video (Video project) |
 | libvpx | 1.17.0 | `libvpx-1.17.0` | VP8/VP9 video decoding (Video project) |
 | libwebm | 1.0.0.32 | `libwebm-libwebm-1.0.0.32` | WebM container parsing (Video project) |
@@ -27,6 +28,7 @@ The folder names below are the ones the projects reference, so keep them exactly
 | NVIDIA Streamline | 2.11.1 | `Streamline` | DLSS Super Resolution |
 | Qt | 6.11.2 | `qt` (built into `qt\install`) | Editor UI |
 | RmlUi | — | `RmlUI` | In-game UI |
+| Steamworks SDK | — | `SteamWorkssdk` | Steam startup check and DRM wrapping for the packaged game (GameLauncher; see `Documentation/Steam.md`) |
 
 The folder name `FidelityFX-SDK-2.3.0` is hardcoded in the includes and in the DLL search, so
 it must not be renamed. The same goes for the Streamline plugin path

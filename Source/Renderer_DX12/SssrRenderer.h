@@ -43,6 +43,10 @@ public:
     // Same contract as SsrRenderer::Dispatch: sceneColorResource must be in
     // PIXEL_SHADER_RESOURCE on entry and is left that way; the depth and G-Buffer SRVs must
     // already be readable from compute. Matrices are already transposed for HLSL.
+    //
+    // The fallback, when set, is voxel GI's reflection: fallbackReflectionSrv unweighted
+    // (fills what rays miss), fallbackSpecularSrv as the deferred resolve added it at
+    // fallbackScale (taken back out where this pass covers the surface).
     void Dispatch(
         ID3D12GraphicsCommandList*   commandList,
         ID3D12Resource*              sceneColorResource,
@@ -55,7 +59,10 @@ public:
         const DirectX::XMFLOAT4X4&   viewProjection,
         const DirectX::XMFLOAT4X4&   inverseViewProjection,
         const DirectX::XMFLOAT3&     cameraPosition,
-        const DirectX::XMFLOAT3&     cameraForward);
+        const DirectX::XMFLOAT3&     cameraForward,
+        D3D12_GPU_DESCRIPTOR_HANDLE  fallbackReflectionSrv = {},
+        D3D12_GPU_DESCRIPTOR_HANDLE  fallbackSpecularSrv = {},
+        float                        fallbackScale = 0.0f);
 
     bool IsInitialized() const { return mIsInitialized; }
 
@@ -121,7 +128,7 @@ private:
         UINT  MinTraversalOccupancy = 4;        UINT  MostDetailedMip = 0;
         UINT  SamplesPerQuad = 1;               UINT  TemporalVarianceGuidedTracingEnabled = 1;
         UINT  HistoryValid = 0;                 float Intensity = 1.0f;
-        UINT  DebugView = 0;                    float Pad0 = 0.0f;
+        UINT  DebugView = 0;                    float FallbackScale = 0.0f;
     };
 
     // The engine keeps up to three frames in flight, so the per-frame constants are ringed.

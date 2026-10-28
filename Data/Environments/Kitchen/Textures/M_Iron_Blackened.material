@@ -1,0 +1,32 @@
+{
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "displacementMidLevel": 0.5,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "heightReference": 0.5,
+    "metallicFactor": 1.0,
+    "name": "M_Iron_Blackened",
+    "normalFlipGreen": false,
+    "normalScale": 1.0,
+    "roughnessFactor": 1.0,
+    "specularFactor": 0.5,
+    "textures": {
+        "anisotropyDirection": "Environments/Kitchen/Textures/M_Iron_Blackened_AnisoDirection.dds",
+        "baseColor": "Environments/Kitchen/Textures/M_Iron_Blackened_BaseColor.dds",
+        "emissive": "Environments/Kitchen/Textures/M_Iron_Blackened_Emissive.dds",
+        "height": "Environments/Kitchen/Textures/M_Iron_Blackened_Height.dds",
+        "normal": "Environments/Kitchen/Textures/M_Iron_Blackened_Normal.dds",
+        "opacity": "Environments/Kitchen/Textures/M_Iron_Blackened_Opacity.dds",
+        "orm": "Environments/Kitchen/Textures/M_Iron_Blackened_ORM.dds",
+        "principledMask": "Environments/Kitchen/Textures/M_Iron_Blackened_PrincipledMask.dds"
+    }
+}

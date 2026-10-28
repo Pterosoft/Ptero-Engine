@@ -4,11 +4,14 @@
 #include "TerrainRenderer.h"
 
 #include "HeightmapImporter.h"
+#include "AnalyticEdgeAARenderer.h"
+#include "PrincipledGBuffer.h"
 #include "..\SDKs\nlohmann\json.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -402,6 +405,21 @@ void TerrainRenderer::Shutdown()
     mMappedMatCB    = nullptr;
     mMatCBCapacity  = 0;
 
+    if (mShadowConstantBuffer && mMappedShadowCB)
+        mShadowConstantBuffer->Unmap(0, nullptr);
+    if (mShadowMaterialBuffer && mMappedShadowMaterials)
+        mShadowMaterialBuffer->Unmap(0, nullptr);
+    mShadowConstantBuffer.Reset();
+    mShadowMaterialBuffer.Reset();
+    mMappedShadowCB = nullptr;
+    mMappedShadowMaterials = nullptr;
+    mShadowCBTerrains = 0;
+    mShadowPipelineState.Reset();
+    mShadowFlatPipelineState.Reset();
+    mShadowPipelineRootSignature = nullptr;
+    mShadowPipelineFailed = false;
+    mDrawMaterials.clear();
+
     mRootSignature.Reset();
     mPipelineState.Reset();
     mFallbackTextureResource.Reset();
@@ -725,6 +743,134 @@ void TerrainRenderer::ExportPatches(std::vector<PatchData>& outPatches) const
 
         if (it->second.LayerWeights.size() == expected)
             patch.LayerWeights = it->second.LayerWeights;
+
+        outPatches.push_back(std::move(patch));
+    }
+}
+
+void TerrainRenderer::CollectRayTracingPatches(std::vector<RayTracingPatch>& outPatches)
+{
+    outPatches.clear();
+    if (mEntities == nullptr)
+        return;
+
+    for (const std::size_t entityIndex : mActiveIndices)
+    {
+        if (entityIndex >= mEntities->size())
+            continue;
+        const Entity& entity = (*mEntities)[entityIndex];
+        if (!entity.HasTerrainComponent() || !entity.Terrain.has_value())
+            continue;
+        const auto stateIt = mGpuStates.find(entityIndex);
+        if (stateIt == mGpuStates.end())
+            continue;
+        const TerrainGpuState& state = stateIt->second;
+        if (state.MeshWidth < 2 || state.MeshHeight < 2
+            || state.MeshVertices.size() != static_cast<std::size_t>(state.MeshWidth) * static_cast<std::size_t>(state.MeshHeight))
+        {
+            continue;
+        }
+        const TerrainComponent& tc = *entity.Terrain;
+
+        RayTracingPatch patch;
+        patch.EntityIndex  = entityIndex;
+        patch.MeshWidth    = state.MeshWidth;
+        patch.MeshHeight   = state.MeshHeight;
+        patch.Vertices     = &state.MeshVertices;
+        patch.MeshRevision = state.MeshRevision;
+
+        // The model matrix Render draws with (no MeshWorldScale).
+        const DirectX::XMMATRIX world =
+            DirectX::XMMatrixScaling(entity.Transform.Scale.x, entity.Transform.Scale.y, entity.Transform.Scale.z)
+            * PteroTransform::ComposeRotation(entity.Transform.Rotation)
+            * DirectX::XMMatrixTranslation(entity.Transform.Position.x, entity.Transform.Position.y, entity.Transform.Position.z);
+        DirectX::XMStoreFloat4x4(&patch.World, world);
+
+        // The layers as Render fills them, without the maps a bounce cannot use.
+        // Displacement is gathered as Render does (MaxDisplacement), so the traced
+        // copy knows how far the drawn surface can stand off it.
+        float displacementReach = 0.0f;
+        const auto fromMaterial = [&displacementReach](const TerrainMaterialInfo& info, const DirectX::XMFLOAT4& tint, float tileSize)
+        {
+            RayTracingLayer layer;
+            if (info.UseTessellation && !info.HeightTexturePath.empty() && info.DisplacementScale != 0.0f)
+            {
+                displacementReach = (std::max)(displacementReach, std::fabs(info.DisplacementScale)
+                    * (std::max)(info.DisplacementMidLevel, 1.0f - info.DisplacementMidLevel));
+                layer.HeightPath = info.HeightTexturePath;
+                layer.DisplacementScale = info.DisplacementScale;
+                layer.DisplacementMidLevel = info.DisplacementMidLevel;
+            }
+            layer.TileSize = (std::max)(tileSize, 0.01f);
+            layer.UvTiling = info.UvTiling;
+            layer.UvOffset = info.UvOffset;
+            layer.UvRotationDegrees = info.UvRotationDegrees;
+            layer.BaseColorPath = info.BaseColorTexturePath;
+            layer.Tint = { info.BaseTint.x * tint.x, info.BaseTint.y * tint.y, info.BaseTint.z * tint.z };
+            layer.Roughness = info.Roughness;
+            layer.Metallic  = info.Metallic;
+            layer.Specular  = info.Specular;
+            return layer;
+        };
+        const int paintLayerCount = (std::min)(static_cast<int>(tc.PaintLayers.size()), kTerrainMaxLayers);
+        if (paintLayerCount == 0)
+        {
+            patch.Layers.push_back(fromMaterial(GetCachedTerrainMaterial(tc.MaterialPath), { 1.0f, 1.0f, 1.0f, 1.0f }, tc.MaterialTileSize));
+        }
+        else
+        {
+            patch.UseSplat = true;
+            for (int i = 0; i < paintLayerCount; ++i)
+            {
+                const TerrainPaintLayer& pl = tc.PaintLayers[i];
+                const DirectX::XMFLOAT4 tint(pl.TintR, pl.TintG, pl.TintB, pl.TintA);
+                if (!pl.MaterialPath.empty())
+                {
+                    patch.Layers.push_back(fromMaterial(GetCachedTerrainMaterial(pl.MaterialPath), tint, pl.EffectiveTileSize(tc.WorldSize)));
+                }
+                else
+                {
+                    // Texture-only layer: a plain rough dielectric, as Render draws it.
+                    RayTracingLayer layer;
+                    layer.BaseColorPath = ResolveDataRelativePath(pl.DiffuseTexturePath).string();
+                    layer.Tint = { tint.x, tint.y, tint.z };
+                    patch.Layers.push_back(std::move(layer));
+                }
+            }
+        }
+
+        // Terrain.hlsl displaces in world metres already (it divides by the model's
+        // scale along the normal), so the reach needs no scaling.
+        patch.DisplacementReach = displacementReach;
+        patch.WorldSize = tc.WorldSize;
+        patch.BreakUpTiling = tc.BreakUpTiling;
+        patch.HeightBlend = tc.HeightBlend;
+        patch.HeightBlendSharpness = tc.HeightBlendSharpness;
+
+        // FNV-1a over everything the layers say.
+        std::uint64_t hash = 1469598103934665603ull;
+        const auto mixBytes = [&hash](const void* data, std::size_t size)
+        {
+            const auto* bytes = static_cast<const std::uint8_t*>(data);
+            for (std::size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ull; }
+        };
+        mixBytes(&patch.UseSplat, sizeof(patch.UseSplat));
+        mixBytes(&patch.DisplacementReach, sizeof(patch.DisplacementReach));
+        mixBytes(&patch.WorldSize, sizeof(patch.WorldSize));
+        mixBytes(&patch.BreakUpTiling, sizeof(patch.BreakUpTiling));
+        mixBytes(&patch.HeightBlend, sizeof(patch.HeightBlend));
+        mixBytes(&patch.HeightBlendSharpness, sizeof(patch.HeightBlendSharpness));
+        for (const RayTracingLayer& layer : patch.Layers)
+        {
+            mixBytes(layer.BaseColorPath.data(), layer.BaseColorPath.size());
+            mixBytes(layer.HeightPath.data(), layer.HeightPath.size());
+            mixBytes(&layer.Tint, sizeof(layer.Tint));
+            const float numbers[] = { layer.Roughness, layer.Metallic, layer.Specular, layer.TileSize,
+                layer.UvTiling.x, layer.UvTiling.y, layer.UvOffset.x, layer.UvOffset.y, layer.UvRotationDegrees,
+                layer.DisplacementScale, layer.DisplacementMidLevel };
+            mixBytes(numbers, sizeof(numbers));
+        }
+        patch.MaterialHash = hash;
 
         outPatches.push_back(std::move(patch));
     }
@@ -1577,6 +1723,7 @@ bool TerrainRenderer::EnsureGpuMeshImpl(
         tc.WorldSize, tc.HeightScale, tc.HeightOffset,
         all, state.MeshVertices);
     TerrainGeometry::ComputeMeshNormals(meshWidth, meshHeight, all, state.MeshVertices);
+    state.MeshRevision = ++mMeshRevisionCounter;
     // A full rebuild covers every pending brush edit.
     state.DirtySamples = {};
 
@@ -1693,6 +1840,7 @@ bool TerrainRenderer::UploadDirtyRegion(
         tc.WorldSize, tc.HeightScale, tc.HeightOffset,
         meshRect, state.MeshVertices);
     TerrainGeometry::ComputeMeshNormals(state.MeshWidth, state.MeshHeight, meshRect, state.MeshVertices);
+    state.MeshRevision = ++mMeshRevisionCounter;
 
     // Whole rows form one contiguous span of the vertex buffer.
     const size_t firstVertex = static_cast<size_t>(meshRect.MinY) * static_cast<size_t>(state.MeshWidth);
@@ -1751,13 +1899,9 @@ bool TerrainRenderer::CreatePipeline(
         L"vs_5_0",
         ShaderStage::Vertex
     };
-    ShaderCompileRequest psRequest
-    {
-        L"Shaders\\Terrain.hlsl",
-        L"PSMain",
-        L"ps_5_0",
-        ShaderStage::Pixel
-    };
+    // Writes the triangle's edges for Analytic Edge AA when the GPU has SM 6.1 barycentrics.
+    ShaderCompileRequest psRequest = AnalyticEdge::MakeGBufferPixelShaderRequest(
+        L"Shaders\\Terrain.hlsl", L"PSMain");
 
     if (!mVertexShader.Compile(vsRequest))
     {
@@ -1868,10 +2012,11 @@ bool TerrainRenderer::CreatePipeline(
     psoDesc.VS                    = mVertexShader.GetBytecode();
     psoDesc.PS                    = mPixelShader.GetBytecode();
     psoDesc.SampleMask            = UINT_MAX;
-    psoDesc.NumRenderTargets      = 3;
+    psoDesc.NumRenderTargets      = PrincipledGBuffer::kGeometryPassTargetCount;
     psoDesc.RTVFormats[0]         = albedoFormat;
     psoDesc.RTVFormats[1]         = normalFormat;
     psoDesc.RTVFormats[2]         = materialFormat;
+    psoDesc.RTVFormats[3]         = AnalyticEdge::kGBufferFormat;
     psoDesc.DSVFormat             = depthFormat;
     psoDesc.SampleDesc.Count      = msaaSampleCount;
     psoDesc.SampleDesc.Quality    = 0;
@@ -1887,7 +2032,8 @@ bool TerrainRenderer::CreatePipeline(
     rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
     rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
     rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    for (UINT i = 0; i < 3; ++i)
+    PrincipledGBuffer::DeclareTargets(psoDesc.RTVFormats);
+    for (UINT i = 0; i < PrincipledGBuffer::kGeometryPassTargetCount; ++i)
         psoDesc.BlendState.RenderTarget[i] = rtBlend;
 
     psoDesc.RasterizerState.FillMode              = mWireframeEnabled ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
@@ -2195,6 +2341,29 @@ void TerrainRenderer::Render(
                 : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
 
+        // The shadow pages draw this terrain with exactly this material.
+        {
+            TerrainGpuState& drawState = stateIt->second;
+            mDrawMaterials[entityIndex] = *mat;
+            DirectX::XMStoreFloat4x4(&drawState.DrawModel, modelMatrix);
+            static_assert(kTerrainTextureCount == kTerrainShadowTextureSlots, "texture slot count");
+            std::uint64_t hash = 1469598103934665603ull;
+            const auto mixBytes = [&hash](const void* data, std::size_t size)
+            {
+                const auto* bytes = static_cast<const std::uint8_t*>(data);
+                for (std::size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ull; }
+            };
+            for (int texture = 0; texture < kTerrainTextureCount; ++texture)
+            {
+                drawState.DrawTextures[texture] = textureHandles[texture];
+                mixBytes(&textureHandles[texture].ptr, sizeof(textureHandles[texture].ptr));
+            }
+            // The named fields only, not alignas(256)'s tail padding.
+            mixBytes(mat, offsetof(TerrainMaterial, Layers) + sizeof(mat->Layers));
+            drawState.DrawMaterialHash = hash;
+            drawState.HasDrawMaterial = true;
+        }
+
         commandList->SetGraphicsRootConstantBufferView(
             0, mConstantBuffer->GetGPUVirtualAddress() + cbIndex * sizeof(TerrainConstants));
         commandList->SetGraphicsRootConstantBufferView(
@@ -2222,4 +2391,361 @@ void TerrainRenderer::Render(
             OutputDebugStringA(log.str().c_str());
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Shadow pages
+// ---------------------------------------------------------------------------
+
+bool TerrainRenderer::CreateShadowPipeline(DXGI_FORMAT depthFormat, float slopeScaledDepthBias)
+{
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr || !mRootSignature)
+        return false;
+
+    // VSMainTess is the G-Buffer pipeline's own; only the hull and domain differ.
+    const ShaderCompileRequest tessVsRequest{ L"Shaders\\Terrain.hlsl", L"VSMainTess",   L"vs_5_0", ShaderStage::Vertex };
+    const ShaderCompileRequest hsRequest    { L"Shaders\\Terrain.hlsl", L"HSMainShadow", L"hs_5_0", ShaderStage::Hull };
+    const ShaderCompileRequest dsRequest    { L"Shaders\\Terrain.hlsl", L"DSMainShadow", L"ds_5_0", ShaderStage::Domain };
+    if (mTessVertexShader.GetBytecode().BytecodeLength == 0 && !mTessVertexShader.Compile(tessVsRequest))
+        return false;
+    if (!mShadowHullShader.Compile(hsRequest) || !mShadowDomainShader.Compile(dsRequest))
+    {
+        mLastError = std::string("TerrainRenderer: shadow shaders failed to compile: ")
+            + (mShadowHullShader.GetLastErrorMessage() ? mShadowHullShader.GetLastErrorMessage()
+               : (mShadowDomainShader.GetLastErrorMessage() ? mShadowDomainShader.GetLastErrorMessage() : "unknown"));
+        return false;
+    }
+
+    const D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0,  0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = mRootSignature.Get();
+    psoDesc.VS                    = mTessVertexShader.GetBytecode();
+    psoDesc.HS                    = mShadowHullShader.GetBytecode();
+    psoDesc.DS                    = mShadowDomainShader.GetBytecode();
+    psoDesc.InputLayout           = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
+    psoDesc.SampleMask            = UINT_MAX;
+    psoDesc.NumRenderTargets      = 0;
+    psoDesc.DSVFormat             = depthFormat;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+
+    // As the virtual shadow map's own depth pipeline biases its casters.
+    psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+    // Pancaked, like the map's own casters: terrain between the light and a page's
+    // near plane still casts, flattened onto it.
+    psoDesc.RasterizerState.DepthClipEnable       = FALSE;
+    psoDesc.RasterizerState.SlopeScaledDepthBias  = (std::max)(slopeScaledDepthBias, 0.0f);
+
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
+
+    mShadowPipelineState.Reset();
+    if (FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mShadowPipelineState))))
+    {
+        mLastError = "TerrainRenderer: shadow CreateGraphicsPipelineState failed.";
+        return false;
+    }
+
+    // The plain mesh: the G-Buffer pipeline's VSMain and no pixel shader.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC flatDesc = psoDesc;
+    flatDesc.VS = mVertexShader.GetBytecode();
+    flatDesc.HS = {};
+    flatDesc.DS = {};
+    flatDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    mShadowFlatPipelineState.Reset();
+    if (flatDesc.VS.BytecodeLength == 0
+        || FAILED(device->CreateGraphicsPipelineState(&flatDesc, IID_PPV_ARGS(&mShadowFlatPipelineState))))
+    {
+        mLastError = "TerrainRenderer: flat shadow CreateGraphicsPipelineState failed.";
+        return false;
+    }
+    mShadowDepthFormat = depthFormat;
+    mShadowSlopeBias = slopeScaledDepthBias;
+    mShadowPipelineRootSignature = mRootSignature.Get();
+    return true;
+}
+
+namespace
+{
+    // The rows of quads (inclusive) of a terrain mesh that a shadow page can see:
+    // the page's frustum edges, each from its near to its far plane, cut to the
+    // slab of the terrain's local heights, projected onto the patch. False when
+    // the page misses the patch.
+    bool ShadowPageRows(
+        const DirectX::XMMATRIX& pageViewProjection,
+        const DirectX::XMMATRIX& model,
+        float worldSize,
+        int meshHeight,
+        float minZ,
+        float maxZ,
+        float margin,
+        int& outFirstRow,
+        int& outLastRow)
+    {
+        using namespace DirectX;
+        XMVECTOR determinant;
+        const XMMATRIX clipToLocal = XMMatrixInverse(&determinant, model * pageViewProjection);
+        if (XMVectorGetX(determinant) == 0.0f)
+            return false;
+
+        float minY = FLT_MAX, maxY = -FLT_MAX;
+        const auto include = [&](XMVECTOR p) { const float y = XMVectorGetY(p); minY = (std::min)(minY, y); maxY = (std::max)(maxY, y); };
+        const float corners[4][2] = { { -1.0f, -1.0f }, { 1.0f, -1.0f }, { -1.0f, 1.0f }, { 1.0f, 1.0f } };
+        for (const auto& corner : corners)
+        {
+            const XMVECTOR nearPoint = XMVector3TransformCoord(XMVectorSet(corner[0], corner[1], 0.0f, 1.0f), clipToLocal);
+            const XMVECTOR farPoint  = XMVector3TransformCoord(XMVectorSet(corner[0], corner[1], 1.0f, 1.0f), clipToLocal);
+            const float nz = XMVectorGetZ(nearPoint), fz = XMVectorGetZ(farPoint);
+            // The part of the edge's line inside the height slab - the whole line, not
+            // just near to far: the pages are pancaked, so terrain in front of the
+            // near plane casts too.
+            float t0 = -1.0e9f, t1 = 1.0e9f;
+            if (std::fabs(fz - nz) > 1e-6f)
+            {
+                float ta = (minZ - nz) / (fz - nz), tb = (maxZ - nz) / (fz - nz);
+                if (ta > tb) std::swap(ta, tb);
+                t0 = (std::max)(t0, ta);
+                t1 = (std::min)(t1, tb);
+            }
+            else if (nz < minZ || nz > maxZ)
+            {
+                continue;
+            }
+            if (t0 > t1)
+                continue;
+            include(XMVectorLerp(nearPoint, farPoint, t0));
+            include(XMVectorLerp(nearPoint, farPoint, t1));
+        }
+        if (minY > maxY)
+            return false;
+
+        const float halfSize = worldSize * 0.5f;
+        const float rowSize = worldSize / static_cast<float>((std::max)(meshHeight - 1, 1));
+        const int lastQuadRow = meshHeight - 2;
+        const int first = static_cast<int>(std::floor((minY - margin + halfSize) / rowSize)) - 1;
+        const int last  = static_cast<int>(std::floor((maxY + margin + halfSize) / rowSize)) + 1;
+        if (last < 0 || first > lastQuadRow)
+            return false;
+        outFirstRow = (std::max)(first, 0);
+        outLastRow  = (std::min)(last, lastQuadRow);
+        return outFirstRow <= outLastRow;
+    }
+}
+
+void TerrainRenderer::RenderShadowDepthPages(
+    ID3D12GraphicsCommandList*         commandList,
+    const std::vector<ShadowPageView>& pages,
+    DXGI_FORMAT                        depthFormat,
+    float                              slopeScaledDepthBias)
+{
+    using namespace DirectX;
+    if (!mShadowCastEnabled || commandList == nullptr || pages.empty() || mEntities == nullptr || !mRootSignature
+        || mActiveIndices.empty())
+    {
+        return;
+    }
+
+    const bool pipelineStale = !mShadowPipelineState || mShadowDepthFormat != depthFormat
+        || mShadowSlopeBias != slopeScaledDepthBias || mShadowPipelineRootSignature != mRootSignature.Get();
+    if (pipelineStale)
+    {
+        // A failed build is retried only when something it depended on changes.
+        if (mShadowPipelineFailed && mShadowDepthFormat == depthFormat && mShadowSlopeBias == slopeScaledDepthBias
+            && mShadowPipelineRootSignature == mRootSignature.Get())
+        {
+            return;
+        }
+        mShadowDepthFormat = depthFormat;
+        mShadowSlopeBias = slopeScaledDepthBias;
+        mShadowPipelineRootSignature = mRootSignature.Get();
+        mShadowPipelineFailed = !CreateShadowPipeline(depthFormat, slopeScaledDepthBias);
+        if (mShadowPipelineFailed)
+            return;
+    }
+
+    struct Draw
+    {
+        const TerrainGpuState* State = nullptr;
+        const TerrainMaterial* Material = nullptr;
+        const TerrainComponent* Terrain = nullptr;
+    };
+    std::vector<Draw> draws;
+    for (const std::size_t entityIndex : mActiveIndices)
+    {
+        if (entityIndex >= mEntities->size())
+            continue;
+        const Entity& entity = (*mEntities)[entityIndex];
+        if (!entity.HasTerrainComponent() || !entity.Terrain.has_value())
+            continue;
+        const auto stateIt = mGpuStates.find(entityIndex);
+        const auto materialIt = mDrawMaterials.find(entityIndex);
+        if (stateIt == mGpuStates.end() || materialIt == mDrawMaterials.end()
+            || !stateIt->second.HasDrawMaterial || stateIt->second.IndexCount == 0 || stateIt->second.MeshHeight < 2)
+        {
+            continue;
+        }
+        draws.push_back({ &stateIt->second, &materialIt->second, &*entity.Terrain });
+    }
+    if (draws.empty())
+        return;
+
+    // Constants: per frame in flight, one block per (page, terrain), then one
+    // material per terrain.
+    ID3D12Device* device = DX12Context_GetDevice();
+    if (device == nullptr)
+        return;
+    if (!mMappedShadowCB || mShadowCBTerrains < draws.size())
+    {
+        if (mShadowConstantBuffer)
+        {
+            mShadowConstantBuffer->Unmap(0, nullptr);
+            RetireResource(std::move(mShadowConstantBuffer));
+        }
+        if (mShadowMaterialBuffer)
+        {
+            mShadowMaterialBuffer->Unmap(0, nullptr);
+            RetireResource(std::move(mShadowMaterialBuffer));
+        }
+        mMappedShadowCB = nullptr;
+        mMappedShadowMaterials = nullptr;
+        mShadowCBTerrains = 0;
+
+        const std::size_t terrains = draws.size() + 1;
+        const UINT64 constantBytes = sizeof(TerrainConstants) * kMaxShadowPages * terrains * kFramesInFlight;
+        const UINT64 materialBytes = sizeof(TerrainMaterial) * terrains * kFramesInFlight;
+        const D3D12_RANGE noRead{ 0, 0 };
+        if (!CreateCommittedBuffer(device, constantBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, mShadowConstantBuffer)
+            || !CreateCommittedBuffer(device, materialBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, mShadowMaterialBuffer)
+            || FAILED(mShadowConstantBuffer->Map(0, &noRead, reinterpret_cast<void**>(&mMappedShadowCB)))
+            || FAILED(mShadowMaterialBuffer->Map(0, &noRead, reinterpret_cast<void**>(&mMappedShadowMaterials))))
+        {
+            mLastError = "TerrainRenderer: failed to create the shadow page constant buffers.";
+            mShadowConstantBuffer.Reset();
+            mShadowMaterialBuffer.Reset();
+            mMappedShadowCB = nullptr;
+            mMappedShadowMaterials = nullptr;
+            return;
+        }
+        mShadowCBTerrains = terrains;
+    }
+    const std::size_t frame = mShadowFrame++ % kFramesInFlight;
+    const std::size_t constantBase = frame * kMaxShadowPages * mShadowCBTerrains;
+    const std::size_t materialBase = frame * mShadowCBTerrains;
+    const std::size_t pageCount = (std::min)(pages.size(), kMaxShadowPages);
+
+    ID3D12DescriptorHeap* heap = DX12Context_GetSrvDescriptorHeap();
+    if (heap == nullptr)
+        return;
+    commandList->SetDescriptorHeaps(1, &heap);
+    commandList->SetGraphicsRootSignature(mRootSignature.Get());
+    commandList->SetPipelineState(mShadowDisplaced ? mShadowPipelineState.Get() : mShadowFlatPipelineState.Get());
+    commandList->IASetPrimitiveTopology(mShadowDisplaced
+        ? D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    for (std::size_t drawIndex = 0; drawIndex < draws.size(); ++drawIndex)
+    {
+        const Draw& draw = draws[drawIndex];
+        const TerrainGpuState& state = *draw.State;
+        const TerrainComponent& tc = *draw.Terrain;
+        mMappedShadowMaterials[materialBase + drawIndex] = *draw.Material;
+        const TerrainMaterial& material = mMappedShadowMaterials[materialBase + drawIndex];
+
+        commandList->SetGraphicsRootConstantBufferView(1,
+            mShadowMaterialBuffer->GetGPUVirtualAddress() + (materialBase + drawIndex) * sizeof(TerrainMaterial));
+        for (int texture = 0; texture < kTerrainTextureCount; ++texture)
+            commandList->SetGraphicsRootDescriptorTable(kTerrainRootTextureBase + texture, state.DrawTextures[texture]);
+        commandList->IASetVertexBuffers(0, 1, &state.VertexBufferView);
+        commandList->IASetIndexBuffer(&state.IndexBufferView);
+
+        const XMMATRIX model = XMLoadFloat4x4(&state.DrawModel);
+        // Undisplaced, the plain mesh stands exactly where its vertices are.
+        const float reach = mShadowDisplaced ? (std::max)(material.MaxDisplacement, 0.0f) : 0.0f;
+        // Local heights the patch spans, displacement included (in local units:
+        // the terrain's height axis is its local Z).
+        const float scaleZ = (std::max)(std::fabs(XMVectorGetX(XMVector3Length(model.r[2]))), 1e-6f);
+        const float minZ = tc.HeightOffset - reach / scaleZ - 0.01f;
+        const float maxZ = tc.HeightOffset + tc.HeightScale + reach / scaleZ + 0.01f;
+        const UINT indicesPerRow = static_cast<UINT>(state.MeshWidth - 1) * 6u;
+
+        for (std::size_t page = 0; page < pageCount; ++page)
+        {
+            const ShadowPageView& view = pages[page];
+            const XMMATRIX viewProjection = XMLoadFloat4x4(&view.ViewProjection);
+
+            int firstRow = 0, lastRow = 0;
+            if (!ShadowPageRows(viewProjection, model, tc.WorldSize, state.MeshHeight, minZ, maxZ,
+                                reach + 0.01f, firstRow, lastRow))
+            {
+                continue;
+            }
+
+            TerrainConstants& constants = mMappedShadowCB[constantBase + page * mShadowCBTerrains + drawIndex];
+            XMStoreFloat4x4(&constants.MVP, XMMatrixTranspose(model * viewProjection));
+            XMStoreFloat4x4(&constants.Model, XMMatrixTranspose(model));
+            constants.CameraPositionWS = view.LodOrigin;
+            constants.TessPixelScale = 1.0f;
+            if (view.Lod == ShadowPageView::LodMode::Orthographic)
+            {
+                constants.ShadowTexelWorld = (std::max)(view.TexelWorldSize, 1e-5f);
+                constants.ShadowTexelAngle = 0.0f;
+            }
+            else
+            {
+                constants.ShadowTexelWorld = 0.0f;
+                constants.ShadowTexelAngle = (std::max)(view.LodTexelAngle, 1e-6f);
+            }
+            constants.ShadowLodOrigin = view.LodOrigin;
+            // Displacement can carry a culled patch's surface into the page: its reach
+            // in clip units (clip x = dot(p, column 0) in this row-vector layout).
+            const XMMATRIX columns = XMMatrixTranspose(viewProjection);
+            const float clipPerMetre = (std::max)(XMVectorGetX(XMVector3Length(columns.r[0])),
+                                                  XMVectorGetX(XMVector3Length(columns.r[1])));
+            constants.ShadowCullSlack = reach * clipPerMetre * 1.5f;
+
+            commandList->RSSetViewports(1, &view.Viewport);
+            commandList->RSSetScissorRects(1, &view.Scissor);
+            commandList->SetGraphicsRootConstantBufferView(0, mShadowConstantBuffer->GetGPUVirtualAddress()
+                + (constantBase + page * mShadowCBTerrains + drawIndex) * sizeof(TerrainConstants));
+            commandList->DrawIndexedInstanced(
+                static_cast<UINT>(lastRow - firstRow + 1) * indicesPerRow, 1,
+                static_cast<UINT>(firstRow) * indicesPerRow, 0, 0);
+        }
+    }
+}
+
+std::uint64_t TerrainRenderer::GetShadowCasterSignature() const
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    const auto mixBytes = [&hash](const void* data, std::size_t size)
+    {
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        for (std::size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ull; }
+    };
+    // Switching either toggle changes every terrain page.
+    mixBytes(&mShadowCastEnabled, sizeof(mShadowCastEnabled));
+    mixBytes(&mShadowDisplaced, sizeof(mShadowDisplaced));
+    for (const std::size_t entityIndex : mActiveIndices)
+    {
+        const auto stateIt = mGpuStates.find(entityIndex);
+        if (stateIt == mGpuStates.end() || !stateIt->second.HasDrawMaterial)
+            continue;
+        const TerrainGpuState& state = stateIt->second;
+        mixBytes(&entityIndex, sizeof(entityIndex));
+        mixBytes(&state.MeshRevision, sizeof(state.MeshRevision));
+        mixBytes(&state.DrawMaterialHash, sizeof(state.DrawMaterialHash));
+        mixBytes(&state.DrawModel, sizeof(state.DrawModel));
+    }
+    return hash;
 }

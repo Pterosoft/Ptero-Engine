@@ -15,6 +15,8 @@
 //  10  table t8  sun shadow map           (ray traced only)
 //  11  table t9  point shadow map array    (ray traced only)
 //  12  SRV   t10 virtual shadow map page table (ray traced only, root descriptor)
+//  13  UAV   u1  ReSTIR reservoirs written (root descriptor)
+//  14  UAV   u3  ReSTIR history read       (root descriptor)
 //  static s0     shadow comparison sampler
 
 #include "pch.h"
@@ -43,6 +45,8 @@ namespace
 {
     constexpr DXGI_FORMAT kLightingFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     constexpr UINT kGroupSize = 8;
+    // PackedSssReservoir in SubsurfaceScattering_RT.hlsl.
+    constexpr UINT64 kReservoirStride = 48;
 
     const wchar_t* kShaderScreenSpace = L"Data/Shaders/SubsurfaceScattering.hlsl";
     const wchar_t* kShaderRayTraced   = L"Data/Shaders/SubsurfaceScattering_RT.hlsl";
@@ -400,6 +404,10 @@ void SubsurfaceScatteringRenderer::Shutdown()
     mRootSignature.Reset();
     mPsoBlurX.Reset();
     mPsoRayTraced.Reset();
+    mPsoRestir.Reset();
+    for (auto& reservoir : mReservoirs) reservoir.Reset();
+    mReservoirWidth = mReservoirHeight = 0;
+    mHistoryValid = false;
     for (auto& pso : mPsoCompositeBlurY) pso.Reset();
     for (auto& pso : mPsoCompositeRayTraced) pso.Reset();
     mRetiredResources.clear();
@@ -419,7 +427,7 @@ bool SubsurfaceScatteringRenderer::CreateRootSignature()
     for (UINT i = 0; i < 5; ++i)
         ranges[6 + i] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5 + i, 0, 0 };
 
-    D3D12_ROOT_PARAMETER params[13]{};
+    D3D12_ROOT_PARAMETER params[15]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -433,6 +441,13 @@ bool SubsurfaceScatteringRenderer::CreateRootSignature()
     params[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[12].Descriptor.ShaderRegister = 10;
     params[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    // 13-14: ReSTIR reservoirs written (u1) and history read (u3), root descriptors.
+    params[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[13].Descriptor.ShaderRegister = 1;
+    params[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[14].Descriptor.ShaderRegister = 3;
+    params[14].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     // Same comparison sampler as the deferred lighting pass's gShadowSampler.
     D3D12_STATIC_SAMPLER_DESC shadowSampler{};
@@ -595,6 +610,24 @@ bool SubsurfaceScatteringRenderer::CreatePipelines()
                 PTERO_LOG_WARNING("Renderer", "Subsurface scattering: ray-traced pipeline creation failed; "
                                   "ray-traced mode falls back to screen space.");
             }
+
+            // ReSTIR reuse: optional on top of the ray-traced pass, which it falls back to.
+            DX12Shader restirShader;
+            if (mPsoRayTraced
+                && compile(kShaderRayTraced, L"CSRestirTemporal", L"cs_6_5", ShaderStage::Compute, restirShader))
+            {
+                desc.CS = restirShader.GetBytecode();
+                if (FAILED(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&mPsoRestir))))
+                {
+                    mPsoRestir.Reset();
+                    PTERO_LOG_WARNING("Renderer", "Subsurface scattering: ReSTIR pipeline creation failed; "
+                                      "the ray-traced mode runs without reuse.");
+                }
+            }
+            else if (mPsoRayTraced && !mLastError.empty())
+            {
+                PTERO_LOG_WARNING("Renderer", "%s", mLastError.c_str());
+            }
         }
         else if (!inlineRayTracing)
         {
@@ -659,6 +692,52 @@ bool SubsurfaceScatteringRenderer::CreateSizeDependentResources()
     return true;
 }
 
+bool SubsurfaceScatteringRenderer::EnsureReservoirs()
+{
+    if (mReservoirs[0] && mReservoirs[1] && mReservoirWidth == mWidth && mReservoirHeight == mHeight)
+        return true;
+
+    // Replaced at a resize; frames still in flight may name the old pair.
+    for (auto& reservoir : mReservoirs)
+    {
+        if (reservoir)
+            mRetiredResources.push_back({ reservoir, kFramesInFlight + 1 });
+        reservoir.Reset();
+    }
+    mHistoryValid = false;
+
+    try
+    {
+        ID3D12Device* device = DX12Context_GetDevice();
+        const CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+        const UINT64 bytes = static_cast<UINT64>(mWidth) * mHeight * kReservoirStride;
+        const CD3DX12_RESOURCE_DESC desc =
+            CD3DX12_RESOURCE_DESC::Buffer(bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        for (int i = 0; i < 2; ++i)
+        {
+            // Buffers are created in COMMON whatever is asked for.
+            DX12_THROW_IF_FAILED(device->CreateCommittedResource(
+                &defaultHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&mReservoirs[i])));
+        }
+        mReservoirs[0]->SetName(L"SSS_RestirReservoirs");
+        mReservoirs[1]->SetName(L"SSS_RestirHistory");
+        mReservoirWidth = mWidth;
+        mReservoirHeight = mHeight;
+        PTERO_LOG_INFO("Renderer", "Subsurface scattering: ReSTIR reservoirs allocated (%.1f MB).",
+                       2.0 * static_cast<double>(bytes) / (1024.0 * 1024.0));
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        PTERO_LOG_WARNING("Renderer", "Subsurface scattering: ReSTIR reservoir allocation failed (%s); "
+                          "the ray-traced mode runs without reuse.", ex.what());
+        for (auto& reservoir : mReservoirs) reservoir.Reset();
+        mReservoirWidth = mReservoirHeight = 0;
+        return false;
+    }
+}
+
 void SubsurfaceScatteringRenderer::RetireSizeDependentResources()
 {
     // Command lists from the frames still in flight name these; keep them alive until
@@ -669,6 +748,7 @@ void SubsurfaceScatteringRenderer::RetireSizeDependentResources()
         mRetiredResources.push_back({ mScratchTarget, kFramesInFlight + 1 });
     mDiffuseTarget.Reset();
     mScratchTarget.Reset();
+    // The reservoirs are replaced on their next use (EnsureReservoirs).
 }
 
 void SubsurfaceScatteringRenderer::TickRetiredResources()
@@ -694,6 +774,7 @@ D3D12_GPU_VIRTUAL_ADDRESS SubsurfaceScatteringRenderer::PrepareFrame(const Frame
 
     const SubsurfaceSettings& settings = *inputs.Settings;
     mRayTracedThisFrame = settings.Mode == 1 && inputs.RayTracingAvailable && mPsoRayTraced != nullptr;
+    mRestirThisFrame = mRayTracedThisFrame && settings.RtRestir && SupportsRestir();
     mDebugView = std::clamp(settings.DebugView, 0, 2);
 
     mFrameSlot = (mFrameSlot + 1) % kFramesInFlight;
@@ -773,6 +854,22 @@ D3D12_GPU_VIRTUAL_ADDRESS SubsurfaceScatteringRenderer::PrepareFrame(const Frame
         constants.Vsm = shadows.Vsm;
     }
 
+    // ReSTIR. The history is only trusted when it was written at this size; a resize
+    // replaces the buffers before they are next read.
+    mFrameViewProj = inputs.ViewProjection;
+    constants.Restir = mRestirThisFrame ? 1u : 0u;
+    constants.RestirTemporal = (mRestirThisFrame && mHistoryValid
+                                && mReservoirWidth == mWidth && mReservoirHeight == mHeight) ? 1u : 0u;
+    constants.RestirHistoryCap = static_cast<uint32_t>(
+        std::clamp(settings.RtHistoryLength, 1, 64) * static_cast<int>(constants.RtSamples));
+    {
+        const XMMATRIX historyViewProjection = XMLoadFloat4x4(constants.RestirTemporal != 0u ? &mHistoryViewProj
+                                                                                             : &inputs.ViewProjection);
+        XMStoreFloat4x4(&constants.PrevViewProj, XMMatrixTranspose(historyViewProjection));
+        XMStoreFloat4x4(&constants.PrevInvViewProj,
+                        XMMatrixTranspose(XMMatrixInverse(nullptr, historyViewProjection)));
+    }
+
     std::uint8_t* destination = mMappedConstants + mFrameSlot * mConstantStride;
     std::memcpy(destination, &constants, sizeof(constants));
 
@@ -847,13 +944,47 @@ void SubsurfaceScatteringRenderer::Apply(
         // Only read when the constants say the virtual shadow map is on.
         commandList->SetComputeRootShaderResourceView(12,
             scene.VsmPageTable != 0 ? scene.VsmPageTable : mConstantBuffer->GetGPUVirtualAddress());
-        commandList->SetPipelineState(mPsoRayTraced.Get());
+    }
+
+    const UINT groupsX = (mWidth + kGroupSize - 1) / kGroupSize;
+    const UINT groupsY = (mHeight + kGroupSize - 1) / kGroupSize;
+    const bool restir = rayTraced && mRestirThisFrame && EnsureReservoirs();
+    if (restir)
+    {
+        // Both reservoir buffers start the frame in COMMON (see the header).
+        D3D12_RESOURCE_BARRIER transitions[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            transitions[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mReservoirs[i].Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
+        commandList->ResourceBarrier(2, transitions);
+
+        // Read the history, write the other buffer, which becomes the next frame's history.
+        const UINT writeIndex = 1 - mHistoryIndex;
+        commandList->SetComputeRootUnorderedAccessView(13, mReservoirs[writeIndex]->GetGPUVirtualAddress());
+        commandList->SetComputeRootUnorderedAccessView(14, mReservoirs[mHistoryIndex]->GetGPUVirtualAddress());
+        commandList->SetPipelineState(mPsoRestir.Get());
+        commandList->Dispatch(groupsX, groupsY, 1);
+
+        for (int i = 0; i < 2; ++i)
+        {
+            transitions[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+                mReservoirs[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
+        }
+        commandList->ResourceBarrier(2, transitions);
+
+        mHistoryIndex = writeIndex;
+        mHistoryValid = true;
+        mHistoryViewProj = mFrameViewProj;
     }
     else
     {
-        commandList->SetPipelineState(mPsoBlurX.Get());
+        // Any other path leaves the history behind.
+        mHistoryValid = false;
+        commandList->SetPipelineState(rayTraced ? mPsoRayTraced.Get() : mPsoBlurX.Get());
+        commandList->Dispatch(groupsX, groupsY, 1);
     }
-    commandList->Dispatch((mWidth + kGroupSize - 1) / kGroupSize, (mHeight + kGroupSize - 1) / kGroupSize, 1);
 
     const D3D12_RESOURCE_BARRIER scratchToRead[] = {
         CD3DX12_RESOURCE_BARRIER::UAV(mScratchTarget.Get()),

@@ -13,7 +13,7 @@
 #include <string>
 
 // SkyRenderer
-// Renders a fullscreen sky background - sky gradient, sun disc, the moon with
+// Renders a fullscreen sky background - the Hosek-Wilkie sky, sun disc, the moon with
 // its phase, and a star field that wheels with the hour - from the evaluated
 // time of day. Must be drawn BEFORE the scene geometry so the depth test hides it.
 class SkyRenderer
@@ -48,13 +48,14 @@ private:
     {
         DirectX::XMFLOAT4X4 InvProj;
         DirectX::XMFLOAT4X4 InvView;
+        // Night gradient; the daylight sky is the Hosek-Wilkie model below.
         DirectX::XMFLOAT3 SkyZenithColor;    float PixelAngle;      // radians per pixel
         DirectX::XMFLOAT3 SkyHorizonColor;   float TimeSeconds;
-        DirectX::XMFLOAT3 SunDirection;      float SunDiscHalfAngleCos;
+        DirectX::XMFLOAT3 SunDirection;      float SunDiscRadius;   // radians
         DirectX::XMFLOAT3 SunColor;          float MoonDiscSin;     // sin of the moon's angular radius
         DirectX::XMFLOAT3 MoonDirection;     float StarVisibility;
         DirectX::XMFLOAT3 MoonColor;         float StarRadiance;
-        DirectX::XMFLOAT3 TwilightGlowColor; float MoonHalo;
+        DirectX::XMFLOAT3 TwilightGlowColor; float Pad0;
         DirectX::XMFLOAT4 StarRotation[3];  // rows, xyz used
         // 1 when the texture is bound, else the procedural fallback is drawn.
         float MoonTextureOn;
@@ -63,7 +64,14 @@ private:
         float StarMapGain;
         float ProceduralStarGain;
         float ProceduralMilkyWayGain;
-        float Pad3[3];
+        DirectX::XMFLOAT3 GroundRadiance;   // the lit ground under the horizon
+        // Hosek-Wilkie coefficients A..I (xyz = r, g, b), and the per-channel
+        // scale that turns the model's F(theta, gamma) into radiance (xyz).
+        DirectX::XMFLOAT4 SkyModel[9];
+        DirectX::XMFLOAT4 DaySkyScale;
+        // The same for the moonlit sky (the model for the moon's elevation).
+        DirectX::XMFLOAT4 MoonSkyModel[9];
+        DirectX::XMFLOAT4 MoonSkyScale;
     };
 
     // The sky textures, loaded on first use. A texture that fails to load is

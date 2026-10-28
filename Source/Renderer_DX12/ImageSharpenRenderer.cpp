@@ -273,6 +273,7 @@ void ImageSharpenRenderer::Apply(
         cb.Strength = settings.ImageSharpeningStrength;
         cb.FrameWidth = mWidth;
         cb.FrameHeight = mHeight;
+        cb.Radius = (std::max)(settings.ImageSharpeningRadius, 1.0f);
         std::memcpy(mMappedCb, &cb, sizeof(cb));
     }
 

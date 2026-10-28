@@ -2,6 +2,7 @@
 #include "LensFlareRenderer.h"
 
 #include "LensDiffraction.h"
+#include "TimeOfDaySettings.h"
 #include "System/PteroLog.h"
 
 #include <DirectXPackedVector.h>
@@ -35,9 +36,9 @@ namespace
     constexpr float kMinLambda = 475.0f;
     constexpr float kMaxLambda = 650.0f;
 
-    // Half-angle the sky pass draws the sun disc with (SkyRenderer.cpp); the occlusion
-    // test stays inside it so the disc's soft edge does not read as partial cover.
-    constexpr float kSunDiscSampleRadians = 0.6f * 0.8f * (kPi / 180.0f);
+    // The occlusion test stays inside the sun disc the sky pass draws, so the disc's
+    // antialiased edge does not read as partial cover.
+    constexpr float kSunDiscSampleRadians = 0.6f * kSunAngularRadiusRad;
 
     // How far past the screen edge (in NDC) a light may be and still flare; it fades out
     // over the last stretch. Real flares do not stop at the frame edge, but past it the
@@ -883,9 +884,11 @@ void LensFlareRenderer::Apply(ID3D12GraphicsCommandList* commandList, const Lens
         const float scale = candidate.Fade * intensity;
         light.Color = XMFLOAT4(source.Illuminance.x * scale, source.Illuminance.y * scale, source.Illuminance.z * scale, 0.0f);
         light.Screen = XMFLOAT4(candidate.Ndc.x * 0.5f + 0.5f, 0.5f - candidate.Ndc.y * 0.5f, occlusionRadius, candidate.ViewDepth);
-        // The sky draws the sun disc at the sun's own colour, so a disc much darker than
-        // that is behind cloud or fog.
-        const float expectedDisc = (source.IsSun && settings.SunCloudOcclusion) ? 0.5f * Luminance(source.Illuminance) : 0.0f;
+        // A disc much darker than the sky pass draws it is behind cloud or fog. The
+        // disc is only a few pixels wide, so TAA and upscaling soften its peak; under
+        // a third reads as cover. The disc is ~50x the sky, so even a sunlit cloud
+        // edge stays well below that.
+        const float expectedDisc = (source.IsSun && settings.SunCloudOcclusion) ? 0.3f * source.DiscLuminance : 0.0f;
         light.Extra = XMFLOAT4(static_cast<float>(lightSlot[i]), reset ? 1.0f : 0.0f, expectedDisc, 0.0f);
 
         // The pupil region at this light's angle: the union of the two table entries

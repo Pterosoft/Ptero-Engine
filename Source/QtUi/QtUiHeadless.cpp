@@ -111,6 +111,7 @@ void UiDrawList::AddTriangle(UiVec2, UiVec2, UiVec2, UiU32, float) {}
 void UiDrawList::AddTriangleFilled(UiVec2, UiVec2, UiVec2, UiU32) {}
 void UiDrawList::AddCircle(UiVec2, float, UiU32, int, float) {}
 void UiDrawList::AddCircleFilled(UiVec2, float, UiU32, int) {}
+void UiDrawList::AddText(UiVec2, UiU32, const char *) {}
 void UiDrawList::AddPolyline(const UiVec2 *, int, UiU32, int, float) {}
 void UiDrawList::AddImage(UiTextureID, UiVec2, UiVec2, UiVec2, UiVec2, UiU32) {}
 
@@ -368,6 +369,7 @@ void SeparatorText(const char *) {}
 void Text(const char *, ...) {}
 void TextWrapped(const char *, ...) {}
 void TextDisabled(const char *, ...) {}
+void TextDisabledWrapped(const char *, ...) {}
 void TextColored(UiVec4, const char *, ...) {}
 void BulletText(const char *, ...) {}
 void TextUnformatted(const char *, const char *) {}

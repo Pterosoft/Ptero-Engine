@@ -4,16 +4,21 @@
 #include "TimeOfDaySettings.h"
 #include "TaaSettings.h"
 #include "SMAASettings.h"
+#include "AnalyticEdgeAASettings.h"
+#include "AarSettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
 #include "FsrSettings.h"
+#include "XessSettings.h"
 #include "RadianceCascadesSettings.h"
 #include "RadianceProbeSettings.h"
 #include "RtGISettings.h"
+#include "VoxelGISettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
 #include "SubsurfaceSettings.h"
+#include "ShadingSettings.h"
 #include "DpleSettings.h"
 #include "ChromaticAberrationSettings.h"
 #include "AgxTonemapSettings.h"
@@ -21,6 +26,7 @@
 #include "VolumetricCloudSettings.h"
 #include "BloomSettings.h"
 #include "LensFlareSettings.h"
+#include "RtShadowSettings.h"
 
 #include "System/NodeGraphDocument.h"
 
@@ -37,17 +43,22 @@ struct Scene
     TimeOfDaySettings* TimeOfDay = nullptr;
     TaaSettings* Taa = nullptr;
     SMAASettings* Smaa = nullptr;
+    AnalyticEdgeAASettings* AnalyticEdgeAa = nullptr;
+    AarSettings* Aar = nullptr;
     SharpenSettings* Sharpen = nullptr;
     DlssSettings* Dlss = nullptr;
     FsrSettings* Fsr = nullptr;
+    XessSettings* Xess = nullptr;
     GlobalIlluminationMode* GlobalIllumination = nullptr;
     RtGISettings* Rtgi = nullptr;
     RadianceCascadesSettings* RadianceCascades = nullptr;
     RadianceProbeSettings* RadianceProbes = nullptr;
+    VoxelGISettings* VoxelGi = nullptr;
     RtAOSettings* Rtao = nullptr;
     GtaoSettings* Gtao = nullptr;
     SsrSettings* Ssr = nullptr;
     SubsurfaceSettings* Subsurface = nullptr;
+    ShadingSettings* Shading = nullptr;
     DpleSettings* Dple = nullptr;
     ChromaticAberrationSettings* ChromaticAberration = nullptr;
     AgxTonemapSettings* Agx = nullptr;
@@ -55,6 +66,7 @@ struct Scene
     VolumetricCloudSettings* VolumetricCloud = nullptr;
     BloomSettings* Bloom = nullptr;
     LensFlareSettings* LensFlare = nullptr;
+    RtShadowSettings* RtShadows = nullptr;
     // The level's visual script. Saved inline under "NodeGraph"; a level may instead
     // carry a path there, which is how a graph shared between levels is referenced.
     NodeGraphDocument* NodeGraph = nullptr;

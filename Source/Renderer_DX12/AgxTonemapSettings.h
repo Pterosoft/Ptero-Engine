@@ -97,6 +97,12 @@ struct AgxTonemapSettings
     AgxColorGradeRegion Midtones{};
     AgxColorGradeRegion Highlights{};
 
+    // Night vision: how much of its colour a dark pixel loses, as rods take over
+    // from cones. Bright pixels (lights, the moon) keep theirs. Not authored or
+    // saved here - the time of day fills it in each frame from its NightDesaturation
+    // (DX12SceneRenderer::GetEffectiveAgxSettings); 0 = off.
+    float NightDesaturation = 0.0f;
+
     AgxTonemapSettings()
     {
         Global.Contrast.Total = 0.10f;

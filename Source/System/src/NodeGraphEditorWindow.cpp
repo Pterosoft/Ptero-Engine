@@ -35,7 +35,11 @@
 #include <QtNodes/NodeDelegateModelRegistry>
 #include <QtNodes/NodeStyle>
 #include <QtNodes/internal/AbstractNodeGeometry.hpp>
+#include <QtNodes/internal/ConnectionGraphicsObject.hpp>
+#include <QtNodes/internal/ConnectionIdUtils.hpp>
+#include <QtNodes/internal/ConnectionState.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
+#include <QtNodes/internal/NodeState.hpp>
 #include <QtNodes/StyleCollection>
 #include <QtNodes/UndoCommands>
 
@@ -101,12 +105,18 @@ QColor CategoryColor(const char* category)
         return QColor(0x2e, 0x2a, 0x52);
     if (name == "Character")
         return QColor(0x1c, 0x4a, 0x2c);
+    if (name == "Physics")
+        return QColor(0x4f, 0x2e, 0x16);
     if (name == "Audio")
         return QColor(0x4a, 0x1f, 0x3d);
+    if (name == "Achievements")
+        return QColor(0x5a, 0x48, 0x12);
     if (name == "Input")
         return QColor(0x3a, 0x3f, 0x1c);
     if (name == "Math" || name == "Logic")
         return QColor(0x1d, 0x3f, 0x35);
+    if (name == "Lists")
+        return QColor(0x24, 0x3c, 0x4a);
     return QColor(0x2b, 0x2d, 0x31);
 }
 
@@ -166,6 +176,37 @@ std::string NormalisedDefault(const std::string& text, NodeGraphVariableType typ
 // ---------------------------------------------------------------------------------------
 // Entity picker
 // ---------------------------------------------------------------------------------------
+
+// An editable combo box whose choices are filled in only when it drops down. The Variable
+// and Function pickers sit on hundreds of nodes, and filling each with every variable when
+// a graph was loaded is what made a large graph take seconds to open: every inserted item
+// restarts a Qt timer, and cancelling one scans the whole posted-event queue, which grows
+// while the graph loads. Filling on demand also means a renamed or added variable needs no
+// pass over every node - the list is read again each time it opens.
+class LazyChoiceCombo : public QComboBox
+{
+public:
+    LazyChoiceCombo(QWidget* parent, std::function<QStringList()> choices)
+        : QComboBox(parent), mChoices(std::move(choices))
+    {
+        setEditable(true);
+    }
+
+    void showPopup() override
+    {
+        const QString current = currentText();
+        {
+            const QSignalBlocker blocker(this);
+            clear();
+            addItems(mChoices());
+            setCurrentText(current);
+        }
+        QComboBox::showPopup();
+    }
+
+private:
+    std::function<QStringList()> mChoices;
+};
 
 // Picks a level entity for an Entity parameter. The value is the entity's id in decimal;
 // the list shows names. It is rebuilt every time it drops down, so it always reflects the
@@ -289,6 +330,171 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------
+// Parameter panel
+// ---------------------------------------------------------------------------------------
+
+// The body of a node with parameters. Until the user first clicks it, it only *paints*
+// each parameter - its label, and its value in a box shaped like the editor it will become
+// - and owns no child widgets at all. The real editors (spin boxes, combo boxes, line
+// edits...) are built on that first click, in exactly the rows the painting used, and the
+// click is passed on to the one under the pointer.
+//
+// Building real editors for every node is what made a large graph slow to load: a
+// thousand nodes meant thousands of styled, laid-out widgets before anything was shown.
+// The panel's size never changes between the two states, so a node does not move or
+// resize when it comes alive.
+class ParamPanel : public QWidget
+{
+public:
+    struct Row
+    {
+        QString Label;
+        NodeParamKind Kind = NodeParamKind::String;
+    };
+
+    // `value(i)` is what row i shows while painted; `build()` creates the editors, placing
+    // each with EditorRect.
+    ParamPanel(std::vector<Row> rows, std::function<QString(int)> value, std::function<void()> build)
+        : mRows(std::move(rows)), mValue(std::move(value)), mBuild(std::move(build))
+    {
+        setAttribute(Qt::WA_NoSystemBackground);
+        const QFontMetrics metrics(font());
+        for (const Row& row : mRows)
+        {
+            mLabelWidth = (std::max)(mLabelWidth, metrics.horizontalAdvance(row.Label));
+            mEditorWidth = (std::max)(mEditorWidth, EditorWidth(row.Kind));
+        }
+        setFixedSize(kMargin + mLabelWidth + kGap + mEditorWidth + kMargin,
+                     kMargin * 2 + static_cast<int>(mRows.size()) * kRowHeight);
+    }
+
+    bool IsBuilt() const { return mBuilt; }
+
+    QRect EditorRect(int row, NodeParamKind kind) const
+    {
+        const int width = kind == NodeParamKind::Bool ? kRowHeight - 4 : mEditorWidth;
+        return QRect(kMargin + mLabelWidth + kGap, kMargin + row * kRowHeight + 1, width, kRowHeight - 3);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        const QPalette& colors = palette();
+        for (int i = 0; i < static_cast<int>(mRows.size()); ++i)
+        {
+            const Row& row = mRows[i];
+            const QRect label(kMargin, kMargin + i * kRowHeight, mLabelWidth, kRowHeight);
+            painter.setPen(colors.color(QPalette::WindowText));
+            painter.drawText(label, Qt::AlignRight | Qt::AlignVCenter, row.Label);
+            if (mBuilt)
+            {
+                continue; // the editors draw themselves
+            }
+
+            const QRect box = EditorRect(i, row.Kind);
+            if (row.Kind == NodeParamKind::Bool)
+            {
+                QStyleOptionButton option;
+                option.initFrom(this);
+                option.rect = box;
+                option.state |= mValue(i) == QLatin1String("true") ? QStyle::State_On : QStyle::State_Off;
+                style()->drawPrimitive(QStyle::PE_IndicatorCheckBox, &option, &painter, this);
+                continue;
+            }
+
+            painter.setPen(colors.color(QPalette::Mid));
+            painter.setBrush(colors.color(QPalette::Base));
+            painter.drawRect(box.adjusted(0, 0, -1, -1));
+            const bool dropDown = row.Kind == NodeParamKind::Enum || row.Kind == NodeParamKind::Variable ||
+                                  row.Kind == NodeParamKind::Function || row.Kind == NodeParamKind::Entity;
+            const QRect text = box.adjusted(4, 0, dropDown ? -16 : -4, 0);
+            painter.setPen(colors.color(QPalette::Text));
+            painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter,
+                             painter.fontMetrics().elidedText(mValue(i), Qt::ElideRight, text.width()));
+            if (dropDown)
+            {
+                QStyleOption arrow;
+                arrow.initFrom(this);
+                arrow.rect = QRect(box.right() - 14, box.top(), 12, box.height());
+                style()->drawPrimitive(QStyle::PE_IndicatorArrowDown, &arrow, &painter, this);
+            }
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (!mBuilt)
+        {
+            mBuilt = true;
+            mBuild();
+            update();
+        }
+
+        // Hand the click to the editor now under the pointer, so the first click already
+        // focuses the field, toggles the box or opens the list.
+        mForwardTarget = childAt(event->position().toPoint());
+        if (mForwardTarget == nullptr)
+        {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+        Forward(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (mForwardTarget == nullptr)
+        {
+            QWidget::mouseReleaseEvent(event);
+            return;
+        }
+        Forward(event);
+        mForwardTarget = nullptr;
+    }
+
+private:
+    static constexpr int kRowHeight = 26;
+    static constexpr int kMargin = 4;
+    static constexpr int kGap = 6;
+
+    // Room for each kind of editor, close to what the editors themselves ask for.
+    static int EditorWidth(NodeParamKind kind)
+    {
+        switch (kind)
+        {
+        case NodeParamKind::Bool: return kRowHeight - 4;
+        case NodeParamKind::Number: return 90;
+        case NodeParamKind::Enum: return 120;
+        case NodeParamKind::Variable: return 140;
+        case NodeParamKind::Function: return 150;
+        case NodeParamKind::Entity: return 170;
+        default: return 140;
+        }
+    }
+
+    void Forward(QMouseEvent* event)
+    {
+        const QPointF local = mForwardTarget->mapFrom(this, event->position().toPoint());
+        QMouseEvent copy(event->type(), local, event->scenePosition(), event->globalPosition(), event->button(),
+                         event->buttons(), event->modifiers());
+        if (event->type() == QEvent::MouseButtonPress)
+        {
+            mForwardTarget->setFocus(Qt::MouseFocusReason);
+        }
+        QApplication::sendEvent(mForwardTarget, &copy);
+    }
+
+    std::vector<Row> mRows;
+    std::function<QString(int)> mValue;
+    std::function<void()> mBuild;
+    int mLabelWidth = 0;
+    int mEditorWidth = 0;
+    bool mBuilt = false;
+    QPointer<QWidget> mForwardTarget;
+};
+
+// ---------------------------------------------------------------------------------------
 // Delegate model
 // ---------------------------------------------------------------------------------------
 
@@ -372,7 +578,13 @@ public:
     {
         if (mWidget == nullptr && mType->ParamCount > 0)
         {
-            BuildWidget();
+            std::vector<ParamPanel::Row> rows;
+            for (unsigned i = 0; i < mType->ParamCount; ++i)
+            {
+                rows.push_back({ QString::fromUtf8(mType->Params[i].Label), mType->Params[i].Kind });
+            }
+            mWidget = new ParamPanel(std::move(rows), [this](int row) { return DisplayValue(row); },
+                                     [this] { BuildEditors(); });
         }
 
         return mWidget;
@@ -424,44 +636,6 @@ public:
         PushParamsToEditors();
     }
 
-    // Called after the variable table or the set of functions changes, so every picker
-    // offers the new set without the user having to recreate their nodes.
-    void RefreshVariableChoices()
-    {
-        for (const auto& [key, editor] : mEditors)
-        {
-            auto* combo = qobject_cast<QComboBox*>(editor);
-            const NodeGraphParam* param = NodeGraphCatalog::FindParam(*mType, key.toUtf8().constData());
-            if (combo == nullptr || param == nullptr)
-            {
-                continue;
-            }
-
-            if (param->Kind != NodeParamKind::Variable && param->Kind != NodeParamKind::Function)
-            {
-                continue;
-            }
-
-            const QString current = mParams.value(key);
-            const QSignalBlocker blocker(combo);
-            combo->clear();
-
-            if (param->Kind == NodeParamKind::Variable)
-            {
-                for (const NodeGraphVariable& variable : mContext->Variables)
-                {
-                    combo->addItem(QString::fromStdString(variable.Name));
-                }
-            }
-            else
-            {
-                combo->addItems(mContext->Functions);
-            }
-
-            combo->setCurrentText(current);
-        }
-    }
-
     // Re-reads entity names, so a rename in the level shows on nodes already placed.
     void RefreshEntityPickers()
     {
@@ -471,6 +645,12 @@ public:
             {
                 picker->Rebuild();
             }
+        }
+
+        // A panel that has not been clicked yet paints entity names itself.
+        if (mWidget != nullptr && mEditors.empty())
+        {
+            mWidget->update();
         }
     }
 
@@ -504,14 +684,43 @@ private:
         }
     }
 
-    void BuildWidget()
+    // What an unclicked panel shows for parameter `row`: the text its editor would hold.
+    QString DisplayValue(int row) const
     {
-        mWidget = new QWidget();
-        mWidget->setAttribute(Qt::WA_NoSystemBackground);
-        auto* form = new QFormLayout(mWidget);
-        form->setContentsMargins(4, 2, 4, 2);
-        form->setSpacing(3);
-        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        const NodeGraphParam& param = mType->Params[row];
+        const QString value = mParams.value(QString::fromUtf8(param.Key));
+        switch (param.Kind)
+        {
+        case NodeParamKind::Number:
+            // As the spin box shows it.
+            return QLocale().toString(value.toDouble(), 'f', 3);
+        case NodeParamKind::Entity:
+        {
+            if (value.isEmpty())
+            {
+                return QStringLiteral("(none)");
+            }
+            if (gListEntities)
+            {
+                for (const NodeGraphEntityInfo& entity : gListEntities())
+                {
+                    if (QString::number(entity.Id) == value)
+                    {
+                        return QString::fromStdString(entity.Name);
+                    }
+                }
+            }
+            return QStringLiteral("<missing %1>").arg(value);
+        }
+        default:
+            return value;
+        }
+    }
+
+    // The real editors, built on the panel's first click, each in its painted row.
+    void BuildEditors()
+    {
+        auto* panel = static_cast<ParamPanel*>(mWidget);
 
         for (unsigned i = 0; i < mType->ParamCount; ++i)
         {
@@ -560,13 +769,16 @@ private:
             {
                 // Editable so a graph whose variable was renamed still shows what it was
                 // pointing at rather than silently snapping to the first entry.
-                auto* combo = new QComboBox(mWidget);
-                combo->setEditable(true);
+                GraphContext* context = mContext;
+                auto* combo = new LazyChoiceCombo(mWidget, [context] {
+                    QStringList names;
+                    for (const NodeGraphVariable& variable : context->Variables)
+                    {
+                        names.append(QString::fromStdString(variable.Name));
+                    }
+                    return names;
+                });
                 combo->setMinimumWidth(110);
-                for (const NodeGraphVariable& variable : mContext->Variables)
-                {
-                    combo->addItem(QString::fromStdString(variable.Name));
-                }
                 combo->setCurrentText(mParams.value(key));
                 QObject::connect(combo, &QComboBox::currentTextChanged, this, [this, key](const QString& text) {
                     RecordEdit(key, text);
@@ -578,13 +790,9 @@ private:
             {
                 // Editable for the same reason as the variable picker, and because a
                 // library may not have been imported yet when the call is wired up.
-                auto* combo = new QComboBox(mWidget);
-                combo->setEditable(true);
+                GraphContext* context = mContext;
+                auto* combo = new LazyChoiceCombo(mWidget, [context] { return context->Functions; });
                 combo->setMinimumWidth(140);
-                for (const QString& function : mContext->Functions)
-                {
-                    combo->addItem(function);
-                }
                 combo->setCurrentText(mParams.value(key));
                 QObject::connect(combo, &QComboBox::currentTextChanged, this, [this, key](const QString& text) {
                     RecordEdit(key, text);
@@ -615,13 +823,19 @@ private:
             }
             }
 
-            form->addRow(QString::fromUtf8(param.Label), editor);
+            editor->setGeometry(panel->EditorRect(static_cast<int>(i), param.Kind));
+            editor->show();
             mEditors.emplace_back(key, editor);
         }
     }
 
     void PushParamsToEditors()
     {
+        if (mWidget != nullptr && mEditors.empty())
+        {
+            mWidget->update();
+        }
+
         for (const auto& [key, editor] : mEditors)
         {
             const QString value = mParams.value(key);
@@ -687,7 +901,154 @@ public:
         }
         painter->restore();
 
-        QtNodes::DefaultNodePainter::paint(painter, ngo);
+        // The stock painter's steps each fetch the node's style from the model as JSON and
+        // decode it again - six times a node - and every zoom step redraws every visible
+        // node. The delegate already holds the decoded style, so the body, ports, labels and
+        // caption are drawn here from that one reference; the rarely-shown extras (resize
+        // handle, processing and validation icons) still come from the base painter.
+        auto* model = dynamic_cast<QtNodes::DataFlowGraphModel*>(&ngo.graphModel());
+        auto* delegate = model != nullptr ? model->delegateModel<QtNodes::NodeDelegateModel>(ngo.nodeId()) : nullptr;
+        if (delegate == nullptr)
+        {
+            QtNodes::DefaultNodePainter::paint(painter, ngo);
+            return;
+        }
+
+        const QtNodes::NodeStyle& style = delegate->nodeStyle();
+        DrawBody(painter, ngo, style, body);
+        DrawPorts(painter, ngo, style);
+        DrawCaption(painter, ngo, style);
+        drawProcessingIndicator(painter, ngo);
+        drawResizeRect(painter, ngo);
+        drawValidationIcon(painter, ngo);
+    }
+
+private:
+    // DefaultNodePainter::drawNodeRect, with the style passed in.
+    static void DrawBody(QPainter* painter, QtNodes::NodeGraphicsObject& ngo, const QtNodes::NodeStyle& style,
+                         const QRectF& body)
+    {
+        QColor color = ngo.isSelected() ? style.SelectedBoundaryColor : style.NormalBoundaryColor;
+        float penWidth = ngo.nodeState().hovered() ? style.HoveredPenWidth : style.PenWidth;
+
+        const QVariant validation = ngo.graphModel().nodeData(ngo.nodeId(), NodeRole::ValidationState);
+        if (validation.canConvert<QtNodes::NodeValidationState>())
+        {
+            const auto state = validation.value<QtNodes::NodeValidationState>()._state;
+            if (state == QtNodes::NodeValidationState::State::Error)
+            {
+                color = style.ErrorColor;
+                penWidth *= 3.0f;
+            }
+            else if (state == QtNodes::NodeValidationState::State::Warning)
+            {
+                color = style.WarningColor;
+                penWidth *= 2.0f;
+            }
+        }
+
+        painter->setPen(QPen(color, penWidth));
+        QLinearGradient gradient(QPointF(0.0, 0.0), QPointF(2.0, body.height()));
+        gradient.setColorAt(0.0, style.GradientColor0);
+        gradient.setColorAt(0.10, style.GradientColor1);
+        gradient.setColorAt(0.90, style.GradientColor2);
+        gradient.setColorAt(1.0, style.GradientColor3);
+        painter->setBrush(gradient);
+        painter->drawRoundedRect(body, 3.0, 3.0);
+    }
+
+    // drawConnectionPoints, drawFilledConnectionPoints and drawEntryLabels in one pass over
+    // the ports, so each port's data type and connections are looked up once.
+    static void DrawPorts(QPainter* painter, QtNodes::NodeGraphicsObject& ngo, const QtNodes::NodeStyle& style)
+    {
+        QtNodes::AbstractGraphModel& model = ngo.graphModel();
+        const NodeId nodeId = ngo.nodeId();
+        QtNodes::AbstractNodeGeometry& geometry = ngo.nodeScene()->nodeGeometry();
+        const auto& connectionStyle = QtNodes::StyleCollection::connectionStyle();
+        QtNodes::NodeState& nodeState = ngo.nodeState();
+        const double diameter = style.ConnectionPointDiameter;
+        // The points are outlined with the body's border pen, as the stock painter does.
+        const QPen outline = painter->pen();
+
+        for (const PortType portType : { PortType::Out, PortType::In })
+        {
+            const unsigned count = model.nodeData(nodeId, portType == PortType::Out ? NodeRole::OutPortCount
+                                                                                    : NodeRole::InPortCount).toUInt();
+            for (PortIndex portIndex = 0; portIndex < count; ++portIndex)
+            {
+                const QPointF point = geometry.portPosition(nodeId, portType, portIndex);
+                const NodeDataType dataType =
+                    model.portData(nodeId, portType, portIndex, QtNodes::PortRole::DataType).value<NodeDataType>();
+                const bool connected = !model.connections(nodeId, portType, portIndex).empty();
+                const QColor typeColor = connectionStyle.useDataDefinedColors()
+                                             ? connectionStyle.normalColor(dataType.id)
+                                             : style.ConnectionPointColor;
+
+                // While a wire is being dragged, the ports it could land on grow as it nears
+                // them and the ones it could not shrink away - the stock painter's feedback.
+                double grow = 1.0;
+                if (const auto* dragged = nodeState.connectionForReaction())
+                {
+                    const PortType required = dragged->connectionState().requiredPort();
+                    if (required == portType)
+                    {
+                        const ConnectionId candidate =
+                            QtNodes::makeCompleteConnectionId(dragged->connectionId(), nodeId, portIndex);
+                        QPointF end = dragged->sceneTransform().map(dragged->endPoint(required));
+                        end = ngo.sceneTransform().inverted().map(end);
+                        const QPointF offset = end - point;
+                        const double distance = std::sqrt(QPointF::dotProduct(offset, offset));
+                        if (model.connectionPossible(candidate))
+                            grow = distance < 40.0 ? 2.0 - distance / 40.0 : 1.0;
+                        else
+                            grow = distance < 80.0 ? distance / 80.0 : 1.0;
+                    }
+                }
+
+                painter->setPen(outline);
+                painter->setBrush(typeColor);
+                painter->drawEllipse(point, diameter * 0.6 * grow, diameter * 0.6 * grow);
+
+                if (connected)
+                {
+                    const QColor fill = connectionStyle.useDataDefinedColors() ? typeColor
+                                                                               : style.FilledConnectionPointColor;
+                    painter->setPen(fill);
+                    painter->setBrush(fill);
+                    painter->drawEllipse(point, diameter * 0.4, diameter * 0.4);
+                }
+
+                const QString label = model.portData<bool>(nodeId, portType, portIndex, QtNodes::PortRole::CaptionVisible)
+                                          ? model.portData<QString>(nodeId, portType, portIndex, QtNodes::PortRole::Caption)
+                                          : dataType.name;
+                painter->setPen(connected ? style.FontColor : style.FontColorFaded);
+                painter->drawText(geometry.portTextPosition(nodeId, portType, portIndex), label);
+            }
+        }
+
+        if (nodeState.connectionForReaction())
+        {
+            nodeState.resetConnectionForReaction();
+        }
+    }
+
+    static void DrawCaption(QPainter* painter, QtNodes::NodeGraphicsObject& ngo, const QtNodes::NodeStyle& style)
+    {
+        QtNodes::AbstractGraphModel& model = ngo.graphModel();
+        const NodeId nodeId = ngo.nodeId();
+        if (!model.nodeData(nodeId, NodeRole::CaptionVisible).toBool())
+        {
+            return;
+        }
+
+        QFont font = painter->font();
+        font.setBold(true);
+        painter->setFont(font);
+        painter->setPen(style.FontColor);
+        painter->drawText(ngo.nodeScene()->nodeGeometry().captionPosition(nodeId),
+                          model.nodeData(nodeId, NodeRole::Caption).toString());
+        font.setBold(false);
+        painter->setFont(font);
     }
 };
 
@@ -756,6 +1117,111 @@ public:
 
         return vacant(PortType::Out) && vacant(PortType::In);
     }
+
+    // The stock model answers every style query by serialising the node's whole NodeStyle
+    // to JSON, and the painter asks six times per node it draws - so every zoom step, which
+    // redraws each visible node, re-serialised the style hundreds of times. A node's style
+    // is fixed once its delegate is built (PteroNodeDelegate colours it by category), so the
+    // serialised form is kept per node.
+    QVariant nodeData(NodeId nodeId, NodeRole role) const override
+    {
+        if (role != NodeRole::Style)
+        {
+            return QtNodes::DataFlowGraphModel::nodeData(nodeId, role);
+        }
+
+        auto it = mStyleCache.find(nodeId);
+        if (it == mStyleCache.end())
+        {
+            it = mStyleCache.emplace(nodeId, QtNodes::DataFlowGraphModel::nodeData(nodeId, role)).first;
+        }
+        return it->second;
+    }
+
+    bool setNodeData(NodeId nodeId, NodeRole role, QVariant value) override
+    {
+        if (role == NodeRole::Style)
+        {
+            mStyleCache.erase(nodeId);
+        }
+        return QtNodes::DataFlowGraphModel::setNodeData(nodeId, role, std::move(value));
+    }
+
+    bool deleteNode(NodeId const nodeId) override
+    {
+        mStyleCache.erase(nodeId);
+        const bool deleted = QtNodes::DataFlowGraphModel::deleteNode(nodeId);
+        mNodeConnections.erase(nodeId);
+        return deleted;
+    }
+
+    // The stock model answers "what is connected to this port" by scanning every connection
+    // in the graph, and the painter asks once per port of every node it draws: on a graph
+    // of a thousand nodes that was a quarter of the time spent painting. Connections are
+    // indexed by port and by node here instead. The index is updated before the base call,
+    // because that is where the scene is told, and the scene queries straight back.
+    void addConnection(ConnectionId const connectionId) override
+    {
+        if (!connectionExists(connectionId))
+        {
+            IndexConnection(connectionId, true);
+        }
+        QtNodes::DataFlowGraphModel::addConnection(connectionId);
+    }
+
+    bool deleteConnection(ConnectionId const connectionId) override
+    {
+        if (connectionExists(connectionId))
+        {
+            IndexConnection(connectionId, false);
+        }
+        return QtNodes::DataFlowGraphModel::deleteConnection(connectionId);
+    }
+
+    std::unordered_set<ConnectionId> connections(NodeId nodeId, PortType portType, PortIndex portIndex) const override
+    {
+        const auto it = mPortConnections.find(PortKey(nodeId, portType, portIndex));
+        return it == mPortConnections.end() ? std::unordered_set<ConnectionId>{} : it->second;
+    }
+
+    std::unordered_set<ConnectionId> allConnectionIds(NodeId const nodeId) const override
+    {
+        const auto it = mNodeConnections.find(nodeId);
+        return it == mNodeConnections.end() ? std::unordered_set<ConnectionId>{} : it->second;
+    }
+
+private:
+    static std::uint64_t PortKey(NodeId nodeId, PortType portType, PortIndex portIndex)
+    {
+        return (static_cast<std::uint64_t>(nodeId) << 32) |
+               (portType == PortType::In ? 0x80000000ull : 0ull) | (portIndex & 0x7fffffffu);
+    }
+
+    void IndexConnection(ConnectionId const& connectionId, bool add)
+    {
+        const std::uint64_t ends[2] = {
+            PortKey(connectionId.outNodeId, PortType::Out, connectionId.outPortIndex),
+            PortKey(connectionId.inNodeId, PortType::In, connectionId.inPortIndex),
+        };
+        for (const std::uint64_t key : ends)
+        {
+            if (add)
+                mPortConnections[key].insert(connectionId);
+            else if (auto it = mPortConnections.find(key); it != mPortConnections.end() && it->second.erase(connectionId) && it->second.empty())
+                mPortConnections.erase(it);
+        }
+        for (const NodeId nodeId : { connectionId.outNodeId, connectionId.inNodeId })
+        {
+            if (add)
+                mNodeConnections[nodeId].insert(connectionId);
+            else if (auto it = mNodeConnections.find(nodeId); it != mNodeConnections.end())
+                it->second.erase(connectionId);
+        }
+    }
+
+    mutable std::unordered_map<NodeId, QVariant> mStyleCache;
+    std::unordered_map<std::uint64_t, std::unordered_set<ConnectionId>> mPortConnections;
+    std::unordered_map<NodeId, std::unordered_set<ConnectionId>> mNodeConnections;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -768,7 +1234,14 @@ public:
 class PteroNodeScene : public QtNodes::DataFlowGraphicsScene
 {
 public:
-    using QtNodes::DataFlowGraphicsScene::DataFlowGraphicsScene;
+    PteroNodeScene(QtNodes::DataFlowGraphModel& model, QObject* parent)
+        : QtNodes::DataFlowGraphicsScene(model, parent)
+    {
+        // Indexed, so finding what is under the pointer does not walk every node, wire and
+        // editor in the graph on each mouse move - which, zoomed out over a large graph,
+        // took longer than drawing it.
+        setItemIndexMethod(QGraphicsScene::BspTreeIndex);
+    }
 
     // Comment boxes are not registered node types, so the menu entry for one has to be
     // handed back to the window rather than pushed through the node registry.
@@ -1178,6 +1651,86 @@ public:
         setDragMode(QGraphicsView::RubberBandDrag);
         setAcceptDrops(true);
         setFocusPolicy(Qt::StrongFocus);
+        QObject::connect(this, &QtNodes::GraphicsView::scaleChanged, this, [this](double) { ScheduleDetailUpdate(); });
+
+        // No zoom limits: QtNodes' 30%..200% range is far too narrow for a large graph,
+        // and a zero range means unlimited.
+        setScaleRange(0.0, 0.0);
+        // Panning stops at the view's scene rect. QtNodes fixes it at +-32767, which a big
+        // graph outgrows (Data/Farkle's is 35000 tall); this leaves room for any graph.
+        constexpr qreal kExtent = 1000000.0;
+        setSceneRect(-kExtent, -kExtent, kExtent * 2.0, kExtent * 2.0);
+    }
+
+    // A graph opens at 100% on its top-left corner, where its first events are, instead of
+    // QtNodes' fit-to-window: a large graph fitted into a window is too small to read. Only
+    // a newly loaded graph is framed - reopening the window keeps the view where it was.
+    void RequestStartFrame()
+    {
+        mStartFramePending = true;
+        if (isVisible())
+        {
+            QTimer::singleShot(0, this, [this] { FrameStart(); });
+        }
+    }
+
+    // View > Fit to Contents. A fit changes the scale without QtNodes' scaleChanged signal,
+    // so the level-of-detail pass has to be asked for here.
+    void FitToContents()
+    {
+        centerScene();
+        ScheduleDetailUpdate();
+    }
+
+    // The parameter editors on the node bodies are real widgets, drawn through a
+    // QGraphicsProxyWidget, and a proxy has to render its widget every time it is painted:
+    // with a thousand nodes on screen, every pan and zoom re-rendered a thousand line edits
+    // and combo boxes. Each proxy is cached in device coordinates instead - a pan is then a
+    // blit, and a widget only re-renders when it changes or the zoom does - and zoomed out
+    // past legibility the editors are hidden altogether, leaving titles, pins and wires.
+    // Batched into one pass per event-loop turn, since loading a graph creates every node
+    // in a row.
+    void ScheduleDetailUpdate()
+    {
+        if (mDetailUpdatePending)
+        {
+            return;
+        }
+
+        mDetailUpdatePending = true;
+        QTimer::singleShot(0, this, [this] {
+            mDetailUpdatePending = false;
+            ApplyDetail();
+        });
+    }
+
+    void ApplyDetail()
+    {
+        if (scene() == nullptr)
+        {
+            return;
+        }
+
+        constexpr double kEditorMinScale = 0.45;
+        const bool showEditors = getScale() >= kEditorMinScale;
+        for (QGraphicsItem* item : scene()->items())
+        {
+            auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(item);
+            if (proxy == nullptr)
+            {
+                continue;
+            }
+
+            if (proxy->cacheMode() != QGraphicsItem::DeviceCoordinateCache)
+            {
+                proxy->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
+            }
+
+            if (proxy->isVisible() != showEditors)
+            {
+                proxy->setVisible(showEditors);
+            }
+        }
     }
 
     // Set by the window: creates a node of the given type at a scene position.
@@ -1204,6 +1757,38 @@ public:
     }
 
 protected:
+    // Deliberately not GraphicsView::showEvent: it fits the whole graph into the window
+    // every time the window is shown.
+    void showEvent(QShowEvent* event) override
+    {
+        QGraphicsView::showEvent(event);
+        if (mStartFramePending)
+        {
+            QTimer::singleShot(0, this, [this] { FrameStart(); });
+        }
+    }
+
+    void FrameStart()
+    {
+        if (!mStartFramePending || scene() == nullptr)
+        {
+            return;
+        }
+
+        mStartFramePending = false;
+        setTransform(QTransform());
+        const QRectF content = scene()->itemsBoundingRect();
+        if (!content.isEmpty())
+        {
+            // The view's centre, placed so the content's corner sits a margin in from the
+            // view's top-left.
+            constexpr qreal kMargin = 40.0;
+            const QSizeF half = QSizeF(viewport()->width(), viewport()->height()) / 2.0;
+            centerOn(content.topLeft() + QPointF(half.width() - kMargin, half.height() - kMargin));
+        }
+        ScheduleDetailUpdate();
+    }
+
     void mousePressEvent(QMouseEvent* event) override
     {
         if (event->button() == Qt::RightButton)
@@ -1374,6 +1959,8 @@ private:
     // Viewport pixels, re-anchored every move so the grabbed point stays under the cursor.
     QPoint mPanAnchor;
     bool mPanning = false;
+    bool mDetailUpdatePending = false;
+    bool mStartFramePending = true;
 };
 
 // ---------------------------------------------------------------------------------------
@@ -1496,7 +2083,7 @@ public:
                          [this] { DeleteSelectedComments(); });
 
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::nodeCreated, this,
-                         [this](NodeId) { MarkEdited(); });
+                         [this](NodeId) { MarkEdited(); mView->ScheduleDetailUpdate(); });
         QObject::connect(mModel.get(), &QtNodes::AbstractGraphModel::nodeDeleted, this,
                          [this](NodeId) { MarkEdited(); });
         // Fires for every node on every mouse move of a drag, so it takes the cheap path.
@@ -1589,6 +2176,7 @@ public:
         RefreshFunctions();
         RefreshFunctionList();
         UpdateStatus();
+        mView->RequestStartFrame();
     }
 
     NodeGraphDocument BuildDocument() const
@@ -1952,7 +2540,7 @@ private:
 
         QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&View"));
         QObject::connect(viewMenu->addAction(QStringLiteral("&Fit to Contents")), &QAction::triggered, this,
-                         [this] { mView->centerScene(); });
+                         [this] { mView->FitToContents(); });
         QObject::connect(viewMenu->addAction(QStringLiteral("Zoom &In")), &QAction::triggered, this,
                          [this] { mView->scaleUp(); });
         QObject::connect(viewMenu->addAction(QStringLiteral("Zoom &Out")), &QAction::triggered, this,
@@ -2041,7 +2629,6 @@ private:
             variable.DefaultValue = NodeGraphVariableTypeDefault(variable.Type);
             mContext.Variables.push_back(variable);
             RefreshVariableTable();
-            RefreshVariablePickers();
             MarkEdited();
         });
 
@@ -2054,7 +2641,6 @@ private:
 
             mContext.Variables.erase(mContext.Variables.begin() + row);
             RefreshVariableTable();
-            RefreshVariablePickers();
             MarkEdited();
         });
 
@@ -2094,7 +2680,6 @@ private:
                 }
             }
 
-            RefreshVariablePickers();
             MarkEdited();
         });
 
@@ -2228,7 +2813,6 @@ private:
                                  }
                                  mSuspendVariableSignals = false;
 
-                                 RefreshVariablePickers();
                                  MarkEdited();
                              });
             mVariableTable->setCellWidget(row, 1, typeCombo);
@@ -2237,17 +2821,6 @@ private:
         }
 
         mSuspendVariableSignals = false;
-    }
-
-    void RefreshVariablePickers()
-    {
-        for (const NodeId nodeId : mModel->allNodeIds())
-        {
-            if (auto* delegate = mModel->delegateModel<PteroNodeDelegate>(nodeId))
-            {
-                delegate->RefreshVariableChoices();
-            }
-        }
     }
 
     // The set of functions is not declared anywhere: a Function Entry node *is* the
@@ -2285,7 +2858,6 @@ private:
         }
 
         mContext.Functions = found;
-        RefreshVariablePickers();
         RefreshFunctionList();
     }
 
@@ -2485,6 +3057,8 @@ NodeGraphDocument gDocument;
 bool gDocumentMatchesWindow = false;
 std::string gExportPath;
 unsigned gRevision = 0;
+// A hidden build of the window is waiting on the event loop (see SetDocument).
+bool gWindowBuildQueued = false;
 
 NodeGraphWindow* EnsureWindow()
 {
@@ -2578,6 +3152,7 @@ bool IsVisible()
 
 void Shutdown()
 {
+    gWindowBuildQueued = false;
     FlushWindowEdits();
     delete gWindow;
     gWindow = nullptr;
@@ -2598,6 +3173,23 @@ void SetDocument(const NodeGraphDocument& document)
     if (gWindow != nullptr)
     {
         gWindow->SetDocument(gDocument);
+    }
+    else if (QApplication::instance() != nullptr && !gWindowBuildQueued)
+    {
+        // Build the window, hidden, as soon as the level has finished loading rather than
+        // when the user first opens it: a large graph takes a moment to put on screen, and
+        // that moment belongs with the level load, not with the click on Node Graph.
+        // Queued, so it runs after the loader returns; whichever document is current by
+        // then is the one built.
+        gWindowBuildQueued = true;
+        QTimer::singleShot(0, [] {
+            // Cleared by Shutdown, which may come first.
+            if (gWindowBuildQueued)
+            {
+                gWindowBuildQueued = false;
+                EnsureWindow();
+            }
+        });
     }
 
     // A load is not an edit: reset the baseline so opening a level does not immediately

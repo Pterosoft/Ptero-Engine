@@ -99,6 +99,11 @@ void Editor::MarkSceneChanged()
 
     mLastSceneChangeTime = now;
     mUndoBaseline = CaptureSceneState();
+
+    // Auto Key: an edit to something the open sequence animates becomes a key at the
+    // playhead. After the baseline, so the level's undo records the edit as made; the
+    // key is the Sequencer's own undo step.
+    SequencerEditor::OnSceneChanged();
 }
 
 bool Editor::Undo()
@@ -121,6 +126,7 @@ bool Editor::Undo()
     // than coalescing into whatever was being dragged before the undo.
     mLastSceneChangeTime = {};
     mSceneDirty = true;
+    SequencerEditor::OnLevelRestored();
 
     PTERO_LOG_INFO(kCategory, "Undo. %llu step%s left, %llu to redo.",
                    static_cast<unsigned long long>(mUndoStack.size()),
@@ -147,6 +153,7 @@ bool Editor::Redo()
     mUndoBaseline = CaptureSceneState();
     mLastSceneChangeTime = {};
     mSceneDirty = true;
+    SequencerEditor::OnLevelRestored();
 
     PTERO_LOG_INFO(kCategory, "Redo. %llu step%s left, %llu to undo.",
                    static_cast<unsigned long long>(mRedoStack.size()),

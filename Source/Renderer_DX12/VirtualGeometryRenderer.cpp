@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "VirtualGeometryRenderer.h"
 #include "EntityMeshRenderer.h"
+#include "AnalyticEdgeAARenderer.h"
+#include "PrincipledGBuffer.h"
 
 #include "System/PteroLog.h"
 
@@ -190,9 +192,11 @@ namespace
         RasterDrawConstants = 0,   // b3
         RasterMaterial      = 1,   // b1, EntityMeshRenderer
         RasterRain          = 2,   // b2
-        RasterTextures      = 3,   // t0-t7, one table each, 3..10
-        RasterBin           = 11,  // b4 root constant
-        RasterClusters      = 12,  // t0, space1
+        // t0-t9, one table each, 3..12: EntityMeshRenderer binds material texture slot s
+        // to root table 3 + s, so this range has to be exactly its slot count.
+        RasterTextures      = 3,
+        RasterBin           = RasterTextures + EntityMeshRenderer::kMaterialTextureSlotCount,  // b4 root constant
+        RasterClusters,            // t0, space1
         RasterInstances,
         RasterClusterVertices,
         RasterClusterTriangles,
@@ -670,8 +674,8 @@ bool VirtualGeometryRenderer::CreateRasterRootSignature(float mipLodBias)
     rootDescriptor(RasterMaterial, D3D12_ROOT_PARAMETER_TYPE_CBV, 1, 0, D3D12_SHADER_VISIBILITY_ALL);
     rootDescriptor(RasterRain, D3D12_ROOT_PARAMETER_TYPE_CBV, 2, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
-    D3D12_DESCRIPTOR_RANGE textureRanges[8]{};
-    for (UINT i = 0; i < 8; ++i)
+    D3D12_DESCRIPTOR_RANGE textureRanges[EntityMeshRenderer::kMaterialTextureSlotCount]{};
+    for (UINT i = 0; i < EntityMeshRenderer::kMaterialTextureSlotCount; ++i)
     {
         textureRanges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         textureRanges[i].NumDescriptors = 1;
@@ -820,7 +824,7 @@ bool VirtualGeometryRenderer::CompileRasterShaders()
         { &mPointShadowPixelShader, { file, L"VgPixelPointShadow", L"ps_6_0", ShaderStage::Pixel } },
         { &mMotionPixelShader,      { file, L"VgPixelMotion", L"ps_6_0", ShaderStage::Pixel } },
         // The G-Buffer pixel shader itself, the same request EntityMeshRenderer makes.
-        { &mGBufferPixelShader,     { L"Shaders\\GBuffer.hlsl", L"PSMain", L"ps_5_0", ShaderStage::Pixel } },
+        { &mGBufferPixelShader,     AnalyticEdge::MakeGBufferPixelShaderRequest(L"Shaders\\GBuffer.hlsl", L"PSMain") },
     };
     for (const Job& job : jobs)
     {
@@ -863,13 +867,14 @@ bool VirtualGeometryRenderer::EnsureRasterPipelines(
         return true;
 
     const D3D12_SHADER_BYTECODE front = UseMeshShaders() ? mMeshShader.GetBytecode() : mVertexShader.GetBytecode();
-    const DXGI_FORMAT targets[3] = { albedoFormat, normalFormat, materialFormat };
+    DXGI_FORMAT targets[PrincipledGBuffer::kGeometryPassTargetCount] = { albedoFormat, normalFormat, materialFormat, AnalyticEdge::kGBufferFormat };
+    PrincipledGBuffer::DeclareTargets(targets);
     const D3D12_RASTERIZER_DESC rasterizer = Rasterizer(D3D12_CULL_MODE_BACK, mFrame.WireframeEnabled);
 
     if (!CreateRasterPipeline({ front, mGBufferPixelShader.GetBytecode() }, rasterizer, DepthTest(true),
-            3, targets, depthFormat, sampleCount, mGBufferPipeline, "G-Buffer")
+            PrincipledGBuffer::kGeometryPassTargetCount, targets, depthFormat, sampleCount, mGBufferPipeline, "G-Buffer")
         || !CreateRasterPipeline({ front, mDebugPixelShader.GetBytecode() }, rasterizer, DepthTest(true),
-            3, targets, depthFormat, sampleCount, mDebugPipeline, "debug view"))
+            PrincipledGBuffer::kGeometryPassTargetCount, targets, depthFormat, sampleCount, mDebugPipeline, "debug view"))
     {
         mGBufferKey = {};
         return false;
@@ -1348,6 +1353,12 @@ void VirtualGeometryRenderer::BeginFrame(ID3D12GraphicsCommandList* commandList,
             const Entity& entity = entities[i];
             if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset
                 || !(entity.Mesh->VirtualizedGeometry || mSettings.VirtualizeAllMeshes))
+            {
+                continue;
+            }
+            // An animated entity is skinned by EntityMeshRenderer, whose posed vertices a
+            // cluster hierarchy of the bind pose cannot follow.
+            if (entity.Animator.has_value())
             {
                 continue;
             }

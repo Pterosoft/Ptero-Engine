@@ -1,0 +1,135 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: Title; src: url("../../../Farkle/Website/dist/assets/title.ttf"); }
+@font-face { font-family: Body; src: url("../../../Farkle/Website/dist/assets/body.ttf"); }
+html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; background: #0d0703; }
+.scene { position: absolute; inset: 0; overflow: hidden; opacity: 0; }
+.img { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.shade { position: absolute; inset: 0; }
+.cap { position: absolute; left: 0; right: 0; text-align: center; color: #f6e6c4;
+  text-shadow: 0 4px 24px rgba(0,0,0,.9), 0 0 4px rgba(0,0,0,.6); }
+.title { font-family: Title, Georgia, serif; }
+.body { font-family: Body, Georgia, serif; }
+.kicker { color: #e9c98f; letter-spacing: .3em; text-transform: uppercase; font-size: 40px; }
+.logo { position: absolute; left: 50%; width: 820px; margin-left: -410px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.8)); }
+.badge { position: absolute; left: 50%; font-family: Title, Georgia, serif; background: #c9a466; color: #1c0f06;
+  font-size: 190px; line-height: 1; padding: 30px 50px 22px; border-radius: 10px; white-space: nowrap;
+  box-shadow: 0 16px 50px rgba(0,0,0,.7), inset 0 0 0 5px rgba(28,15,6,.25); }
+.btn { position: absolute; left: 50%; transform: translateX(-50%); white-space: nowrap; background: rgba(20,12,6,.8);
+  border: 3px solid #c9a466; border-radius: 10px; padding: 22px 46px; font-family: Body, Georgia, serif;
+  color: #f6e6c4; font-size: 46px; letter-spacing: .05em; }
+.flash { position: absolute; inset: 0; background: #0d0703; opacity: 0; pointer-events: none; }
+</style></head>
+<body>
+<!-- 1: tavern establishing shot -->
+<div class="scene" id="s1">
+  <img class="img" id="i1" src="source.webp">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.85) 0%,rgba(13,7,3,0) 35%,rgba(13,7,3,0) 70%,rgba(13,7,3,.8) 100%)"></div>
+  <img class="logo" id="l1" src="../../library/en/library_logo_transparent.png" style="top:150px">
+  <div class="cap body kicker" id="c1" style="top:1640px">The tavern is open</div>
+</div>
+<!-- 2: main menu -->
+<div class="scene" id="s2">
+  <img class="img" id="i2" src="../../Screens/01.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,0) 62%,rgba(13,7,3,.95) 88%)"></div>
+  <div class="cap title" id="c2" style="top:1560px;font-size:110px">A tavern game<br>of dice</div>
+</div>
+<!-- 3: dice roll -->
+<div class="scene" id="s3">
+  <img class="img" id="i3" src="../../Screens/03.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.75) 0%,rgba(13,7,3,0) 30%,rgba(13,7,3,0) 62%,rgba(13,7,3,.95) 88%)"></div>
+  <div class="cap title" id="c3a" style="top:180px;font-size:140px">Roll.</div>
+  <div class="cap title" id="c3b" style="top:1560px;font-size:140px">Risk it.</div>
+</div>
+<!-- 4: big score -->
+<div class="scene" id="s4">
+  <img class="img" id="i4" src="../../Screens/04.png">
+  <div class="shade" style="background:linear-gradient(180deg,rgba(13,7,3,.8) 0%,rgba(13,7,3,0) 30%,rgba(13,7,3,0) 62%,rgba(13,7,3,.95) 88%)"></div>
+  <div class="cap title" id="c4a" style="top:180px;font-size:140px">Bank it.</div>
+  <div class="cap body kicker" id="c4b" style="top:1620px;font-size:48px">First to 3,000 wins</div>
+</div>
+<!-- 5: end card -->
+<div class="scene" id="s5">
+  <img class="img" id="i5" src="source.webp" style="filter:blur(6px) brightness(.45)">
+  <img class="logo" id="l5" src="../../library/en/library_logo_transparent.png" style="top:240px">
+  <div class="cap title" id="c5a" style="top:780px;font-size:150px;line-height:1">Out Now<br>on Steam</div>
+  <div class="badge" id="b5" style="top:1160px">-15%</div>
+  <div class="cap body kicker" id="c5b" style="top:1440px">Launch discount</div>
+  <div class="btn" id="btn5" style="top:1620px">Grab a seat at the table</div>
+</div>
+<div class="flash" id="flash"></div>
+<script>
+const W = 1080, H = 1920;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = x => { x = clamp(x); return x * x * (3 - 2 * x); };
+const outBack = x => { x = clamp(x); const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const lerp = (a, b, t) => a + (b - a) * t;
+const $ = id => document.getElementById(id);
+
+// Scene timing in seconds: [start, end]; scenes cross-fade over FADE.
+const FADE = 0.45;
+const S = { s1: [0, 4], s2: [4, 7], s3: [7, 10], s4: [10, 13], s5: [13, 17.5] };
+window.DURATION = 17.5;
+
+// Pan/zoom a 1920x1080 source: focus point (fx,fy) in source px, scale relative to cover-height.
+function frame(img, fx0, fy0, z0, fx1, fy1, z1, t) {
+  const k = ease(t), base = H / 1080;
+  const z = lerp(z0, z1, k) * base, fx = lerp(fx0, fx1, k), fy = lerp(fy0, fy1, k);
+  let x = W / 2 - fx * z, y = H / 2 - fy * z;
+  x = clamp(x, W - 1920 * z, 0); y = clamp(y, H - 1080 * z, 0);
+  img.style.transform = `translate(${x}px,${y}px) scale(${z})`;
+}
+function fadeUp(el, t, dy = 40) {
+  const k = ease(t);
+  el.style.opacity = k;
+  el.style.transform = `translateY(${(1 - k) * dy}px)`;
+}
+
+window.render = function (t) {
+  for (const [id, [a, b]] of Object.entries(S)) {
+    const o = id === 's1' ? clamp((b + FADE - t) / FADE) : clamp(Math.min((t - a) / FADE, (b + FADE - t) / FADE));
+    $(id).style.opacity = id === 's5' ? clamp((t - a) / FADE) : o;
+    $(id).style.zIndex = Object.keys(S).indexOf(id);
+  }
+  $('flash').style.opacity = clamp(1 - t / 0.6);
+
+  // 1: push in from the room toward the table and fire
+  let l = (t - 0) / 4.4;
+  frame($('i1'), 950, 600, 1.05, 1560, 620, 1.12, l);
+  fadeUp($('l1'), (t - 0.4) / 0.8);
+  fadeUp($('c1'), (t - 1.2) / 0.8);
+
+  // 2: drift across the menu
+  l = (t - 4) / 3.45;
+  frame($('i2'), 780, 520, 1.05, 1000, 480, 1.15, l);
+  fadeUp($('c2'), (t - 4.4) / 0.7);
+
+  // 3: zoom onto the rolled dice
+  l = (t - 7) / 3.45;
+  frame($('i3'), 960, 600, 1.05, 960, 640, 1.6, l);
+  fadeUp($('c3a'), (t - 7.3) / 0.5);
+  fadeUp($('c3b'), (t - 8.4) / 0.5);
+
+  // 4: slide down to the 1,000 round score
+  l = (t - 10) / 3.45;
+  frame($('i4'), 960, 600, 1.3, 1260, 830, 1.6, l);
+  fadeUp($('c4a'), (t - 10.3) / 0.5);
+  fadeUp($('c4b'), (t - 11.2) / 0.6);
+
+  // 5: end card, badge stamps in
+  l = (t - 13) / 4.5;
+  frame($('i5'), 960, 560, 1.0, 1000, 580, 1.08, l);
+  fadeUp($('l5'), (t - 13.2) / 0.6);
+  fadeUp($('c5a'), (t - 13.6) / 0.6);
+  const b = (t - 14.4) / 0.45, s = lerp(2.4, 1, outBack(b));
+  $('b5').style.opacity = ease(b * 2);
+  $('b5').style.transform = `translateX(-50%) rotate(${lerp(-14, -4, ease(b))}deg) scale(${s})`;
+  fadeUp($('c5b'), (t - 15.0) / 0.5);
+  const c = ease((t - 15.4) / 0.6);
+  $('btn5').style.opacity = c;
+  $('btn5').style.transform = `translateX(-50%) translateY(${(1 - c) * 40}px) scale(${1 + 0.02 * Math.sin(Math.max(0, t - 16) * 5)})`;
+};
+render(0);
+</script>
+</body></html>

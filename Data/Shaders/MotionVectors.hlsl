@@ -10,6 +10,10 @@ struct VSInput
     float3 Normal   : NORMAL;
     float2 TexCoord : TEXCOORD;
     float4 Color    : COLOR;
+    // Where this vertex was last frame, in object space: stream 1. MotionVectorRenderer
+    // binds the same buffer as stream 0 for rigid meshes and last frame's posed vertices
+    // for animated ones (EntityMeshRenderer skinning), so limbs get their own motion.
+    float3 PreviousPosition : POSITION1;
 };
 
 struct VSOutput
@@ -23,7 +27,7 @@ VSOutput VSMain(VSInput input)
 {
     VSOutput output;
     output.CurrentClipPos = mul(float4(input.Position, 1.0f), gCurrentMVP);
-    output.PreviousClipPos = mul(float4(input.Position, 1.0f), gPreviousMVP);
+    output.PreviousClipPos = mul(float4(input.PreviousPosition, 1.0f), gPreviousMVP);
     output.Position = output.CurrentClipPos;
     return output;
 }

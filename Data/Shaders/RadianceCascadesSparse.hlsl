@@ -1,3 +1,5 @@
+#include "RtTransform.hlsli"
+
 #if __INTELLISENSE__
 #define RayQuery(x) int
 #define RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH 0
@@ -316,13 +318,9 @@ RayResult TraceBounce(float3 origin, float3 dir, float maxDistance)
     const float3 localPos2 = float3(v2.px, v2.py, v2.pz);
 
     const float3x4 o2w = rq.CommittedObjectToWorld3x4();
-    const float3x3 o2wRot = float3x3(
-        float3(o2w[0][0], o2w[1][0], o2w[2][0]),
-        float3(o2w[0][1], o2w[1][1], o2w[2][1]),
-        float3(o2w[0][2], o2w[1][2], o2w[2][2]));
 
     float3 hitPos = origin + dir * t;
-    float3 worldNormal = normalize(mul(o2wRot, localNormal));
+    float3 worldNormal = normalize(PteroObjectToWorldNormal(o2w, localNormal));
     if (dot(worldNormal, -dir) < 0.0f)
         worldNormal = -worldNormal;
 
@@ -394,13 +392,9 @@ bool TraceCellSurfaceAnchor(float3 origin, float3 dir, float maxDistance, out fl
         + bary.y * float3(v2.nx, v2.ny, v2.nz);
 
     const float3x4 o2w = rq.CommittedObjectToWorld3x4();
-    const float3x3 o2wRot = float3x3(
-        float3(o2w[0][0], o2w[1][0], o2w[2][0]),
-        float3(o2w[0][1], o2w[1][1], o2w[2][1]),
-        float3(o2w[0][2], o2w[1][2], o2w[2][2]));
 
     hitPos = origin + dir * t;
-    hitNormal = normalize(mul(o2wRot, localNormal));
+    hitNormal = normalize(PteroObjectToWorldNormal(o2w, localNormal));
     if (dot(hitNormal, -dir) < 0.0f)
         hitNormal = -hitNormal;
 

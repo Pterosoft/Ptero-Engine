@@ -1,0 +1,1 @@
+Farkle: Tavern Dice porta il classico gioco di dadi "push your luck" in un'accogliente taverna medievale. Lancia per fare punti, decidi quando mettere al sicuro il punteggio e rischia un altro tiro per un premio più grande, oppure perdi il round.

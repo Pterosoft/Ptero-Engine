@@ -5,16 +5,22 @@
 #include "TerrainRenderer.h"
 #include "TaaSettings.h"
 #include "SMAASettings.h"
+#include "AnalyticEdgeAASettings.h"
+#include "AarSettings.h"
 #include "SharpenSettings.h"
 #include "DlssSettings.h"
 #include "FsrSettings.h"
+#include "XessSettings.h"
 #include "SubsurfaceSettings.h"
+#include "ShadingSettings.h"
 #include "DpleSettings.h"
 #include "LensFlareSettings.h"
+#include "RtShadowSettings.h"
 #include "TimeOfDaySettings.h"
 #include "RtGISettings.h"
 #include "RadianceCascadesSettings.h"
 #include "RadianceProbeSettings.h"
+#include "VoxelGISettings.h"
 #include "RtAOSettings.h"
 #include "GtaoSettings.h"
 #include "SsrSettings.h"
@@ -27,6 +33,7 @@
 #include "AudioManager.h"
 #include "..\Ptero-Engine\EditorCamera.h"
 #include "System/NodeGraphEditor.h"
+#include "../Editor/Sequencer/SequencerEditor.h"
 
 #include "../QtUi/QtUi.h"
 
@@ -37,6 +44,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -96,6 +104,8 @@ public:
     };
 
     Editor();
+    // Out of line: mSequencerHost's type is only complete in EditorCinematics.cpp.
+    ~Editor();
 
     bool Initialize(ID3D12GraphicsCommandList* commandList);
     void Shutdown();
@@ -206,6 +216,24 @@ public:
     // given - from the Asset Browser, or an emitter's Properties.
     void OpenParticleEditor(const std::string& relativePath = {});
 
+    // --- Cinematics (EditorCinematics.cpp) ------------------------------------------
+    // Hands the viewport's fly controls to a camera entity: the view moves the camera, and
+    // the camera's lens sets the view's field of view. 0 stops piloting.
+    void PilotCamera(std::uint64_t entityId);
+    void StopPilotingCamera() { PilotCamera(0); }
+    std::uint64_t GetPilotedCamera() const { return mPilotedCameraId; }
+    // The viewport menu's cinematic camera entries (Lock, Pilot Selected, Stop Piloting).
+    void DrawCinematicViewportMenuItems();
+    // Adds a camera entity where the viewport looks from. Returns its id.
+    std::uint64_t CreateCameraAtView(const std::string& name);
+
+    // Render Sequence (EditorCinematics.cpp). The job runs one step per frame from the
+    // render loop, which hands it the final image texture to capture from.
+    bool StartCinematicRender(const CinematicRenderSettings& settings, std::string& error);
+    void CancelCinematicRender();
+    CinematicRenderStatus GetCinematicRenderStatus() const;
+    void UpdateCinematicRender(struct ID3D12Resource* finalImage);
+
     bool SaveSceneToFile(const std::string& filepath);
     bool LoadSceneFromFile(const std::string& filepath);
     bool BeginLoadSceneFromFile(const std::string& filepath);
@@ -261,10 +289,16 @@ public:
     // Separate from SetSceneSettings so the long list there does not have to grow
     // at every call site; saved and restored with the level all the same.
     void SetFsrSettings(FsrSettings* fsrSettings) { mFsrSettings = fsrSettings; }
+    void SetAnalyticEdgeAaSettings(AnalyticEdgeAASettings* analyticEdgeAaSettings) { mAnalyticEdgeAaSettings = analyticEdgeAaSettings; }
+    void SetAarSettings(AarSettings* aarSettings) { mAarSettings = aarSettings; }
+    void SetXessSettings(XessSettings* xessSettings) { mXessSettings = xessSettings; }
     void SetSubsurfaceSettings(SubsurfaceSettings* subsurfaceSettings) { mSubsurfaceSettings = subsurfaceSettings; }
+    void SetShadingSettings(ShadingSettings* shadingSettings) { mShadingSettings = shadingSettings; }
     void SetDpleSettings(DpleSettings* dpleSettings) { mDpleSettings = dpleSettings; }
     void SetLensFlareSettings(LensFlareSettings* lensFlareSettings) { mLensFlareSettings = lensFlareSettings; }
+    void SetRtShadowSettings(RtShadowSettings* rtShadowSettings) { mRtShadowSettings = rtShadowSettings; }
     void SetRadianceProbeSettings(RadianceProbeSettings* radianceProbeSettings) { mRadianceProbeSettings = radianceProbeSettings; }
+    void SetVoxelGiSettings(VoxelGISettings* voxelGiSettings) { mVoxelGiSettings = voxelGiSettings; }
     void SetSceneSettings(
         TimeOfDaySettings* timeOfDaySettings,
         TaaSettings* taaSettings,
@@ -465,15 +499,20 @@ private:
         TimeOfDaySettings TimeOfDay{};
         TaaSettings Taa{};
         SMAASettings Smaa{};
+        AnalyticEdgeAASettings AnalyticEdgeAa{};
+        AarSettings Aar{};
         SharpenSettings Sharpen{};
         DlssSettings Dlss{};
         FsrSettings Fsr{};
+        XessSettings Xess{};
         SubsurfaceSettings Subsurface{};
+        ShadingSettings Shading{};
         DpleSettings Dple{};
         GlobalIlluminationMode GlobalIlluminationMode = GlobalIlluminationMode::Rtgi;
         RtGISettings Rtgi{};
         RadianceCascadesSettings RadianceCascades{};
         RadianceProbeSettings RadianceProbes{};
+        VoxelGISettings VoxelGi{};
         RtAOSettings Rtao{};
         GtaoSettings Gtao{};
         SsrSettings Ssr{};
@@ -483,6 +522,7 @@ private:
         VolumetricCloudSettings VolumetricCloud{};
         BloomSettings Bloom{};
         LensFlareSettings LensFlare{};
+        RtShadowSettings RtShadows{};
         bool HasCameraPosition = false;
         bool HasCameraRotation = false;
         bool HasTimeOfDay = false;
@@ -531,6 +571,62 @@ private:
         std::string&  customStylePattern);
 
     void DrawComponentsPanel();
+
+    // --- Cinematics (EditorCinematics.cpp) -----------------------------------
+    // The Sequencer's view of the editor (entities, selection, cameras); created by
+    // InitializeCinematics, which also hands it to the Sequencer.
+    friend class EditorSequencerHost;
+    std::unique_ptr<class EditorSequencerHost> mSequencerHost;
+    void InitializeCinematics();
+    void ShutdownCinematics();
+    // Called by the scene renderer each frame after the fly camera has moved: piloting
+    // writes the view into the piloted camera entity, the cinematic lock overrides the
+    // view with the cut camera's.
+    void UpdateCinematicViewportCamera(EditorCamera& camera);
+    void DrawCameraProperties(Entity& entity);
+    // Physics section of the Properties panel: add, edit or remove a Rigid Body.
+    void DrawRigidBodyProperties(Entity& entity);
+    void DrawAnimatorProperties(Entity& entity);
+    // Runs Animations.dll's FBX importer on a Data-relative FBX, writing the .pskel/.panim
+    // beside it, and points the Animator at the results. With importSkeleton false the
+    // clips are built against the Animator's existing skeleton.
+    bool ImportAnimationsFromFbx(Entity& entity, const std::string& fbxRelativePath, bool importSkeleton);
+    // Re-cooks the entity's mesh so it gets the .pskin sidecar older cooks lack.
+    bool RecookMeshWithSkin(Entity& entity);
+    std::string mAnimatorMessage;
+    bool mAnimatorMessageIsError = false;
+    // Each camera's frustum outline in the viewport, gated like the light gizmos.
+    void DrawCameraFrustums(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera) const;
+    Entity* FindEntityById(std::uint64_t entityId);
+    bool mCinematicCameraHookInstalled = false;
+    std::uint64_t mPilotedCameraId = 0;
+    float mFovBeforePilot = 0.0f;
+    // Piloting starts by moving the view to the camera, and ends by giving the view its
+    // own field of view back; both happen in the camera hook, which owns the camera.
+    bool mPilotSnapPending = false;
+    bool mPilotRestorePending = false;
+    // What the pilot last wrote into the camera entity and last set on the view. A change
+    // to the entity it did not make (the sequence scrubbed, an undo) moves the view to
+    // the camera; a change to the view it did not make (the user flew) moves the camera.
+    // Comparing the two directly instead would write the view back over every animated
+    // pose - and with Auto Key on, key it.
+    TransformComponent mPilotLastTransform;
+    DirectX::XMFLOAT3 mPilotLastViewPosition{};
+    DirectX::XMFLOAT3 mPilotLastViewRotation{};
+    // Draws the render frame over the viewport while Camera View is active.
+    void DrawCinematicFrameGuide(const UiVec2& viewportOrigin, const UiVec2& viewportSize) const;
+    // A camera's vertical field of view, widened when the viewport is narrower than the
+    // render frame so the letterboxed frame shows exactly what the render will.
+    float FitFovToRenderFrame(float verticalFovRadians) const;
+    std::unique_ptr<struct CinematicRenderJob> mRenderJob;
+    // How the last render ended, reported until the next one starts.
+    CinematicRenderStatus mLastRenderStatus;
+    void FinishCinematicRender(bool succeeded, const std::string& message);
+    // The view the lock replaced, put back when the lock lets go.
+    bool mCinematicLockActive = false;
+    DirectX::XMFLOAT3 mViewBeforeLockPosition{};
+    DirectX::XMFLOAT3 mViewBeforeLockRotation{};
+    float mViewBeforeLockFov = 0.0f;
 
     // --- Particle effects (EditorParticles.cpp) ------------------------------
     // Every setting of a particle effect, shared by the Particle Editor and the
@@ -645,6 +741,11 @@ private:
     void FinishViewportSelection(const UiVec2& viewportOrigin, const UiVec2& viewportSize, const EditorCamera& camera);
     void CreateGeometryInstanceAt(const DirectX::XMFLOAT3& worldPosition);
     void DrawViewportStatisticsOverlay() const;
+    // The viewport bar's View Mode menu: the G-Buffer views and every renderer system's
+    // debug view in one place, one at a time.
+    void DrawViewModeMenu();
+    // Names the tiles of the G-Buffer overview drawn over the viewport image.
+    void DrawGBufferOverviewLabels(const UiVec2& viewportOrigin, const UiVec2& viewportSize) const;
     void SetViewportStatisticsText(const char* text);
     void HandleKeyboardShortcuts();
     void ResetScene();
@@ -668,6 +769,7 @@ private:
     mutable bool mTerrainPrototypeSelected = false;
     mutable bool mWaterPrototypeSelected = false;
     mutable bool mVegetationPrototypeSelected = false;
+    mutable bool mCameraPrototypeSelected = false;
     // Hides the side panels and tool windows so the viewport fills the window.
     // Toggled by F11 or the toolbar button; the toolbar itself stays visible.
     bool mViewportFullscreen = false;
@@ -814,15 +916,20 @@ private:
     TimeOfDaySettings* mTimeOfDaySettings = nullptr;
     TaaSettings* mTaaSettings = nullptr;
     SMAASettings* mSmaaSettings = nullptr;
+    AnalyticEdgeAASettings* mAnalyticEdgeAaSettings = nullptr;
+    AarSettings* mAarSettings = nullptr;
     SharpenSettings* mSharpenSettings = nullptr;
     DlssSettings* mDlssSettings = nullptr;
     FsrSettings* mFsrSettings = nullptr;
+    XessSettings* mXessSettings = nullptr;
     SubsurfaceSettings* mSubsurfaceSettings = nullptr;
+    ShadingSettings* mShadingSettings = nullptr;
     DpleSettings* mDpleSettings = nullptr;
     GlobalIlluminationMode* mGlobalIlluminationMode = nullptr;
     RtGISettings* mRtgiSettings = nullptr;
     RadianceCascadesSettings* mRadianceCascadesSettings = nullptr;
     RadianceProbeSettings* mRadianceProbeSettings = nullptr;
+    VoxelGISettings* mVoxelGiSettings = nullptr;
     RtAOSettings* mRtaoSettings = nullptr;
     GtaoSettings* mGtaoSettings = nullptr;
     SsrSettings* mSsrSettings = nullptr;
@@ -832,6 +939,7 @@ private:
     VolumetricCloudSettings* mVolumetricCloudSettings = nullptr;
     BloomSettings* mBloomSettings = nullptr;
     LensFlareSettings* mLensFlareSettings = nullptr;
+    RtShadowSettings* mRtShadowSettings = nullptr;
     ProgressCallback mProgressCallback = nullptr;
     TerrainRenderer* mTerrainRenderer = nullptr;
     class DX12SceneRenderer* mSceneRenderer = nullptr;

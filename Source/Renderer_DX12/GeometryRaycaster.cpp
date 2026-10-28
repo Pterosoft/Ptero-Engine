@@ -82,13 +82,18 @@ void GeometryRaycaster::Build(
     const std::vector<Entity>& entities,
     const XMFLOAT3&            regionMin,
     const XMFLOAT3&            regionMax,
-    bool                       forPlayer)
+    bool                       forPlayer,
+    bool                       skipMovingRigidBodies)
 {
     Clear();
 
     for (std::size_t i = 0; i < entities.size(); ++i)
     {
         const Entity& entity = entities[i];
+
+        // The physics simulation moves these, and answers rays against them itself.
+        if (skipMovingRigidBodies && entity.RigidBody && entity.RigidBody->Motion != RigidBodyMotion::Static)
+            continue;
 
         // Terrain is queried analytically through the heightmap, and area
         // volumes are not surfaces, so neither belongs in the BVH.

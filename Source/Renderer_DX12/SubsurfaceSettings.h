@@ -37,6 +37,16 @@ struct SubsurfaceSettings
     // integrates them; 8-16 is plenty under TAA/DLSS/FSR.
     int RtSamples = 12;
 
+    // Ray traced: ReSTIR temporal reuse of the surface probes (SubsurfaceScattering_RT.hlsl).
+    // Each pixel resamples its probes together with its reprojected history and lights the
+    // chosen points afresh every frame: about half the noise of the plain per-pixel average
+    // at the same probe count, which is what Off falls back to.
+    bool RtRestir = true;
+    // How many frames of probes the history may stand for. 5 is the measured sweet spot
+    // under TAA jitter and camera motion; longer only pays off on a perfectly still,
+    // unjittered view and otherwise builds up slowly-changing, blotchy error.
+    int  RtHistoryLength = 5;
+
     // 0 = composite, 1 = scattered diffuse only, 2 = subsurface mask.
     int DebugView = 0;
 };

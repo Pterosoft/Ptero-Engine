@@ -52,12 +52,45 @@ struct HosekWilkieResult
     float AmbientR = 0.0f, AmbientG = 0.0f, AmbientB = 0.0f;
     // 1 in full daylight, 0 at night; how much of the ambient is daylight sky.
     float DaylightWeight = 1.0f;
+    // 0 until the sun sets, 1 once it is 8 degrees down: how far into the night it
+    // is, for the night-vision desaturation.
+    float Nightness = 0.0f;
 
-    // Discs drawn by the sky pass. The sun disc carries the sun's colour and
-    // intensity and fades out at the horizon; the moon disc is its full-face
-    // radiance, which the sky pass shades by phase.
+    // ---- Sky pass: the daylight sky, evaluated per pixel ----------------------------
+    // The Hosek-Wilkie RGB model's nine coefficients A..I, one triplet per
+    // coefficient (r, g, b). The sky pass evaluates the model's F(theta, gamma)
+    // with them and multiplies by DaySkyScale.
+    float SkyModel[9][3] = {};
+    // Per-channel scale on F: the model's radiance, normalised so the sky's
+    // average over the hemisphere is the daylight part of the ambient above -
+    // the drawn sky and the light it gives agree - and faded with DaylightWeight.
+    // Zero at night, when the sky pass draws only the night gradient.
+    float DaySkyScale[3] = {};
+    // The moonlit sky: the same model for the moon's elevation, and its scale on F
+    // (zero when the moon is down, new or turned off).
+    float MoonSkyModel[9][3] = {};
+    float MoonSkyScale[3] = {};
+    // The night part of the ambient alone, for the sky pass's night gradient.
+    float NightSkyR = 0.0f, NightSkyG = 0.0f, NightSkyB = 0.0f;
+    // The ground under the horizon: an open floor of GroundAlbedo lit by the key
+    // light and the sky ambient, as the deferred pass would light it. Black with
+    // the time of day off.
+    float GroundRadiance[3] = {};
+
+    // The sun's own illuminance at the camera, whether or not it is the key
+    // light, fading out as the disc goes under. Drives the sun glare.
+    float SunIlluminance[3] = {};
+
+    // Discs drawn by the sky pass. The sun disc is kSunDiscRadianceScale times
+    // its illuminance - enough to clip to white - and fades out at the horizon;
+    // the moon disc is its full-face radiance, which the sky pass shades by phase.
     float SunDiscR = 0.0f, SunDiscG = 0.0f, SunDiscB = 0.0f;
     float MoonDiscR = 0.0f, MoonDiscG = 0.0f, MoonDiscB = 0.0f;
+    // The moon's angular radius as drawn (MoonSize applied), and the light its
+    // drawn disc sends toward the camera - lit share and albedo included. Drives
+    // the moon glare.
+    float MoonDiscRadius = 0.0f;
+    float MoonIlluminance[3] = {};
     // Radiance of an average star before the sky pass's per-star variation.
     float StarRadiance = 0.0f;
 

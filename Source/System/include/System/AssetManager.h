@@ -24,6 +24,9 @@ public:
         const std::string& targetDirectoryRelativeToData = {},
         std::string* summary = nullptr);
     std::shared_ptr<Mesh> GetMesh(const std::string& fbxFilePath);
+    // Drops the cached copy so the next GetMesh reads the cooked files again (after a
+    // re-cook). Entities keep the old geometry until their MeshAsset is reset.
+    void ForgetMesh(const std::string& meshPath);
 
     const std::string& GetLastErrorMessage() const
     {

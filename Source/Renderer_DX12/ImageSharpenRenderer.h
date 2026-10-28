@@ -44,7 +44,7 @@ private:
         float Strength = 0.0f;
         UINT  FrameWidth = 0;
         UINT  FrameHeight = 0;
-        float Pad0 = 0.0f;
+        float Radius = 1.0f;
     };
 
     DX12Shader                                   mComputeShader;

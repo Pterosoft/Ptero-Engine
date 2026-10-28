@@ -83,7 +83,7 @@ current step is still walking.
 
 | Category | Nodes |
 | --- | --- |
-| Events | On Game Start, On Game Stop, On Tick, On Video Finished, On Key Pressed, On Key Released, On UI Button Clicked, On Landed, On Jumped |
+| Events | On Game Start, On Game Stop, On Tick, On Video Finished, On Key Pressed, On Key Released, On UI Button Clicked, On Landed, On Jumped, On Rigid Body Hit |
 | Functions | Function Entry, Call Function, Return |
 | Flow | Branch, Delay, Gate, Sequence, Do Once, Do N, Flip Flop, For Loop, Switch |
 | Logic | Multiplexer, And, Or, Not, Compare |
@@ -95,6 +95,7 @@ current step is still walking.
 | Input | Is Key Down, Get Input Axis, Get Look Input, Get Mouse Delta, Set Mouse Captured, Is Mouse Captured |
 | Character | Add Movement Input, Add Look Input, Jump, Stop Jumping, Crouch, Uncrouch, Set Sprinting, Get Character State, Get Character Location, Teleport Character, Get/Set Movement Property, Get/Set Camera Property |
 | Entity | Entity, Find Entity, Is Entity Valid, Get Entity Name, Get/Set Entity Position, Move Entity By, Get/Set Entity Rotation, Rotate Entity By, Get/Set Entity Scale, Move Entity To, Get/Set Entity Property, Play/Stop Entity Audio |
+| Physics | Add Impulse, Add Force, Set Velocity, Set Spin, Get Velocity, Raycast, Raycast From Camera |
 | Camera | Get Camera, Set Camera, Move Camera To, Release Camera, Camera Look Point |
 | Audio | Play Sound, Play Music, Play Music Playlist, Stop Music, Is Music Playing |
 | Game | Stop Game, Toggle Fullscreen, Is Standalone, Get Play Time, Print String |
@@ -166,6 +167,26 @@ as Farkle does with its dice.
 
 The graph edits the play session's copy of the level, so every change snaps back when play
 stops.
+
+### Physics
+
+Entities with a **Rigid Body** (Properties > Physics) are simulated by Jolt (Physics.dll) while
+playing; see `Source/Renderer_DX12/ScenePhysics.h`. **Add Impulse** (N·s - the change in speed
+is the impulse divided by the mass), **Add Force** (N, for one frame: run it on Tick), **Set
+Velocity** (m/s) and **Set Spin** (degrees per second) act on a **Dynamic** rigid body and report
+**Success** false, with a log line, on anything else. Kinematic bodies are moved with the
+ordinary transform nodes; doing that to a Dynamic one teleports it. **Get Velocity** reads
+Dynamic and Kinematic bodies.
+
+**Raycast** and **Raycast From Camera** report the first solid thing along the line - level
+meshes, terrain or rigid bodies, never the player - with its entity, distance, point and
+normal. Combined, they make a push or a shot: Raycast From Camera, then Add Impulse on **Hit
+Entity** along Hit X/Y/Z minus Get Camera's position (or along the negated Normal), scaled.
+
+**On Rigid Body Hit** fires when something starts touching the picked entity (or, with none
+picked, for every collision), with **Other Entity**, **Hit Player** (the player is not an
+entity) and **Impact Speed** in m/s. **Min Impact Speed** (default 1) filters out bodies merely
+settling. Physics steps after the graphs, so a collision is reported on the next frame's tick.
 
 ### Latent nodes, camera and audio
 

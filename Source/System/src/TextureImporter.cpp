@@ -43,7 +43,14 @@ bool TextureImporter::IsLikelyMaskTexturePath(const std::string& path)
         || lower.find("opacity") != std::string::npos
         || lower.find("height") != std::string::npos
         || lower.find("displacement") != std::string::npos
-        || lower.find("mask") != std::string::npos;
+        || lower.find("mask") != std::string::npos
+        // Disney principled maps: the packed mask and the anisotropy direction map.
+        || lower.find("principled") != std::string::npos
+        || lower.find("clearcoat") != std::string::npos
+        || lower.find("sheen") != std::string::npos
+        || lower.find("aniso") != std::string::npos
+        || lower.find("flowmap") != std::string::npos
+        || lower.find("direction") != std::string::npos;
 }
 
 // Link DirectXTex support libs.

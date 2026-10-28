@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -850,7 +851,146 @@ namespace
         return true;
     }
 
-    void ProcessMesh(FbxMesh* mesh, std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, std::vector<PteroSubMeshEntry>& subMeshEntries)
+    // Skin weights gathered while the meshes are processed, one record per output vertex.
+    // Joint names are shared by every mesh in the file and are the FBX node names, which is
+    // what Animations.dll's importer calls the joints of the skeleton it builds from the
+    // same file.
+    struct SkinBuilder
+    {
+        std::vector<std::string> JointNames;
+        std::unordered_map<std::string, std::uint16_t> JointIndex;
+        std::vector<MeshSkinVertex> Vertices;
+        bool AnyInfluence = false;
+
+        std::uint16_t IndexOf(const char* name)
+        {
+            const std::string key = (name != nullptr && name[0] != '\0') ? name : "Joint";
+            const auto found = JointIndex.find(key);
+            if (found != JointIndex.end())
+                return found->second;
+            const auto index = static_cast<std::uint16_t>(JointNames.size());
+            JointNames.push_back(key);
+            JointIndex.emplace(key, index);
+            return index;
+        }
+    };
+
+    // The four strongest influences on each control point of one mesh, normalised. A mesh
+    // without a skin that hangs under a bone (a sword parented to a hand) follows that bone
+    // rigidly; any other mesh gets no influences and stays where it was cooked.
+    std::vector<MeshSkinVertex> ReadControlPointSkin(FbxMesh* mesh, SkinBuilder& builder)
+    {
+        const int controlPointCount = mesh->GetControlPointsCount();
+        std::vector<MeshSkinVertex> result(static_cast<std::size_t>((std::max)(controlPointCount, 0)));
+        std::vector<std::vector<std::pair<std::uint16_t, float>>> raw(result.size());
+
+        const int skinCount = mesh->GetDeformerCount(FbxDeformer::eSkin);
+        for (int s = 0; s < skinCount; ++s)
+        {
+            auto* skin = static_cast<FbxSkin*>(mesh->GetDeformer(s, FbxDeformer::eSkin));
+            for (int c = 0; skin != nullptr && c < skin->GetClusterCount(); ++c)
+            {
+                FbxCluster* cluster = skin->GetCluster(c);
+                FbxNode* link = cluster ? cluster->GetLink() : nullptr;
+                if (link == nullptr)
+                    continue;
+                const std::uint16_t joint = builder.IndexOf(link->GetName());
+                const int count = cluster->GetControlPointIndicesCount();
+                const int* pointIndices = cluster->GetControlPointIndices();
+                const double* weights = cluster->GetControlPointWeights();
+                for (int k = 0; k < count && pointIndices != nullptr && weights != nullptr; ++k)
+                {
+                    const int point = pointIndices[k];
+                    if (point >= 0 && point < controlPointCount && weights[k] > 0.0)
+                        raw[static_cast<std::size_t>(point)].push_back({ joint, static_cast<float>(weights[k]) });
+                }
+            }
+        }
+
+        if (skinCount == 0)
+        {
+            for (FbxNode* node = mesh->GetNode() ? mesh->GetNode()->GetParent() : nullptr; node != nullptr; node = node->GetParent())
+            {
+                const FbxNodeAttribute* attribute = node->GetNodeAttribute();
+                if (attribute != nullptr && attribute->GetAttributeType() == FbxNodeAttribute::eSkeleton)
+                {
+                    const std::uint16_t joint = builder.IndexOf(node->GetName());
+                    for (auto& influences : raw)
+                        influences.push_back({ joint, 1.0f });
+                    break;
+                }
+            }
+        }
+
+        for (std::size_t point = 0; point < raw.size(); ++point)
+        {
+            auto& influences = raw[point];
+            if (influences.empty())
+                continue;
+
+            // One joint can appear in several clusters (several skins); add those up first.
+            std::sort(influences.begin(), influences.end());
+            std::vector<std::pair<std::uint16_t, float>> merged;
+            for (const auto& influence : influences)
+            {
+                if (!merged.empty() && merged.back().first == influence.first)
+                    merged.back().second += influence.second;
+                else
+                    merged.push_back(influence);
+            }
+            std::sort(merged.begin(), merged.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; });
+
+            const std::size_t kept = (std::min)(merged.size(), std::size_t(4));
+            float total = 0.0f;
+            for (std::size_t i = 0; i < kept; ++i)
+                total += merged[i].second;
+            if (!(total > 0.0f))
+                continue;
+
+            MeshSkinVertex& vertex = result[point];
+            for (std::size_t i = 0; i < kept; ++i)
+            {
+                vertex.Joints[i] = merged[i].first;
+                vertex.Weights[i] = merged[i].second / total;
+            }
+            builder.AnyInfluence = true;
+        }
+        return result;
+    }
+
+    bool WriteSkinSidecar(const std::string& pteroPath, const SkinBuilder& skin)
+    {
+        const std::string skinPath = PteroSkinPathFor(pteroPath);
+        std::error_code ignored;
+        if (!skin.AnyInfluence)
+        {
+            // A re-cooked mesh that lost its skin must not pick up the old weights.
+            std::filesystem::remove(skinPath, ignored);
+            return true;
+        }
+
+        std::ofstream output(skinPath, std::ios::binary | std::ios::trunc);
+        if (!output)
+            return false;
+
+        PteroSkinHeader header{};
+        header.vertexCount = static_cast<std::uint32_t>(skin.Vertices.size());
+        header.jointCount = static_cast<std::uint32_t>(skin.JointNames.size());
+        output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        for (const std::string& name : skin.JointNames)
+        {
+            const auto length = static_cast<std::uint32_t>(name.size());
+            output.write(reinterpret_cast<const char*>(&length), sizeof(length));
+            output.write(name.data(), static_cast<std::streamsize>(name.size()));
+        }
+        output.write(reinterpret_cast<const char*>(skin.Vertices.data()),
+            static_cast<std::streamsize>(skin.Vertices.size() * sizeof(MeshSkinVertex)));
+        return static_cast<bool>(output);
+    }
+
+    void ProcessMesh(FbxMesh* mesh, std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices,
+                     std::vector<PteroSubMeshEntry>& subMeshEntries, SkinBuilder& skin)
     {
         if (mesh == nullptr || mesh->GetControlPoints() == nullptr)
         {
@@ -869,6 +1009,7 @@ namespace
 
         const FbxVector4* controlPoints = mesh->GetControlPoints();
         const int polygonCount = mesh->GetPolygonCount();
+        const std::vector<MeshSkinVertex> controlPointSkin = ReadControlPointSkin(mesh, skin);
 
         // Group polygon indices by material id first, then emit them in order so the shared index buffer
         // contains one contiguous run per material.  This mirrors how CryEngine/Unreal store sub-objects.
@@ -971,6 +1112,10 @@ namespace
                     {
                         const std::uint32_t newIndex = static_cast<std::uint32_t>(vertices.size());
                         vertices.push_back(vertex);
+                        skin.Vertices.push_back(
+                            tv.controlPointIndex >= 0 && static_cast<std::size_t>(tv.controlPointIndex) < controlPointSkin.size()
+                                ? controlPointSkin[static_cast<std::size_t>(tv.controlPointIndex)]
+                                : MeshSkinVertex{});
                         vertexLookup.emplace(vertexKey, newIndex);
                         triangleIndices[v] = newIndex;
                     }
@@ -1054,9 +1199,10 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<PteroSubMeshEntry> subMeshEntries;
+    SkinBuilder skin;
     for (FbxMesh* mesh : meshes)
     {
-        ProcessMesh(mesh, vertices, indices, subMeshEntries);
+        ProcessMesh(mesh, vertices, indices, subMeshEntries, skin);
     }
 
     MeshLodData baseLod;
@@ -1064,7 +1210,9 @@ bool FbxCompiler::CompileFbxToPtero(const std::string& fbxPath, const std::strin
     baseLod.indices = std::move(indices);
     baseLod.subMeshEntries = std::move(subMeshEntries);
     const std::vector<MeshLodData> lods = GenerateMeshLods(baseLod);
-    const bool writeSucceeded = !lods.empty() && WritePteroMeshFile(pteroOutPath, lods);
+    // LOD 0 is the base LOD unchanged, so the skin records still line up with its vertices.
+    const bool writeSucceeded = !lods.empty() && WritePteroMeshFile(pteroOutPath, lods) &&
+                                WriteSkinSidecar(pteroOutPath, skin);
 
     // Write a companion multi-material JSON into Data/MultiMaterials/ so the editor
     // can assign materials to the imported mesh without manual authoring.

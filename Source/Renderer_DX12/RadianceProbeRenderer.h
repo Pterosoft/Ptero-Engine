@@ -11,6 +11,8 @@
 #include "RadianceProbeSettings.h"
 #include "DeferredLightingPass.h"
 #include "Components.h"
+#include "GpuSkyModel.h"
+#include "VirtualShadowMapConstants.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -74,6 +76,16 @@ struct alignas(256) RadianceProbeConstants
     uint32_t CascadeCount;
     uint32_t ProbesPerCascade;
     uint32_t _pad6[2];
+
+    // The sky escaped rays see (SkyModel.hlsli), pre-exposed like the colours above.
+    GpuSkyModel Sky;
+
+    // Next-event estimation at bounce hits, as RTGI does it (RtGISettings).
+    float    VsmMaxTexelSize;
+    int32_t  VsmVisibility;     // 1 = ask the shadow map first, trace only where it cannot answer
+    int32_t  LightSamples;      // > 0: lights a hit tests, picked stochastically
+    float    _pad7;
+    VsmGpuConstants Vsm{};      // Active = 0 when the map is not bound this frame
 };
 // Pinned against the offsets cbuffer RadianceProbeConstants has in
 // RadianceProbes_Common.hlsli.
@@ -81,6 +93,10 @@ static_assert(offsetof(RadianceProbeConstants, DebugView) == 1792, "see Radiance
 static_assert(offsetof(RadianceProbeConstants, CascadeOrigin) == 1808, "see RadianceProbes_Common.hlsli");
 static_assert(offsetof(RadianceProbeConstants, CascadeHistory) == 1872, "see RadianceProbes_Common.hlsli");
 static_assert(offsetof(RadianceProbeConstants, CascadeCount) == 1936, "see RadianceProbes_Common.hlsli");
+static_assert(offsetof(RadianceProbeConstants, Sky) == 1952, "see RadianceProbes_Common.hlsli");
+static_assert(offsetof(RadianceProbeConstants, VsmMaxTexelSize) == offsetof(RadianceProbeConstants, Sky) + sizeof(GpuSkyModel),
+    "RadianceProbeConstants::VsmMaxTexelSize must follow g_Sky directly, as g_VsmMaxTexelSize does");
+static_assert(offsetof(RadianceProbeConstants, Vsm) % 16 == 0, "RadianceProbeConstants::Vsm must be 16-byte aligned to match g_Vsm");
 
 // ── ProbeSH struct mirroring the HLSL layout (7 × float4 = 28 floats) ───────
 struct ProbeSHGpu
@@ -115,6 +131,7 @@ public:
         D3D12_GPU_DESCRIPTOR_HANDLE  instanceInfoSrv,
         D3D12_GPU_DESCRIPTOR_HANDLE  materialRangeSrv,
         D3D12_GPU_DESCRIPTOR_HANDLE  baseTextureTableSrv,
+        D3D12_GPU_DESCRIPTOR_HANDLE  materialSurfaceSrv,   // GpuMaterialSurface per range
         const RadianceProbeSettings& settings,
         float                        colorLeakIntensity,
         int                          maxBounces,
@@ -125,6 +142,29 @@ public:
         float sunR, float sunG, float sunB,
         float skyR, float skyG, float skyB,
         uint32_t frameIndex);
+
+    // The sky rays that escape the scene see, pre-exposed like the sun and sky
+    // colours passed to Update. Call before it.
+    void SetSkyModel(const GpuSkyModel& sky) { mSkyModel = sky; }
+
+    // Next-event estimation at bounce hits, as RTGI does it: visibility from the
+    // virtual shadow map where it holds a page no coarser than vsmMaxTexelSize (null
+    // constants when the map is not active this frame), and lightSamples
+    // stochastically picked lights per hit (0 = every light). Call before Update.
+    void SetVirtualShadowMap(const VsmGpuConstants* constants, D3D12_GPU_VIRTUAL_ADDRESS pageTable,
+                             D3D12_GPU_DESCRIPTOR_HANDLE poolSrv)
+    {
+        mVsmBound = constants != nullptr && pageTable != 0 && poolSrv.ptr != 0;
+        mVsmConstants = mVsmBound ? *constants : VsmGpuConstants{};
+        mVsmPageTable = mVsmBound ? pageTable : 0;
+        mVsmPoolSrv = mVsmBound ? poolSrv : D3D12_GPU_DESCRIPTOR_HANDLE{};
+    }
+    void SetNextEventOptions(bool vsmVisibility, float vsmMaxTexelSize, int lightSamples)
+    {
+        mVsmVisibility = vsmVisibility;
+        mVsmMaxTexelSize = vsmMaxTexelSize;
+        mLightSamples = lightSamples;
+    }
 
     // Draw debug probe spheres onto the scene output RTV using real hardware depth testing.
     // sceneRtvHandle is the CPU RTV handle for the bound render target.
@@ -168,6 +208,17 @@ private:
     bool     mIsInitialized = false;
     bool     mInitFailed    = false;
     std::string mLastError;
+
+    GpuSkyModel mSkyModel{};           // SetSkyModel
+
+    // SetVirtualShadowMap / SetNextEventOptions.
+    bool            mVsmBound = false;
+    VsmGpuConstants mVsmConstants{};
+    D3D12_GPU_VIRTUAL_ADDRESS   mVsmPageTable = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE mVsmPoolSrv{};
+    bool            mVsmVisibility = false;
+    float           mVsmMaxTexelSize = 0.04f;
+    int             mLightSamples = 0;
 
     uint32_t mTotalProbes   = 0;
     uint32_t mWriteIdx      = 0;       // ping-pong SH buffer index

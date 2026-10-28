@@ -20,6 +20,9 @@ namespace ReleaseGame
         std::wstring GameName;
         // Empty = leave the template's placeholder icon alone.
         std::wstring IconSourcePath;
+        // Shown by the game's launcher from the moment it starts until the first frame is
+        // on screen. Any WIC image; transparency is kept. Empty = no splash screen.
+        std::wstring SplashSourcePath;
         std::wstring OutputDirectory;
         // Top-level Data/ subfolder names to include, e.g. L"Textures", L"UI".
         std::vector<std::wstring> IncludedFolders;

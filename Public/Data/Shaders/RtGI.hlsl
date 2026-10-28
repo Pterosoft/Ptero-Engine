@@ -1,0 +1,11 @@
+// RtGI.hlsl
+// This file is intentionally left as a placeholder redirect.
+// The RTGI implementation is split across the following shaders:
+//
+//   RtGI_Common.hlsli    – shared types, root signature, reservoir utilities
+//   RtGI_RayGen.hlsl     – Pass 0: initial GI ray sampling
+//   RtGI_Temporal.hlsl   – Pass 1: ReSTIR temporal resampling
+//   RtGI_Spatial.hlsl    – Pass 2: ReSTIR spatial resampling
+//   RtGI_Composite.hlsl  – Pass 3: temporal accumulation + final composite
+//
+// See Source/Renderer_DX12/RtGlobalIllumination.h for the C++ class.

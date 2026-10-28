@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -350,6 +351,7 @@ void NodeGraphRuntime::Tick(float deltaSeconds)
 
     FireInputEvents();
     FireCharacterEvents();
+    FirePhysicsEvents();
 
     // Delays resume before this frame's tick events so a graph that delays by zero-ish
     // amounts stays in step with the frame it was scheduled from.
@@ -646,13 +648,18 @@ void NodeGraphRuntime::AdvanceTweens(float deltaSeconds)
     for (std::size_t i = 0; i < mNodes.size(); ++i)
     {
         NodeState& state = mNodes[i].State;
+        if (!state.EntityTweens.empty())
+        {
+            AdvanceEntityTweens(static_cast<int>(i), deltaSeconds);
+            continue;
+        }
+
         if (!state.TweenActive)
         {
             continue;
         }
 
         const int nodeIndex = static_cast<int>(i);
-        const bool camera = mNodes[i].Data->TypeId == "Camera.MoveTo";
         state.TweenElapsed += static_cast<double>(deltaSeconds);
         const double t = state.TweenDuration > 0.0 ? (std::min)(state.TweenElapsed / state.TweenDuration, 1.0) : 1.0;
         const double eased = ApplyEasing(t, ParamValue(nodeIndex, "Easing", NodePinKind::String).AsString());
@@ -663,46 +670,81 @@ void NodeGraphRuntime::AdvanceTweens(float deltaSeconds)
             pose[a] = state.TweenFrom[a] + (state.TweenTo[a] - state.TweenFrom[a]) * eased;
         }
 
-        if (camera)
-        {
-            // Pitch/yaw were unwrapped when the move began (To = From + shortest delta),
-            // so a straight blend already turns the short way round.
-            mCameraHeld = true;
-            mCameraPose.Position[0] = pose[0];
-            mCameraPose.Position[1] = pose[1];
-            mCameraPose.Position[2] = pose[2];
-            mCameraPose.Pitch = pose[3];
-            // Wrapped back into -180..180 so the unwrapped target (350 -> 370, say) never
-            // leaks out through Get Camera or into the engine camera.
-            mCameraPose.Yaw = std::remainder(pose[4], 2.0 * kPi);
-        }
-        else if (mHost != nullptr)
-        {
-            // The arc runs on raw time, not the eased curve, so the peak stays mid-flight
-            // whatever easing the horizontal motion uses.
-            const double arc = ParamValue(nodeIndex, "Arc Height", NodePinKind::Number).AsNumber();
-            pose[2] += arc * std::sin(kPi * t);
-
-            NodeGraphTransform transform;
-            if (!mHost->GetEntityTransform(state.TweenEntity, transform))
-            {
-                // The entity went away mid-move; there is nothing left to arrive.
-                state.TweenActive = false;
-                continue;
-            }
-
-            for (int a = 0; a < 3; ++a)
-            {
-                transform.Position[a] = pose[a];
-            }
-            mHost->SetEntityTransform(state.TweenEntity, transform);
-        }
+        // Only Move Camera To keeps a single tween: there is one camera. Pitch/yaw were
+        // unwrapped when the move began (To = From + shortest delta), so a straight blend
+        // already turns the short way round.
+        mCameraHeld = true;
+        mCameraPose.Position[0] = pose[0];
+        mCameraPose.Position[1] = pose[1];
+        mCameraPose.Position[2] = pose[2];
+        mCameraPose.Pitch = pose[3];
+        // Wrapped back into -180..180 so the unwrapped target (350 -> 370, say) never
+        // leaks out through Get Camera or into the engine camera.
+        mCameraPose.Yaw = std::remainder(pose[4], 2.0 * kPi);
 
         if (t >= 1.0)
         {
             state.TweenActive = false;
             FireEntry(nodeIndex, 1);
         }
+    }
+}
+
+void NodeGraphRuntime::AdvanceEntityTweens(int nodeIndex, float deltaSeconds)
+{
+    NodeState& state = mNodes[nodeIndex].State;
+    const bool rotate = mNodes[nodeIndex].Data->TypeId == "Entity.RotateTo";
+    const std::string easing = ParamValue(nodeIndex, "Easing", NodePinKind::String).AsString();
+    const double arc = rotate ? 0.0 : ParamValue(nodeIndex, "Arc Height", NodePinKind::Number).AsNumber();
+
+    // Arrivals are collected and fired only once every tween of this node has moved: a
+    // Completed handler may start new tweens on this very node, which would otherwise grow
+    // the vector being walked.
+    int arrived = 0;
+    for (std::size_t k = 0; k < state.EntityTweens.size();)
+    {
+        EntityTween& tween = state.EntityTweens[k];
+        tween.Elapsed += static_cast<double>(deltaSeconds);
+        const double t = tween.Duration > 0.0 ? (std::min)(tween.Elapsed / tween.Duration, 1.0) : 1.0;
+        const double eased = ApplyEasing(t, easing);
+
+        NodeGraphTransform transform;
+        if (mHost == nullptr || !mHost->GetEntityTransform(tween.Entity, transform))
+        {
+            // The entity went away mid-move; there is nothing left to arrive.
+            state.EntityTweens.erase(state.EntityTweens.begin() + static_cast<std::ptrdiff_t>(k));
+            continue;
+        }
+
+        double* target = rotate ? transform.Rotation : transform.Position;
+        for (int a = 0; a < 3; ++a)
+        {
+            // A finished turn lands on the rest rotation itself, without the extra whole
+            // turns, so the next one starts from a small angle rather than a wound-up one.
+            target[a] = t >= 1.0 && rotate ? tween.Rest[a]
+                                           : tween.From[a] + (tween.To[a] - tween.From[a]) * eased;
+        }
+        if (!rotate)
+        {
+            // The arc runs on raw time, not the eased curve, so the peak stays mid-flight
+            // whatever easing the horizontal motion uses.
+            transform.Position[2] += arc * std::sin(kPi * t);
+        }
+        mHost->SetEntityTransform(tween.Entity, transform);
+
+        if (t >= 1.0)
+        {
+            ++arrived;
+            state.EntityTweens.erase(state.EntityTweens.begin() + static_cast<std::ptrdiff_t>(k));
+            continue;
+        }
+        ++k;
+    }
+
+    // A handler that stops the game clears the nodes, so check before every one.
+    for (int k = 0; k < arrived && mIsRunning; ++k)
+    {
+        FireEntry(nodeIndex, 1);
     }
 }
 
@@ -1207,6 +1249,12 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         return;
     }
 
+    if (typeId.compare(0, 8, "Physics.") == 0)
+    {
+        ExecutePhysicsNode(nodeIndex);
+        return;
+    }
+
     if (typeId == "Input.SetMouseCaptured")
     {
         if (mHost != nullptr)
@@ -1327,6 +1375,51 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         return;
     }
 
+    if (typeId.compare(0, 13, "Achievements.") == 0)
+    {
+        state.Success = false;
+        const std::string name = ReadInput(nodeIndex, 1).AsString();
+
+        if (mHost == nullptr)
+        {
+            Log("Achievement node ran with no host attached.");
+        }
+        else if (typeId == "Achievements.Unlock")
+        {
+            state.Success = mHost->UnlockAchievement(name);
+            if (!state.Success)
+                Log("Unlock Achievement: '" + name + "' could not be unlocked.");
+        }
+        else if (typeId == "Achievements.ShowProgress")
+        {
+            state.Success = mHost->ShowAchievementProgress(name,
+                static_cast<int>(ReadInput(nodeIndex, 2).AsNumber()), static_cast<int>(ReadInput(nodeIndex, 3).AsNumber()));
+        }
+        else if (typeId == "Achievements.Clear")
+        {
+            state.Success = mHost->ClearAchievement(name);
+        }
+        else if (typeId == "Achievements.SetStat")
+        {
+            state.Success = mHost->SetStat(name, static_cast<int>(std::lround(ReadInput(nodeIndex, 2).AsNumber())));
+            if (!state.Success)
+                Log("Set Stat: '" + name + "' is not a stat of this app, or it may only increase.");
+        }
+        else if (typeId == "Achievements.AddStat")
+        {
+            int value = 0;
+            mHost->GetStat(name, value);
+            value += static_cast<int>(std::lround(ReadInput(nodeIndex, 2).AsNumber()));
+            state.Success = mHost->SetStat(name, value);
+            state.ResultValues[0] = state.Success ? value : 0.0;
+            if (!state.Success)
+                Log("Add to Stat: '" + name + "' is not a stat of this app, or it may only increase.");
+        }
+
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
     if (typeId == "Game.ToggleFullscreen")
     {
         if (mHost != nullptr)
@@ -1392,6 +1485,12 @@ void NodeGraphRuntime::ExecuteNode(int nodeIndex, int inPortIndex)
         else if (typeId == "UI.SetElementVisible")
         {
             state.Success = mHost->SetUiElementVisible(
+                ReadInput(nodeIndex, 1).AsString(),
+                ReadInput(nodeIndex, 2).AsBool());
+        }
+        else if (typeId == "UI.SetElementEnabled")
+        {
+            state.Success = mHost->SetUiElementEnabled(
                 ReadInput(nodeIndex, 1).AsString(),
                 ReadInput(nodeIndex, 2).AsBool());
         }
@@ -1528,26 +1627,50 @@ void NodeGraphRuntime::ExecuteEntityNode(int nodeIndex)
         }
         state.Success = mHost->SetEntityTransform(entity, transform);
     }
-    else if (typeId == "Entity.MoveTo")
+    else if (typeId == "Entity.MoveTo" || typeId == "Entity.RotateTo")
     {
-        // A newer move of the same entity takes over from one still in flight.
+        // A newer move of the same entity takes over from one still in flight - from this
+        // node or any other of the same kind - while other entities keep going.
         for (RuntimeNode& other : mNodes)
         {
-            if (other.Data->TypeId == "Entity.MoveTo" && other.State.TweenEntity == entity)
+            if (other.Data->TypeId != typeId)
             {
-                other.State.TweenActive = false;
+                continue;
             }
+
+            std::vector<EntityTween>& tweens = other.State.EntityTweens;
+            tweens.erase(std::remove_if(tweens.begin(), tweens.end(),
+                                        [entity](const EntityTween& tween) { return tween.Entity == entity; }),
+                         tweens.end());
         }
 
-        state.TweenEntity = entity;
-        state.TweenElapsed = 0.0;
-        state.TweenDuration = ReadInput(nodeIndex, 5).AsNumber();
-        for (int a = 0; a < 3; ++a)
+        EntityTween tween;
+        tween.Entity = entity;
+        tween.Duration = ReadInput(nodeIndex, 5).AsNumber();
+        if (typeId == "Entity.MoveTo")
         {
-            state.TweenFrom[a] = transform.Position[a];
-            state.TweenTo[a] = vector[a];
+            for (int a = 0; a < 3; ++a)
+            {
+                tween.From[a] = transform.Position[a];
+                tween.To[a] = vector[a];
+            }
         }
-        state.TweenActive = true;
+        else
+        {
+            static const char* const kTurnKeys[3] = { "Turns X", "Turns Y", "Turns Z" };
+            for (int a = 0; a < 3; ++a)
+            {
+                // The short way round to the target, then whole extra turns in the
+                // direction of travel (or forwards, when there is no travel at all).
+                const double rest = vector[a] * kDegreesToRadians;
+                const double delta = std::remainder(rest - transform.Rotation[a], 2.0 * kPi);
+                const double turns = ParamValue(nodeIndex, kTurnKeys[a], NodePinKind::Number).AsNumber();
+                tween.From[a] = transform.Rotation[a];
+                tween.To[a] = transform.Rotation[a] + delta + (delta < 0.0 ? -turns : turns) * 2.0 * kPi;
+                tween.Rest[a] = rest;
+            }
+        }
+        state.EntityTweens.push_back(tween);
         state.Success = true;
 
         FireExec(nodeIndex, 0);
@@ -1631,6 +1754,205 @@ NodeGraphValue NodeGraphRuntime::EvaluateEntityOutput(int nodeIndex, int outPort
         return NodeGraphValue::FromNumber(transform.Scale[outPortIndex]);
 
     return NodeGraphValue::FromNumber(0.0);
+}
+
+void NodeGraphRuntime::ExecutePhysicsNode(int nodeIndex)
+{
+    RuntimeNode& node = mNodes[nodeIndex];
+    NodeState& state = node.State;
+    const std::string& typeId = node.Data->TypeId;
+    state.Success = false;
+
+    if (mHost == nullptr)
+    {
+        Log("Physics node ran with no host attached.");
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    if (typeId == "Physics.Raycast" || typeId == "Physics.RaycastFromCamera")
+    {
+        double origin[3]{};
+        double direction[3]{};
+        double distance = 0.0;
+        if (typeId == "Physics.Raycast")
+        {
+            for (int a = 0; a < 3; ++a)
+            {
+                origin[a] = ReadInput(nodeIndex, 1 + a).AsNumber();
+                direction[a] = ReadInput(nodeIndex, 4 + a).AsNumber();
+            }
+            distance = ReadInput(nodeIndex, 7).AsNumber();
+        }
+        else
+        {
+            // Same forward as Camera.LookPoint and the engine camera.
+            const NodeGraphCameraPose pose = CurrentCamera();
+            for (int a = 0; a < 3; ++a)
+                origin[a] = pose.Position[a];
+            direction[0] = std::sin(pose.Yaw) * std::cos(pose.Pitch);
+            direction[1] = std::cos(pose.Yaw) * std::cos(pose.Pitch);
+            direction[2] = std::sin(pose.Pitch);
+            distance = ReadInput(nodeIndex, 1).AsNumber();
+        }
+
+        NodeGraphRayHit hit;
+        state.Success = distance > 0.0 && mHost->Raycast(origin, direction, distance, hit);
+        state.ResultEntity = state.Success ? hit.EntityId : 0;
+        state.ResultValues[0] = state.Success ? hit.Distance : 0.0;
+        for (int a = 0; a < 3; ++a)
+        {
+            state.ResultValues[1 + a] = state.Success ? hit.Position[a] : 0.0;
+            state.ResultValues[4 + a] = state.Success ? hit.Normal[a] : 0.0;
+        }
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    // The rest act on one entity's rigid body with a vector, laid out like Move Entity By.
+    const std::uint64_t entity = ReadEntity(nodeIndex);
+    if (entity == 0)
+    {
+        Log(std::string(node.Type->Caption) + ": no entity chosen.");
+        FireExec(nodeIndex, 0);
+        return;
+    }
+
+    double vector[3]{};
+    for (int a = 0; a < 3; ++a)
+        vector[a] = ReadInput(nodeIndex, 2 + a).AsNumber();
+
+    if (typeId == "Physics.AddImpulse")
+        state.Success = mHost->AddEntityImpulse(entity, vector);
+    else if (typeId == "Physics.AddForce")
+        state.Success = mHost->AddEntityForce(entity, vector);
+    else if (typeId == "Physics.SetVelocity")
+        state.Success = mHost->SetEntityVelocity(entity, vector);
+    else if (typeId == "Physics.SetAngularVelocity")
+    {
+        for (double& component : vector)
+            component *= kDegreesToRadians;
+        state.Success = mHost->SetEntityAngularVelocity(entity, vector);
+    }
+
+    if (!state.Success)
+    {
+        // The usual cause, and an easy one to miss: the entity was never given a Dynamic
+        // Rigid Body in its Properties.
+        Log(std::string(node.Type->Caption) + ": entity " + std::to_string(entity) +
+            " has no Dynamic Rigid Body (or physics is not running).");
+    }
+
+    FireExec(nodeIndex, 0);
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluatePhysicsOutput(int nodeIndex, int outPortIndex)
+{
+    const RuntimeNode& node = mNodes[nodeIndex];
+    const NodeState& state = node.State;
+    const std::string& typeId = node.Data->TypeId;
+
+    if (typeId == "Physics.Raycast" || typeId == "Physics.RaycastFromCamera")
+    {
+        // Then, Hit, Hit Entity, Distance, Hit X/Y/Z, Normal X/Y/Z.
+        switch (outPortIndex)
+        {
+        case 1: return NodeGraphValue::FromBool(state.Success);
+        case 2: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultEntity));
+        default:
+            if (outPortIndex >= 3 && outPortIndex <= 9)
+                return NodeGraphValue::FromNumber(state.ResultValues[outPortIndex - 3]);
+            return NodeGraphValue::FromNumber(0.0);
+        }
+    }
+
+    if (typeId == "Event.RigidBodyHit")
+    {
+        // Then, Entity, Other Entity, Hit Player, Impact Speed, Hit X/Y/Z.
+        switch (outPortIndex)
+        {
+        case 1: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultEntity));
+        case 2: return NodeGraphValue::FromNumber(static_cast<double>(state.ResultOtherEntity));
+        case 3: return NodeGraphValue::FromBool(state.Flag);
+        default:
+            if (outPortIndex >= 4 && outPortIndex <= 7)
+                return NodeGraphValue::FromNumber(state.ResultValues[outPortIndex - 4]);
+            return NodeGraphValue::FromNumber(0.0);
+        }
+    }
+
+    if (typeId == "Physics.GetVelocity")
+    {
+        double velocity[3]{};
+        const std::uint64_t entity = ReadEntity(nodeIndex);
+        if (mHost == nullptr || entity == 0 || !mHost->GetEntityVelocity(entity, velocity))
+            return NodeGraphValue::FromNumber(0.0);
+        if (outPortIndex == 3)
+            return NodeGraphValue::FromNumber(
+                std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]));
+        return NodeGraphValue::FromNumber(outPortIndex >= 0 && outPortIndex < 3 ? velocity[outPortIndex] : 0.0);
+    }
+
+    // The vector nodes report the Success of their last run.
+    return NodeGraphValue::FromBool(state.Success);
+}
+
+void NodeGraphRuntime::FirePhysicsEvents()
+{
+    if (mHost == nullptr)
+        return;
+
+    // Physics stepped after last frame's tick, so its hits are this tick's events. A copy:
+    // the handlers run arbitrary graph logic while this walks the list.
+    const std::vector<NodeGraphPhysicsHit> hits = mHost->GetPhysicsHits();
+    if (hits.empty())
+        return;
+
+    for (std::size_t i = 0; i < mNodes.size(); ++i)
+    {
+        if (mNodes[i].Data->TypeId != "Event.RigidBodyHit")
+            continue;
+
+        const int nodeIndex = static_cast<int>(i);
+        const std::uint64_t watched = ReadEntity(nodeIndex);
+        const double minimumSpeed = ParamValue(nodeIndex, "Min Impact Speed", NodePinKind::Number).AsNumber();
+
+        for (const NodeGraphPhysicsHit& hit : hits)
+        {
+            if (hit.ImpactSpeed < minimumSpeed)
+                continue;
+
+            // With an entity chosen it is always reported as Entity, whichever side of the
+            // contact Jolt put it on; the other side is Other Entity.
+            std::uint64_t self = hit.EntityA;
+            std::uint64_t other = hit.EntityB;
+            if (watched != 0)
+            {
+                if (hit.EntityB == watched)
+                    std::swap(self, other);
+                else if (hit.EntityA != watched)
+                    continue;
+            }
+            else if (self == 0)
+            {
+                // The player is not an entity; keep the entity in front.
+                std::swap(self, other);
+            }
+
+            NodeState& state = mNodes[i].State;
+            state.ResultEntity = self;
+            state.ResultOtherEntity = other;
+            state.Flag = hit.PlayerInvolved;
+            state.ResultValues[0] = hit.ImpactSpeed;
+            for (int a = 0; a < 3; ++a)
+                state.ResultValues[1 + a] = hit.Position[a];
+            FireEntry(nodeIndex, 0);
+
+            // The graph may have stopped the game, which clears the nodes.
+            if (!mIsRunning || i >= mNodes.size())
+                return;
+        }
+    }
 }
 
 NodeGraphValue NodeGraphRuntime::ReadInput(int nodeIndex, int inPortIndex)
@@ -1855,6 +2177,45 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
 
         result = NodeGraphValue::FromBool(outcome);
     }
+    else if (typeId == "Logic.Select")
+    {
+        // Only the chosen side is evaluated, so a Random node on the other side is not drawn.
+        result = ReadInput(nodeIndex, ReadInput(nodeIndex, 0).AsBool() ? 1 : 2);
+    }
+    else if (typeId == "Logic.TextEquals")
+    {
+        std::string a = ReadInput(nodeIndex, 0).AsString();
+        std::string b = ReadInput(nodeIndex, 1).AsString();
+        if (ParamValue(nodeIndex, "Ignore Case", NodePinKind::Bool).AsBool())
+        {
+            const auto lower = [](std::string& text) {
+                std::transform(text.begin(), text.end(), text.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            };
+            lower(a);
+            lower(b);
+        }
+        result = NodeGraphValue::FromBool(a == b);
+    }
+    else if (typeId == "Math.Power")
+    {
+        const double value = std::pow(ReadInput(nodeIndex, 0).AsNumber(), ReadInput(nodeIndex, 1).AsNumber());
+        // A negative base with a fractional exponent has no real answer; read zero rather
+        // than let a NaN loose into the graph.
+        result = NodeGraphValue::FromNumber(std::isfinite(value) ? value : 0.0);
+    }
+    else if (typeId.compare(0, 8, "Math.Bit") == 0 || typeId == "Math.SetBit" || typeId == "Math.CountBits" ||
+             typeId.compare(0, 5, "List.") == 0 || typeId == "Value.FormatText")
+    {
+        result = EvaluateListOutput(nodeIndex, outPortIndex);
+    }
+    else if (typeId == "Game.GetSetting")
+    {
+        std::string value;
+        const bool found = mHost != nullptr && mHost->GetGameSetting(ReadInput(nodeIndex, 0).AsString(), value);
+        // Typed like a variable default, so "3000" arrives as a number and "true" as a bool.
+        result = outPortIndex == 1 ? NodeGraphValue::FromBool(found) : NodeGraphValue::Parse(value, NodePinKind::Any);
+    }
     else if (typeId == "Logic.Multiplexer")
     {
         const int selected = static_cast<int>(ReadInput(nodeIndex, 0).AsNumber());
@@ -1977,6 +2338,10 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     {
         result = EvaluateEntityOutput(nodeIndex, outPortIndex);
     }
+    else if (typeId.compare(0, 8, "Physics.") == 0 || typeId == "Event.RigidBodyHit")
+    {
+        result = EvaluatePhysicsOutput(nodeIndex, outPortIndex);
+    }
     else if (typeId == "Camera.Get")
     {
         const NodeGraphCameraPose pose = CurrentCamera();
@@ -2024,10 +2389,208 @@ NodeGraphValue NodeGraphRuntime::EvaluateOutput(int nodeIndex, int outPortIndex)
     {
         result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsStandalone());
     }
+    else if (typeId == "Achievements.IsUnlocked")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsAchievementUnlocked(ReadInput(nodeIndex, 0).AsString()));
+    }
+    else if (typeId == "Achievements.GetStat")
+    {
+        int value = 0;
+        const bool found = mHost != nullptr && mHost->GetStat(ReadInput(nodeIndex, 0).AsString(), value);
+        result = outPortIndex == 1 ? NodeGraphValue::FromBool(found) : NodeGraphValue::FromNumber(found ? value : 0.0);
+    }
+    else if (typeId == "Achievements.IsSteamRunning")
+    {
+        result = NodeGraphValue::FromBool(mHost != nullptr && mHost->IsSteamRunning());
+    }
+    else if (typeId == "Achievements.AddStat" && outPortIndex == 2)
+    {
+        result = NodeGraphValue::FromNumber(node.State.ResultValues[0]);
+    }
+    else if (typeId.compare(0, 13, "Achievements.") == 0)
+    {
+        result = NodeGraphValue::FromBool(node.State.Success);
+    }
 
     mEvaluationStack.pop_back();
     mValueCache[cacheKey] = result;
     return result;
+}
+
+namespace
+{
+    // An empty text is an empty list, not a list of one empty item; an empty separator
+    // falls back to the default rather than splitting between every character.
+    std::vector<std::string> SplitList(const std::string& text, std::string separator)
+    {
+        std::vector<std::string> items;
+        if (text.empty())
+            return items;
+        if (separator.empty())
+            separator = ",";
+
+        std::size_t start = 0;
+        for (;;)
+        {
+            const std::size_t end = text.find(separator, start);
+            items.push_back(text.substr(start, end == std::string::npos ? std::string::npos : end - start));
+            if (end == std::string::npos)
+                return items;
+            start = end + separator.size();
+        }
+    }
+
+    std::string JoinList(const std::vector<std::string>& items, const std::string& separator)
+    {
+        std::string text;
+        for (std::size_t i = 0; i < items.size(); ++i)
+        {
+            if (i > 0)
+                text += separator.empty() ? std::string(",") : separator;
+            text += items[i];
+        }
+        return text;
+    }
+
+    // Bit operations work on whole numbers; anything below zero or past 2^53 (where a double
+    // stops counting in ones) has no sensible set of bits, so it reads as zero.
+    std::uint64_t BitsOf(double value)
+    {
+        return value >= 0.0 && value < 9007199254740992.0 ? static_cast<std::uint64_t>(value) : 0;
+    }
+}
+
+NodeGraphValue NodeGraphRuntime::EvaluateListOutput(int nodeIndex, int outPortIndex)
+{
+    const std::string& typeId = mNodes[nodeIndex].Data->TypeId;
+
+    if (typeId == "Math.BitAnd" || typeId == "Math.BitOr" || typeId == "Math.BitXor")
+    {
+        const std::uint64_t a = BitsOf(ReadInput(nodeIndex, 0).AsNumber());
+        const std::uint64_t b = BitsOf(ReadInput(nodeIndex, 1).AsNumber());
+        const std::uint64_t bits = typeId == "Math.BitAnd" ? (a & b) : typeId == "Math.BitOr" ? (a | b) : (a ^ b);
+        return NodeGraphValue::FromNumber(static_cast<double>(bits));
+    }
+
+    if (typeId == "Math.BitTest" || typeId == "Math.SetBit")
+    {
+        const std::uint64_t value = BitsOf(ReadInput(nodeIndex, 0).AsNumber());
+        const int bit = static_cast<int>(ReadInput(nodeIndex, 1).AsNumber());
+        const std::uint64_t mask = bit >= 0 && bit < 53 ? (std::uint64_t(1) << bit) : 0;
+        if (typeId == "Math.BitTest")
+            return NodeGraphValue::FromBool((value & mask) != 0);
+        const bool on = ReadInput(nodeIndex, 2).AsBool();
+        return NodeGraphValue::FromNumber(static_cast<double>(on ? (value | mask) : (value & ~mask)));
+    }
+
+    if (typeId == "Math.CountBits")
+    {
+        std::uint64_t value = BitsOf(ReadInput(nodeIndex, 0).AsNumber());
+        int count = 0;
+        for (; value != 0; value &= value - 1)
+            ++count;
+        return NodeGraphValue::FromNumber(count);
+    }
+
+    if (typeId == "Value.FormatText")
+    {
+        std::string text = ReadInput(nodeIndex, 0).AsString();
+        for (int argument = 0; argument < 4; ++argument)
+        {
+            const std::string placeholder = "{" + std::to_string(argument) + "}";
+            if (text.find(placeholder) == std::string::npos)
+                continue;
+
+            // Read only when used, so an unconnected input that is not in the format costs
+            // nothing - and replaced left to right, never re-scanning what was inserted.
+            const std::string value = ReadInput(nodeIndex, 1 + argument).AsString();
+            for (std::size_t at = text.find(placeholder); at != std::string::npos;
+                 at = text.find(placeholder, at + value.size()))
+            {
+                text.replace(at, placeholder.size(), value);
+            }
+        }
+        return NodeGraphValue::FromString(text);
+    }
+
+    const std::string separator = ParamValue(nodeIndex, "Separator", NodePinKind::String).AsString();
+
+    if (typeId == "List.Fill")
+    {
+        const int count = (std::min)((std::max)(static_cast<int>(ReadInput(nodeIndex, 0).AsNumber()), 0),
+                                     kMaxLoopIterations);
+        return NodeGraphValue::FromString(
+            JoinList(std::vector<std::string>(static_cast<std::size_t>(count), ReadInput(nodeIndex, 1).AsString()),
+                     separator));
+    }
+
+    std::vector<std::string> items = SplitList(ReadInput(nodeIndex, 0).AsString(), separator);
+
+    if (typeId == "List.Length")
+    {
+        return NodeGraphValue::FromNumber(static_cast<double>(items.size()));
+    }
+
+    if (typeId == "List.Get")
+    {
+        const double index = ReadInput(nodeIndex, 1).AsNumber();
+        const bool valid = index >= 0.0 && index < static_cast<double>(items.size());
+        if (outPortIndex == 1)
+            return NodeGraphValue::FromBool(valid);
+        // Typed like a variable default, so a list of numbers reads back as numbers.
+        return valid ? NodeGraphValue::Parse(items[static_cast<std::size_t>(index)], NodePinKind::Any)
+                     : NodeGraphValue::FromString(std::string());
+    }
+
+    if (typeId == "List.Set")
+    {
+        const double index = ReadInput(nodeIndex, 1).AsNumber();
+        if (index >= 0.0 && index < static_cast<double>(kMaxLoopIterations))
+        {
+            const std::size_t at = static_cast<std::size_t>(index);
+            if (at >= items.size())
+                items.resize(at + 1);
+            items[at] = ReadInput(nodeIndex, 2).AsString();
+        }
+        return NodeGraphValue::FromString(JoinList(items, separator));
+    }
+
+    if (typeId == "List.Add")
+    {
+        items.push_back(ReadInput(nodeIndex, 1).AsString());
+        return NodeGraphValue::FromString(JoinList(items, separator));
+    }
+
+    if (typeId == "List.Count")
+    {
+        const std::string value = ReadInput(nodeIndex, 1).AsString();
+        return NodeGraphValue::FromNumber(static_cast<double>(std::count(items.begin(), items.end(), value)));
+    }
+
+    if (typeId == "List.Last")
+    {
+        const int count = (std::max)(static_cast<int>(ReadInput(nodeIndex, 1).AsNumber()), 0);
+        if (static_cast<std::size_t>(count) < items.size())
+            items.erase(items.begin(), items.end() - count);
+        return NodeGraphValue::FromString(JoinList(items, separator));
+    }
+
+    if (typeId == "List.Join")
+    {
+        const std::string before = ReadInput(nodeIndex, 1).AsString();
+        const std::string after = ReadInput(nodeIndex, 2).AsString();
+        const std::string between = ReadInput(nodeIndex, 3).AsString();
+        std::string text;
+        for (std::size_t i = 0; i < items.size(); ++i)
+        {
+            if (i > 0)
+                text += between;
+            text += before + items[i] + after;
+        }
+        return NodeGraphValue::FromString(text);
+    }
+
+    return NodeGraphValue::FromNumber(0.0);
 }
 
 NodeGraphValue* NodeGraphRuntime::FindVariableSlot(const std::string& name)

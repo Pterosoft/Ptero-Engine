@@ -88,6 +88,16 @@ cbuffer SubsurfaceConstants : register(PTERO_SSS_CB_REGISTER)
     float2   _SssShadowPad;
     // When Enabled, gSssSunShadowMap is the sun's virtual shadow map pool.
     PteroVsmConstants gSssVsm;
+
+    // ReSTIR temporal reuse in the ray-traced mode (SubsurfaceScattering_RT.hlsl). The
+    // previous matrices are those of the frame whose reservoirs are in the history buffer,
+    // jittered as its G-Buffer was, transposed like gSssViewProj.
+    float4x4 gSssPrevViewProj;
+    float4x4 gSssPrevInvViewProj;
+    uint     gSssRestir;                // 1 = reservoir pass, 0 = the plain per-pixel estimate
+    uint     gSssRestirTemporal;        // 1 = the history buffer is valid and may be reused
+    uint     gSssRestirHistoryCap;      // most candidates the history may stand for
+    uint     _SssRestirPad;
 };
 
 bool PteroSssSlotActive(uint slot)
@@ -96,10 +106,16 @@ bool PteroSssSlotActive(uint slot)
         && gSssProfiles[slot].ColorRadius.a > 0.0f;
 }
 
-// Device depth -> view-space distance along the camera axis, in metres.
+// Device depth -> view-space distance along the camera axis, in metres: z = _43 / (d - _33).
+// With the camera's (non-reversed) XMMatrixPerspectiveFovLH, _43 and d - _33 are both
+// negative. The guard has to keep that sign: it used to clamp the denominator to +1e-7,
+// which turned every depth into about -1e6 metres - the screen-space blur then stepped off
+// the screen and fell back to the centre tap, and the ray-traced composite's depth test
+// rejected every neighbour.
 float PteroSssLinearDepth(float deviceDepth)
 {
-    return gSssDepthB / max(deviceDepth - gSssDepthA, 1e-7f);
+    const float denominator = deviceDepth - gSssDepthA;
+    return gSssDepthB / (abs(denominator) > 1e-7f ? denominator : -1e-7f);
 }
 
 // Transmittance through `thickness` metres of the medium, from the SDK's
@@ -137,15 +153,46 @@ float PteroSssMaxTransmissionThickness(PteroSssProfile profile)
     return 5.7f * (0.001f + maxFalloff) / scale;
 }
 
+// The surface's own orientation at a pixel, without its normal map, from the world
+// positions of the pixel and its four neighbours: the cross product of the steps toward
+// the nearer neighbour on each axis (the farther one may lie across a silhouette).
+// Transmission is measured along this normal, as the SDK measures it along the
+// interpolated vertex normal. A normal map's pores and baked tilts tip the shading normal
+// far enough that the point pushed "inside" along it lies outside the skin, and the
+// thickness read from there - shadow map or ray - flips between none and all in jagged,
+// speckled patches that follow the map (they appeared or vanished with Flip Normal Green).
+// Turned to the shading normal's side; the shading normal where the positions are degenerate.
+float3 PteroSssDepthNormal(float3 P, float3 right, float3 left, float3 down, float3 up, float3 shadingNormal)
+{
+    const float3 toRight = right - P;
+    const float3 fromLeft = P - left;
+    const float3 toDown = down - P;
+    const float3 fromUp = P - up;
+    const float3 dx = dot(toRight, toRight) < dot(fromLeft, fromLeft) ? toRight : fromLeft;
+    const float3 dy = dot(toDown, toDown) < dot(fromUp, fromUp) ? toDown : fromUp;
+    float3 n = cross(dx, dy);
+    const float lengthSq = dot(n, n);
+    if (!(lengthSq > 1e-20f))
+        return shadingNormal;
+    n *= rsqrt(lengthSq);
+    return dot(n, shadingNormal) < 0.0f ? -n : n;
+}
+
 // Light arriving through the back of the surface. `L` points from the surface to the
-// light. The SDK's wrap term keeps a little transmission alive near the terminator.
+// light. Only light from behind (N.L < 0) is transmitted. The SDK wraps the term to
+// 0.3 + dot(L, -N), which also transmits on the lit side up to N.L = 0.3. There the
+// light reaches the point directly, so the measured thickness is only the shrink depth
+// times N.L - about zero - and every channel came through unattenuated: a pale band
+// along the sun's terminator in all three modes (screen space, ray traced, path traced),
+// the brighter the higher the transmission intensity. The scattered direct light
+// already covers the lit side.
 float3 PteroSssTransmission(PteroSssProfile profile, float thickness, float3 N, float3 L,
                             float3 lightRadiance, float3 albedo)
 {
     if (profile.FalloffTranslucency.a <= 0.0f)
         return 0.0f.xxx;
     return PteroSssTransmittanceProfile(profile, thickness)
-         * saturate(0.3f + dot(L, -N))
+         * saturate(dot(L, -N))
          * lightRadiance * albedo * gSssTransmissionIntensity;
 }
 

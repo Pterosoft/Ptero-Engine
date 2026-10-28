@@ -1,10 +1,27 @@
 #pragma once
 
+#include "SkyGlareSettings.h"
+
 // Lux values that map to 1.0 in the engine's scene-linear units. The sun, the
 // moon and the sky are all authored in lux and divided by these before they
 // reach a shader, so every pass that lights with them agrees on the scale.
 inline constexpr float kTimeOfDayRefSunLux = 100000.0f;
 inline constexpr float kTimeOfDayRefSkyLux = 20000.0f;
+
+// The sun's true angular radius (0.2666 degrees). The sky pass draws the disc
+// this size and the lens flare's occlusion test samples inside it.
+inline constexpr float kSunAngularRadiusRad = 0.2666f * (3.14159265f / 180.0f);
+
+// The moon is drawn inflated (the real one is 0.26 degrees), and scaled again by
+// TimeOfDaySettings::MoonSize.
+inline constexpr float kMoonAngularRadiusRad = 0.9f * (3.14159265f / 180.0f);
+
+// Radiance the sky pass draws the sun disc with, as a multiple of the sun's
+// illuminance. The real figure is ~15000 (illuminance over the disc's solid
+// angle), but then the level's bloom would turn the sun into its own glare;
+// 50 clips to white at any sane exposure and blooms like any other bright
+// pixel. The sun's real glare is SkyGlareRenderer's, from the true energy.
+inline constexpr float kSunDiscRadianceScale = 50.0f;
 
 // TimeOfDaySettings
 // Holds all parameters that drive the Hosek-Wilkie sky model, the sun and moon,
@@ -55,12 +72,21 @@ struct TimeOfDaySettings
     float SunColorR = 1.00f, SunColorG = 0.95f, SunColorB = 0.80f;
     float SkyColorR = 0.25f, SkyColorG = 0.45f, SkyColorB = 1.00f;
 
+    // The glare around the sun and the moon; separate from the level's bloom.
+    SkyGlareSettings SunGlare;
+    SkyGlareSettings MoonGlare = DefaultMoonGlareSettings();
+
     // ---- Night -----------------------------------------------------------------
     // Sky ambient once the sun is well below the horizon, in lux. Real starlight is
     // a fraction of a lux; this is a game value, sized so that together with the
     // exposure below a night is dark but readable.
     float NightSkyIntensityLux = 30.0f;
     float NightSkyColorR = 0.20f, NightSkyColorG = 0.30f, NightSkyColorB = 0.60f;
+
+    // Night vision: how much colour dark parts of the frame lose at night, as the
+    // eye's rods take over from its cones. Lights and the moon keep theirs. Comes
+    // in from sunset and is full once the sun is 8 degrees down. 0 = off.
+    float NightDesaturation = 0.6f;
 
     // The moon lights the scene as the directional light while the sun is down.
     // Phase 0 = new moon, 0.5 = full, 0.25 / 0.75 = first / last quarter. The phase
@@ -74,6 +100,16 @@ struct TimeOfDaySettings
     float MoonColorR = 0.70f, MoonColorG = 0.82f, MoonColorB = 1.00f;
     // Apparent size of the moon disc, as a multiple of the default.
     float MoonSize = 1.0f;
+    // Radiance of the moon disc, as a multiple of MoonIntensityLux's illuminance -
+    // how bright the moon looks, separate from how much it lights the scene. Its
+    // glare follows it.
+    float MoonDiscBrightness = 4.0f;
+    // Strength of the moonlit sky: the same sky the sun gives, lit by the moon
+    // instead and scaled by how much fainter its light is - the glow of the air
+    // around the moon and the blue it gives the night. 1 = in proportion to the
+    // daylight sky; lower, because the night ambient is authored far below what
+    // that sky would cast.
+    float MoonlitSky = 0.25f;
 
     bool  StarsEnabled = true;
     // Brightness multiplier on the star field.

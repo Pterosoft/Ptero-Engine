@@ -65,6 +65,7 @@
         "metallicRoughness": "",
         "normal": "Textures/Sand/Rippled_Sand_xd0mda1_4K_Normal.dds",
         "opacity": "",
+        "orm": "",
         "roughness": "Textures/Sand/Rippled_Sand_xd0mda1_4K_Roughness.dds"
     },
     "useAlphaCutout": false,

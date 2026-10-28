@@ -14,6 +14,7 @@
 // Saved as Data/Game/GameSettings.json, so they ship inside the packaged game with the
 // rest of Data and a controller graph can sit next to them in Data/Game.
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -34,6 +35,15 @@ struct GameProjectSettings
     // editor plays whatever level is open and ignores this. GameLauncher reads the key
     // straight out of the file, so its name is part of the launcher's contract too.
     std::string StartupLevel;
+    // The game's Steam App ID; 0 = not a Steam build. When set, the packaged game only
+    // runs through the Steam client (GameLauncher's SteamSupport.cpp) and Build Game
+    // ships steam_api64.dll. Read by GameLauncher under this key name too.
+    std::uint32_t SteamAppId = 0;
+    // The game's product ID on the Pterosoft store; 0 = not sold through Pterosoft
+    // Launcher. When set, the packaged game only runs when started by the launcher, which
+    // hands it a one-shot ticket that GameLauncher verifies online before the window
+    // opens (GameLauncher's PterosoftGameLicense.h). Read by GameLauncher under this key.
+    std::uint32_t PterosoftProductId = 0;
 
     // Missing file or missing keys keep their defaults, so an old or hand-trimmed file
     // still loads. False only when the file exists but is not valid JSON.

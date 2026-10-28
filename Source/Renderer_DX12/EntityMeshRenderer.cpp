@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "EntityMeshRenderer.h"
 #include "SubsurfaceScattering.h"
+#include "AnalyticEdgeAARenderer.h"
+#include "PrincipledGBuffer.h"
 
 #include "System/DataFiles.h"
 #include "System/Udim.h"
@@ -8,6 +10,7 @@
 #include "System/PteroLog.h"
 
 #include "d3dx12.h"
+#include <DirectXPackedVector.h>
 
 #include <algorithm>
 #include <cmath>
@@ -259,7 +262,8 @@ void EntityMeshRenderer::Render(
             continue;
 
         const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
-        const std::size_t selectedLodIndex = SelectLodIndex(i, entity, *meshPtr, cameraPosition);
+        // An animated entity draws its skinned LOD 0 (UpdateSkinning).
+        const std::size_t selectedLodIndex = DrawLodFor(entity, SelectLodIndex(i, entity, *meshPtr, cameraPosition));
 
         if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, selectedLodIndex))
         {
@@ -291,7 +295,7 @@ void EntityMeshRenderer::Render(
         commandList->SetGraphicsRootConstantBufferView(
             0, mConstantBuffer->GetGPUVirtualAddress() + cbOffset);
 
-        commandList->IASetVertexBuffers(0, 1, &selectedGpuMesh.VertexBufferView);
+        commandList->IASetVertexBuffers(0, 1, &VertexViewFor(entity, selectedGpuMesh));
         commandList->IASetIndexBuffer(&selectedGpuMesh.IndexBufferView);
 
         const std::string& materialPath = entity.Mesh->MaterialPath;
@@ -438,7 +442,8 @@ const EntityMeshRenderer::SubMaterialTextures* EntityMeshRenderer::PickSubMateri
     {
         if (!textures.baseColor.empty() || !textures.normal.empty() || !textures.metallic.empty()
             || !textures.roughness.empty() || !textures.ao.empty() || !textures.emissive.empty()
-            || !textures.opacity.empty() || !textures.height.empty())
+            || !textures.opacity.empty() || !textures.height.empty()
+            || !textures.principledMask.empty() || !textures.anisotropyDirection.empty())
         {
             return &textures;
         }
@@ -483,8 +488,8 @@ D3D12_GPU_VIRTUAL_ADDRESS EntityMeshRenderer::GetRainSurfaceConstantsAddress()
     return EnsureRainSurfaceConstantBuffer() ? mRainSurfaceConstantBuffer->GetGPUVirtualAddress() : 0;
 }
 
-// Fills a sub-material's constants and binds its eight texture slots to root
-// tables 3-10 (t0-t7), straight from the texture cache's pre-allocated
+// Fills a sub-material's constants and binds its ten texture slots to root
+// tables 3-12 (t0-t9), straight from the texture cache's pre-allocated
 // descriptors, so nothing is copied. Shared by the ordinary G-Buffer draws
 // and the virtualized ones, which use the same root parameter layout.
 bool EntityMeshRenderer::BindSubMaterial(
@@ -522,7 +527,8 @@ bool EntityMeshRenderer::BindMaterialCached(
         {
             for (std::string* path : { &texPaths.baseColor, &texPaths.normal, &texPaths.packedMaterial,
                                        &texPaths.metallic, &texPaths.roughness, &texPaths.ao,
-                                       &texPaths.emissive, &texPaths.opacity, &texPaths.height })
+                                       &texPaths.emissive, &texPaths.opacity, &texPaths.height,
+                                       &texPaths.principledMask, &texPaths.anisotropyDirection })
             {
                 *path = Udim::Resolve(*path, udimTile);
             }
@@ -553,6 +559,13 @@ void EntityMeshRenderer::PrepareSubMaterial(const SubMaterialTextures& texPaths,
     matOut.MetallicFactor  = texPaths.metallicFactor;
     matOut.RoughnessFactor = texPaths.roughnessFactor;
     matOut.SpecularFactor  = texPaths.specularFactor;
+    matOut.PrincipledSubsurface     = texPaths.principledSubsurface;
+    matOut.PrincipledSpecularTint   = texPaths.principledSpecularTint;
+    matOut.PrincipledSheen          = texPaths.principledSheen;
+    matOut.PrincipledSheenTint      = texPaths.principledSheenTint;
+    matOut.PrincipledClearcoat      = texPaths.principledClearcoat;
+    matOut.PrincipledClearcoatGloss = texPaths.principledClearcoatGloss;
+    matOut.PrincipledAnisotropic    = texPaths.principledAnisotropic;
     matOut.NormalScale     = texPaths.normalScale;
     matOut.FlipNormalGreen = texPaths.flipNormalGreen ? 1 : 0;
     matOut.AoStrength      = texPaths.aoStrength;
@@ -566,6 +579,22 @@ void EntityMeshRenderer::PrepareSubMaterial(const SubMaterialTextures& texPaths,
     const float uvRotationRadians = DirectX::XMConvertToRadians(texPaths.uvRotationDegrees);
     matOut.UvRotationSin = std::sin(uvRotationRadians);
     matOut.UvRotationCos = std::cos(uvRotationRadians);
+
+    // Iris adjust: halves packed two to a word (GBuffer.hlsl ApplyIrisAdjust). Left at
+    // zero when off, since a zero warp radius is the shader's off switch.
+    if (texPaths.useIrisAdjust && texPaths.irisWarpRadius > 0.0f)
+    {
+        const auto packHalf2 = [](float low, float high) -> std::uint32_t
+        {
+            return static_cast<std::uint32_t>(DirectX::PackedVector::XMConvertFloatToHalf(low))
+                 | (static_cast<std::uint32_t>(DirectX::PackedVector::XMConvertFloatToHalf(high)) << 16);
+        };
+        matOut.IrisCenterPacked  = packHalf2(texPaths.irisCenterU, texPaths.irisCenterV);
+        matOut.IrisOffsetPacked  = packHalf2(texPaths.irisOffsetU, texPaths.irisOffsetV);
+        matOut.IrisRadiiPacked   = packHalf2((std::max)(texPaths.irisRadius, 1e-3f), texPaths.irisWarpRadius);
+        matOut.IrisScalesPacked  = packHalf2(texPaths.irisScale, texPaths.pupilScale);
+        matOut.PupilRadiusPacked = packHalf2(texPaths.pupilRadius, 0.0f);
+    }
 
     matOut.UseParallaxOcclusion = texPaths.useParallaxOcclusion ? 1 : 0;
     matOut.ParallaxHeightScale  = texPaths.parallaxHeightScale;
@@ -601,7 +630,8 @@ void EntityMeshRenderer::PrepareSubMaterial(const SubMaterialTextures& texPaths,
     int* flags[kTextureSlotCount] = {
         nullptr,               &matOut.HasNormalMap,    &matOut.HasMetallicMap,
         &matOut.HasRoughnessMap, &matOut.HasAoMap,       &matOut.HasEmissiveMap,
-        &matOut.HasOpacityMap,   &matOut.HasHeightMap
+        &matOut.HasOpacityMap,   &matOut.HasHeightMap,
+        &matOut.HasPrincipledMap, &matOut.HasAnisotropyDirectionMap
     };
 
     out.Incomplete = false;
@@ -648,7 +678,7 @@ bool EntityMeshRenderer::ApplyPreparedMaterial(
 
     for (std::size_t s = 0; s < kTextureSlotCount; ++s)
     {
-        // Root slots 3–10 correspond to t0–t7.
+        // Root slots 3–12 correspond to t0–t9.
         if (prepared.Handles[s].ptr != 0)
             commandList->SetGraphicsRootDescriptorTable(static_cast<UINT>(3 + s), prepared.Handles[s]);
     }
@@ -672,6 +702,8 @@ bool EntityMeshRenderer::ResolveTextureSlots(
         texPaths.emissive,
         texPaths.opacity,
         texPaths.height,
+        texPaths.principledMask,
+        texPaths.anisotropyDirection,
     };
     return usePacked;
 }
@@ -735,7 +767,8 @@ void EntityMeshRenderer::CollectTextureRequests(
                 SubMaterialTextures tilePaths = *picked;
                 for (std::string* path : { &tilePaths.baseColor, &tilePaths.normal, &tilePaths.packedMaterial,
                                            &tilePaths.metallic, &tilePaths.roughness, &tilePaths.ao,
-                                           &tilePaths.emissive, &tilePaths.opacity, &tilePaths.height })
+                                           &tilePaths.emissive, &tilePaths.opacity, &tilePaths.height,
+                                           &tilePaths.principledMask, &tilePaths.anisotropyDirection })
                 {
                     *path = Udim::Resolve(*path, tile);
                 }
@@ -765,6 +798,18 @@ void EntityMeshRenderer::Shutdown()
 {
     // Holds texture references; must go before the texture manager's cache does.
     mBindCache.clear();
+
+    mSkinnedInstances.clear();
+    mSkinSources.clear();
+    if (mPaletteUpload && mPaletteMapped != nullptr)
+    {
+        mPaletteUpload->Unmap(0, nullptr);
+        mPaletteMapped = nullptr;
+    }
+    mPaletteUpload.Reset();
+    mPaletteSlotBytes = 0;
+    mSkinPipeline.Reset();
+    mSkinRootSignature.Reset();
     if (mConstantBuffer && mMappedCB != nullptr)
     {
         mConstantBuffer->Unmap(0, nullptr);
@@ -962,7 +1007,7 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
         // The detail the camera pass is using for this entity, not LOD 0. See
         // LastSelectedLod: asking for the finest LOD here made every shadow face
         // redraw every prop at full resolution.
-        const std::size_t casterLod = LastSelectedLod(i);
+        const std::size_t casterLod = DrawLodFor(entity, LastSelectedLod(i));
         if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, casterLod))
         {
             ++slot;
@@ -993,12 +1038,103 @@ void EntityMeshRenderer::RenderPointLightShadowDepth(
             1,
             mPointShadowFaceConstantBuffer->GetGPUVirtualAddress());
 
-        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+        commandList->IASetVertexBuffers(0, 1, &VertexViewFor(entity, gpuMesh));
         commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
         commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
 
         ++slot;
     }
+}
+
+std::uint32_t EntityMeshRenderer::RenderVoxelization(
+    ID3D12GraphicsCommandList* commandList,
+    const DirectX::XMFLOAT3&   regionMin,
+    const DirectX::XMFLOAT3&   regionMax,
+    std::size_t                lodIndex,
+    const DirectX::XMFLOAT3&   cameraPosition)
+{
+    if (commandList == nullptr || mEntities == nullptr)
+        return 0;
+
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    const XMVECTOR boxMin = XMLoadFloat3(&regionMin);
+    const XMVECTOR boxMax = XMLoadFloat3(&regionMax);
+
+    std::uint32_t drawCount = 0;
+    for (std::size_t i = 0; i < mEntities->size(); ++i)
+    {
+        const Entity& entity = (*mEntities)[i];
+        if (!entity.HasMeshComponent() || !entity.Mesh.has_value() || !entity.Mesh->MeshAsset)
+            continue;
+
+        const Mesh* meshPtr = entity.Mesh->MeshAsset.get();
+        const std::size_t lodCount = meshPtr->GetLodCount();
+        if (lodCount == 0)
+            continue;
+        const std::size_t lod = DrawLodFor(entity, (std::min)(lodIndex, lodCount - 1));
+
+        if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, lod))
+            continue;
+        auto it = mGpuMeshes.find(MeshCacheKey{ meshPtr, lod });
+        if (it == mGpuMeshes.end() || it->second.IndexCount == 0)
+            continue;
+        EntityGpuMesh& gpuMesh = it->second;
+        gpuMesh.LastUsedFrame = mFrameCounter;
+
+        // World bounds of the LOD's box: centre moved by the transform, extent
+        // through the absolute rotation-scale.
+        const XMMATRIX model = entity.Transform.GetTransform();
+        const XMVECTOR localMin = XMLoadFloat3(&gpuMesh.BoundsMin);
+        const XMVECTOR localMax = XMLoadFloat3(&gpuMesh.BoundsMax);
+        const XMVECTOR center = XMVector3TransformCoord(XMVectorScale(XMVectorAdd(localMin, localMax), 0.5f), model);
+        const XMVECTOR extent = XMVectorScale(XMVectorSubtract(localMax, localMin), 0.5f);
+        const XMVECTOR worldExtent = XMVectorAdd(XMVectorAdd(
+            XMVectorMultiply(XMVectorSplatX(extent), XMVectorAbs(model.r[0])),
+            XMVectorMultiply(XMVectorSplatY(extent), XMVectorAbs(model.r[1]))),
+            XMVectorMultiply(XMVectorSplatZ(extent), XMVectorAbs(model.r[2])));
+        const XMVECTOR worldMin = XMVectorSubtract(center, worldExtent);
+        const XMVECTOR worldMax = XMVectorAdd(center, worldExtent);
+        if (XMVector3LessOrEqual(worldMin, boxMax) == false || XMVector3GreaterOrEqual(worldMax, boxMin) == false)
+            continue;
+
+        XMFLOAT4X4 modelTransposed;
+        XMStoreFloat4x4(&modelTransposed, XMMatrixTranspose(model));
+        commandList->SetGraphicsRoot32BitConstants(0, 16, &modelTransposed, 0);
+        commandList->IASetVertexBuffers(0, 1, &VertexViewFor(entity, gpuMesh));
+        commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
+
+        const std::string& materialPath = entity.Mesh->MaterialPath;
+        const std::vector<SubMesh>& subMeshes = meshPtr->GetLod(lod).SubMeshes;
+        if (subMeshes.empty())
+        {
+            BindVirtualGeometryMaterial(commandList, materialPath, 0u, 0u, cameraPosition);
+            commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
+            ++drawCount;
+            continue;
+        }
+
+        const auto& allTextures = ResolveAllSubMaterialTextures(materialPath);
+        for (const SubMesh& subMesh : subMeshes)
+        {
+            const SubMaterialTextures* picked = PickSubMaterial(allTextures, subMesh.materialId);
+            if (picked != nullptr && picked->hasUdim && !subMesh.udimTiles.empty())
+            {
+                for (const SubMeshUdimTile& tileRange : subMesh.udimTiles)
+                {
+                    BindVirtualGeometryMaterial(commandList, materialPath, subMesh.materialId, tileRange.tile, cameraPosition);
+                    commandList->DrawIndexedInstanced(tileRange.indexCount, 1, tileRange.indexStart, 0, 0);
+                    ++drawCount;
+                }
+                continue;
+            }
+
+            BindVirtualGeometryMaterial(commandList, materialPath, subMesh.materialId, 0u, cameraPosition);
+            commandList->DrawIndexedInstanced(subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+            ++drawCount;
+        }
+    }
+    return drawCount;
 }
 
 void EntityMeshRenderer::RenderDepthOnly(
@@ -1035,7 +1171,7 @@ void EntityMeshRenderer::RenderDepthOnly(
         // The detail the camera pass is using for this entity, not LOD 0. See
         // LastSelectedLod: asking for the finest LOD here made every shadow face
         // redraw every prop at full resolution.
-        const std::size_t casterLod = LastSelectedLod(i);
+        const std::size_t casterLod = DrawLodFor(entity, LastSelectedLod(i));
         if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, casterLod))
         {
             ++slot;
@@ -1062,7 +1198,7 @@ void EntityMeshRenderer::RenderDepthOnly(
             0,
             mDepthPassConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(depthIndex) * sizeof(EntityConstants));
 
-        commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+        commandList->IASetVertexBuffers(0, 1, &VertexViewFor(entity, gpuMesh));
         commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
         commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
 
@@ -1110,7 +1246,7 @@ void EntityMeshRenderer::RenderDepthOnlyPages(
                 continue;
 
             // The detail the camera pass is using, as for the other shadow passes.
-            const std::size_t casterLod = LastSelectedLod(i);
+            const std::size_t casterLod = DrawLodFor(entity, LastSelectedLod(i));
             if (!EnsureEntityGpuMesh(commandList, i, entity.Mesh->MeshAsset, casterLod))
             {
                 outNotReady.push_back(static_cast<std::uint32_t>(i));
@@ -1129,7 +1265,7 @@ void EntityMeshRenderer::RenderDepthOnlyPages(
             XMFLOAT4X4 mvp;
             XMStoreFloat4x4(&mvp, XMMatrixTranspose(entity.Transform.GetTransform() * pageViewProjection));
             commandList->SetGraphicsRoot32BitConstants(0, 16, &mvp, 0);
-            commandList->IASetVertexBuffers(0, 1, &gpuMesh.VertexBufferView);
+            commandList->IASetVertexBuffers(0, 1, &VertexViewFor(entity, gpuMesh));
             commandList->IASetIndexBuffer(&gpuMesh.IndexBufferView);
             commandList->DrawIndexedInstanced(gpuMesh.IndexCount, 1, 0, 0, 0);
             ++outDrawCount;
@@ -1157,7 +1293,7 @@ bool EntityMeshRenderer::CreatePipeline(
         return false;
     }
 
-    // Compile the G-Buffer geometry shader (outputs albedo/normal/material MRT; no lighting).
+    // Compile the G-Buffer geometry shader (outputs albedo/normal/material/edge MRT; no lighting).
     const ShaderCompileRequest vsRequest
     {
         L"Shaders\\GBuffer.hlsl",
@@ -1165,13 +1301,9 @@ bool EntityMeshRenderer::CreatePipeline(
         L"vs_5_0",
         ShaderStage::Vertex
     };
-    const ShaderCompileRequest psRequest
-    {
-        L"Shaders\\GBuffer.hlsl",
-        L"PSMain",
-        L"ps_5_0",
-        ShaderStage::Pixel
-    };
+    // Writes the triangle's edges for Analytic Edge AA when the GPU has SM 6.1 barycentrics.
+    const ShaderCompileRequest psRequest = AnalyticEdge::MakeGBufferPixelShaderRequest(
+        L"Shaders\\GBuffer.hlsl", L"PSMain");
 
     if (!mVertexShader.Compile(vsRequest))
     {
@@ -1190,13 +1322,14 @@ bool EntityMeshRenderer::CreatePipeline(
     //   slot 0 – root CBV  (b0, VS) per-entity MVP + model matrix
     //   slot 1 – root CBV  (b1, PS) per-draw material constants
     //   slot 2 – root CBV  (b2, PS) frame rain surface constants
-    //   slots 3–10 – individual 1-SRV descriptor tables (PS):
+    //   slots 3–12 – individual 1-SRV descriptor tables (PS):
     //              3=t0 baseColor, 4=t1 normal, 5=t2 metallic,
     //              6=t3 roughness, 7=t4 ao, 8=t5 emissive, 9=t6 opacity,
-    //              10=t7 height (parallax occlusion)
+    //              10=t7 height (parallax occlusion), 11=t8 Disney principled mask,
+    //              12=t9 anisotropy direction
     // Using individual tables means each texture
     // can be bound directly from its pre-allocated GPU handle without copying.
-    D3D12_ROOT_PARAMETER rootParams[11]{};
+    D3D12_ROOT_PARAMETER rootParams[3 + kTextureSlotCount]{};
 
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0
@@ -1216,13 +1349,13 @@ bool EntityMeshRenderer::CreatePipeline(
     rootParams[2].Descriptor.RegisterSpace  = 0;
     rootParams[2].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    // One D3D12_DESCRIPTOR_RANGE per texture slot (t0–t7).
-    D3D12_DESCRIPTOR_RANGE srvRanges[8]{};
-    for (int i = 0; i < 8; ++i)
+    // One D3D12_DESCRIPTOR_RANGE per texture slot (t0–t9).
+    D3D12_DESCRIPTOR_RANGE srvRanges[kTextureSlotCount]{};
+    for (int i = 0; i < static_cast<int>(kTextureSlotCount); ++i)
     {
         srvRanges[i].RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors                    = 1;
-        srvRanges[i].BaseShaderRegister                = static_cast<UINT>(i); // t0..t7
+        srvRanges[i].BaseShaderRegister                = static_cast<UINT>(i); // t0..t9
         srvRanges[i].RegisterSpace                     = 0;
         srvRanges[i].OffsetInDescriptorsFromTableStart = 0;
 
@@ -1287,17 +1420,18 @@ bool EntityMeshRenderer::CreatePipeline(
     psoDesc.VS                    = mVertexShader.GetBytecode();
     psoDesc.PS                    = mPixelShader.GetBytecode();
     psoDesc.SampleMask            = UINT_MAX;
-    // G-Buffer MRT: three colour outputs (albedo, normal, material).
-    psoDesc.NumRenderTargets      = 3;
+    // G-Buffer MRT: albedo, normal, material, edge and the two principled targets.
+    psoDesc.NumRenderTargets      = PrincipledGBuffer::kGeometryPassTargetCount;
     psoDesc.RTVFormats[0]         = albedoFormat;
     psoDesc.RTVFormats[1]         = normalFormat;
     psoDesc.RTVFormats[2]         = materialFormat;
+    psoDesc.RTVFormats[3]         = AnalyticEdge::kGBufferFormat;
     psoDesc.DSVFormat             = depthFormat;
     psoDesc.SampleDesc.Count      = msaaSampleCount;
     psoDesc.SampleDesc.Quality    = 0;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
-    // Opaque blend for all three G-Buffer outputs.
+    // Opaque blend for all G-Buffer outputs.
     D3D12_RENDER_TARGET_BLEND_DESC rtBlend{};
     rtBlend.BlendEnable           = FALSE;
     rtBlend.LogicOpEnable         = FALSE;
@@ -1308,7 +1442,8 @@ bool EntityMeshRenderer::CreatePipeline(
     rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
     rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
     rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    for (UINT i = 0; i < 3; ++i)
+    PrincipledGBuffer::DeclareTargets(psoDesc.RTVFormats);
+    for (UINT i = 0; i < PrincipledGBuffer::kGeometryPassTargetCount; ++i)
         psoDesc.BlendState.RenderTarget[i] = rtBlend;
 
     psoDesc.RasterizerState.FillMode              = mWireframeEnabled ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
@@ -1489,6 +1624,17 @@ bool EntityMeshRenderer::EnsureEntityGpuMesh(
     gpuMesh.SourceMeshOwner = meshAsset;
     gpuMesh.LodIndex = lodIndex;
     mSceneContentChanged = true;
+
+    gpuMesh.BoundsMin = gpuMesh.BoundsMax = meshLod->Vertices.front().Position;
+    for (const Vertex& vertex : meshLod->Vertices)
+    {
+        gpuMesh.BoundsMin.x = (std::min)(gpuMesh.BoundsMin.x, vertex.Position.x);
+        gpuMesh.BoundsMin.y = (std::min)(gpuMesh.BoundsMin.y, vertex.Position.y);
+        gpuMesh.BoundsMin.z = (std::min)(gpuMesh.BoundsMin.z, vertex.Position.z);
+        gpuMesh.BoundsMax.x = (std::max)(gpuMesh.BoundsMax.x, vertex.Position.x);
+        gpuMesh.BoundsMax.y = (std::max)(gpuMesh.BoundsMax.y, vertex.Position.y);
+        gpuMesh.BoundsMax.z = (std::max)(gpuMesh.BoundsMax.z, vertex.Position.z);
+    }
 
     const UINT64 vbSize = meshLod->Vertices.size() * sizeof(Vertex);
     const UINT64 ibSize = meshLod->Indices.size()  * sizeof(std::uint32_t);
@@ -2220,6 +2366,8 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
             t.emissive   = resolve("emissive");
             t.opacity    = resolve("opacity");
             t.height     = resolve("height");
+            t.principledMask      = resolve("principledMask");
+            t.anisotropyDirection = resolve("anisotropyDirection");
         }
 
         // Read scalar parameters; use safe value() calls with sensible defaults.
@@ -2256,6 +2404,16 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         t.subsurfaceRadiusMm      = node.value("subsurfaceRadiusMm",      3.f);
         t.subsurfaceTranslucency  = node.value("subsurfaceTranslucency",  0.8f);
 
+        // Disney principled lobes; materials that predate them carry no keys, and the
+        // defaults are every lobe off.
+        t.principledSubsurface     = node.value("subsurfaceFlatten", 0.f);
+        t.principledSpecularTint   = node.value("specularTint",      0.f);
+        t.principledAnisotropic    = node.value("anisotropic",       0.f);
+        t.principledSheen          = node.value("sheen",             0.f);
+        t.principledSheenTint      = node.value("sheenTint",         0.5f);
+        t.principledClearcoat      = node.value("clearcoat",         0.f);
+        t.principledClearcoatGloss = node.value("clearcoatGloss",    1.f);
+
         // UV tiling and offset are stored as two-element arrays [u, v].
         auto readFloat2 = [&node](const char* key, float& outU, float& outV)
         {
@@ -2268,6 +2426,15 @@ EntityMeshRenderer::ParseSubMaterialTextures(const std::string& materialPath) co
         };
         readFloat2("uvTiling", t.uvTilingU, t.uvTilingV);
         readFloat2("uvOffset", t.uvOffsetU, t.uvOffsetV);
+
+        t.useIrisAdjust  = node.value("useIrisAdjust",  false);
+        t.irisRadius     = node.value("irisRadius",     0.12f);
+        t.irisScale      = node.value("irisScale",      1.f);
+        t.pupilRadius    = node.value("pupilRadius",    0.04f);
+        t.pupilScale     = node.value("pupilScale",     1.f);
+        t.irisWarpRadius = node.value("irisWarpRadius", 0.28f);
+        readFloat2("irisCenter", t.irisCenterU, t.irisCenterV);
+        readFloat2("irisOffset", t.irisOffsetU, t.irisOffsetV);
 
         auto readFloat3 = [&node](const char* key, float& outR, float& outG, float& outB)
         {

@@ -26,6 +26,10 @@ cbuffer CameraConstants : register(b0)
 // spot's cone ends.
 #include "LightShapes.hlsli"
 
+// Every scene light and its clustered lists (b0, t0..t3 in space 7). The 16-light
+// array in SceneLighting below is kept for its layout only.
+#include "LightClusters.hlsli"
+
 // The probe SH packing and grid addressing are shared with the volumetric fog,
 // which samples the same grid per froxel.
 #include "RadianceProbeCommon.hlsli"
@@ -33,6 +37,9 @@ cbuffer CameraConstants : register(b0)
 // The material reflectivity knob and the F0 it produces, shared with SSR and the
 // ray-traced specular pass so all three agree on how reflective a surface is.
 #include "SurfaceSpecular.hlsli"
+
+// The Disney principled BRDF and its two G-Buffer targets (t12, t13).
+#include "PrincipledBrdf.hlsli"
 
 // Subsurface scattering. When a subsurface material is on screen the resolve runs as a
 // second pipeline variant that also writes the pixel's diffuse lighting to SV_Target1,
@@ -66,12 +73,17 @@ cbuffer SceneLighting : register(b1)
     float  gFogMaxDistance;
     int    gFogDebugView;
     float  gSpecularIntensity; // 0 = specular reflections disabled; >0 blends ray-traced specular
-    PteroLightData gPointLights[MAX_POINT_LIGHTS];
+    PteroLightData gPointLights[MAX_POINT_LIGHTS]; // the 16 most important, for the C++ side only; the shader reads gClusterLights
     int    gRtgiDebugView;
     int    gPointShadowDebugView;
     int    gPointShadowFilterRadius;
     float  gPointShadowSeamBlendDistance;
     float  gPointShadowNormalOffset;
+    int    gDisneyBrdf;     // 1 = Disney principled BRDF, 0 = Lambert + Cook-Torrance
+    int    gRtSunShadow;    // 1 = sun visibility from gRtSunShadow (t14), not the shadow map
+    int    gRtLocalShadows; // 1 = local lights listed in gRtLocalShadow (t15) skip their shadow maps
+    float  gAoDirectOcclusion; // how much AO darkens local lights' direct light (0..1)
+    int    gRtShadowDebugView; // 1/2 sun visibility, 3 darkest ray-traced local light
 };
 
 #include "VirtualShadowMap.hlsli"
@@ -110,6 +122,10 @@ Texture2D    gSpecularReflect : register(t8); // DXR specular reflections (RGBA1
 Texture2DArray gPointShadowMaps : register(t9);
 StructuredBuffer<ProbeSH> gRadianceProbes : register(t10);
 StructuredBuffer<uint>   gVsmPageTable    : register(t11); // virtual shadow map pages -> pool tiles
+Texture2D    gGBufferPrincipled0 : register(t12); // Disney: subsurface, specular tint, sheen, sheen tint
+Texture2D    gGBufferPrincipled1 : register(t13); // Disney: clearcoat, clearcoat gloss, anisotropic, tangent
+Texture2D<float> gRtSunShadowTexture   : register(t14); // ray-traced sun visibility (RtShadows), 1 = lit
+Texture2D<uint4> gRtLocalShadowTexture : register(t15); // ray-traced local lights: 8 x (index << 8 | visibility)
 
 SamplerState             gPointSampler   : register(s0); // point-clamp for G-buffer reads
 SamplerComparisonState   gShadowSampler  : register(s1); // PCF comparison sampler
@@ -267,7 +283,7 @@ float SampleSunShadow(float3 worldPos, float3 N, out int usedLevel)
     [branch]
     if (gVsm.Active != 0u)
         return gVsm.Enabled != 0u
-            ? PteroVsmVisibility(gVsm, gVsmPageTable, gShadowMap, worldPos, N, gCameraPos, usedLevel)
+            ? PteroVsmVisibilitySoft(gVsm, gVsmPageTable, gShadowMap, worldPos, N, gCameraPos, usedLevel)
             : 1.0f;
     return SampleShadowPCF(worldPos);
 }
@@ -278,24 +294,43 @@ float SampleSunShadow(float3 worldPos, float3 N)
     return SampleSunShadow(worldPos, N, usedLevel);
 }
 
+// Visibility of local light `lightIndex` from the ray-traced pairs (RtShadow_Local.hlsl),
+// or -1 when that light was not traced for this pixel and keeps its shadow map.
+float FindRtLocalShadow(uint4 packedPairs, uint lightIndex)
+{
+    const uint words[4] = { packedPairs.x, packedPairs.y, packedPairs.z, packedPairs.w };
+    [unroll]
+    for (uint w = 0u; w < 4u; ++w)
+    {
+        [unroll]
+        for (uint slot = 0u; slot < 2u; ++slot)
+        {
+            const uint entry = (words[w] >> (slot * 16u)) & 0xFFFFu;
+            if (entry != 0xFFFFu && (entry >> 8) == (lightIndex & 0xFFu))
+                return float(entry & 0xFFu) * (1.0f / 255.0f);
+        }
+    }
+    return -1.0f;
+}
+
 float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
 {
-    if (lightIndex < 0 || lightIndex >= MAX_POINT_LIGHTS)
+    if (lightIndex < 0 || lightIndex >= (int)gLightClusters.LightCount)
         return 1.0f;
-    if (gPointLights[lightIndex].CastShadows < 0.5f)
+    if (gClusterLights[lightIndex].CastShadows < 0.5f)
         return 1.0f;
 
-    int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
+    int shadowIndex = (int)gClusterLights[lightIndex].ShadowIndex;
     if (shadowIndex < 0)
         return 1.0f;
 
     // Virtual shadow map: the shadow index is the light's slot in it.
     [branch]
     if (gVsm.LocalEnabled != 0u)
-        return PteroVsmLocalVisibility(gVsm, gVsmPageTable, gShadowMap, (uint)shadowIndex, worldPos,
-                                       normalize(surfaceNormal), gCameraPos, 1.0f);
+        return PteroVsmLocalVisibilitySoft(gVsm, gVsmPageTable, gShadowMap, (uint)shadowIndex, worldPos,
+                                           normalize(surfaceNormal), gCameraPos);
 
-    float3 toPoint = worldPos - gPointLights[lightIndex].Position;
+    float3 toPoint = worldPos - gClusterLights[lightIndex].Position;
     float distanceToLight = length(toPoint);
     if (distanceToLight <= 0.0001f)
         return 1.0f;
@@ -304,10 +339,10 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
 
     const float mapSize = max(gPointShadowMapSize, 1.0f);
     const float texelSize = 1.0f / mapSize;
-    const float normalOffsetDistance = max(gPointShadowNormalOffset, 0.0f) * texelSize * max(gPointLights[lightIndex].Radius, 1e-4f);
+    const float normalOffsetDistance = max(gPointShadowNormalOffset, 0.0f) * texelSize * max(gClusterLights[lightIndex].Radius, 1e-4f);
     float3 offsetWorldPos = worldPos + normalize(surfaceNormal) * normalOffsetDistance;
 
-    toPoint = offsetWorldPos - gPointLights[lightIndex].Position;
+    toPoint = offsetWorldPos - gClusterLights[lightIndex].Position;
     distanceToLight = length(toPoint);
     if (distanceToLight <= 0.0001f)
         return 1.0f;
@@ -357,7 +392,7 @@ float SamplePointShadow(int lightIndex, float3 worldPos, float3 surfaceNormal)
     if (faceIndex < 0)
         return 1.0f;
 
-    const float lightRadius = max(gPointLights[lightIndex].Radius, 1e-4f);
+    const float lightRadius = max(gClusterLights[lightIndex].Radius, 1e-4f);
     float currentDepth = distanceToLight / lightRadius;
     const float3 lightDir = -sampleDir;
     const float normalAlignment = saturate(dot(normalize(surfaceNormal), normalize(lightDir)));
@@ -479,15 +514,32 @@ float3 SampleRadianceProbeIrradiance(float3 worldPos, float3 normal)
 // specularLevel – material reflectivity knob; 0.5 is neutral (see SurfaceSpecular.hlsli).
 //                Named apart from the Cook-Torrance `specular` term computed below.
 // -------------------------------------------------------------------------
+// principled  – the Disney extra lobes; ignored unless gDisneyBrdf is set.
 // diffuseAccum – receives the diffuse half of the result on its own, which is the part
 //                subsurface scattering redistributes.
 float3 EvalBRDF(float3 L_in, float3 lightRadiance,
                 float3 V, float3 N,
                 float3 albedo, float metallic, float roughness, float specularLevel,
+                PteroPrincipled principled,
                 inout float3 diffuseAccum)
 {
     float NdotL = saturate(dot(N, L_in));
     if (NdotL <= 0.0f) return float3(0.0f, 0.0f, 0.0f);
+
+    // Disney principled BRDF. The lobes come back as true BRDF values; the raster
+    // convention below leaves 1/pi off the diffuse term, so the diffuse family - Burley
+    // diffuse and the sheen, which Disney sizes against it - is scaled back up by pi to
+    // keep the same brightness relative to the lights and to the specular lobes.
+    [branch]
+    if (gDisneyBrdf != 0)
+    {
+        const PteroPrincipledLobes lobes = PteroEvalPrincipled(
+            N, V, L_in, albedo, metallic, roughness, specularLevel, principled, true);
+        const float3 diffuseTerm = lobes.diffuse * kPteroPrincipledPi;
+        const float3 sheenTerm   = lobes.sheen * kPteroPrincipledPi;
+        diffuseAccum += diffuseTerm * lightRadiance * NdotL;
+        return (diffuseTerm + sheenTerm + lobes.specular + lobes.clearcoat) * lightRadiance * NdotL;
+    }
 
     float3 H     = normalize(V + L_in);
     float  NdotV = max(dot(N, V), 0.0001f);
@@ -550,13 +602,31 @@ float SunTransmissionThickness(float3 worldPos, float3 N)
     return max(projCoords.z - storedDepth, 0.0f) / max(depthPerMetre, 1e-8f);
 }
 
+// PteroSssDepthNormal at this pixel, from the depth buffer.
+float3 SssGeometricNormal(int2 pixel, float3 worldPos, float3 shadingNormal)
+{
+    float width, height;
+    gDepthBuffer.GetDimensions(width, height);
+    const int2 maxPixel = int2(width, height) - 1;
+    const float2 texel = 1.0f / float2(width, height);
+    float3 neighbours[4];
+    const int2 offsets[4] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1) };
+    [unroll]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        const int2 q = clamp(pixel + offsets[k], int2(0, 0), maxPixel);
+        neighbours[k] = ReconstructWorldPosition((float2(q) + 0.5f) * texel, gDepthBuffer.Load(int3(q, 0)).r);
+    }
+    return PteroSssDepthNormal(worldPos, neighbours[0], neighbours[1], neighbours[2], neighbours[3], shadingNormal);
+}
+
 // Same estimate for a shadow-casting point, spot or rect light, from its cube shadow
 // map, which stores linear distance / radius. Returns -1 when the light has no shadow map.
 float PointTransmissionThickness(int lightIndex, float3 worldPos, float3 N)
 {
-    if (gPointLights[lightIndex].CastShadows < 0.5f)
+    if (gClusterLights[lightIndex].CastShadows < 0.5f)
         return -1.0f;
-    const int shadowIndex = (int)gPointLights[lightIndex].ShadowIndex;
+    const int shadowIndex = (int)gClusterLights[lightIndex].ShadowIndex;
     if (shadowIndex < 0)
         return -1.0f;
 
@@ -565,7 +635,7 @@ float PointTransmissionThickness(int lightIndex, float3 worldPos, float3 N)
         return PteroVsmLocalOccluderDistance(gVsm, gVsmPageTable, gShadowMap, (uint)shadowIndex, worldPos, N, gCameraPos);
 
     const float3 shrunkPos = worldPos - 0.005f * N;
-    const float distanceToLight = length(shrunkPos - gPointLights[lightIndex].Position);
+    const float distanceToLight = length(shrunkPos - gClusterLights[lightIndex].Position);
     const float mapSize = max(gPointShadowMapSize, 1.0f);
 
     [unroll]
@@ -581,7 +651,7 @@ float PointTransmissionThickness(int lightIndex, float3 worldPos, float3 N)
 
         const int2 texel = int2(faceUv * (mapSize - 1.0f));
         const float storedDistance = gPointShadowMaps.Load(int4(texel, shadowIndex * 6 + face, 0)).r
-                                   * max(gPointLights[lightIndex].Radius, 1e-4f);
+                                   * max(gClusterLights[lightIndex].Radius, 1e-4f);
         return max(distanceToLight - storedDistance, 0.0f);
     }
     return -1.0f;
@@ -639,33 +709,43 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         float facing = saturate(dot(N, V));
         float fresnel = 0.04f + 0.96f * pow(1.0f - facing, 5.0f);
 
-        float shadowFactor = SampleSunShadow(worldPos, N);
+        float shadowFactor = gRtSunShadow != 0
+            ? gRtSunShadowTexture.Load(int3(pixel, 0))
+            : SampleSunShadow(worldPos, N);
         float3 L_sun = normalize(-gSunDirection);
         float sunFacing = saturate(dot(N, L_sun));
         float3 glassTint = lerp(float3(0.96f, 0.99f, 1.0f), saturate(albedo), glassOpacity * 0.18f);
         float3 glassLit = glassTint * gSunColor * sunFacing * shadowFactor * (0.12f + fresnel * 0.55f);
         glassLit += glassTint * gSkyAmbient * (0.10f + fresnel * 0.22f);
 
-        [unroll]
-        for (int i = 0; i < MAX_POINT_LIGHTS; ++i)
+        const uint glassCluster = PteroViewClusterBase(worldPos);
+        [loop]
+        for (uint word = 0; word < gLightClusters.WordCount; ++word)
         {
-            float active = (i < gNumPointLights) ? 1.0f : 0.0f;
-            PteroResolvedLight glassShape = PteroResolveLightShape(gPointLights[i], worldPos);
+          uint lightBits = PteroViewClusterWord(glassCluster, word);
+          [loop]
+          while (lightBits != 0u)
+          {
+            const uint i = word * 32u + firstbitlow(lightBits);
+            lightBits &= lightBits - 1u;
+            const float active = 1.0f;
+            PteroResolvedLight glassShape = PteroResolveLightShape(gClusterLights[i], worldPos);
             float3 toLight = glassShape.Position - worldPos;
             float distSq = dot(toLight, toLight);
             float dist = sqrt(max(distSq, 1e-6f));
             float3 L_pt = toLight / dist;
-            float normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
+            float normalizedDistance = saturate(dist / max(gClusterLights[i].Radius, 1e-4f));
             float rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
             rangeMask *= rangeMask;
             float falloff = rangeMask
-                          * pow(PteroLightFalloffDistance(gPointLights[i], dist),
-                                -max(gPointLights[i].FalloffExponent, 0.001f))
+                          * pow(PteroLightFalloffDistance(gClusterLights[i], dist),
+                                -max(gClusterLights[i].FalloffExponent, 0.001f))
                           * glassShape.ShapeMask;
             float pointFacing = saturate(dot(N, L_pt));
             float3 H = normalize(V + L_pt);
             float sparkle = pow(saturate(dot(N, H)), lerp(96.0f, 24.0f, glassRoughness));
-            glassLit += gPointLights[i].Color * falloff * active * (pointFacing * 0.05f + sparkle * (0.25f + fresnel));
+            glassLit += gClusterLights[i].Color * falloff * active * (pointFacing * 0.05f + sparkle * (0.25f + fresnel));
+          }
         }
 
         glassLit *= lerp(0.35f, 1.0f, glassOpacity);
@@ -677,6 +757,11 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     // Reflectivity rides in the normal target's W channel; 0 means the pass that wrote
     // this pixel does not carry the channel, which decodes to the neutral default.
     float  specular  = PteroDecodeSurfaceSpecular(normalSample.w);
+    // Disney's extra lobes, or all of them off under the original model - which makes
+    // every term below that reads them reduce to exactly what it was.
+    PteroPrincipled principled = PteroPrincipledNone();
+    if (gDisneyBrdf != 0)
+        principled = PteroDecodePrincipled(gGBufferPrincipled0.Load(int3(pixel, 0)), gGBufferPrincipled1.Load(int3(pixel, 0)), N);
     // Override the baked G-Buffer AO with the ray-traced AO when available.
     float  ao        = materialSample.b;             // G-buffer B
     float  rtao      = ao;
@@ -712,10 +797,20 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     const bool sssShadowMapTransmission = sssPixel && gSssMode == 0u && gSssTransmission != 0u
         && gSssProfiles[sssSlot].FalloffTranslucency.a > 0.0f;
     float3 sssTransmitted = float3(0.0f, 0.0f, 0.0f);
+    // Transmission follows the surface, not its normal map (PteroSssDepthNormal).
+    const float3 sssNormal = sssShadowMapTransmission ? SssGeometricNormal(int2(pixel), worldPos, N) : N;
 #endif
 
-    int    vsmLevel;
-    float  shadowFactor = SampleSunShadow(worldPos, N, vsmLevel);
+    int    vsmLevel = -1;
+    float  shadowFactor;
+    [branch]
+    if (gRtSunShadow != 0)
+        shadowFactor = gRtSunShadowTexture.Load(int3(pixel, 0));
+    else
+        shadowFactor = SampleSunShadow(worldPos, N, vsmLevel);
+    [branch]
+    if (gRtShadowDebugView == 1 || gRtShadowDebugView == 2)
+        return float4(shadowFactor.xxx, 1.0f);
     [branch]
     if (gVsm.Active != 0u && gVsm.DebugView != 0)
     {
@@ -727,7 +822,7 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         return float4(debugColour, 1.0f);
     }
     float3 L_sun        = normalize(-gSunDirection);
-    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular, diffuseLit);
+    float3 sunContrib   = EvalBRDF(L_sun, gSunColor * shadowFactor, V, N, albedo, metallic, roughness, specular, principled, diffuseLit);
 
     // Vegetation leaves and needles (the sign of the specular channel, SurfaceSpecular.hlsli)
     // are thin cards, not closed surfaces. Lit one-sided, as below for everything else,
@@ -751,10 +846,10 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     [branch]
     if (sssShadowMapTransmission)
     {
-        const float sunThickness = SunTransmissionThickness(worldPos, N);
+        const float sunThickness = SunTransmissionThickness(worldPos, sssNormal);
         if (sunThickness >= 0.0f)
         {
-            sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], sunThickness, N, L_sun,
+            sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], sunThickness, sssNormal, L_sun,
                                                    gSunColor, albedo * (1.0f - metallic));
         }
     }
@@ -778,7 +873,7 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         // at 5% left the whole crown black. AO still applies on top.
         skyVis = lerp(0.5f, 1.0f, shadowFactor);
     }
-    float3 F0          = PteroComputeF0(albedo, metallic, specular);
+    float3 F0          = PteroComputePrincipledF0(albedo, metallic, specular, principled.specularTint);
     float3 ambientDiff = gSkyAmbient * skyWeight * skyVis * (1.0f - metallic) * albedo;
     float3 F_amb       = F0 + (max(float3(1,1,1) * (1.0f - roughness), F0) - F0)
                              * pow(1.0f - saturate(dot(N, V)), 5.0f);
@@ -790,35 +885,65 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
     float3 R_env       = reflect(-V, N);
     float  envWeight   = lerp(saturate(R_env.z * 0.5f + 0.5f), 0.5f, roughness);
     float3 ambientSpec = gSkyAmbient * envWeight * skyVis * F_amb * (1.0f / (roughness * roughness + 1.0f));
-    float3 ambient     = (ambientDiff + ambientSpec) * ao;
+    // Disney's sheen and clearcoat under the sky. Rough stand-ins in the spirit of the two
+    // terms above, not integrals of the lobes: the sheen as a rim that grows with the
+    // grazing Fresnel weight of the view, the clearcoat as one more Fresnel-weighted
+    // reflection of the environment. Both are zero when the lobes are off.
+    const float  viewFresnel = PteroSchlickWeight(saturate(dot(N, V)));
+    const float3 sheenColor  = lerp(float3(1.0f, 1.0f, 1.0f), PteroPrincipledTintColor(albedo), principled.sheenTint);
+    // The sheen is surface reflection, so it stays out of the diffuse light that
+    // subsurface scattering redistributes.
+    const float3 ambientSheen = gSkyAmbient * skyWeight * skyVis * (1.0f - metallic)
+                              * principled.sheen * sheenColor * viewFresnel;
+    ambientSpec += gSkyAmbient * envWeight * skyVis
+                 * (0.25f * principled.clearcoat * lerp(0.04f, 1.0f, viewFresnel));
+    float3 ambient     = (ambientDiff + ambientSheen + ambientSpec) * ao;
     indirectDiffuse   += ambientDiff * ao;
 
     // ---- Point lights ----
     float3 pointSum = float3(0.0f, 0.0f, 0.0f);
     float pointShadowDebug = 1.0f;
-    // A real loop over the live lights, not an unroll of every slot: each iteration
-    // carries a whole virtual-shadow-map lookup, and sixteen inlined copies of it
-    // cost registers - and so occupancy - even for the slots nothing is in.
-    const int pointLightCount = min(gNumPointLights, MAX_POINT_LIGHTS);
+    float rtLocalShadowDebug = 1.0f;
+    // Ambient occlusion on local lights. A point, spot or rect light is direct light
+    // with its own shadow, so AO used to darken only the sky ambient and GI - next to
+    // nothing in an interior lit by lamps, where AO then seemed not to work at all.
+    // Applied to the light's colour so the subsurface diffuse split sees it too.
+    const float aoDirect = lerp(1.0f, ao, saturate(gAoDirectOcclusion));
+    // The lights RtShadow_Local.hlsl traced for this pixel; the rest use their maps.
+    const uint4 rtLocalShadows = gRtLocalShadows != 0
+        ? gRtLocalShadowTexture.Load(int3(pixel, 0))
+        : uint4(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu);
+    // A real loop over the lights this pixel's cluster lists, not an unroll of every
+    // slot: each iteration carries a whole virtual-shadow-map lookup, and inlined copies
+    // of it cost registers - and so occupancy - even for the slots nothing is in.
+    // Clustering (LightClusters.hlsli) is what lets a scene hold far more lights than
+    // any one pixel pays for.
+    const uint lightCluster = PteroViewClusterBase(worldPos);
     [loop]
-    for (int i = 0; i < pointLightCount; ++i)
+    for (uint lightWord = 0; lightWord < gLightClusters.WordCount; ++lightWord)
     {
+      uint lightBits = PteroViewClusterWord(lightCluster, lightWord);
+      [loop]
+      while (lightBits != 0u)
+      {
+        const uint i = lightWord * 32u + firstbitlow(lightBits);
+        lightBits &= lightBits - 1u;
         const float active = 1.0f;
 
-        PteroResolvedLight shape = PteroResolveLightShape(gPointLights[i], worldPos);
+        PteroResolvedLight shape = PteroResolveLightShape(gClusterLights[i], worldPos);
         float3 lightPos = shape.Position;
 
         // Spherical source: pull the sample point toward the surface by the
         // source radius so a large bulb lights like a ball rather than a
         // pinpoint. A rect light already has a real area, so it skips this.
-        if (gPointLights[i].SourceRadius > 0.0001f &&
-            (int)gPointLights[i].LightType != LIGHT_TYPE_RECT)
+        if (gClusterLights[i].SourceRadius > 0.0001f &&
+            (int)gClusterLights[i].LightType != LIGHT_TYPE_RECT)
         {
             float3 toCenter = worldPos - lightPos;
             float  toCenterLen = length(toCenter);
             if (toCenterLen > 0.0001f)
             {
-                lightPos += (toCenter / toCenterLen) * min(gPointLights[i].SourceRadius, gPointLights[i].Radius * 0.5f);
+                lightPos += (toCenter / toCenterLen) * min(gClusterLights[i].SourceRadius, gClusterLights[i].Radius * 0.5f);
             }
         }
 
@@ -827,13 +952,13 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         float  dist    = sqrt(max(distSq, 1e-6f));
         float3 L_pt    = toLight / dist;
 
-        float  normalizedDistance = saturate(dist / max(gPointLights[i].Radius, 1e-4f));
+        float  normalizedDistance = saturate(dist / max(gClusterLights[i].Radius, 1e-4f));
         float  rangeMask = saturate(1.0f - normalizedDistance * normalizedDistance);
         rangeMask *= rangeMask;
-        float  falloffExponent = max(gPointLights[i].FalloffExponent, 0.001f);
+        float  falloffExponent = max(gClusterLights[i].FalloffExponent, 0.001f);
         // Not max(dist, 1e-3): an area emitter has no singularity to guard
         // against, it has a size to stop inside of. See LightShapes.hlsli.
-        float  distanceFalloff = pow(PteroLightFalloffDistance(gPointLights[i], dist), -falloffExponent);
+        float  distanceFalloff = pow(PteroLightFalloffDistance(gClusterLights[i], dist), -falloffExponent);
         float  falloff = rangeMask * distanceFalloff * shape.ShapeMask;
 
         // The shadow lookup is by far the dearest part of a light, so it only runs
@@ -842,33 +967,44 @@ float4 ResolveLighting(PSInput input, inout float4 sssDiffuse)
         // changes no pixel. In an interior every surface is in range of every nearby
         // light, and this is what stops half of them paying for lights behind them.
         const bool lightReaches = falloff > 0.0f && dot(N, L_pt) > 0.0f
-                                  && any(gPointLights[i].Color > 0.0f);
+                                  && any(gClusterLights[i].Color > 0.0f);
         float pointShadow = 1.0f;
+        const float rtPointShadow = gRtLocalShadows != 0 ? FindRtLocalShadow(rtLocalShadows, i) : -1.0f;
         [branch]
-        if (lightReaches || gPointShadowDebugView > 0)
+        if (rtPointShadow >= 0.0f)
+        {
+            pointShadow = rtPointShadow;
+            rtLocalShadowDebug = min(rtLocalShadowDebug, rtPointShadow);
+        }
+        else if (lightReaches || gPointShadowDebugView > 0)
             pointShadow = SamplePointShadow(i, worldPos, N);
         pointShadowDebug = min(pointShadowDebug, pointShadow);
         [branch]
         if (lightReaches)
-            pointSum += EvalBRDF(L_pt, gPointLights[i].Color * falloff * active * pointShadow, V, N, albedo, metallic, roughness, specular, diffuseLit);
+            pointSum += EvalBRDF(L_pt, gClusterLights[i].Color * falloff * active * pointShadow * aoDirect, V, N, albedo, metallic, roughness, specular, principled, diffuseLit);
 
 #if PTERO_SSS_OUTPUT
         [branch]
         if (sssShadowMapTransmission && active > 0.0f && falloff > 0.0f)
         {
-            const float pointThickness = PointTransmissionThickness(i, worldPos, N);
+            const float pointThickness = PointTransmissionThickness(i, worldPos, sssNormal);
             if (pointThickness >= 0.0f)
             {
-                sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], pointThickness, N, L_pt,
-                                                       gPointLights[i].Color * falloff, albedo * (1.0f - metallic));
+                sssTransmitted += PteroSssTransmission(gSssProfiles[sssSlot], pointThickness, sssNormal, L_pt,
+                                                       gClusterLights[i].Color * falloff, albedo * (1.0f - metallic));
             }
         }
 #endif
+      }
     }
 
     if (gPointShadowDebugView > 0)
     {
         return float4(pointShadowDebug.xxx, 1.0f);
+    }
+    if (gRtShadowDebugView == 3 || gRtShadowDebugView == 4)
+    {
+        return float4(rtLocalShadowDebug.xxx, 1.0f);
     }
 
     // ---- Final composite ----

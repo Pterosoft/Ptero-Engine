@@ -23,7 +23,9 @@ class TerrainRenderer;
 class PlayerCollision
 {
 public:
-    void Build(const std::vector<Entity>& entities, const TerrainRenderer* terrain);
+    // `skipMovingRigidBodies`: leave dynamic and kinematic rigid bodies to ScenePhysics,
+    // which knows where they are now rather than where they started.
+    void Build(const std::vector<Entity>& entities, const TerrainRenderer* terrain, bool skipMovingRigidBodies = false);
     void Clear();
 
     bool Trace(const float origin[3], const float direction[3], float maxDistance, CharacterTraceHit& hit) const;

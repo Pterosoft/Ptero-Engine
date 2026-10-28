@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "AgxTonemapper.h"
 
+#include <algorithm>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -331,6 +332,7 @@ void AgxTonemapper::Apply(
 
         cb.FrameWidth = mWidth;
         cb.FrameHeight = mHeight;
+        cb.NightDesaturation = std::clamp(settings.NightDesaturation, 0.0f, 1.0f);
         std::memcpy(static_cast<std::byte*>(mMappedCb) + cbOffset, &cb, sizeof(cb));
     }
 

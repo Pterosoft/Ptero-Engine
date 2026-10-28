@@ -26,12 +26,21 @@ struct VolumetricFogSettings
     // leaves the fog grey where no light reaches instead of pure black.
     float ScatteringAlbedo = 0.9f;
 
-    // Weight on indirect light sampled from the radiance probe grid. This is
-    // the only light an interior with no sky and no time-of-day gets, so it is
-    // on by default - but it makes the fog pass ask for the probe grid, which
-    // costs a probe update each frame if nothing else already needed one.
-    // Set to 0 to drop both the contribution and the cost.
+    // Weight on indirect light from whichever GI the level runs: the radiance probe
+    // grid when the probes are the GI, RTGI's or voxel GI's screen-space output
+    // otherwise, and none without GI. This is the only light an interior with no
+    // sky and no time-of-day gets, so it is on by default. It costs the fog a few
+    // texture reads; the GI itself runs for the surfaces anyway.
     float GiIntensity = 1.0f;
+
+    // With RTGI or voxel GI, gather their screen-space light into a world-space volume
+    // around the camera and light the fog from that: the air between surfaces gets the
+    // light of the surfaces around it rather than of the one behind it, and what the
+    // camera has turned away from is remembered. Off reads the screen-space GI directly.
+    bool  GiVolume = true;
+    // Size of the volume's cells, in metres. The volume is 128 x 128 x 48 cells, so
+    // this also sets how far it reaches; beyond it the fog reads the screen-space GI.
+    float GiVolumeCellSize = 0.5f;
 
     // Optional exponential height falloff. 0 disables height-based thinning.
     float BaseHeight = 0.0f;

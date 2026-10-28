@@ -3,6 +3,7 @@
 #include "DX12Helper.h"
 #include "DX12ShaderCompiler.h"
 #include "DeferredLightingPass.h"
+#include "LightClusterRenderer.h"
 #include "VolumetricFogSettings.h"
 
 #include <DirectXMath.h>
@@ -50,12 +51,20 @@ public:
         const FogPointLight* PointLights = nullptr;
         uint32_t NumPointLights = 0;
 
-        // Radiance probe grid. Leave the SRV null to inject without indirect
-        // light; the shader then skips the grid entirely.
+        // Indirect light, from whichever GI is running: the radiance probe grid when
+        // the probes are the GI, otherwise the screen-space GI buffer (RTGI's or voxel
+        // GI's diffuse output, irradiance / pi at the visible surface), read behind
+        // each froxel. Leave both null to inject without indirect light. The SRV
+        // must be readable from compute.
         D3D12_GPU_DESCRIPTOR_HANDLE ProbeSrv{};
         RadianceProbeFieldGpu ProbeField{};
-        // The probes hold pre-exposed irradiance (see HosekWilkieResult::PreExposure);
-        // this is the inverse, folded into the GI intensity.
+        D3D12_GPU_DESCRIPTOR_HANDLE ScreenGiSrv{};
+        // The G-Buffer normal (xy: oct normal), readable from compute. With it and
+        // ScreenGiSrv, the screen-space GI is gathered into a world-space volume
+        // the fog samples instead (VolumetricFogSettings::GiVolume).
+        D3D12_GPU_DESCRIPTOR_HANDLE GBufferNormalSrv{};
+        // Both hold pre-exposed light (see HosekWilkieResult::PreExposure); this is
+        // the inverse, folded into the GI intensity.
         float ProbeInvPreExposure = 1.0f;
 
         // Point shadow cubemap atlas. Leave the SRV null for unshadowed fog.
@@ -70,6 +79,11 @@ public:
         const VsmGpuConstants* Vsm = nullptr;
         D3D12_GPU_VIRTUAL_ADDRESS VsmPageTable = 0;
         D3D12_GPU_DESCRIPTOR_HANDLE VsmPoolSrv{};
+
+        // Every scene light and its clustered lists (LightClusterRenderer); the
+        // injection reads these, not PointLights, whose 16 slots only fill the
+        // constant buffer's layout. Required: without them nothing is dispatched.
+        LightClusterBindings LightClusters{};
     };
 
     VolumetricFogRenderer() = default;
@@ -132,7 +146,8 @@ private:
         float _Pad4 = 0.0f;
 
         uint32_t NumPointLights = 0;
-        uint32_t _ProbePad[3]{};
+        uint32_t ScreenGiEnabled = 0;   // 1: indirect light from ScreenGiSrv (t5)
+        uint32_t _ProbePad[2]{};
 
         RadianceProbeFieldGpu ProbeField{};
 
@@ -148,6 +163,14 @@ private:
         float CurrViewProj[16]{};
 
         VsmGpuConstants Vsm{};
+
+        // World-space GI volume (VolumetricFogGiVolume.hlsl).
+        int32_t  GiVolumeOrigin[4]{};      // xyz: world cell at the window's min corner; w: 1 = in use
+        int32_t  GiVolumePrevOrigin[4]{};  // xyz: last frame's; w: 1 = last frame's volume is history
+        float    GiVolumeCellSize = 0.0f;
+        float    GiVolumeInvCellSize = 0.0f;
+        uint32_t GiVolumeFrame = 0;
+        uint32_t GiVolumeSplatStride = 1;
     };
 
     // Pinned against the offsets FogConstants has in VolumetricFogCommon.hlsli.
@@ -164,6 +187,9 @@ private:
         "FogConstants matrices must stay packed at the end of the buffer.");
     static_assert(offsetof(FogConstants, Vsm) == 3472,
         "FogConstants virtual shadow map block must follow the matrices.");
+    static_assert(offsetof(FogConstants, GiVolumeOrigin) == offsetof(FogConstants, Vsm) + sizeof(VsmGpuConstants)
+                  && offsetof(FogConstants, GiVolumeOrigin) % 16 == 0,
+        "FogConstants GI volume block must follow the virtual shadow map block on a 16-byte register.");
 
     bool CreateRootSignatures();
     bool CreatePipelines();
@@ -172,6 +198,12 @@ private:
     bool CreateDescriptors();
     bool CreateNullDescriptors();
     void UploadConstants(const VolumetricFogSettings& settings, const FrameInputs& inputs);
+    // Lazily creates the GI volume's textures, accumulation buffer and views.
+    bool EnsureGiVolume();
+    // Splats this frame's screen-space GI into the volume and resolves it. Uses the
+    // constants already uploaded for this frame.
+    void UpdateGiVolume(ID3D12GraphicsCommandList* cmdList, D3D12_GPU_VIRTUAL_ADDRESS constantsAddress,
+        D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrv, const FrameInputs& inputs);
 
     bool mIsInitialized = false;
     UINT mSceneWidth = 0;
@@ -227,6 +259,31 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE mNullProbeSrvGpu{};
     D3D12_CPU_DESCRIPTOR_HANDLE mNullShadowSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE mNullShadowSrvGpu{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mNullVolumeSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mNullVolumeSrvGpu{};
+
+    // ---- World-space GI volume (VolumetricFogGiVolume.hlsl) ----------------
+    // Two volumes ping-pong: last frame's is the history this frame's is resolved
+    // from. Both rest in NON_PIXEL_SHADER_RESOURCE; the splat buffer rests in
+    // UNORDERED_ACCESS and is left zeroed by the resolve.
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mGiVolumeRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mGiSplatPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mGiResolvePipelineState;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGiVolume[2];
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGiAccum;
+    D3D12_CPU_DESCRIPTOR_HANDLE mGiVolumeSrvCpu[2]{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mGiVolumeSrvGpu[2]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mGiVolumeUavCpu[2]{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mGiVolumeUavGpu[2]{};
+    bool     mGiVolumeFailed = false;
+    // This frame's state, decided in Dispatch before the constants go up.
+    bool     mGiVolumeActive = false;     // the volume is updated and sampled this frame
+    UINT     mGiVolumeWrite = 0;          // the volume this frame writes
+    bool     mGiVolumeHistoryValid = false;
+    int32_t  mGiVolumeOrigin[3]{};
+    int32_t  mGiVolumePrevOrigin[3]{};
+    float    mGiVolumeCellSize = 0.0f;
+    uint32_t mGiVolumeFrame = 0;
 
     bool mDescriptorsAllocated = false;
     bool mNullDescriptorsCreated = false;

@@ -47,6 +47,12 @@ bool GameProjectSettings::Load(const std::filesystem::path& dataDirectory, std::
         : PlayerControllerKind::Native;
     ControllerGraph = root.value("ControllerGraph", std::string());
     StartupLevel = root.value("StartupLevel", std::string());
+    const auto steamAppId = root.find("SteamAppId");
+    if (steamAppId != root.end() && steamAppId->is_number_unsigned())
+        SteamAppId = steamAppId->get<std::uint32_t>();
+    const auto pterosoftProductId = root.find("PterosoftProductId");
+    if (pterosoftProductId != root.end() && pterosoftProductId->is_number_unsigned())
+        PterosoftProductId = pterosoftProductId->get<std::uint32_t>();
     return true;
 }
 
@@ -56,6 +62,8 @@ bool GameProjectSettings::Save(const std::filesystem::path& dataDirectory, std::
     root["PlayerController"] = ControllerKindId(PlayerController);
     root["ControllerGraph"] = ControllerGraph;
     root["StartupLevel"] = StartupLevel;
+    root["SteamAppId"] = SteamAppId;
+    root["PterosoftProductId"] = PterosoftProductId;
 
     const std::filesystem::path path = FilePath(dataDirectory);
     std::error_code ignored;

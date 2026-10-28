@@ -1,0 +1,50 @@
+[IMAGE: about.png]
+Farkle: Tavern Dice, klasik zar oyununu atmosferik bir Orta Çağ meyhanesinde hayata geçiriyor.
+Zarları at, puanını yükselt ve şansını ne kadar zorlamaya hazır olduğuna karar ver. Her başarılı atış sana yeni bir seçim sunar: puanlarını kasaya koyup garantiye al ya da yeniden atıp o tur kazandığın her şeyi kaybetmeyi göze al.
+Kurallar basit. Kararlar değil.
+
+[IMAGE: roll.png]
+Her tur altı zarla başlar. Puan getiren kombinasyonları ayır ve puanını artırmaya devam etmek için kalan zarları yeniden at.
+Ama risk her zaman masada.
+Bir atışta puan getiren hiçbir zar gelmezse Farkle olursun ve o turda kasaya koymadığın tüm puanlarını kaybedersin.
+Bazen en güvenli seçim durmaktır.
+Bazen bir atış daha riske değer.
+Bazen de zarların başka planları vardır.
+
+[IMAGE: gameplay.png]
+Farkle, sürekli risk ve ödül kararları doğuran basit bir "şansını zorla" sistemi üzerine kurulu.
+Kuralları hızla öğren ve önemli olana odaklan:
+[list]
+[*]Altı zar at ve puan getiren kombinasyonları ara
+[*]Puan getiren zarları tut, kalanları yeniden at
+[*]Turuna devam ederek daha yüksek puanlar topla
+[*]Puanlarını kaybetmeden önce kasaya koy
+[*]Olası ödülün riske ne zaman değdiğine karar ver
+[/list]
+Her atış oyunun gidişatını değiştirebilir.
+
+[IMAGE: tavern.png]
+Farkle: Tavern Dice, geleneksel bir masa oyunu arayüzünden çok daha fazlası.
+Oyun, her maçın gerçekten oturup zar oynuyormuşsun gibi hissettirmesi için tasarlanmış, ayrıntılı bir 3D Orta Çağ meyhanesinde geçiyor.
+Sıcak ışıklar, ahşap iç mekânlar, meyhane ortam sesleri ve fiziksel zarlar sürükleyici bir Orta Çağ atmosferi yaratıyor. Film müziği ayrıca doğrudan o tarihî döneme ait otantik Orta Çağ müziklerini de içeriyor; yalnızca modern, Orta Çağ esintili bestelere dayanmak yerine meyhaneye o dönemin gerçek müziğini taşıyor.
+Meyhane atmosferi ve görsel sunumla birleşen müzik, her maçı yaşayan bir Orta Çağ dünyasına yerleştiriyor.
+
+[IMAGE: learn.png]
+Ezberlenecek karmaşık sistemler ya da öğrenilecek devasa bir kural kitabı yok.
+Farkle; olasılık, karar verme ve ne zaman duracağını bilmekle ilgili.
+Temkinli bir oyuncu puanını istikrarla artırabilir.
+Agresif bir oyuncu büyük bir tur için her şeyi riske atabilir.
+Hiçbir yaklaşım zaferi garanti etmez.
+Bazen sadece zarları atman gerekir.
+
+[IMAGE: features.png]
+[list]
+[*]Klasik Farkle'dan esinlenen zar oynanışı
+[*]Şansını zorlamaya dayalı risk ve ödül mekanikleri
+[*]Tamamen 3D işlenmiş zarlar
+[*]Atmosferik Orta Çağ meyhanesi ortamı
+[*]Basit kurallar ve hızla öğrenilen oynanış
+[*]Her turda stratejik kararlar
+[*]Hem kısa oturumlar hem de uzun maçlar için tasarlandı
+[/list]
+Masaya otur, zarları eline al ve şansını ne kadar zorlamaya hazır olduğunu gör.

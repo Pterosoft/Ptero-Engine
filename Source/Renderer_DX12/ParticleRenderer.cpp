@@ -1149,7 +1149,8 @@ void ParticleRenderer::RecomputeProxyLights()
             settings.LightStylePhaseOffset + static_cast<float>(i) * 3.77f,
             settings.LightCustomStylePattern);
 
-        const float brightness = (settings.LightIntensityLumens / kReferenceLumens) * styleMultiplier;
+        const float steadyBrightness = settings.LightIntensityLumens / kReferenceLumens;
+        const float brightness = steadyBrightness * styleMultiplier;
 
         ParticleProxyLight light;
         light.Position = XMFLOAT3(
@@ -1159,10 +1160,12 @@ void ParticleRenderer::RecomputeProxyLights()
         light.Radius = (std::max)(settings.LightRadius, 0.001f);
         light.InvRadiusSq = 1.0f / (light.Radius * light.Radius);
         light.Color = XMFLOAT3(color.x * brightness, color.y * brightness, color.z * brightness);
+        light.SteadyColor = XMFLOAT3(color.x * steadyBrightness, color.y * steadyBrightness, color.z * steadyBrightness);
         light.CastShadows = settings.LightCastShadows;
         light.AffectVolumetricFog = settings.LightAffectVolumetricFog;
         light.VolumetricFogIntensity = (std::max)(settings.LightVolumetricFogIntensity, 0.0f);
         light.GiContribution = settings.GiContribution;
+        light.EntityId = mSystems[i].EntityId;
 
         mProxyLights.push_back(light);
     }

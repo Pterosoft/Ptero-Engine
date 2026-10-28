@@ -271,8 +271,11 @@ bool RadianceProbeRenderer::CreateRootSignature()
     // param 6: SRV t5 (TLAS)
     // param 7: SRV t6..t37 (base-color textures)
     // param 8: UAV u0 (current SH write)
+    // param 9: SRV t38 (material surfaces: tint and texture averages per range)
+    // param 10: SRV t40 (virtual shadow map pool)
+    // param 11: root SRV t41 (virtual shadow map page table)
     {
-        D3D12_DESCRIPTOR_RANGE ranges[8]{};
+        D3D12_DESCRIPTOR_RANGE ranges[10]{};
         ranges[0] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
         ranges[1] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
         ranges[2] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
@@ -281,21 +284,26 @@ bool RadianceProbeRenderer::CreateRootSignature()
         ranges[5] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 5, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // TLAS
         ranges[6] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 32, 6, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // base-color textures
         ranges[7] = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND };
+        ranges[8] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 38, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // material surfaces
+        ranges[9] = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 40, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND }; // VSM pool
 
-        D3D12_ROOT_PARAMETER params[9]{};
+        D3D12_ROOT_PARAMETER params[12]{};
         params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_CBV;
         params[0].Descriptor.ShaderRegister = 0;
         params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
-        for (int i = 1; i <= 8; ++i)
+        for (int i = 1; i <= 10; ++i)
         {
             params[i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             params[i].DescriptorTable.NumDescriptorRanges = 1;
             params[i].DescriptorTable.pDescriptorRanges   = &ranges[i - 1];
             params[i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
         }
+        params[11].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[11].Descriptor.ShaderRegister = 41;
+        params[11].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = 9;
+        rsd.NumParameters = 12;
         rsd.pParameters   = params;
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -601,6 +609,7 @@ void RadianceProbeRenderer::UploadConstants(
     cb.SunDirX  = sunDirX; cb.SunDirY  = sunDirY; cb.SunDirZ  = sunDirZ;
     cb.SunColorR = sunR;   cb.SunColorG = sunG;   cb.SunColorB = sunB;
     cb.SkyColorR = skyR;   cb.SkyColorG = skyG;   cb.SkyColorB = skyB;
+    cb.Sky = mSkyModel;
     if (cameraPos)
     {
         cb.CameraX = cameraPos[0]; cb.CameraY = cameraPos[1]; cb.CameraZ = cameraPos[2];
@@ -619,6 +628,10 @@ void RadianceProbeRenderer::UploadConstants(
         std::memcpy(cb.ViewProjInv, viewProjInv, 64);
     cb.DebugView = settings.DebugShowProbes ? 4 : 0;
     cb.DebugLightingMode = settings.DebugLightingMode;
+    cb.VsmMaxTexelSize = mVsmMaxTexelSize;
+    cb.VsmVisibility   = (mVsmVisibility && mVsmBound) ? 1 : 0;
+    cb.LightSamples    = std::clamp(mLightSamples, 0, 4);
+    cb.Vsm             = mVsmConstants;
 
     // History scroll, per cascade. An origin only ever moves in whole cells of
     // its cascade, so the shift is an exact integer. A changed spacing, grid
@@ -651,8 +664,10 @@ void RadianceProbeRenderer::UploadConstants(
         // The finest cascade traces every probe every frame; each coarser one
         // traces a share of its probes per frame. Its probes stand further
         // apart and light far away changes less between frames, and without
-        // the rotation four cascades would cost four grids.
-        history[3] = (std::min)(1 << c, 4);
+        // the rotation four cascades would cost four grids. TraceResolution
+        // divides every cascade's share further, the finest one's included.
+        const int traceDivisor = settings.TraceResolution >= 4 ? 4 : settings.TraceResolution >= 2 ? 2 : 1;
+        history[3] = (std::min)(1 << c, 4) * traceDivisor;
 
         for (int axis = 0; axis < 3; ++axis)
             mHistoryOrigin[c][axis] = field.Cascades[c][axis];
@@ -683,6 +698,7 @@ void RadianceProbeRenderer::Update(
     D3D12_GPU_DESCRIPTOR_HANDLE  instanceInfoSrv,
     D3D12_GPU_DESCRIPTOR_HANDLE  materialRangeSrv,
     D3D12_GPU_DESCRIPTOR_HANDLE  baseTextureTableSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  materialSurfaceSrv,
     const RadianceProbeSettings& settings,
     float                        colorLeakIntensity,
     int                          maxBounces,
@@ -744,6 +760,11 @@ void RadianceProbeRenderer::Update(
     cmdList->SetComputeRootDescriptorTable(6, tlasSrv);                     // t5: TLAS
     cmdList->SetComputeRootDescriptorTable(7, baseTextureTableSrv);         // t6..t37: base-color textures
     cmdList->SetComputeRootDescriptorTable(8, mProbeSHUavGpu[writeIdx]);    // u0: current SH
+    cmdList->SetComputeRootDescriptorTable(9, materialSurfaceSrv);          // t38: material surfaces
+    // t40 / t41: the virtual shadow map. Only read when the constants say it is
+    // bound; a texture of the base table and the constants stand in otherwise.
+    cmdList->SetComputeRootDescriptorTable(10, mVsmBound ? mVsmPoolSrv : baseTextureTableSrv);
+    cmdList->SetComputeRootShaderResourceView(11, mVsmBound ? mVsmPageTable : CurrentCbAddress());
 
     cmdList->SetPipelineState(mPSO_Update.Get());
     // Must match kProbeUpdateGroupSize in RadianceProbes_Update.hlsl.

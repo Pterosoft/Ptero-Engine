@@ -61,6 +61,7 @@
 
 class EntityMeshRenderer;
 class VegetationRenderer;
+class TerrainRenderer;
 class VirtualGeometryRenderer;
 class Mesh;
 struct Entity;
@@ -106,6 +107,16 @@ public:
         // nothing (-2 for all around), so pages it could not light are never asked for.
         DirectX::XMFLOAT3 Direction{ 0.0f, 0.0f, -1.0f };
         float             EmitCosine = -2.0f;
+
+        // Set by the shadow budget (DX12SceneRenderer::SelectShadowedLocalLights); none of
+        // them touches the cached pages. 1 = full shadow, less while it fades in or out.
+        float             ShadowStrength = 1.0f;
+        // Added to the cube mip this light is read and requested at; +1 halves it.
+        float             LodBias = 0.0f;
+        // Camera distance beyond which receivers use the 2x2 filter (0 = everywhere).
+        float             CheapFilterDistance = 1.0e30f;
+        // Radius of the emitting surface, in metres, for the soft shadow's penumbra.
+        float             SourceSize = 0.0f;
     };
 
     struct FrameInputs
@@ -128,6 +139,8 @@ public:
 
         // Changes whenever vegetation that casts shadows changed shape or material.
         std::uint64_t VegetationSignature = 0;
+        // The same for terrain (TerrainRenderer::GetShadowCasterSignature).
+        std::uint64_t TerrainSignature = 0;
     };
 
     // Whether the map is in use this frame. When false, nothing else records and the
@@ -161,7 +174,8 @@ public:
         ID3D12GraphicsCommandList* commandList,
         EntityMeshRenderer& entities,
         VegetationRenderer& vegetation,
-        VirtualGeometryRenderer& virtualGeometry);
+        VirtualGeometryRenderer& virtualGeometry,
+        TerrainRenderer& terrain);
 
     // After the G-Buffer pass. depthSrv and normalSrv must be readable from the pixel
     // shader. invViewProjection is Transpose(inverse(viewProj)), as the lighting uses it.
@@ -222,6 +236,10 @@ private:
         float             Radius = 1.0f;
         DirectX::XMFLOAT3 Direction{ 0.0f, 0.0f, -1.0f };
         float             EmitCosine = -2.0f;
+        float             ShadowStrength = 1.0f;
+        float             LodBias = 0.0f;
+        float             CheapFilterDistance = 1.0e30f;
+        float             SourceSize = 0.0f;
     };
 
     struct LocalPageAddress
@@ -273,6 +291,8 @@ private:
     void ResetSunPages();
     void ResetLocalSlot(int slot);
     void DirtyLocalSlot(int slot);
+    // Only the pages of the slot's cube whose texels can see into the box.
+    void DirtyLocalBox(int slot, const DirectX::XMFLOAT3& boxMin, const DirectX::XMFLOAT3& boxMax);
     void DirtySunPages();
     void FreePage(PageEntry& page);
     void UpdateLightFrame(const FrameInputs& inputs, const VirtualShadowMapSettings& settings);
@@ -377,6 +397,7 @@ private:
 
     std::vector<TrackedCaster> mTrackedCasters;
     std::uint64_t              mVegetationSignature = 0;
+    std::uint64_t              mTerrainSignature = 0;
     std::vector<std::uint32_t> mCastersNotReady;   // skipped by the last page render
     std::unordered_map<const Mesh*, MeshBounds> mMeshBounds;
 

@@ -80,6 +80,10 @@ float RtgiVsmLocalVisibility(PteroLightData light, float3 worldPos, float3 light
         return RTGI_VSM_NO_ANSWER;
 
     const uint slot = (uint)light.ShadowIndex;
+    // A light fading out of the shadow budget: its map is on its way out, so the ray
+    // answers, as it does for a light the budget left without a shadow.
+    if (PteroVsmLocalShadowStrength(g_Vsm, slot) < 1.0f)
+        return RTGI_VSM_NO_ANSWER;
     const PteroVsmLocalLocation location = PteroVsmLocalLocate(g_Vsm, t_VsmPageTable, t_VsmPool, slot,
         worldPos, lightSideNormal, g_CameraPos, g_Vsm.NormalOffset, 1.0f);
     if (location.Mip < 0 || location.TexelWorld > g_VsmMaxTexelSize)

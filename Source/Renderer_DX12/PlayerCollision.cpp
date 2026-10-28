@@ -19,7 +19,8 @@ namespace
     constexpr int kTerrainRefineSteps = 8;
 }
 
-void PlayerCollision::Build(const std::vector<Entity>& entities, const TerrainRenderer* terrain)
+void PlayerCollision::Build(const std::vector<Entity>& entities, const TerrainRenderer* terrain,
+                            bool skipMovingRigidBodies)
 {
     Clear();
 
@@ -27,7 +28,7 @@ void PlayerCollision::Build(const std::vector<Entity>& entities, const TerrainRe
     const XMFLOAT3 regionMin(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     const XMFLOAT3 regionMax(FLT_MAX, FLT_MAX, FLT_MAX);
 
-    mMeshes.Build(entities, regionMin, regionMax, true);
+    mMeshes.Build(entities, regionMin, regionMax, true, skipMovingRigidBodies);
 
     // Without a terrain entity every terrain query would walk the entity list for
     // nothing, several times per ray.

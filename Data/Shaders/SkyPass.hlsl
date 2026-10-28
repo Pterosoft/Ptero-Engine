@@ -1,9 +1,12 @@
 // SkyPass.hlsl
 // Fullscreen sky background pass.
-// Draws a vertical sky gradient from the evaluated time-of-day ambient, a sunset
+// Draws the daylight sky from the Hosek-Wilkie model (per pixel, so it has the
+// circumsolar aureole and the darker zenith), a night gradient under it, a sunset
 // glow, the sun disc, the moon shaded by its phase, and a star field (with a
 // faint Milky Way) that turns with the hour. Everything is worked out in world
 // space, Z up; SkyRenderer.cpp fills the constants.
+
+#include "SkyModel.hlsli"
 
 cbuffer SkyConstants : register(b0)
 {
@@ -12,7 +15,7 @@ cbuffer SkyConstants : register(b0)
     float4x4 InvProj;
     float4x4 InvView;
 
-    // Sky colour at the zenith and at the horizon (linear HDR RGB).
+    // Night sky colour at the zenith and at the horizon (linear HDR RGB).
     float3 SkyZenithColor;
     float  PixelAngle;          // radians covered by one pixel
     float3 SkyHorizonColor;
@@ -20,7 +23,7 @@ cbuffer SkyConstants : register(b0)
 
     // Directions point from the scene toward the body.
     float3 SunDirection;
-    float  SunDiscHalfAngleCos;
+    float  SunDiscRadius;       // the sun's angular radius, radians
     float3 SunColor;            // sun disc radiance, already faded at the horizon
     float  MoonDiscSin;         // sin of the moon's angular radius
     float3 MoonDirection;
@@ -28,7 +31,7 @@ cbuffer SkyConstants : register(b0)
     float3 MoonColor;           // full-face radiance; shaded by phase here
     float  StarRadiance;
     float3 TwilightGlowColor;
-    float  MoonHalo;
+    float  _SkyPad0;
 
     // World -> the frame the stars are fixed in (rows, xyz). Row 2 is the
     // celestial pole in world space.
@@ -39,7 +42,17 @@ cbuffer SkyConstants : register(b0)
     float  StarMapGain;
     float  ProceduralStarGain;
     float  ProceduralMilkyWayGain;
-    float3 _SkyPad3;
+    float3 GroundRadiance;      // the lit ground under the horizon (SkyModel.hlsli)
+
+    // Hosek-Wilkie RGB coefficients A..I (xyz = r, g, b) and the per-channel
+    // scale from the model's F to radiance; zero at night.
+    float4 SkyModel[9];
+    float4 DaySkyScale;
+
+    // The same for the moonlit sky: the model for the moon's elevation, and its
+    // scale; zero when the moon is down, new or off.
+    float4 MoonSkyModel[9];
+    float4 MoonSkyScale;
 }
 
 // Equirectangular maps (Data/Textures/Sky): longitude across, latitude down,
@@ -243,8 +256,8 @@ float3 Moon(float3 dir, out float outCoverage)
     const float3 offset = (dir - MoonDirection * cosToMoon) / MoonDiscSin;
     const float radius = length(offset);
 
-    // Faint glow around it, before the disc is tested.
-    float3 result = MoonColor * MoonHalo * exp(-radius * 0.25f);
+    // Its glow is the sky glare pass's (SkyGlareRenderer), not drawn here.
+    float3 result = float3(0.0f, 0.0f, 0.0f);
 
     outCoverage = saturate((1.0f - radius) * MoonDiscSin / max(PixelAngle, 1e-6f) + 0.5f);
     if (outCoverage <= 0.0f)
@@ -310,11 +323,18 @@ float4 PSMain(VSOutput input) : SV_Target
     float3 viewDir  = normalize(viewRay4.xyz / viewRay4.w);
     float3 dir      = normalize(mul(float4(viewDir, 0.0f), InvView).xyz);
 
-    // Sky gradient: blend zenith/horizon based on world elevation (Z up), so
-    // pitching the camera no longer drags the horizon with it.
+    // Night gradient by world elevation (Z up), so pitching the camera no longer
+    // drags the horizon with it - the same sky the GI passes bounce (SkyModel.hlsli).
     float elevation = dir.z;
-    float t = saturate(elevation * 2.0f); // remap so horizon = 0, mid-sky = 1
-    float3 color = lerp(SkyHorizonColor, SkyZenithColor, t * t);
+    float3 color = PteroNightGradient(SkyZenithColor, SkyHorizonColor, dir);
+
+    // The daylight sky on top, and the moonlit one.
+    [branch]
+    if (any(DaySkyScale.xyz > 0.0f))
+        color += max(PteroHosekWilkieF(dir, SunDirection, SkyModel), 0.0f) * DaySkyScale.xyz;
+    [branch]
+    if (any(MoonSkyScale.xyz > 0.0f))
+        color += max(PteroHosekWilkieF(dir, MoonDirection, MoonSkyModel), 0.0f) * MoonSkyScale.xyz;
 
     // Sunset glow, low on the horizon toward the sun.
     const float towardSun = saturate(dot(SafeNormalize2(dir.xy), SafeNormalize2(SunDirection.xy)) * 0.5f + 0.5f);
@@ -335,11 +355,13 @@ float4 PSMain(VSOutput input) : SV_Target
     // moon it should be, never a dark hole.
     color += moon;
 
-    // Sun disc: angle between view ray and sun direction, with a soft edge. The
-    // max() keeps a disc that has faded out below the horizon from punching a
-    // black hole in the sky.
+    // Sun disc: angle between view ray and sun direction (from the chord, which
+    // stays precise at this size), antialiased over a pixel. The max() keeps a
+    // disc that has faded out below the horizon from punching a black hole in
+    // the sky.
     float cosAngle = dot(dir, SunDirection);
-    float sunEdge  = saturate((cosAngle - SunDiscHalfAngleCos + 0.002f) / 0.002f);
+    const float sunAngle = 2.0f * asin(saturate(0.5f * length(dir - SunDirection)));
+    float sunEdge  = saturate((SunDiscRadius - sunAngle) / max(PixelAngle, 1e-6f) + 0.5f);
     float3 sunDisc = SunColor;
     [branch]
     if (SunTextureOn > 0.0f && sunEdge > 0.0f)
@@ -347,7 +369,7 @@ float4 PSMain(VSOutput input) : SV_Target
         // Granulation from the map, taken as luminance relative to its average so
         // the colour and brightness stay the time of day's, plus limb darkening
         // (normalised to keep the disc's mean brightness where it was).
-        const float discSin = sqrt(max(1.0f - SunDiscHalfAngleCos * SunDiscHalfAngleCos, 1e-8f));
+        const float discSin = sin(SunDiscRadius);
         const float3 offset = (dir - SunDirection * cosAngle) / discSin;
         const float r2 = saturate(dot(offset, offset));
         const float mu = sqrt(1.0f - r2);
@@ -366,6 +388,10 @@ float4 PSMain(VSOutput input) : SV_Target
         sunDisc *= lerp(1.0f, clamp(detail, 0.0f, 2.0f), 0.8f) * limbDarkening;
     }
     float3 finalColor = lerp(color, max(color, sunDisc), sunEdge);
+
+    // Below the horizon the ground stands in front of all of it, fading into the
+    // horizon haze in the distance - as the GI passes see it.
+    finalColor = PteroApplyGround(finalColor, GroundRadiance, dir);
 
     return float4(finalColor, 1.0f);
 }

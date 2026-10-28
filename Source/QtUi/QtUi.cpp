@@ -154,6 +154,10 @@ class EventCounter : public QObject
     // than guessed at: a FontChange or StyleChange arriving each frame points straight at
     // an unguarded setter, where a Resize points at a layout that will not settle.
     QHash<int, unsigned> types, lastTypes;
+    // Double clicks as Qt delivered them, left/right/middle. Mouse buttons are otherwise
+    // polled, and polling only runs while the editor's main window is foreground, so a
+    // floating tool window (the asset browser) would never see a double click at all.
+    bool doubled[3]{};
 
     void reset()
     {
@@ -179,6 +183,13 @@ class EventCounter : public QObject
         case QEvent::LayoutRequest:
             ++layouts;
             break;
+        case QEvent::MouseButtonDblClick: {
+            const Qt::MouseButton button = static_cast<QMouseEvent *>(event)->button();
+            const int index = button == Qt::LeftButton ? 0 : button == Qt::RightButton ? 1 : button == Qt::MiddleButton ? 2 : -1;
+            if (index >= 0)
+                doubled[index] = true;
+            break;
+        }
         case QEvent::Paint: {
             ++paints;
             const QString name = watched->objectName().isEmpty()
@@ -531,6 +542,15 @@ void applyToolTip(QWidget *w, const QString &tip)
 {
     if (w && w->toolTip() != tip)
         w->setToolTip(tip);
+}
+// QLineEdit::setMaxLength has no early-out either: it re-applies the current text, which
+// drops the selection and moves the cursor to the end. Re-asserted every frame, that made
+// it impossible to select text in any field.
+void applyMaxLength(QLineEdit *w, std::size_t capacity)
+{
+    const int length = int(capacity ? capacity - 1 : 0);
+    if (w->maxLength() != length)
+        w->setMaxLength(length);
 }
 // Marks a widget for a selector in the style's sheet (QPushButton[uiSelectable="true"]).
 // A dynamic property is only read when the widget is polished, hence the repolish - done
@@ -1426,12 +1446,25 @@ void NewFrame()
             clickTime[i] = now;
         }
         mouseDown[i] = down;
+        // While the main window is foreground the poll above already caught it; taking
+        // Qt's as well could report one double click on two consecutive frames.
+        if (events)
+        {
+            mouseDouble[i] = mouseDouble[i] || (!active && events->doubled[i]);
+            events->doubled[i] = false;
+        }
     }
     io.KeyCtrl = keys[VK_CONTROL];
     io.KeyShift = keys[VK_SHIFT];
     QWidget *focus = QApplication::focusWidget();
     io.WantTextInput = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus) ||
                                  qobject_cast<QTextEdit *>(focus));
+    // A tool docked in the shell that handles its own keys (the Sequencer's timeline: Delete,
+    // Space, Ctrl+Z) marks itself with this property. The editor's shortcuts are polled
+    // from the physical keyboard, so without it one key press would act in both places -
+    // deleting a key in the timeline and the selected entity in the level.
+    for (QWidget *w = focus; w && !io.WantTextInput; w = w->parentWidget())
+        io.WantTextInput = w->property("pteroKeyboardOwner").toBool();
     viewport.WorkSize = {float(shell->width()), float(shell->height())};
     const QPoint origin = shell->mapToGlobal(QPoint(0, 0));
     viewport.WorkPos = {float(origin.x()), float(origin.y())};
@@ -2008,7 +2041,7 @@ bool InputTextSubmit(const char *name, char *value, std::size_t capacity,
     bool fresh = !n.widget;
     auto *w = labeledControl<QLineEdit>(n, name);
     applyToolTip(w, label(name));
-    w->setMaxLength(int(capacity ? capacity - 1 : 0));
+    applyMaxLength(w, capacity);
     if (fresh)
     {
         // Only Return reports. A console line is meaningless half-typed, so the
@@ -2131,7 +2164,7 @@ bool InputText(const char *name, char *value, std::size_t capacity, int)
     bool fresh = !n.widget;
     auto *w = labeledControl<QLineEdit>(n, name);
     applyToolTip(w, label(name));
-    w->setMaxLength(int(capacity ? capacity - 1 : 0));
+    applyMaxLength(w, capacity);
     if (fresh)
         QObject::connect(w, &QLineEdit::textEdited, w, [&n](const QString &v) {
             n.value = v;
@@ -2698,6 +2731,13 @@ void TextDisabled(const char *f, ...)
     textWidget(format(f, a), false, QtUiTheme::Color("textDim"));
     va_end(a);
 }
+void TextDisabledWrapped(const char *f, ...)
+{
+    va_list a;
+    va_start(a, f);
+    textWidget(format(f, a), true, QtUiTheme::Color("textDim"));
+    va_end(a);
+}
 void TextColored(UiVec4 c, const char *f, ...)
 {
     va_list a;
@@ -3039,6 +3079,14 @@ void UiDrawList::AddCircleFilled(UiVec2 a, float r, UiU32 c, int)
         p.setPen(Qt::NoPen);
         p.setBrush(color(c));
         p.drawEllipse(QPointF(a.x, a.y), r, r);
+    });
+}
+void UiDrawList::AddText(UiVec2 a, UiU32 c, const char *text)
+{
+    const QString string = QString::fromUtf8(text ? text : "");
+    overlay->commands.push_back([=](QPainter &p) {
+        p.setPen(color(c));
+        p.drawText(QPointF(a.x, a.y + p.fontMetrics().ascent()), string);
     });
 }
 void UiDrawList::AddPolyline(const UiVec2 *points, int count, UiU32 c, int flags, float width)

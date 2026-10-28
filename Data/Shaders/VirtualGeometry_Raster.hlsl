@@ -298,6 +298,9 @@ PSOutput VgPixelDebug(PSInput input)
     output.Normal   = float4(EncodeOctNormal(normal), input.Position.z,
                              PteroEncodeSurfaceSpecularAndSubsurface(0.5f, 0u));
     output.Material = float4(0.6f, 0.0f, 1.0f, 0.0f);
+    output.Edge     = kPteroNoEdge;
+    output.Principled0 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    output.Principled1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
     return output;
 }
 

@@ -1,0 +1,134 @@
+{
+  "PteroSequence": 1,
+  "Id": "5f2c8a10-3b7e-4c1d-9a6e-1d2b3c4d5e60",
+  "Name": "Intro",
+  "FrameRate": [30, 1],
+  "PlaybackRange": [0.0, 5.0],
+  "WorkRange": [-0.5, 5.5],
+  "Metadata": {
+    "Level": "Levels/CinematicDemo.level",
+    "Description": "First working demo: Camera_A pushes in, the cube rises, cut to Camera_B turning toward the cube while the point light ramps up."
+  },
+  "Bindings": [
+    {
+      "Id": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b01",
+      "Name": "Camera_A",
+      "Domain": "Entity",
+      "EntityId": 7346312905530011,
+      "EntityName": "Camera_A",
+      "Tracks": [
+        {
+          "Type": "Property",
+          "Id": "2b9f5d3c-7e40-4f6b-9c8d-0e1f2a3b4c01",
+          "Name": "Transform",
+          "Property": "Transform",
+          "ValueType": "transform",
+          "Channels": [
+            { "Keys": [] },
+            { "Keys": [ { "t": 0.0, "v": -6.0 }, { "t": 3.0, "v": -3.0 } ] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] }
+          ]
+        }
+      ]
+    },
+    {
+      "Id": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b02",
+      "Name": "Camera_B",
+      "Domain": "Entity",
+      "EntityId": 7346312905530012,
+      "EntityName": "Camera_B",
+      "Tracks": [
+        {
+          "Type": "Property",
+          "Id": "2b9f5d3c-7e40-4f6b-9c8d-0e1f2a3b4c02",
+          "Name": "Transform",
+          "Property": "Transform",
+          "ValueType": "transform",
+          "Channels": [
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [ { "t": 3.0, "v": 0.0 }, { "t": 5.0, "v": -14.6 } ] },
+            { "Keys": [] },
+            { "Keys": [ { "t": 3.0, "v": 0.0 }, { "t": 5.0, "v": 90.0 } ] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] }
+          ]
+        }
+      ]
+    },
+    {
+      "Id": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b03",
+      "Name": "Cube",
+      "Domain": "Entity",
+      "EntityId": 7346312905530014,
+      "EntityName": "Cube",
+      "Tracks": [
+        {
+          "Type": "Property",
+          "Id": "2b9f5d3c-7e40-4f6b-9c8d-0e1f2a3b4c03",
+          "Name": "Transform",
+          "Property": "Transform",
+          "ValueType": "transform",
+          "Channels": [
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [ { "t": 1.0, "v": 0.5 }, { "t": 4.0, "v": 2.5 } ] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Keys": [] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] },
+            { "Default": 1.0, "Keys": [] }
+          ]
+        }
+      ]
+    },
+    {
+      "Id": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b04",
+      "Name": "PointLight",
+      "Domain": "Entity",
+      "EntityId": 7346312905530013,
+      "EntityName": "PointLight",
+      "Tracks": [
+        {
+          "Type": "Property",
+          "Id": "2b9f5d3c-7e40-4f6b-9c8d-0e1f2a3b4c04",
+          "Name": "Intensity",
+          "Property": "Light.Intensity",
+          "ValueType": "float",
+          "Channels": [
+            { "Keys": [ { "t": 4.0, "v": 0.0 }, { "t": 5.0, "v": 5000.0 } ] }
+          ]
+        }
+      ]
+    }
+  ],
+  "Tracks": [
+    {
+      "Type": "CameraCut",
+      "Id": "3c0a6e4d-8f51-4a7c-8d9e-1f2a3b4c5d01",
+      "Name": "Camera Cuts",
+      "Sections": [
+        { "Id": "3c0a6e4d-8f51-4a7c-8d9e-1f2a3b4c5d02", "Start": 0.0, "End": 3.0, "Camera": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b01" },
+        { "Id": "3c0a6e4d-8f51-4a7c-8d9e-1f2a3b4c5d03", "Start": 3.0, "End": 5.0, "Camera": "1a8e4c2b-6d3f-4e5a-8b7c-9d0e1f2a3b02" }
+      ]
+    },
+    {
+      "Type": "Event",
+      "Id": "4d1b7f5e-9062-4b8d-9eaf-2a3b4c5d6e01",
+      "Name": "Events",
+      "Keys": [
+        { "Time": 2.0, "Name": "LightOn" },
+        { "Time": 5.0, "Name": "IntroFinished" }
+      ]
+    }
+  ]
+}

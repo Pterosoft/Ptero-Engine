@@ -701,6 +701,81 @@ void VirtualShadowMapRenderer::DirtyLocalSlot(int slot)
     }
 }
 
+void VirtualShadowMapRenderer::DirtyLocalBox(int slotIndex, const XMFLOAT3& boxMin, const XMFLOAT3& boxMax)
+{
+    const LocalSlot& slot = mLocalSlots[slotIndex];
+    XMFLOAT3 corners[8];
+    for (int c = 0; c < 8; ++c)
+    {
+        corners[c] = XMFLOAT3(
+            ((c & 1) ? boxMax.x : boxMin.x) - slot.Position.x,
+            ((c & 2) ? boxMax.y : boxMin.y) - slot.Position.y,
+            ((c & 4) ? boxMax.z : boxMin.z) - slot.Position.z);
+    }
+
+    // Texels a caster's edge only partly covers, and the slope bias, reach a little past
+    // the projected box.
+    constexpr float kSlackTexels = 2.0f;
+
+    for (int face = 0; face < 6; ++face)
+    {
+        const XMFLOAT3& f = kLocalFaces[face].Forward;
+        const XMFLOAT3& u = kLocalFaces[face].Up;
+        // Right = cross(Up, Forward), as PteroVsmSelectFace has it.
+        const XMFLOAT3 r(u.y * f.z - u.z * f.y, u.z * f.x - u.x * f.z, u.x * f.y - u.y * f.x);
+
+        bool allBehind = true;
+        bool crossesNear = false;
+        float minU = FLT_MAX, maxU = -FLT_MAX, minV = FLT_MAX, maxV = -FLT_MAX;
+        for (const XMFLOAT3& v : corners)
+        {
+            const float depth = v.x * f.x + v.y * f.y + v.z * f.z;
+            if (depth > 0.0f)
+                allBehind = false;
+            if (depth <= kLocalNear)
+            {
+                // Projects without bound: the whole face, conservatively.
+                crossesNear = true;
+                continue;
+            }
+            const float pu = (v.x * r.x + v.y * r.y + v.z * r.z) / depth;
+            const float pv = (v.x * u.x + v.y * u.y + v.z * u.z) / depth;
+            minU = (std::min)(minU, pu); maxU = (std::max)(maxU, pu);
+            minV = (std::min)(minV, pv); maxV = (std::max)(maxV, pv);
+        }
+        if (allBehind)
+            continue;
+        if (crossesNear)
+        {
+            minU = minV = -1.0f;
+            maxU = maxV = 1.0f;
+        }
+        if (minU > 1.0f || maxU < -1.0f || minV > 1.0f || maxV < -1.0f)
+            continue;
+
+        for (int mip = 0; mip < kLocalMips; ++mip)
+        {
+            const float resolution = float(kLocalResolution >> mip);
+            const int lastPage = (32 >> mip) - 1;
+            // Texel x = (u * 0.5 + 0.5) * res; texel y = (0.5 - v * 0.5) * res (row 0 at v = +1).
+            const auto page = [&](float texel) { return int(std::floor(texel / float(kPageTexels))); };
+            const int x0 = (std::max)(page((minU * 0.5f + 0.5f) * resolution - kSlackTexels), 0);
+            const int x1 = (std::min)(page((maxU * 0.5f + 0.5f) * resolution + kSlackTexels), lastPage);
+            const int y0 = (std::max)(page((0.5f - maxV * 0.5f) * resolution - kSlackTexels), 0);
+            const int y1 = (std::min)(page((0.5f - minV * 0.5f) * resolution + kSlackTexels), lastPage);
+            for (int y = y0; y <= y1; ++y)
+            {
+                for (int x = x0; x <= x1; ++x)
+                {
+                    PageEntry& entry = mPages[std::size_t(LocalPageIndex(slotIndex, face, mip, x, y))];
+                    if (entry.Tile >= 0)
+                        entry.Dirty = true;
+                }
+            }
+        }
+    }
+}
+
 void VirtualShadowMapRenderer::DirtySunPages()
 {
     for (std::size_t tile = 0; tile < mTileOwner.size(); ++tile)
@@ -832,6 +907,10 @@ void VirtualShadowMapRenderer::UpdateLocalSlots(const FrameInputs& inputs, const
             slot.Radius = light.Radius;
             slot.Direction = light.Direction;
             slot.EmitCosine = light.EmitCosine;
+            slot.ShadowStrength = light.ShadowStrength;
+            slot.LodBias = light.LodBias;
+            slot.CheapFilterDistance = light.CheapFilterDistance;
+            slot.SourceSize = light.SourceSize;
             mLocalSlotOfInput[i] = s;
             break;
         }
@@ -862,6 +941,10 @@ void VirtualShadowMapRenderer::UpdateLocalSlots(const FrameInputs& inputs, const
             slot.Radius = light.Radius;
             slot.Direction = light.Direction;
             slot.EmitCosine = light.EmitCosine;
+            slot.ShadowStrength = light.ShadowStrength;
+            slot.LodBias = light.LodBias;
+            slot.CheapFilterDistance = light.CheapFilterDistance;
+            slot.SourceSize = light.SourceSize;
             mLocalSlotOfInput[i] = s;
             break;
         }
@@ -875,12 +958,14 @@ void VirtualShadowMapRenderer::UpdateLocalSlots(const FrameInputs& inputs, const
 
 void VirtualShadowMapRenderer::InvalidateBox(const XMFLOAT3& boxMin, const XMFLOAT3& boxMax)
 {
-    // Local lights: anything moving inside a light's reach re-renders the whole light.
+    // Local lights: anything moving inside a light's reach re-renders the pages of its
+    // cube that can see it. This used to re-render the whole light, so with a large
+    // radius anything moving anywhere in the room re-rendered every page of every light.
     for (int s = 0; s < kMaxLocalLights; ++s)
     {
         const LocalSlot& slot = mLocalSlots[s];
         if (slot.Used && SphereIntersectsBox(slot.Position, slot.Radius, boxMin, boxMax))
-            DirtyLocalSlot(s);
+            DirtyLocalBox(s, boxMin, boxMax);
     }
 
     if (!mLightValid)
@@ -970,6 +1055,8 @@ void VirtualShadowMapRenderer::TrackCasters(const FrameInputs& inputs)
 
     const bool vegetationChanged = inputs.VegetationSignature != mVegetationSignature;
     mVegetationSignature = inputs.VegetationSignature;
+    const bool terrainChanged = inputs.TerrainSignature != mTerrainSignature;
+    mTerrainSignature = inputs.TerrainSignature;
 
     for (std::size_t i = 0; i < entities.size(); ++i)
     {
@@ -978,6 +1065,7 @@ void VirtualShadowMapRenderer::TrackCasters(const FrameInputs& inputs)
         current.Hash = 14695981039346656037ull;
         bool isMesh = false;
         bool isVegetation = false;
+        bool isTerrain = false;
 
         if (entity.HasMeshComponent() && entity.Mesh->MeshAsset)
         {
@@ -1010,6 +1098,27 @@ void VirtualShadowMapRenderer::TrackCasters(const FrameInputs& inputs)
             current.Valid = true;
             isVegetation = true;
         }
+        else if (entity.HasTerrainComponent() && entity.Terrain.has_value())
+        {
+            // The patch (square, centred on the entity, heights up from HeightOffset),
+            // turned and scaled like the terrain renderer draws it, with room for
+            // displacement. Drawn by TerrainRenderer::RenderShadowDepthPages.
+            const TerrainComponent& tc = *entity.Terrain;
+            constexpr float kDisplacementRoom = 2.0f;
+            const float half = tc.WorldSize * 0.5f;
+            const XMMATRIX model = XMMatrixScaling(entity.Transform.Scale.x, entity.Transform.Scale.y, entity.Transform.Scale.z)
+                * PteroTransform::ComposeRotation(entity.Transform.Rotation)
+                * XMMatrixTranslation(entity.Transform.Position.x, entity.Transform.Position.y, entity.Transform.Position.z);
+            TransformBox(XMFLOAT3(-half, -half, tc.HeightOffset - kDisplacementRoom),
+                         XMFLOAT3(half, half, tc.HeightOffset + tc.HeightScale + kDisplacementRoom),
+                         model, current.Min, current.Max);
+            current.Hash = HashValue(current.Hash, entity.Transform);
+            current.Hash = HashValue(current.Hash, tc.WorldSize);
+            current.Hash = HashValue(current.Hash, tc.HeightScale);
+            current.Hash = HashValue(current.Hash, tc.HeightOffset);
+            current.Valid = true;
+            isTerrain = true;
+        }
 
         TrackedCaster& tracked = mTrackedCasters[i];
         if (tracked.Valid != current.Valid || tracked.Hash != current.Hash)
@@ -1020,7 +1129,7 @@ void VirtualShadowMapRenderer::TrackCasters(const FrameInputs& inputs)
                 InvalidateBox(current.Min, current.Max);
             tracked = current;
         }
-        else if (isVegetation && vegetationChanged)
+        else if ((isVegetation && vegetationChanged) || (isTerrain && terrainChanged))
         {
             InvalidateBox(current.Min, current.Max);
         }
@@ -1471,7 +1580,20 @@ void VirtualShadowMapRenderer::UpdateGpuConstants(const FrameInputs& inputs, con
             continue;
         c.LocalLights[s] = XMFLOAT4(slot.Position.x, slot.Position.y, slot.Position.z, (std::max)(slot.Radius, kLocalNear * 2.0f));
         c.LocalDirections[s] = XMFLOAT4(slot.Direction.x, slot.Direction.y, slot.Direction.z, slot.EmitCosine);
+        // The emitter's radius for the soft shadow, with a floor so point lights soften too.
+        const float sourceSize = settings.SoftShadows
+            ? (std::max)(slot.SourceSize, (std::max)(settings.MinLocalLightSize, 0.0f)) * (std::max)(settings.LocalLightSoftness, 0.0f)
+            : 0.0f;
+        c.LocalParams[s] = XMFLOAT4(std::clamp(slot.ShadowStrength, 0.0f, 1.0f), slot.LodBias,
+                                    (std::max)(slot.CheapFilterDistance, 0.0f), sourceSize);
     }
+
+    const float sunAngularRadius = XMConvertToRadians(std::clamp(settings.SunAngularDiameter, 0.0f, 20.0f) * 0.5f);
+    c.SoftShadow = XMFLOAT4(
+        settings.SoftShadows ? std::tan(sunAngularRadius) : 0.0f,
+        (std::max)(settings.MaxPenumbra, 0.0f) * 0.5f,
+        0.0f,
+        static_cast<float>(mFrame % 64u));
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,7 +1690,8 @@ void VirtualShadowMapRenderer::RenderPages(
     ID3D12GraphicsCommandList* commandList,
     EntityMeshRenderer& entities,
     VegetationRenderer& vegetation,
-    VirtualGeometryRenderer& virtualGeometry)
+    VirtualGeometryRenderer& virtualGeometry,
+    TerrainRenderer& terrain)
 {
     if (!mActiveThisFrame || commandList == nullptr)
         return;
@@ -1619,6 +1742,7 @@ void VirtualShadowMapRenderer::RenderPages(
         // Both of these bind their own root signatures and pipelines, and draw into
         // whatever depth target is bound.
         vegetation.RenderShadowDepthPages(commandList, mPageViews, DXGI_FORMAT_D32_FLOAT);
+        terrain.RenderShadowDepthPages(commandList, mPageViews, DXGI_FORMAT_D32_FLOAT, mPipelineSlopeBias);
         for (std::size_t page = 0; page < mPageViews.size(); ++page)
             virtualGeometry.RenderShadowPage(commandList, page, mPageViews[page], mPipelineSlopeBias);
     }

@@ -42,6 +42,22 @@ struct RadianceProbeSettings
     // Higher = more accurate lighting, higher GPU cost. Range [32..256].
     int RaysPerProbe = 64;
 
+    // Next-event estimation at bounce hits, as RTGI does it. Shadow Map Visibility
+    // answers a light's visibility from the virtual shadow map where it holds a page
+    // no coarser than VsmMaxTexelSize, and traces the shadow ray only where it does
+    // not. Stochastic Lights shadow-tests only LightSamples lights per hit, picked by
+    // how much each would add (range [1..4]); the probes' temporal blend averages them.
+    bool  VsmVisibility = true;
+    float VsmMaxTexelSize = 0.04f;
+    bool  StochasticLights = true;
+    int   LightSamples = 2;
+
+    // Share of the probes traced each frame, as a divisor: 1 = every probe of the
+    // finest cascade every frame, 2 = half of them, 4 = a quarter. The rest keep
+    // their history until their turn comes round. Coarser cascades already trace
+    // a share of their own; this divides theirs as well.
+    int TraceResolution = 1;
+
     // Exponential blend weight for probe SH updates (per frame).
     // Lower = smoother, higher = faster response. Range [0.01..1.0].
     float UpdateBlend = 0.15f;

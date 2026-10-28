@@ -9,7 +9,10 @@
 #include "SceneSerializer.h"
 #include "HeightmapImporter.h"
 #include "DX12SceneRenderer.h"
+#include "DebugViewNames.h"
+#include "CinematicWorldHost.h"
 #include "EntityIds.h"
+#include "AnimationImport.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -293,7 +296,8 @@ UiTextureID Editor::TextureIdFromHandle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
 // Constructor / Initialize / Shutdown
 // ---------------------------------------------------------------------------
 
-Editor::Editor() = default;
+// Editor::Editor and Editor::~Editor are in EditorCinematics.cpp, where the type behind
+// mSequencerHost is complete.
 
 void Editor::ReportProgress(const wchar_t* message) const
 {
@@ -364,7 +368,9 @@ void Editor::Shutdown()
     ReleaseIconTexture(mParticleSystemIcon);
 
     // Before QtUi tears Qt down: the node graph window is a child of the editor shell and
-    // must not outlive the QApplication.
+    // must not outlive the QApplication. The Sequencer dock likewise, and it puts the
+    // level back to how it was authored on the way out.
+    ShutdownCinematics();
     NodeGraphEditor::Shutdown();
 
     mIsInitialized = false;
@@ -593,9 +599,12 @@ namespace
         properties["Transform"] = entity.Transform;
         if (entity.Mesh)         properties["Mesh"]         = *entity.Mesh;
         if (entity.PointLight)   properties["PointLight"]   = *entity.PointLight;
+        if (entity.Camera)       properties["Camera"]       = *entity.Camera;
         if (entity.AudioEmitter) properties["AudioEmitter"] = *entity.AudioEmitter;
         if (entity.Decal)        properties["Decal"]        = *entity.Decal;
-        if (entity.Rain)         properties["Rain"]         = *entity.Rain;
+        if (entity.RigidBody)    properties["RigidBody"]    = *entity.RigidBody;
+        if (entity.Animator)     properties["Animator"]     = *entity.Animator;
+        if (entity.Rain)        properties["Rain"]         = *entity.Rain;
         if (entity.Water)        properties["Water"]        = *entity.Water;
         return properties;
     }
@@ -612,8 +621,11 @@ namespace
                 entity.Mesh->MeshAsset.reset();
         }
         if (entity.PointLight && properties.contains("PointLight"))     properties.at("PointLight").get_to(*entity.PointLight);
+        if (entity.Camera && properties.contains("Camera"))             properties.at("Camera").get_to(*entity.Camera);
         if (entity.AudioEmitter && properties.contains("AudioEmitter")) properties.at("AudioEmitter").get_to(*entity.AudioEmitter);
         if (entity.Decal && properties.contains("Decal"))               properties.at("Decal").get_to(*entity.Decal);
+        if (entity.RigidBody && properties.contains("RigidBody"))       properties.at("RigidBody").get_to(*entity.RigidBody);
+        if (entity.Animator && properties.contains("Animator"))         properties.at("Animator").get_to(*entity.Animator);
         if (entity.Rain && properties.contains("Rain"))                 properties.at("Rain").get_to(*entity.Rain);
         if (entity.Water && properties.contains("Water"))               properties.at("Water").get_to(*entity.Water);
     }
@@ -840,15 +852,20 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.TimeOfDay         = mTimeOfDaySettings;
     scene.Taa               = mTaaSettings;
     scene.Smaa              = mSmaaSettings;
+    scene.AnalyticEdgeAa    = mAnalyticEdgeAaSettings;
+    scene.Aar               = mAarSettings;
     scene.Sharpen           = mSharpenSettings;
     scene.Dlss              = mDlssSettings;
     scene.Fsr               = mFsrSettings;
+    scene.Xess              = mXessSettings;
     scene.Subsurface        = mSubsurfaceSettings;
+    scene.Shading           = mShadingSettings;
     scene.Dple              = mDpleSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi              = mRtgiSettings;
     scene.RadianceCascades  = mRadianceCascadesSettings;
     scene.RadianceProbes    = mRadianceProbeSettings;
+    scene.VoxelGi           = mVoxelGiSettings;
     scene.Rtao              = mRtaoSettings;
     scene.Gtao              = mGtaoSettings;
     scene.Ssr               = mSsrSettings;
@@ -858,11 +875,20 @@ bool Editor::SaveSceneToFile(const std::string& filepath)
     scene.VolumetricCloud   = mVolumetricCloudSettings;
     scene.Bloom             = mBloomSettings;
     scene.LensFlare         = mLensFlareSettings;
+    scene.RtShadows         = mRtShadowSettings;
 
     // Snapshot rather than hand out the editor's copy: the serializer takes a mutable
     // pointer, and nothing outside the Node Graph window may write that document.
     NodeGraphDocument nodeGraph = NodeGraphEditor::Document();
     scene.NodeGraph = &nodeGraph;
+
+    // A sequence being previewed has written animated values into the entities. The
+    // level saves as authored: the preview steps aside for the write and comes back after.
+    struct PreviewSuspension
+    {
+        PreviewSuspension() { SequencerEditor::SuspendPreview(); }
+        ~PreviewSuspension() { SequencerEditor::ResumePreview(); }
+    } previewSuspension;
 
     try
     {
@@ -901,6 +927,7 @@ void Editor::RestoreEditorAfterPlay()
         mSceneRenderer->SetEntities(&mEntities);
         mSceneRenderer->SetNodeGraph(&NodeGraphEditor::Document());
     }
+    SequencerEditor::ResumePreview();
 }
 
 void Editor::StopPlaySession()
@@ -941,6 +968,10 @@ void Editor::UpdatePlaySession()
         mGameStartErrorMessage="Wait for the level to finish loading before Play.";
         return;
     }
+    // The game starts from the level as authored, not from wherever the Sequencer's
+    // preview has posed it. Resumed in RestoreEditorAfterPlay, which every way out of a
+    // session - including a failed start below - goes through.
+    SequencerEditor::SuspendPreview();
     try {
         // Copy entity values, retaining shared mesh assets already resident on the GPU.
         mEntitiesBeforePlay=mEntities;
@@ -952,12 +983,12 @@ void Editor::UpdatePlaySession()
         auto remember=[this](auto* setting) {
             if (setting) mRestorePlaySettings.emplace_back([setting, value=*setting] { *setting=value; });
         };
-        remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings);
-        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mSubsurfaceSettings); remember(mDpleSettings); remember(mGlobalIlluminationMode);
-        remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRadianceProbeSettings); remember(mRtaoSettings);
+        remember(mTimeOfDaySettings); remember(mTaaSettings); remember(mSmaaSettings); remember(mAnalyticEdgeAaSettings); remember(mAarSettings);
+        remember(mSharpenSettings); remember(mDlssSettings); remember(mFsrSettings); remember(mXessSettings); remember(mSubsurfaceSettings); remember(mShadingSettings); remember(mDpleSettings); remember(mGlobalIlluminationMode);
+        remember(mRtgiSettings); remember(mRadianceCascadesSettings); remember(mRadianceProbeSettings); remember(mVoxelGiSettings); remember(mRtaoSettings);
         remember(mGtaoSettings); remember(mSsrSettings); remember(mChromaticAberrationSettings);
         remember(mAgxSettings); remember(mVolumetricFogSettings); remember(mVolumetricCloudSettings);
-        remember(mBloomSettings); remember(mLensFlareSettings);
+        remember(mBloomSettings); remember(mLensFlareSettings); remember(mRtShadowSettings);
         // Playing in the viewport, F11 hides the panels for the session. Stopping puts
         // them back rather than leaving the editor fullscreen with nothing running.
         remember(&mViewportFullscreen);
@@ -973,6 +1004,8 @@ void Editor::UpdatePlaySession()
         mGameStartErrorMessage.clear();
     } catch (const std::exception& error) {
         mGameStartErrorMessage=error.what();
+        if (!mPlaySceneActive)
+            SequencerEditor::ResumePreview();
         RestoreEditorAfterPlay();
     }
 }
@@ -988,15 +1021,20 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.TimeOfDay     = mTimeOfDaySettings;
     scene.Taa           = mTaaSettings;
     scene.Smaa          = mSmaaSettings;
+    scene.AnalyticEdgeAa = mAnalyticEdgeAaSettings;
+    scene.Aar           = mAarSettings;
     scene.Sharpen       = mSharpenSettings;
     scene.Dlss          = mDlssSettings;
     scene.Fsr           = mFsrSettings;
+    scene.Xess          = mXessSettings;
     scene.Subsurface    = mSubsurfaceSettings;
+    scene.Shading       = mShadingSettings;
     scene.Dple          = mDpleSettings;
     scene.GlobalIllumination = mGlobalIlluminationMode;
     scene.Rtgi          = mRtgiSettings;
     scene.RadianceCascades = mRadianceCascadesSettings;
     scene.RadianceProbes = mRadianceProbeSettings;
+    scene.VoxelGi       = mVoxelGiSettings;
     scene.Rtao          = mRtaoSettings;
     scene.Gtao          = mGtaoSettings;
     scene.Ssr           = mSsrSettings;
@@ -1006,6 +1044,7 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
     scene.VolumetricCloud = mVolumetricCloudSettings;
     scene.Bloom         = mBloomSettings;
     scene.LensFlare     = mLensFlareSettings;
+    scene.RtShadows     = mRtShadowSettings;
 
     NodeGraphDocument nodeGraph;
     scene.NodeGraph = &nodeGraph;
@@ -1016,6 +1055,8 @@ bool Editor::LoadSceneFromFile(const std::string& filepath)
         mEntities.clear();
         mSelectedEntityIndex = -1;
         mSelectedEntityIndices.clear();
+        mPilotedCameraId = 0;
+        SequencerEditor::OnLevelReplaced();
         if (serializer.Deserialize(filepath))
         {
             mCurrentSceneFilePath   = filepath;
@@ -1073,15 +1114,20 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.TimeOfDay     = &data.TimeOfDay;
         scene.Taa           = &data.Taa;
         scene.Smaa          = &data.Smaa;
+        scene.AnalyticEdgeAa = &data.AnalyticEdgeAa;
+        scene.Aar           = &data.Aar;
         scene.Sharpen       = &data.Sharpen;
         scene.Dlss          = &data.Dlss;
         scene.Fsr           = &data.Fsr;
+        scene.Xess          = &data.Xess;
         scene.Subsurface    = &data.Subsurface;
+        scene.Shading       = &data.Shading;
         scene.Dple          = &data.Dple;
         scene.GlobalIllumination = &data.GlobalIlluminationMode;
         scene.Rtgi          = &data.Rtgi;
         scene.RadianceCascades = &data.RadianceCascades;
         scene.RadianceProbes = &data.RadianceProbes;
+        scene.VoxelGi       = &data.VoxelGi;
         scene.Rtao          = &data.Rtao;
         scene.Gtao          = &data.Gtao;
         scene.Ssr           = &data.Ssr;
@@ -1091,6 +1137,7 @@ bool Editor::BeginLoadSceneFromFile(const std::string& filepath)
         scene.VolumetricCloud = &data.VolumetricCloud;
         scene.Bloom         = &data.Bloom;
         scene.LensFlare     = &data.LensFlare;
+        scene.RtShadows     = &data.RtShadows;
         // Parsed on the worker, handed to the Qt window in UpdateSceneLoading: the node
         // editor is a widget and must only ever be touched from the main thread.
         scene.NodeGraph     = &data.NodeGraph;
@@ -1127,6 +1174,8 @@ void Editor::ResetScene()
 
     NodeGraphEditor::SetDocument(NodeGraphDocument{});
     mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
+    mPilotedCameraId = 0;
+    SequencerEditor::OnLevelReplaced();
 }
 
 bool Editor::ConfirmDiscardUnsavedScene(HWND ownerWindowHandle)
@@ -1280,6 +1329,9 @@ void Editor::UpdateSceneLoading()
     {
         auto& data       = *mSceneLoadState.Result;
         mEntities        = std::move(data.Entities);
+        // The preview's record of pre-animation values belonged to the old level.
+        mPilotedCameraId = 0;
+        SequencerEditor::OnLevelReplaced();
         // The serializer loaded the effect files; lay unsaved Particle Editor edits on top.
         ResyncParticleEffects();
         mSelectedEntityIndex = -1;
@@ -1295,15 +1347,20 @@ void Editor::UpdateSceneLoading()
         if (mTimeOfDaySettings)       *mTimeOfDaySettings       = data.TimeOfDay;
         if (mTaaSettings)             *mTaaSettings             = data.Taa;
         if (mSmaaSettings)            *mSmaaSettings            = data.Smaa;
+        if (mAnalyticEdgeAaSettings)  *mAnalyticEdgeAaSettings  = data.AnalyticEdgeAa;
+        if (mAarSettings)             *mAarSettings             = data.Aar;
         if (mSharpenSettings)         *mSharpenSettings         = data.Sharpen;
         if (mDlssSettings)            *mDlssSettings            = data.Dlss;
         if (mFsrSettings)             *mFsrSettings             = data.Fsr;
+        if (mXessSettings)            *mXessSettings            = data.Xess;
         if (mSubsurfaceSettings)      *mSubsurfaceSettings      = data.Subsurface;
+        if (mShadingSettings)         *mShadingSettings         = data.Shading;
         if (mDpleSettings)            *mDpleSettings            = data.Dple;
         if (mGlobalIlluminationMode)  *mGlobalIlluminationMode  = data.GlobalIlluminationMode;
         if (mRtgiSettings)            *mRtgiSettings            = data.Rtgi;
         if (mRadianceCascadesSettings) *mRadianceCascadesSettings = data.RadianceCascades;
         if (mRadianceProbeSettings)   *mRadianceProbeSettings   = data.RadianceProbes;
+        if (mVoxelGiSettings)         *mVoxelGiSettings         = data.VoxelGi;
         if (mRtaoSettings)            *mRtaoSettings            = data.Rtao;
         if (mGtaoSettings)            *mGtaoSettings            = data.Gtao;
         if (mSsrSettings)             *mSsrSettings             = data.Ssr;
@@ -1313,6 +1370,7 @@ void Editor::UpdateSceneLoading()
         if (mVolumetricCloudSettings) *mVolumetricCloudSettings = data.VolumetricCloud;
         if (mBloomSettings)           *mBloomSettings           = data.Bloom;
         if (mLensFlareSettings)       *mLensFlareSettings       = data.LensFlare;
+        if (mRtShadowSettings)        *mRtShadowSettings        = data.RtShadows;
 
         NodeGraphEditor::SetDocument(data.NodeGraph);
         mNodeGraphRevisionAtSave = NodeGraphEditor::Revision();
@@ -1320,7 +1378,9 @@ void Editor::UpdateSceneLoading()
         mLastSceneStatusMessage = "Scene loaded: " + mCurrentSceneFilePath;
         mSceneDirty = false;
         ResetUndoHistory();
-        AddRecentLevel(mCurrentSceneFilePath);
+        // A standalone game loads through here too; its level is not the editor's history.
+        if (!QtUi::IsStandaloneGame())
+            AddRecentLevel(mCurrentSceneFilePath);
 
         // The render loop resolves the meshes and textures from here on and reports back.
         mSceneAssetsStreaming = true;
@@ -1642,7 +1702,7 @@ void Editor::FinishViewportSelection(
     const UiVec2& viewportSize,
     const EditorCamera& camera)
 {
-    if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mSpotLightPrototypeSelected || mRectLightPrototypeSelected || mAudioEmitterPrototypeSelected || mDecalPrototypeSelected || mRainPrototypeSelected || mParticleSystemPrototypeSelected || mTerrainPrototypeSelected || mWaterPrototypeSelected || mVegetationPrototypeSelected)
+    if (mGeometryPrototypeSelected || mPointLightPrototypeSelected || mSpotLightPrototypeSelected || mRectLightPrototypeSelected || mAudioEmitterPrototypeSelected || mDecalPrototypeSelected || mRainPrototypeSelected || mParticleSystemPrototypeSelected || mTerrainPrototypeSelected || mWaterPrototypeSelected || mVegetationPrototypeSelected || mCameraPrototypeSelected)
     {
         if (mTerrainPrototypeSelected)
         {
@@ -1701,6 +1761,24 @@ void Editor::FinishViewportSelection(
                 mEntities.push_back(std::move(entity));
                 mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
                 mSelectedEntityIndices = { mSelectedEntityIndex };
+            }
+            else if (mCameraPrototypeSelected)
+            {
+                // At eye height on the clicked spot, looking the way the viewport looks
+                // but level, so it frames what the user was pointing at.
+                Entity entity;
+                int cameras = 0;
+                for (const Entity& existing : mEntities)
+                    cameras += existing.Camera ? 1 : 0;
+                entity.Name = "Camera_" + std::to_string(cameras + 1);
+                entity.Transform.Position = worldPosition;
+                entity.Transform.Position.z += 1.7f;
+                entity.Transform.Rotation = CinematicWorldHost::RotationForView(0.0f, camera.GetRotation().y);
+                entity.Camera.emplace();
+                mEntities.push_back(std::move(entity));
+                mSelectedEntityIndex = static_cast<int>(mEntities.size()) - 1;
+                mSelectedEntityIndices = { mSelectedEntityIndex };
+                MarkSceneChanged();
             }
             else if (mAudioEmitterPrototypeSelected)
             {
@@ -2585,19 +2663,33 @@ void Editor::DrawResourceDebugWindow()
         QtUi::Text("Renderer Elements");
         QtUi::TextDisabled("CPU command-recording time this frame: %.3f ms", mRendererTimingSnapshot.TotalCpuMilliseconds);
 
-        if (QtUi::BeginTable("RendererTimingTable", 4, QtUiTableFlags_Borders | QtUiTableFlags_RowBg | QtUiTableFlags_SizingStretchProp))
+        // GPU share is of the scene renderer's whole GPU span; the remainder is
+        // work recorded outside any timed pass.
+        const bool haveGpu = mRendererTimingSnapshot.TotalGpuMilliseconds > 0.0f;
+        if (haveGpu)
+        {
+            float timedGpu = 0.0f;
+            for (const RendererTimingEntry& entry : mRendererTimingSnapshot.Entries)
+                timedGpu += (std::max)(entry.GpuMilliseconds, 0.0f);
+            QtUi::TextDisabled("GPU scene time: %.3f ms  (untimed: %.3f ms)",
+                mRendererTimingSnapshot.TotalGpuMilliseconds,
+                (std::max)(mRendererTimingSnapshot.TotalGpuMilliseconds - timedGpu, 0.0f));
+        }
+
+        if (QtUi::BeginTable("RendererTimingTable", 5, QtUiTableFlags_Borders | QtUiTableFlags_RowBg | QtUiTableFlags_SizingStretchProp))
         {
             QtUi::TableSetupColumn("Category");
             QtUi::TableSetupColumn("Render Element");
+            QtUi::TableSetupColumn("GPU ms", QtUiTableColumnFlags_WidthFixed, 82.0f);
             QtUi::TableSetupColumn("CPU ms", QtUiTableColumnFlags_WidthFixed, 82.0f);
-            QtUi::TableSetupColumn("Frame %", QtUiTableColumnFlags_WidthFixed, 82.0f);
+            QtUi::TableSetupColumn(haveGpu ? "GPU %" : "CPU %", QtUiTableColumnFlags_WidthFixed, 82.0f);
             QtUi::TableHeadersRow();
 
             for (const RendererTimingEntry& entry : mRendererTimingSnapshot.Entries)
             {
-                const float framePercent = mRendererTimingSnapshot.TotalCpuMilliseconds > 0.0f
-                    ? (entry.CpuMilliseconds / mRendererTimingSnapshot.TotalCpuMilliseconds) * 100.0f
-                    : 0.0f;
+                const float total = haveGpu ? mRendererTimingSnapshot.TotalGpuMilliseconds : mRendererTimingSnapshot.TotalCpuMilliseconds;
+                const float value = haveGpu ? (std::max)(entry.GpuMilliseconds, 0.0f) : entry.CpuMilliseconds;
+                const float framePercent = total > 0.0f ? (value / total) * 100.0f : 0.0f;
 
                 QtUi::TableNextRow();
                 QtUi::TableSetColumnIndex(0);
@@ -2605,8 +2697,13 @@ void Editor::DrawResourceDebugWindow()
                 QtUi::TableSetColumnIndex(1);
                 QtUi::TextUnformatted(entry.Name.c_str());
                 QtUi::TableSetColumnIndex(2);
-                QtUi::Text("%.3f", entry.CpuMilliseconds);
+                if (entry.GpuMilliseconds >= 0.0f)
+                    QtUi::Text("%.3f", entry.GpuMilliseconds);
+                else
+                    QtUi::TextDisabled("-");
                 QtUi::TableSetColumnIndex(3);
+                QtUi::Text("%.3f", entry.CpuMilliseconds);
+                QtUi::TableSetColumnIndex(4);
                 QtUi::Text("%.1f", framePercent);
             }
 
@@ -3247,13 +3344,13 @@ void Editor::DrawToolbar()
         QtUi::SetCursorPosX(QtUi::GetCursorPosX() + (availableWidth - totalButtonsWidth) * 0.5f);
     }
 
-    ToolButton("select", GizmoType::None,      "Select  (Q)");
+    ToolButton("select", GizmoType::None,      "Select  (1)");
     QtUi::SameLine();
-    ToolButton("move",   GizmoType::Translate, "Move    (W)");
+    ToolButton("move",   GizmoType::Translate, "Move    (2)");
     QtUi::SameLine();
-    ToolButton("rotate", GizmoType::Rotate,    "Rotate  (E)");
+    ToolButton("rotate", GizmoType::Rotate,    "Rotate  (3)");
     QtUi::SameLine();
-    ToolButton("scale",  GizmoType::Scale,     "Scale   (R)");
+    ToolButton("scale",  GizmoType::Scale,     "Scale   (4)");
     QtUi::SameLine();
     QtUi::Dummy(UiVec2(separatorWidth, 0.0f));
     QtUi::SameLine();
@@ -3267,6 +3364,189 @@ void Editor::DrawToolbar()
 
     QtUi::End();
     QtUi::PopStyleVar(2);
+}
+
+// ---------------------------------------------------------------------------
+// View Mode menu
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // One renderer system's debug view: the setting it lives in and the names it
+    // goes by (DebugViewNames.h). Values maps a name to its id where they differ.
+    struct ViewModeTarget
+    {
+        int*               Value;
+        const char* const* Names;
+        int                Count;
+        const int*         Values = nullptr;
+
+        int IdAt(int index) const { return Values ? Values[index] : index; }
+    };
+
+    template <std::size_t N>
+    ViewModeTarget MakeViewModeTarget(int& value, const char* const (&names)[N], const int* values = nullptr)
+    {
+        return { &value, names, static_cast<int>(N), values };
+    }
+}
+
+void Editor::DrawViewModeMenu()
+{
+    if (mSceneRenderer == nullptr)
+        return;
+    DX12SceneRenderer& renderer = *mSceneRenderer;
+
+    SsrSettings& ssr = renderer.GetSsrSettings();
+    PathTracerSettings& pathTracer = renderer.GetPathTracerSettings();
+    const ViewModeTarget rtgi     = MakeViewModeTarget(renderer.GetRtgiSettings().DebugView, DebugViewNames::Rtgi, DebugViewNames::RtgiValues);
+    const ViewModeTarget voxelGi  = MakeViewModeTarget(renderer.GetVoxelGiSettings().DebugView, DebugViewNames::VoxelGi, DebugViewNames::VoxelGiValues);
+    const ViewModeTarget cascades = MakeViewModeTarget(renderer.GetRadianceCascadesSettings().DebugView, DebugViewNames::RadianceCascades);
+    ViewModeTarget pathTraced     = MakeViewModeTarget(pathTracer.DebugView, DebugViewNames::PathTracer);
+    if (pathTracer.Mode != PathTracerMode::RealTime)
+        pathTraced.Count = DebugViewNames::PathTracerReferenceCount;
+    const ViewModeTarget rtao     = MakeViewModeTarget(renderer.GetRtaoSettings().DebugView, DebugViewNames::Rtao);
+    const ViewModeTarget gtao     = MakeViewModeTarget(renderer.GetGtaoSettings().DebugView, DebugViewNames::Gtao);
+    const ViewModeTarget dple     = MakeViewModeTarget(renderer.GetDpleSettings().DebugView, DebugViewNames::Dple);
+    // One setting for both techniques; the names follow whichever is selected.
+    const ViewModeTarget reflections = ssr.Technique == 1
+        ? MakeViewModeTarget(ssr.DebugView, DebugViewNames::Sssr)
+        : MakeViewModeTarget(ssr.DebugView, DebugViewNames::Ssr);
+    const ViewModeTarget subsurface = MakeViewModeTarget(renderer.GetSubsurfaceSettings().DebugView, DebugViewNames::Subsurface);
+    const ViewModeTarget vsm      = MakeViewModeTarget(renderer.GetVirtualShadowMapSettings().DebugView, DebugViewNames::VirtualShadowMap);
+    const ViewModeTarget points   = MakeViewModeTarget(renderer.GetPointShadowSettings().DebugView, DebugViewNames::PointShadows);
+    const ViewModeTarget fog      = MakeViewModeTarget(renderer.GetVolumetricFogSettings().DebugView, DebugViewNames::VolumetricFog);
+    const ViewModeTarget clouds   = MakeViewModeTarget(renderer.GetVolumetricCloudSettings().DebugView, DebugViewNames::VolumetricClouds);
+    const ViewModeTarget smaa     = MakeViewModeTarget(renderer.GetSmaaSettings().DebugView, DebugViewNames::Smaa);
+    const ViewModeTarget edgeAa   = MakeViewModeTarget(renderer.GetAnalyticEdgeAaSettings().DebugView, DebugViewNames::EdgeAa);
+    const ViewModeTarget aar      = MakeViewModeTarget(renderer.GetAarSettings().DebugView, DebugViewNames::Aar);
+    const ViewModeTarget geometry = MakeViewModeTarget(renderer.GetVirtualGeometryRenderer().GetSettings().DebugView, DebugViewNames::VirtualGeometry);
+
+    const ViewModeTarget* targets[] =
+    {
+        &rtgi, &voxelGi, &cascades, &pathTraced, &rtao, &gtao, &dple, &reflections, &subsurface,
+        &vsm, &points, &fog, &clouds, &smaa, &edgeAa, &aar, &geometry,
+    };
+
+    // The views stack badly - a G-Buffer view over an AO debug view over a fog one - so
+    // picking any of them turns all the others off, and Lit turns everything off.
+    auto resetAll = [&]
+    {
+        for (const ViewModeTarget* target : targets)
+            *target->Value = 0;
+        renderer.SetGBufferView(GBufferView::Off);
+    };
+
+    bool anyActive = renderer.GetGBufferView() != GBufferView::Off;
+    for (const ViewModeTarget* target : targets)
+        anyActive = anyActive || *target->Value != 0;
+
+    auto submenu = [&](const char* title, const ViewModeTarget& target)
+    {
+        if (!QtUi::BeginMenu(title))
+            return;
+        // Index 0 is the system's ordinary output, which Lit already stands for.
+        for (int i = 1; i < target.Count; ++i)
+        {
+            const int id = target.IdAt(i);
+            if (QtUi::MenuItem(target.Names[i], nullptr, *target.Value == id))
+            {
+                resetAll();
+                *target.Value = id;
+            }
+        }
+        QtUi::EndMenu();
+    };
+
+    if (!QtUi::BeginMenu("View Mode"))
+        return;
+
+    if (QtUi::MenuItem("Lit", nullptr, !anyActive))
+        resetAll();
+    QtUi::Separator();
+
+    if (QtUi::BeginMenu("G-Buffer"))
+    {
+        const GBufferView current = renderer.GetGBufferView();
+        if (QtUi::MenuItem("All Buffers", nullptr, current == GBufferView::Overview))
+        {
+            resetAll();
+            renderer.SetGBufferView(GBufferView::Overview);
+        }
+        QtUi::Separator();
+        for (int i = 1; i < static_cast<int>(GBufferView::Count); ++i)
+        {
+            if (QtUi::MenuItem(GBufferViewLayout::kNames[i], nullptr, static_cast<int>(current) == i))
+            {
+                resetAll();
+                renderer.SetGBufferView(static_cast<GBufferView>(i));
+            }
+        }
+        QtUi::EndMenu();
+    }
+
+    // A system's debug view only shows while that system is running; the menus list
+    // them all regardless, so nothing has to be switched on first just to find it.
+    if (QtUi::BeginMenu("Global Illumination"))
+    {
+        submenu("Ray-Traced GI", rtgi);
+        submenu("Voxel GI", voxelGi);
+        submenu("Radiance Cascades", cascades);
+        submenu("Path Tracer", pathTraced);
+        QtUi::EndMenu();
+    }
+    if (QtUi::BeginMenu("Ambient Occlusion"))
+    {
+        submenu("Ray-Traced AO", rtao);
+        submenu("GTAO", gtao);
+        submenu("DPLE", dple);
+        QtUi::EndMenu();
+    }
+    submenu("Reflections", reflections);
+    submenu("Subsurface Scattering", subsurface);
+    if (QtUi::BeginMenu("Shadows"))
+    {
+        submenu("Virtual Shadow Map", vsm);
+        submenu("Point Lights", points);
+        QtUi::EndMenu();
+    }
+    if (QtUi::BeginMenu("Volumetrics"))
+    {
+        submenu("Fog", fog);
+        submenu("Clouds", clouds);
+        QtUi::EndMenu();
+    }
+    if (QtUi::BeginMenu("Anti-Aliasing"))
+    {
+        submenu("SMAA", smaa);
+        submenu("Analytic Edge AA", edgeAa);
+        submenu("AAR", aar);
+        QtUi::EndMenu();
+    }
+    submenu("Virtual Geometry", geometry);
+
+    QtUi::EndMenu();
+}
+
+void Editor::DrawGBufferOverviewLabels(const UiVec2& viewportOrigin, const UiVec2& viewportSize) const
+{
+    if (mSceneRenderer == nullptr || !mSceneRenderer->IsGBufferViewActive()
+        || mSceneRenderer->GetGBufferView() != GBufferView::Overview)
+        return;
+
+    // The same grid GBufferView.hlsl lays the tiles out in.
+    using namespace GBufferViewLayout;
+    const float tileWidth  = viewportSize.x / static_cast<float>(kOverviewColumns);
+    const float tileHeight = viewportSize.y / static_cast<float>(kOverviewRows);
+    UiDrawList* drawList = QtUi::GetWindowDrawList();
+    for (int tile = 0; tile < kOverviewTiles; ++tile)
+    {
+        const UiVec2 at(viewportOrigin.x + static_cast<float>(tile % kOverviewColumns) * tileWidth + 6.0f,
+                        viewportOrigin.y + static_cast<float>(tile / kOverviewColumns) * tileHeight + 4.0f);
+        // A shadow keeps the name legible over a white tile.
+        drawList->AddText(UiVec2(at.x + 1.0f, at.y + 1.0f), UI_COL32(0, 0, 0, 220), kNames[tile + 1]);
+        drawList->AddText(at, UI_COL32(255, 255, 255, 255), kNames[tile + 1]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3299,6 +3579,8 @@ void Editor::DrawViewport(
                 mShowViewportResolutionDialog = true;
             if (QtUi::MenuItem("Screenshot..."))
                 mShowScreenshotDialog = true;
+            QtUi::Separator();
+            DrawCinematicViewportMenuItems();
             QtUi::EndMenu();
         }
 
@@ -3350,6 +3632,8 @@ void Editor::DrawViewport(
             QtUi::EndMenu();
         }
 
+        DrawViewModeMenu();
+
         // A top-level bar action rather than an entry inside a menu: this is a
         // mode you toggle constantly while framing a shot, so it should be one
         // click, not two. MenuItem adds straight to the QMenuBar when there is
@@ -3373,6 +3657,7 @@ void Editor::DrawViewport(
     if (viewportSize.x > 1.0f && viewportSize.y > 1.0f && sceneTextureHandle.ptr != 0)
     {
         QtUi::Image(TextureIdFromHandle(sceneTextureHandle), viewportSize);
+        DrawGBufferOverviewLabels(viewportOrigin, viewportSize);
     }
 
     DrawGameUiOverlay(viewportOrigin, viewportSize);
@@ -3388,6 +3673,8 @@ void Editor::DrawViewport(
     {
         DrawViewportPlacementIcons(viewportOrigin, viewportSize, camera);
         DrawLightShapeGizmos(viewportOrigin, viewportSize, camera);
+        DrawCameraFrustums(viewportOrigin, viewportSize, camera);
+        DrawCinematicFrameGuide(viewportOrigin, viewportSize);
         DrawVegetationAreaBounds(viewportOrigin, viewportSize, camera);
         DrawTerrainViewportOverlay(viewportOrigin, viewportSize, camera);
         HandleManualGizmoInteraction(viewportOrigin, viewportSize, camera, viewportHovered, selectedEntity);
@@ -4400,6 +4687,7 @@ void Editor::DrawComponentsPanel()
         mTerrainPrototypeSelected = false;
         mWaterPrototypeSelected = false;
         mVegetationPrototypeSelected = false;
+        mCameraPrototypeSelected = false;
     };
 
     QtUi::SetNextItemIcon("geometry");
@@ -4432,6 +4720,24 @@ void Editor::DrawComponentsPanel()
         const bool shouldSelect = !mRectLightPrototypeSelected;
         clearPrototypes();
         mRectLightPrototypeSelected = shouldSelect;
+    }
+
+    // A cinematic camera. Double-click drops one exactly where the viewport is looking
+    // from - the usual way to start a shot; a single click arms placement like the rest.
+    QtUi::SetNextItemIcon("camera");
+    if (QtUi::Selectable("Camera", mCameraPrototypeSelected, QtUiSelectableFlags_AllowDoubleClick))
+    {
+        const bool shouldSelect = !mCameraPrototypeSelected;
+        clearPrototypes();
+        mCameraPrototypeSelected = shouldSelect;
+        if (shouldSelect && QtUi::IsMouseDoubleClicked(QtUiMouseButton_Left))
+        {
+            int cameras = 0;
+            for (const Entity& entity : mEntities)
+                cameras += entity.Camera ? 1 : 0;
+            CreateCameraAtView("Camera_" + std::to_string(cameras + 1));
+            mCameraPrototypeSelected = false;
+        }
     }
 
     QtUi::SetNextItemIcon("audio-emitter");
@@ -4757,7 +5063,7 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
 
                 // Scene-wide switches, the same variables as the vg.* console cvars.
                 VirtualGeometrySettings& vgSettings = mSceneRenderer->GetVirtualGeometryRenderer().GetSettings();
-                const char* debugViews[] = { "Off", "Clusters", "Instances", "LOD (DAG level)" };
+                const auto& debugViews = DebugViewNames::VirtualGeometry;
                 QtUi::Combo("VG Debug View", &vgSettings.DebugView, debugViews, std::size(debugViews));
                 if (QtUi::IsItemHovered())
                     QtUi::SetTooltip("%s", "Colour virtualized geometry by cluster, by instance, or by DAG level: "
@@ -4847,6 +5153,9 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
         }
     }
 
+    if (selectedEntity->Camera.has_value())
+        DrawCameraProperties(*selectedEntity);
+
     if (selectedEntity->Decal.has_value())
     {
         if (QtUi::CollapsingHeader("Decal", QtUiTreeNodeFlags_DefaultOpen))
@@ -4868,6 +5177,15 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
             if (QtUi::DragFloat("Size Z##dc", &dc.SizeZ, 0.01f, 0.001f, 1000.0f))
                 MarkSceneChanged();
         }
+    }
+
+    // Physics: offered on mesh entities, which are the ones a shape can be fitted to.
+    // Terrain and water are colliders of their own, and an area volume is not a surface.
+    if (selectedEntity->Mesh.has_value() && !selectedEntity->Terrain && !selectedEntity->Water &&
+        !selectedEntity->VegetationArea)
+    {
+        DrawRigidBodyProperties(*selectedEntity);
+        DrawAnimatorProperties(*selectedEntity);
     }
 
     if (selectedEntity->VegetationArea.has_value())
@@ -5622,6 +5940,390 @@ void Editor::DrawPropertiesPanel(Entity* selectedEntity, AudioManager* audioMana
     QtUi::End();
 }
 
+void Editor::DrawRigidBodyProperties(Entity& entity)
+{
+    if (!QtUi::CollapsingHeader("Physics", QtUiTreeNodeFlags_DefaultOpen))
+        return;
+
+    if (!entity.RigidBody.has_value())
+    {
+        QtUi::TextWrapped("Collides as static level geometry. Add a Rigid Body to make it fall, "
+                          "tumble and get pushed around while playing.");
+        if (QtUi::Button("Add Rigid Body"))
+        {
+            entity.RigidBody.emplace();
+            MarkSceneChanged();
+        }
+        return;
+    }
+
+    RigidBodyComponent& rb = *entity.RigidBody;
+
+    static const char* const motionNames[] = { "Static", "Dynamic", "Kinematic" };
+    int motion = static_cast<int>(rb.Motion);
+    if (QtUi::Combo("Motion##rb", &motion, motionNames, static_cast<int>(std::size(motionNames))))
+    {
+        rb.Motion = static_cast<RigidBodyMotion>(motion);
+        MarkSceneChanged();
+    }
+    QtUi::SetItemTooltip("Static: never moves.\nDynamic: simulated - gravity, contacts, forces.\n"
+                         "Kinematic: moved by the game; pushes dynamic bodies but is never pushed.");
+
+    static const char* const shapeNames[] = { "Auto", "Box", "Sphere", "Capsule", "Convex Hull", "Triangle Mesh" };
+    int shape = static_cast<int>(rb.Shape);
+    if (QtUi::Combo("Shape##rb", &shape, shapeNames, static_cast<int>(std::size(shapeNames))))
+    {
+        rb.Shape = static_cast<RigidBodyShape>(shape);
+        MarkSceneChanged();
+    }
+    QtUi::SetItemTooltip("Auto uses the mesh's collision hulls (Generate Collisions) when it has them,\n"
+                         "otherwise its convex hull when dynamic or its exact triangles when not.\n"
+                         "Box, Sphere and Capsule are fitted to the mesh bounds.");
+
+    const bool dynamic = rb.Motion == RigidBodyMotion::Dynamic;
+    if (dynamic && rb.Shape == RigidBodyShape::TriangleMesh)
+        QtUi::TextColored(UiVec4(1.0f, 0.8f, 0.2f, 1.0f), "A dynamic body cannot be a triangle mesh; its convex hull is used.");
+
+    if (dynamic)
+    {
+        // Unbounded: a bounded drag is a 1000-step slider, which over any useful mass range
+        // would move in steps of tens of kilograms.
+        if (QtUi::DragFloat("Mass (kg)##rb", &rb.Mass, 0.1f, 0.0f, 0.0f, "%.2f"))
+        {
+            rb.Mass = (std::max)(rb.Mass, 0.0f);
+            MarkSceneChanged();
+        }
+        QtUi::SetItemTooltip("0 derives the mass from the shape's volume at the density of water.");
+    }
+
+    if (QtUi::DragFloat("Friction##rb", &rb.Friction, 0.01f, 0.0f, 2.0f, "%.2f"))
+        MarkSceneChanged();
+    if (QtUi::DragFloat("Restitution##rb", &rb.Restitution, 0.01f, 0.0f, 1.0f, "%.2f"))
+        MarkSceneChanged();
+    QtUi::SetItemTooltip("Bounciness: 0 lands dead, 1 bounces back as high as it fell.");
+
+    if (dynamic)
+    {
+        if (QtUi::DragFloat("Linear Damping##rb", &rb.LinearDamping, 0.01f, 0.0f, 10.0f, "%.2f"))
+            MarkSceneChanged();
+        if (QtUi::DragFloat("Angular Damping##rb", &rb.AngularDamping, 0.01f, 0.0f, 10.0f, "%.2f"))
+            MarkSceneChanged();
+        if (QtUi::DragFloat("Gravity Scale##rb", &rb.GravityScale, 0.01f, -10.0f, 10.0f, "%.2f"))
+            MarkSceneChanged();
+        if (QtUi::Checkbox("Continuous Collision##rb", &rb.ContinuousCollision))
+            MarkSceneChanged();
+        QtUi::SetItemTooltip("For small, fast bodies that would otherwise pass through thin walls.");
+        if (QtUi::Checkbox("Start Asleep##rb", &rb.StartAsleep))
+            MarkSceneChanged();
+        QtUi::SetItemTooltip("Stays put until something touches it, rather than settling when play starts.");
+    }
+
+    if (QtUi::Button("Remove Rigid Body"))
+    {
+        entity.RigidBody.reset();
+        MarkSceneChanged();
+    }
+}
+
+namespace
+{
+    std::string Utf8Path(const std::filesystem::path& path)
+    {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
+    }
+
+    // Every "<base>@<take>.panim" beside the FBX, as Data-relative paths.
+    std::vector<std::string> FindImportedClips(const std::filesystem::path& directory, const std::string& base,
+                                               const std::filesystem::path& dataDirectory)
+    {
+        std::vector<std::string> clips;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(directory, error))
+        {
+            const std::string name = entry.path().filename().string();
+            if (entry.is_regular_file() && _stricmp(entry.path().extension().string().c_str(), ".panim") == 0 &&
+                name.size() > base.size() + 1 && _strnicmp(name.c_str(), (base + "@").c_str(), base.size() + 1) == 0)
+            {
+                clips.push_back(NormalizeRelativeDataPath(std::filesystem::relative(entry.path(), dataDirectory, error)));
+            }
+        }
+        std::sort(clips.begin(), clips.end());
+        return clips;
+    }
+}
+
+// Forgets the AssetManager's cached copy of a mesh (DX12RendererAPI.cpp owns it).
+void Renderer_ForgetCachedMesh(const std::string& meshPath);
+
+bool Editor::ImportAnimationsFromFbx(Entity& entity, const std::string& fbxRelativePath, bool importSkeleton)
+{
+    AnimatorComponent& animator = *entity.Animator;
+    const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+    if (dataDirectory.empty() || fbxRelativePath.empty())
+    {
+        mAnimatorMessage = "No FBX to import from.";
+        mAnimatorMessageIsError = true;
+        return false;
+    }
+
+    const std::filesystem::path fbxPath = (dataDirectory / std::filesystem::path(fbxRelativePath)).lexically_normal();
+    const std::filesystem::path outputDirectory = fbxPath.parent_path();
+    const std::string base = fbxPath.stem().string();
+
+    AnimationFbxImportSettings settings;
+    settings.ImportSkeleton = importSkeleton;
+    const std::string skeletonPath = importSkeleton || animator.SkeletonPath.empty()
+        ? std::string()
+        : Utf8Path((dataDirectory / std::filesystem::path(animator.SkeletonPath)).lexically_normal());
+    if (!importSkeleton)
+    {
+        if (skeletonPath.empty())
+        {
+            mAnimatorMessage = "Assign or import a skeleton first: clips are built against it.";
+            mAnimatorMessageIsError = true;
+            return false;
+        }
+        settings.SkeletonPath = skeletonPath.c_str();
+    }
+
+    AnimationFbxImportResult result;
+    char error[1024] = {};
+    if (!AnimationImportFbx(Utf8Path(fbxPath).c_str(), Utf8Path(outputDirectory).c_str(), base.c_str(), settings,
+                            &result, error, sizeof(error)))
+    {
+        mAnimatorMessage = std::string("Import failed: ") + error;
+        mAnimatorMessageIsError = true;
+        return false;
+    }
+
+    std::error_code relativeError;
+    if (importSkeleton)
+    {
+        animator.SkeletonPath = NormalizeRelativeDataPath(
+            std::filesystem::relative(outputDirectory / (base + ".pskel"), dataDirectory, relativeError));
+    }
+    for (const std::string& clip : FindImportedClips(outputDirectory, base, dataDirectory))
+    {
+        if (std::find(animator.ClipPaths.begin(), animator.ClipPaths.end(), clip) == animator.ClipPaths.end())
+            animator.ClipPaths.push_back(clip);
+    }
+
+    // The files on disk changed under paths SceneAnimation may already have loaded.
+    if (mSceneRenderer)
+        mSceneRenderer->GetSceneAnimation().ReloadAssets();
+
+    mAnimatorMessage = "Imported " + std::to_string(result.JointCount) + " joints and " +
+                       std::to_string(result.ClipCount) + " clip(s) from " + fbxPath.filename().string() + ".";
+    mAnimatorMessageIsError = false;
+    MarkSceneChanged();
+    return true;
+}
+
+bool Editor::RecookMeshWithSkin(Entity& entity)
+{
+    const std::string meshPath = entity.Mesh->MeshPath;
+    const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+    const std::filesystem::path fbxPath = (dataDirectory / std::filesystem::path(meshPath)).lexically_normal();
+    if (_stricmp(fbxPath.extension().string().c_str(), ".fbx") != 0 || !std::filesystem::exists(fbxPath))
+    {
+        mAnimatorMessage = "Only meshes imported from an FBX can be re-cooked.";
+        mAnimatorMessageIsError = true;
+        return false;
+    }
+
+    // Cooking needs the FBX SDK, which only System.dll links (this DLL's FbxCompiler is the
+    // stub), so it goes through System's export like the asset browser's tools do.
+    using RecookMeshFn = bool(__stdcall*)(const char*, bool, bool*, char*, int);
+    HMODULE systemModule = GetModuleHandleW(L"System.dll");
+    if (systemModule == nullptr)
+        systemModule = LoadLibraryW(L"System.dll");
+    const auto recookMesh = systemModule
+        ? reinterpret_cast<RecookMeshFn>(GetProcAddress(systemModule, "System_RecookMesh"))
+        : nullptr;
+    if (recookMesh == nullptr)
+    {
+        mAnimatorMessage = "System.dll is missing or has no System_RecookMesh export; rebuild System.";
+        mAnimatorMessageIsError = true;
+        return false;
+    }
+
+    const bool hadCollisionHulls = entity.Mesh->MeshAsset && entity.Mesh->MeshAsset->HasCollisionHulls();
+    bool skinned = false;
+    char statusMessage[512] = {};
+    const bool succeeded = recookMesh(fbxPath.string().c_str(), hadCollisionHulls, &skinned,
+                                      statusMessage, static_cast<int>(sizeof(statusMessage)));
+
+    Renderer_ForgetCachedMesh(meshPath);
+    for (Entity& other : mEntities)
+    {
+        if (other.Mesh && _stricmp(other.Mesh->MeshPath.c_str(), meshPath.c_str()) == 0)
+            other.Mesh->MeshAsset.reset();
+    }
+
+    mAnimatorMessage = statusMessage;
+    mAnimatorMessageIsError = !(succeeded && skinned);
+    return succeeded && skinned;
+}
+
+void Editor::DrawAnimatorProperties(Entity& entity)
+{
+    if (!QtUi::CollapsingHeader("Animation", QtUiTreeNodeFlags_DefaultOpen))
+        return;
+
+    const UiVec4 warningColor(1.0f, 0.8f, 0.2f, 1.0f);
+    const UiVec4 errorColor(1.0f, 0.4f, 0.4f, 1.0f);
+
+    if (!entity.Animator.has_value())
+    {
+        QtUi::TextWrapped("Add an Animator to play skeletal animation on this mesh. The mesh needs "
+                          "skin weights, so it has to come from an FBX with a skinned mesh.");
+        if (QtUi::Button("Add Animator"))
+        {
+            entity.Animator.emplace();
+            mAnimatorMessage.clear();
+            // A skeleton imported earlier from the same FBX is picked up straight away.
+            const std::filesystem::path dataDirectory = FindProjectDataDirectory();
+            const std::filesystem::path meshPath = (dataDirectory / std::filesystem::path(entity.Mesh->MeshPath)).lexically_normal();
+            const std::filesystem::path skeletonPath = meshPath.parent_path() / (meshPath.stem().string() + ".pskel");
+            std::error_code error;
+            if (!dataDirectory.empty() && std::filesystem::exists(skeletonPath, error))
+            {
+                entity.Animator->SkeletonPath = NormalizeRelativeDataPath(std::filesystem::relative(skeletonPath, dataDirectory, error));
+                entity.Animator->ClipPaths = FindImportedClips(meshPath.parent_path(), meshPath.stem().string(), dataDirectory);
+            }
+            MarkSceneChanged();
+        }
+        return;
+    }
+
+    AnimatorComponent& animator = *entity.Animator;
+    const SceneAnimation::Status status = mSceneRenderer
+        ? mSceneRenderer->GetSceneAnimation().GetStatus(entity)
+        : SceneAnimation::Status{};
+
+    // ---- Skin -------------------------------------------------------------------------
+    if (entity.Mesh->MeshAsset && !status.MeshHasSkin)
+    {
+        QtUi::TextColored(warningColor, "This mesh has no skin weights.");
+        if (QtUi::Button("Re-cook Mesh With Skin Weights##anim"))
+            RecookMeshWithSkin(entity);
+        QtUi::SetItemTooltip("Meshes cooked before animation support have no .pskin file. Re-cooking reads the\n"
+                             "skin weights from the FBX (and regenerates collision hulls if the mesh had them).");
+    }
+    else if (status.MeshHasSkin)
+    {
+        if (status.SkeletonJointCount > 0)
+            QtUi::TextDisabled("Skin: %d joints, %d found in the skeleton (%d joints)",
+                               status.MeshJointCount, status.MatchedJointCount, status.SkeletonJointCount);
+        else
+            QtUi::TextDisabled("Skin: %d joints", status.MeshJointCount);
+    }
+
+    // ---- Import -----------------------------------------------------------------------
+    if (QtUi::Button("Import Skeleton && Clips From Mesh FBX##anim"))
+        ImportAnimationsFromFbx(entity, entity.Mesh->MeshPath, true);
+    QtUi::SetItemTooltip("Builds <mesh>.pskel and one <mesh>@<take>.panim per animation take of the\n"
+                         "mesh's own FBX, beside it, and assigns them.");
+    QtUi::SameLine();
+    if (QtUi::Button("Add Clips From FBX...##anim"))
+    {
+        std::string fbxPath;
+        if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Animation FBX", "FBX\0*.fbx\0All Files\0*.*\0", fbxPath))
+            ImportAnimationsFromFbx(entity, fbxPath, false);
+    }
+    QtUi::SetItemTooltip("Imports every take of another FBX (an animation exported on the same rig)\n"
+                         "against this Animator's skeleton.");
+    if (!mAnimatorMessage.empty())
+        QtUi::TextColored(mAnimatorMessageIsError ? errorColor : UiVec4(0.6f, 0.9f, 0.6f, 1.0f), "%s", mAnimatorMessage.c_str());
+
+    // ---- Assets -----------------------------------------------------------------------
+    static char skeletonBuffer[512];
+    strncpy_s(skeletonBuffer, animator.SkeletonPath.c_str(), sizeof(skeletonBuffer) - 1);
+    if (QtUi::InputText("Skeleton##anim", skeletonBuffer, sizeof(skeletonBuffer)))
+    {
+        animator.SkeletonPath = skeletonBuffer;
+        MarkSceneChanged();
+    }
+    QtUi::SameLine();
+    if (QtUi::SmallButton("...##animskeleton"))
+    {
+        std::string path = animator.SkeletonPath;
+        if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Skeleton", "Skeleton\0*.pskel\0All Files\0*.*\0", path))
+        {
+            animator.SkeletonPath = path;
+            MarkSceneChanged();
+        }
+    }
+
+    QtUi::Text("Clips");
+    int clipToRemove = -1;
+    for (int i = 0; i < static_cast<int>(animator.ClipPaths.size()); ++i)
+    {
+        QtUi::PushID(i);
+        if (QtUi::RadioButton("##animdefault", animator.DefaultClip == i))
+        {
+            animator.DefaultClip = i;
+            MarkSceneChanged();
+        }
+        QtUi::SetItemTooltip("Default clip: plays when the level starts and in the editor preview.");
+        QtUi::SameLine();
+        QtUi::TextUnformatted(std::filesystem::path(animator.ClipPaths[i]).filename().string().c_str());
+        QtUi::SameLine();
+        if (QtUi::SmallButton("Remove##animclip"))
+            clipToRemove = i;
+        QtUi::PopID();
+    }
+    if (clipToRemove >= 0)
+    {
+        animator.ClipPaths.erase(animator.ClipPaths.begin() + clipToRemove);
+        if (animator.DefaultClip >= clipToRemove && animator.DefaultClip > 0)
+            --animator.DefaultClip;
+        MarkSceneChanged();
+    }
+    if (animator.ClipPaths.empty())
+        QtUi::TextDisabled("No clips.");
+    if (QtUi::Button("Add Clip...##anim"))
+    {
+        std::string path;
+        if (PromptForDataFile(DX12Context_GetWindowHandle(), "Select Animation Clip", "Animation Clip\0*.panim\0All Files\0*.*\0", path) &&
+            std::find(animator.ClipPaths.begin(), animator.ClipPaths.end(), path) == animator.ClipPaths.end())
+        {
+            animator.ClipPaths.push_back(path);
+            MarkSceneChanged();
+        }
+    }
+
+    // ---- Playback ---------------------------------------------------------------------
+    if (QtUi::Checkbox("Loop##anim", &animator.Loop))
+        MarkSceneChanged();
+    if (QtUi::DragFloat("Speed##anim", &animator.Speed, 0.01f, -4.0f, 4.0f, "%.2f"))
+        MarkSceneChanged();
+    if (QtUi::DragFloat("Blend Time (s)##anim", &animator.BlendSeconds, 0.01f, 0.0f, 2.0f, "%.2f"))
+        MarkSceneChanged();
+    QtUi::SetItemTooltip("Cross-fade when the game switches clips.");
+    if (QtUi::Checkbox("Play On Start##anim", &animator.PlayOnStart))
+        MarkSceneChanged();
+    if (QtUi::Checkbox("Preview In Editor##anim", &animator.PreviewInEditor))
+        MarkSceneChanged();
+    QtUi::SetItemTooltip("Loop the default clip in the editor viewport. Off, the mesh shows its bind pose.");
+
+    if (status.Active && !status.CurrentClip.empty())
+    {
+        QtUi::Text("Playing '%s'  %.2f / %.2f s", status.CurrentClip.c_str(), status.Time, status.Duration);
+        QtUi::ProgressBar(status.Duration > 0.0f ? status.Time / status.Duration : 0.0f, UiVec2(-1.0f, 0.0f));
+    }
+    if (!status.Problem.empty())
+        QtUi::TextColored(errorColor, "%s", status.Problem.c_str());
+
+    if (QtUi::Button("Remove Animator##anim"))
+    {
+        entity.Animator.reset();
+        mAnimatorMessage.clear();
+        MarkSceneChanged();
+    }
+}
+
 void Editor::DrawViewportResolutionWindow()
 {
     if (!mShowViewportResolutionDialog)
@@ -5895,6 +6597,11 @@ void Editor::Draw(
 
     UpdateSceneLoading();
     HandleKeyboardShortcuts();
+
+    // The Sequencer's preview: playback advances and any pending evaluation is applied
+    // before the panels below read the entities.
+    InitializeCinematics();
+    SequencerEditor::Tick(QtUi::GetIO().DeltaTime);
 
     Entity* selectedEntity = GetSelectedEntity();
 

@@ -1,0 +1,332 @@
+// RtGI_Common.hlsli
+// Shared types, root-signature binding, and utility functions used by all four
+// RTGI compute shader passes.
+
+#ifndef RTGI_COMMON_HLSLI
+#define RTGI_COMMON_HLSLI
+
+#define MAX_RTGI_POINT_LIGHTS 16
+// Most lights a bounce hit tests with stochastic light selection (g_LightSamples).
+#define RTGI_MAX_LIGHT_SAMPLES 4
+
+// Every scene light and its clustered lists (b0, t0..t3 in space 7). RayGen and the
+// specular pass light bounce hits from these, through the world grid; g_PointLights
+// below only keeps the constant buffer's layout.
+#include "LightClusters.hlsli"
+
+// The light record and the emitter-shape resolution are shared with the
+// deferred, probe and cascade passes so all of them agree on the layout and on
+// where a spot cone ends.
+#include "LightShapes.hlsli"
+#include "ShaderSafeMath.hlsli"
+// PteroVsmConstants, for next-event visibility from the shadow map (RtGI_Vsm.hlsli).
+#include "VirtualShadowMap.hlsli"
+#include "SkyModel.hlsli"
+
+// ─── Root signature (matches RtGlobalIllumination::CreateRootSignature) ───────
+// [0] CBV  b0  – RtGIConstants
+// [1] SRV  t0  – input slot A  (albedo / current reservoir / GI output)
+// [2] SRV  t1  – input slot B  (normal+depth / history reservoir / accum history)
+// [3] UAV  u0  – output slot A (reservoir write / accum write)
+// [4] UAV  u1  – output slot B (GI output / final output)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Constant buffer ─────────────────────────────────────────────────────────
+cbuffer RtGIConstants : register(b0)
+{
+    uint   g_FrameWidth;
+    uint   g_FrameHeight;
+    uint   g_FrameIndex;
+    uint   g_RaysPerPixel;
+
+    uint   g_MaxHistoryLength;
+    uint   g_SpatialSamples;
+    float  g_SpatialRadius;
+    float  g_DepthThreshold;
+
+    float  g_NormalThreshold;
+    float  g_RadianceClamp;
+    float  g_AccumulationBlend;
+    int    g_MaxBounces;
+
+    int    g_DebugView;
+    int    g_TemporalReuseEnabled;
+    int    g_SpatialReuseEnabled;
+    int    g_NextEventEstimation;
+
+    float  g_NrdSharpenAmount;
+    float  g_ColorLeakIntensity;
+    float  g_SpecularRoughnessThreshold;
+    uint   g_TraceScale;        // diffuse passes run on a grid this many times coarser (1, 2, 4)
+
+    float4x4 g_ViewProjInv;     // inverse view-projection (row-major)
+    float4x4 g_CurrViewProj;    // current non-jittered view-projection
+    float4x4 g_PrevViewProj;    // previous frame view-projection
+    float4x4 g_WorldToView;     // current non-jittered world-to-view matrix (row-major)
+
+    float3 g_CameraPos;
+    uint   g_SpecularScale;     // the specular pass's grid, likewise (1, 2)
+
+    float3 g_SunDir;            // world-space direction FROM sun TOWARD scene (Z-up)
+    float  g_Pad2;
+
+    float3 g_SunColor;          // scaled Hosek-Wilkie sun colour
+    float  g_Pad3;
+
+    float3 g_SkyColor;          // scaled Hosek-Wilkie sky colour
+    float  g_Pad4;
+
+    int    g_NumPointLights;
+    float3 g_Pad5;
+
+    PteroLightData g_PointLights[MAX_RTGI_POINT_LIGHTS];
+
+    float  g_VsmMaxTexelSize;   // coarsest shadow-map texel (metres) trusted at a bounce hit
+    int    g_VsmVisibility;     // 1 = ask the shadow map before tracing a shadow ray
+    int    g_LightSamples;      // > 0: bounce hits test this many stochastically picked lights (RTGI_MAX_LIGHT_SAMPLES at most)
+    float  g_Pad6;
+    PteroVsmConstants g_Vsm;    // g_Vsm.Active == 0 when the map is not bound
+
+    PteroSkyModel g_Sky;        // the sky escaped rays see, pre-exposed (SkyModel.hlsli)
+
+    // Ray visualisation capture (RtGI_RayDebug.hlsli). RayGen only.
+    uint   g_RayDebugWrite;          // 1 = the recorded pixels write their paths this frame
+    uint   g_RayDebugPattern;        // 0 grid, 1 centre pixel
+    uint   g_RayDebugSpacing;        // grid: pixels between recorded pixels
+    uint   g_RayDebugGridWidth;      // grid: recorded pixels per row
+    uint   g_RayDebugSlotBase;       // first segment slot this frame writes (history ring)
+    uint   g_RayDebugRays;           // rays recorded per pixel
+    uint   g_RayDebugSlotsPerRay;    // 2 per bounce: the bounce segment and its shadow ray
+    uint   g_RayDebugSlotsPerPixel;  // rays x slots per ray, plus the camera ray
+}
+
+// ─── GI Reservoir stored in the structured buffer ────────────────────────────
+struct GIReservoir
+{
+    float3 position;    // world-space position of the visible primary surface pixel
+    float3 normal;      // world-space normal of the visible primary surface pixel
+    float3 radiance;    // indirect radiance chosen for that primary surface
+    float  weightSum;   // running W sum (RIS weight accumulator)
+    uint   M;           // number of candidates considered
+    uint   age;         // frames this sample has been alive
+};
+
+// Packed form stored in StructuredBuffer<PackedGIReservoir> (12 floats + 2 uints)
+struct PackedGIReservoir
+{
+    float posX, posY, posZ;
+    uint  packedNormal;         // oct-encoded  2×snorm16
+
+    float radR, radG, radB;
+    float weight;
+
+    uint  M;
+    uint  age;
+    uint  _pad0, _pad1;
+};
+
+// ─── Oct-normal encode / decode ───────────────────────────────────────────────
+float2 OctWrap(float2 v)
+{
+    return (1.0f - abs(v.yx)) * (float2(v.xy >= 0.0f) * 2.0f - 1.0f);
+}
+
+uint EncodeNormal(float3 n)
+{
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    float2 oct = n.z >= 0.0f ? n.xy : OctWrap(n.xy);
+    oct = oct * 0.5f + 0.5f;
+    uint2 snorm16 = uint2(saturate(oct) * 65535.0f);
+    return (snorm16.y << 16) | snorm16.x;
+}
+
+float3 DecodeNormal(uint packed)
+{
+    float2 oct;
+    oct.x = (packed & 0xFFFFu) / 65535.0f * 2.0f - 1.0f;
+    oct.y = (packed >> 16)     / 65535.0f * 2.0f - 1.0f;
+    float3 n = float3(oct, 1.0f - abs(oct.x) - abs(oct.y));
+    if (n.z < 0.0f)
+    {
+        float2 wrapped = (1.0f - abs(n.yx)) * (float2(n.xy >= 0.0f) * 2.0f - 1.0f);
+        n.xy = wrapped;
+    }
+    return normalize(n);
+}
+
+// ─── Reservoir pack / unpack ─────────────────────────────────────────────────
+PackedGIReservoir PackReservoir(GIReservoir r)
+{
+    PackedGIReservoir p;
+    p.posX         = r.position.x;
+    p.posY         = r.position.y;
+    p.posZ         = r.position.z;
+    p.packedNormal = EncodeNormal(r.normal);
+    p.radR         = r.radiance.x;
+    p.radG         = r.radiance.y;
+    p.radB         = r.radiance.z;
+    p.weight       = r.weightSum;
+    p.M            = min(r.M, 0xFFu);
+    p.age          = min(r.age, 0xFFu);
+    p._pad0        = 0;
+    p._pad1        = 0;
+    return p;
+}
+
+GIReservoir UnpackReservoir(PackedGIReservoir p)
+{
+    GIReservoir r;
+    r.position  = float3(p.posX, p.posY, p.posZ);
+    r.normal    = DecodeNormal(p.packedNormal);
+    r.radiance  = float3(p.radR, p.radG, p.radB);
+    r.weightSum = p.weight;
+    r.M         = p.M;
+    r.age       = p.age;
+    return r;
+}
+
+GIReservoir EmptyReservoir()
+{
+    GIReservoir r;
+    r.position  = float3(0, 0, 0);
+    r.normal    = float3(0, 0, 1);
+    r.radiance  = float3(0, 0, 0);
+    r.weightSum = 0.0f;
+    r.M         = 0;
+    r.age       = 0;
+    return r;
+}
+
+bool IsValidReservoir(GIReservoir r)
+{
+    return r.M > 0 && r.weightSum > 0.0f;
+}
+
+// ─── ReSTIR reservoir update (weighted reservoir sampling) ───────────────────
+// Returns true if the incoming candidate was selected.
+bool UpdateReservoir(inout GIReservoir r, GIReservoir candidate, float risWeight, inout uint rngState)
+{
+    r.weightSum += risWeight;
+    r.M         += 1;
+
+    // Random number in [0,1)
+    rngState = rngState * 1664525u + 1013904223u;
+    float xi = (rngState >> 8) * (1.0f / float(1 << 24));
+
+    if (xi * r.weightSum <= risWeight)
+    {
+        r.position  = candidate.position;
+        r.normal    = candidate.normal;
+        r.radiance  = candidate.radiance;
+        return true;
+    }
+    return false;
+}
+
+void FinalizeReservoir(inout GIReservoir r, float targetPdf)
+{
+    // W = w_sum / (M * p_hat)
+    r.weightSum = (targetPdf > 0.0f) ? (r.weightSum / (float(r.M) * targetPdf)) : 0.0f;
+}
+
+// ─── Simple PCG-based RNG ─────────────────────────────────────────────────────
+// PCG hash (Jarzynski & Olano, "Hash Functions for GPU Rendering").
+uint RtgiPcgHash(uint v)
+{
+    const uint state = v * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// The seed has to be hashed. It used to be a linear function of the pixel, which an LCG
+// maps to a regular lattice: neighbouring pixels drew correlated numbers instead of
+// independent ones. Smooth cosine-sampled bounce light hid that, but NEE's binary shadow
+// visibility turned the lattice into high-contrast structure that the denoiser smeared
+// into visible blocks.
+uint InitRng(uint2 pixel, uint frameIndex)
+{
+    return RtgiPcgHash(pixel.x ^ RtgiPcgHash(pixel.y ^ RtgiPcgHash(frameIndex))) | 1u;
+}
+
+float RandFloat(inout uint state)
+{
+    state = state * 1664525u + 1013904223u;
+    return (state >> 8) * (1.0f / float(1 << 24));
+}
+
+// ─── Reconstruct world-space position from depth ─────────────────────────────
+float3 ReconstructWorldPos(uint2 pixel, float depth)
+{
+    float2 uv  = (float2(pixel) + 0.5f) / float2(g_FrameWidth, g_FrameHeight);
+    float2 ndc = uv * 2.0f - 1.0f;
+    ndc.y      = -ndc.y;
+    float4 clip = float4(ndc, depth, 1.0f);
+
+    // The renderer uploads Transpose(Inverse(ViewProjection)) so HLSL must use
+    // row-vector multiplication here, matching the deferred lighting pass.
+    float4 world = mul(clip, g_ViewProjInv);
+    return world.xyz / world.w;
+}
+
+// ─── Project world position to previous-frame screen UV ──────────────────────
+float2 ReprojectUV(float3 worldPos)
+{
+    // Previous-frame reprojection uses the same transposed matrix convention.
+    float4 clip = mul(float4(worldPos, 1.0f), g_PrevViewProj);
+    clip.xy /= clip.w;
+    float2 uv = clip.xy * 0.5f + 0.5f;
+    uv.y = 1.0f - uv.y;
+    return uv;
+}
+
+float2 ProjectCurrentUV(float3 worldPos)
+{
+    float4 clip = mul(float4(worldPos, 1.0f), g_CurrViewProj);
+    clip.xy /= clip.w;
+    float2 uv = clip.xy * 0.5f + 0.5f;
+    uv.y = 1.0f - uv.y;
+    return uv;
+}
+
+// ─── Luminance helper ─────────────────────────────────────────────────────────
+float Luminance(float3 c)
+{
+    return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+// Scene light i as the GI sees it: its colour times its GI contribution and the
+// GI's pre-exposure, as the old per-pass copy of the lights carried it.
+PteroLightData RtgiSceneLight(uint i)
+{
+    PteroLightData light = gClusterLights[i];
+    light.Color *= gClusterLightExtras[i].y;
+    return light;
+}
+
+// ─── Reduced-resolution grids ────────────────────────────────────────────────
+// A pass that traces at 1/scale resolution runs one thread per scale x scale block
+// of the frame. Each such "trace pixel" shades one frame pixel of its block - always
+// the same one, near its centre, so the G-Buffer guides the denoiser sees do not
+// shift between frames - and RtGI_Upsample.hlsl fills the block back in.
+uint2 ReducedSize(uint scale)
+{
+    return (uint2(g_FrameWidth, g_FrameHeight) + scale - 1u) / scale;
+}
+
+uint2 ReducedToFramePixel(uint2 reducedPixel, uint scale)
+{
+    return min(reducedPixel * scale + scale / 2u, uint2(g_FrameWidth, g_FrameHeight) - 1u);
+}
+
+// The diffuse passes' grid: reservoirs, raw radiance, the NRD inputs and outputs.
+uint2 TraceSize()                       { return ReducedSize(g_TraceScale); }
+uint2 TraceToFramePixel(uint2 tracePixel) { return ReducedToFramePixel(tracePixel, g_TraceScale); }
+
+// ─── Linear pixel index ───────────────────────────────────────────────────────
+// Of a trace pixel: the reservoir buffers hold one entry per trace pixel.
+uint PixelIndex(uint2 tracePixel)
+{
+    return tracePixel.y * TraceSize().x + tracePixel.x;
+}
+
+#endif // RTGI_COMMON_HLSLI

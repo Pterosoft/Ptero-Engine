@@ -1,0 +1,43 @@
+{
+    "name": "Midnight Blue",
+    "description": "Blue-black panels with a cyan-blue accent and squarer corners.",
+    "author": "Pterosoft",
+    "dark": true,
+
+    "icons": {
+        "color": "#c9d3e6",
+        "checked": "#4ea1ff",
+        "disabled": "#4b5569"
+    },
+
+    "colors": {
+        "window": "#12161f",
+        "panel": "#161b26",
+        "header": "#1c2230",
+        "base": "#0d1118",
+        "alternateBase": "#141a24",
+        "button": "#1e2533",
+        "buttonHover": "#27303f",
+        "buttonPressed": "#151b26",
+        "border": "#2a3242",
+        "borderStrong": "#3b4659",
+        "separator": "#222a38",
+        "text": "#e3e8f2",
+        "textDim": "#8d98ad",
+        "textDisabled": "#566075",
+        "accent": "#3d8bfd",
+        "accentHover": "#5c9fff",
+        "accentPressed": "#2a72dc",
+        "accentSoft": "rgba(61, 139, 253, 0.2)",
+        "menu": "#171d29",
+        "menuBorder": "#2e3748",
+        "tooltip": "#1e2533",
+        "scrollbar": "#2c3546",
+        "scrollbarHover": "#435069"
+    },
+
+    "metrics": {
+        "radius": 2,
+        "radiusSmall": 2
+    }
+}

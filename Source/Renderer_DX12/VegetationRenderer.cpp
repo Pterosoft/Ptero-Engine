@@ -3,6 +3,8 @@
 
 #include "VegetationRenderer.h"
 #include "SubsurfaceScattering.h"
+#include "AnalyticEdgeAARenderer.h"
+#include "PrincipledGBuffer.h"
 
 #include "..\SDKs\nlohmann\json.hpp"
 
@@ -1875,10 +1877,11 @@ bool VegetationRenderer::CreateBillboardPipeline(
     psoDesc.PS                    = mBillboardPixelShader.GetBytecode();
     psoDesc.InputLayout           = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
     psoDesc.SampleMask            = UINT_MAX;
-    psoDesc.NumRenderTargets      = 3;
+    psoDesc.NumRenderTargets      = PrincipledGBuffer::kGeometryPassTargetCount;
     psoDesc.RTVFormats[0]         = albedoFormat;
     psoDesc.RTVFormats[1]         = normalFormat;
     psoDesc.RTVFormats[2]         = materialFormat;
+    psoDesc.RTVFormats[3]         = AnalyticEdge::kGBufferFormat; // always "no edge" for foliage
     psoDesc.DSVFormat             = depthFormat;
     psoDesc.SampleDesc.Count      = msaaSampleCount;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -1891,7 +1894,8 @@ bool VegetationRenderer::CreateBillboardPipeline(
     rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
     rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
     rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    for (UINT i = 0; i < 3; ++i)
+    PrincipledGBuffer::DeclareTargets(psoDesc.RTVFormats);
+    for (UINT i = 0; i < PrincipledGBuffer::kGeometryPassTargetCount; ++i)
         psoDesc.BlendState.RenderTarget[i] = rtBlend;
 
     psoDesc.BlendState.AlphaToCoverageEnable = (msaaSampleCount > 1);
@@ -2107,16 +2111,17 @@ bool VegetationRenderer::CreateGraphicsPipeline(
     psoDesc.PS                    = mPixelShader.GetBytecode();
     psoDesc.InputLayout           = { inputLayout, static_cast<UINT>(std::size(inputLayout)) };
     psoDesc.SampleMask            = UINT_MAX;
-    psoDesc.NumRenderTargets      = 3;
+    psoDesc.NumRenderTargets      = PrincipledGBuffer::kGeometryPassTargetCount;
     psoDesc.RTVFormats[0]         = albedoFormat;
     psoDesc.RTVFormats[1]         = normalFormat;
     psoDesc.RTVFormats[2]         = materialFormat;
+    psoDesc.RTVFormats[3]         = AnalyticEdge::kGBufferFormat; // always "no edge" for foliage
     psoDesc.DSVFormat             = depthFormat;
     psoDesc.SampleDesc.Count      = msaaSampleCount;
     psoDesc.SampleDesc.Quality    = 0;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
-    // Opaque blend for all three G-Buffer outputs, matching EntityMeshRenderer.
+    // Opaque blend for all G-Buffer outputs, matching EntityMeshRenderer.
     D3D12_RENDER_TARGET_BLEND_DESC rtBlend{};
     rtBlend.BlendEnable           = FALSE;
     rtBlend.LogicOpEnable         = FALSE;
@@ -2127,7 +2132,8 @@ bool VegetationRenderer::CreateGraphicsPipeline(
     rtBlend.DestBlendAlpha        = D3D12_BLEND_ZERO;
     rtBlend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
     rtBlend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    for (UINT i = 0; i < 3; ++i)
+    PrincipledGBuffer::DeclareTargets(psoDesc.RTVFormats);
+    for (UINT i = 0; i < PrincipledGBuffer::kGeometryPassTargetCount; ++i)
         psoDesc.BlendState.RenderTarget[i] = rtBlend;
 
     // Alpha-to-coverage turns the alpha test into a soft edge under MSAA,

@@ -296,11 +296,11 @@ bool SssrRenderer::CreatePipelines()
     if (!CreatePass(mClassifyTilesPass,   L"Sssr_ClassifyTiles.hlsl",       4, { 1, 1, 1, 1 },    0, 3)) return false;
     if (!CreatePass(mBlueNoisePass,       L"Sssr_BlueNoise.hlsl",           0, { 1 },             3, 0)) return false;
     if (!CreatePass(mPrepareArgsPass,     L"Sssr_PrepareIndirectArgs.hlsl", 0, {},                0, 2)) return false;
-    if (!CreatePass(mIntersectPass,       L"Sssr_Intersect.hlsl",           5, { 1 },             2, 0)) return false;
+    if (!CreatePass(mIntersectPass,       L"Sssr_Intersect.hlsl",           6, { 1 },             2, 0)) return false;
     if (!CreatePass(mReprojectPass,       L"Sssr_Reproject.hlsl",          10, { 1, 1, 1, 1 },    2, 0)) return false;
     if (!CreatePass(mPrefilterPass,       L"Sssr_Prefilter.hlsl",           7, { 1, 1, 1 },       2, 0)) return false;
     if (!CreatePass(mResolveTemporalPass, L"Sssr_ResolveTemporal.hlsl",     6, { 1, 1 },          2, 0)) return false;
-    if (!CreatePass(mApplyPass,           L"Sssr_Apply.hlsl",               6, { 1 },             0, 0)) return false;
+    if (!CreatePass(mApplyPass,           L"Sssr_Apply.hlsl",               7, { 1 },             0, 0)) return false;
 
     D3D12_INDIRECT_ARGUMENT_DESC dispatchArg{};
     dispatchArg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
@@ -591,7 +591,10 @@ void SssrRenderer::Dispatch(
     const DirectX::XMFLOAT4X4&   viewProjection,
     const DirectX::XMFLOAT4X4&   inverseViewProjection,
     const DirectX::XMFLOAT3&     cameraPosition,
-    const DirectX::XMFLOAT3&     cameraForward)
+    const DirectX::XMFLOAT3&     cameraForward,
+    D3D12_GPU_DESCRIPTOR_HANDLE  fallbackReflectionSrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE  fallbackSpecularSrv,
+    float                        fallbackScale)
 {
     if (!mIsInitialized || commandList == nullptr || sceneColorResource == nullptr || mMappedCb == nullptr)
         return;
@@ -603,6 +606,13 @@ void SssrRenderer::Dispatch(
 
     const UINT cur = mBufferIndex;
     const UINT prev = 1 - mBufferIndex;
+    // Without a fallback its tables still need valid views; the shaders do not read them.
+    const bool hasFallback = fallbackReflectionSrv.ptr != 0 && fallbackSpecularSrv.ptr != 0;
+    if (!hasFallback)
+    {
+        fallbackReflectionSrv = sceneColorSrv;
+        fallbackSpecularSrv = sceneColorSrv;
+    }
     // Debug view 2 shows the raw traced result, so the denoiser does not run at all.
     const bool denoise = settings.DebugView != 2;
 
@@ -632,6 +642,7 @@ void SssrRenderer::Dispatch(
         cb.HistoryValid = mHistoryValid ? 1u : 0u;
         cb.Intensity = (std::max)(settings.Intensity, 0.0f);
         cb.DebugView = static_cast<UINT>(std::clamp(settings.DebugView, 0, 2));
+        cb.FallbackScale = hasFallback ? (std::max)(fallbackScale, 0.0f) : 0.0f;
         std::memcpy(mMappedCb + static_cast<size_t>(mCbSlot) * kCbStride, &cb, sizeof(cb));
     }
     const D3D12_GPU_VIRTUAL_ADDRESS constants =
@@ -717,7 +728,8 @@ void SssrRenderer::Dispatch(
     FlushBarriers(commandList);
 
     Bind(commandList, mIntersectPass, constants,
-         { sceneColorSrv, mDepthHierarchy.Srv, mNormal[cur].Srv, mRoughness[cur].Srv, mBlueNoiseTexture.Srv },
+         { sceneColorSrv, mDepthHierarchy.Srv, mNormal[cur].Srv, mRoughness[cur].Srv, mBlueNoiseTexture.Srv,
+           fallbackReflectionSrv },
          { mRadiance[cur].Uav },
          { mRayList.Address(), mIndirectArgs.Address() }, {});
     commandList->ExecuteIndirect(mDispatchSignature.Get(), 1, mIndirectArgs.Resource.Get(), IntersectArgsOffsetBytes, nullptr, 0);
@@ -787,7 +799,7 @@ void SssrRenderer::Dispatch(
     FlushBarriers(commandList);
 
     Bind(commandList, mApplyPass, constants,
-         { sceneColorSrv, mRadiance[cur].Srv, normalSrv, materialSrv, albedoSrv, depthSrv },
+         { sceneColorSrv, mRadiance[cur].Srv, normalSrv, materialSrv, albedoSrv, depthSrv, fallbackSpecularSrv },
          { mOutput.Uav }, {}, {});
     commandList->Dispatch(DivideRoundingUp(mWidth, 8), DivideRoundingUp(mHeight, 8), 1);
 

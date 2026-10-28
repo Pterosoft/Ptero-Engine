@@ -6,6 +6,13 @@
 #define RTGI_COMMON_HLSLI
 
 #define MAX_RTGI_POINT_LIGHTS 16
+// Most lights a bounce hit tests with stochastic light selection (g_LightSamples).
+#define RTGI_MAX_LIGHT_SAMPLES 4
+
+// Every scene light and its clustered lists (b0, t0..t3 in space 7). RayGen and the
+// specular pass light bounce hits from these, through the world grid; g_PointLights
+// below only keeps the constant buffer's layout.
+#include "LightClusters.hlsli"
 
 // The light record and the emitter-shape resolution are shared with the
 // deferred, probe and cascade passes so all of them agree on the layout and on
@@ -14,6 +21,7 @@
 #include "ShaderSafeMath.hlsli"
 // PteroVsmConstants, for next-event visibility from the shadow map (RtGI_Vsm.hlsli).
 #include "VirtualShadowMap.hlsli"
+#include "SkyModel.hlsli"
 
 // ─── Root signature (matches RtGlobalIllumination::CreateRootSignature) ───────
 // [0] CBV  b0  – RtGIConstants
@@ -49,7 +57,7 @@ cbuffer RtGIConstants : register(b0)
     float  g_NrdSharpenAmount;
     float  g_ColorLeakIntensity;
     float  g_SpecularRoughnessThreshold;
-    float  g_Pad0;
+    uint   g_TraceScale;        // diffuse passes run on a grid this many times coarser (1, 2, 4)
 
     float4x4 g_ViewProjInv;     // inverse view-projection (row-major)
     float4x4 g_CurrViewProj;    // current non-jittered view-projection
@@ -57,7 +65,7 @@ cbuffer RtGIConstants : register(b0)
     float4x4 g_WorldToView;     // current non-jittered world-to-view matrix (row-major)
 
     float3 g_CameraPos;
-    float  g_Pad1;
+    uint   g_SpecularScale;     // the specular pass's grid, likewise (1, 2)
 
     float3 g_SunDir;            // world-space direction FROM sun TOWARD scene (Z-up)
     float  g_Pad2;
@@ -75,8 +83,21 @@ cbuffer RtGIConstants : register(b0)
 
     float  g_VsmMaxTexelSize;   // coarsest shadow-map texel (metres) trusted at a bounce hit
     int    g_VsmVisibility;     // 1 = ask the shadow map before tracing a shadow ray
-    float2 g_Pad6;
+    int    g_LightSamples;      // > 0: bounce hits test this many stochastically picked lights (RTGI_MAX_LIGHT_SAMPLES at most)
+    float  g_Pad6;
     PteroVsmConstants g_Vsm;    // g_Vsm.Active == 0 when the map is not bound
+
+    PteroSkyModel g_Sky;        // the sky escaped rays see, pre-exposed (SkyModel.hlsli)
+
+    // Ray visualisation capture (RtGI_RayDebug.hlsli). RayGen only.
+    uint   g_RayDebugWrite;          // 1 = the recorded pixels write their paths this frame
+    uint   g_RayDebugPattern;        // 0 grid, 1 centre pixel
+    uint   g_RayDebugSpacing;        // grid: pixels between recorded pixels
+    uint   g_RayDebugGridWidth;      // grid: recorded pixels per row
+    uint   g_RayDebugSlotBase;       // first segment slot this frame writes (history ring)
+    uint   g_RayDebugRays;           // rays recorded per pixel
+    uint   g_RayDebugSlotsPerRay;    // 2 per bounce: the bounce segment and its shadow ray
+    uint   g_RayDebugSlotsPerPixel;  // rays x slots per ray, plus the camera ray
 }
 
 // ─── GI Reservoir stored in the structured buffer ────────────────────────────
@@ -273,10 +294,39 @@ float Luminance(float3 c)
     return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
 }
 
-// ─── Linear pixel index ───────────────────────────────────────────────────────
-uint PixelIndex(uint2 pixel)
+// Scene light i as the GI sees it: its colour times its GI contribution and the
+// GI's pre-exposure, as the old per-pass copy of the lights carried it.
+PteroLightData RtgiSceneLight(uint i)
 {
-    return pixel.y * g_FrameWidth + pixel.x;
+    PteroLightData light = gClusterLights[i];
+    light.Color *= gClusterLightExtras[i].y;
+    return light;
+}
+
+// ─── Reduced-resolution grids ────────────────────────────────────────────────
+// A pass that traces at 1/scale resolution runs one thread per scale x scale block
+// of the frame. Each such "trace pixel" shades one frame pixel of its block - always
+// the same one, near its centre, so the G-Buffer guides the denoiser sees do not
+// shift between frames - and RtGI_Upsample.hlsl fills the block back in.
+uint2 ReducedSize(uint scale)
+{
+    return (uint2(g_FrameWidth, g_FrameHeight) + scale - 1u) / scale;
+}
+
+uint2 ReducedToFramePixel(uint2 reducedPixel, uint scale)
+{
+    return min(reducedPixel * scale + scale / 2u, uint2(g_FrameWidth, g_FrameHeight) - 1u);
+}
+
+// The diffuse passes' grid: reservoirs, raw radiance, the NRD inputs and outputs.
+uint2 TraceSize()                       { return ReducedSize(g_TraceScale); }
+uint2 TraceToFramePixel(uint2 tracePixel) { return ReducedToFramePixel(tracePixel, g_TraceScale); }
+
+// ─── Linear pixel index ───────────────────────────────────────────────────────
+// Of a trace pixel: the reservoir buffers hold one entry per trace pixel.
+uint PixelIndex(uint2 tracePixel)
+{
+    return tracePixel.y * TraceSize().x + tracePixel.x;
 }
 
 #endif // RTGI_COMMON_HLSLI

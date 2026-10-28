@@ -40,10 +40,13 @@ namespace Packaging
         // Mesh folders keep their materials (.material, or .json from older imports) and cooked textures (.dds) beside the
         // cooked mesh - Geometry/MET_Table/M_MET_Table.json points at
         // Geometry/MET_Table/Textures/*.dds - so all three ship. Source art (.fbx, .png,
-        // .tga, .spp, ...) stays behind.
+        // .tga, .spp, ...) stays behind. A skinned mesh also has its skin weights (.pskin)
+        // and the skeleton and clips imported from it (.pskel, .panim) beside it.
         if (folderLower == L"geometry")
             return HasExtension(fileName, L".ptero") || HasExtension(fileName, L".dds") ||
-                   HasExtension(fileName, L".material") || HasExtension(fileName, L".json");
+                   HasExtension(fileName, L".material") || HasExtension(fileName, L".json") ||
+                   HasExtension(fileName, L".pskin") || HasExtension(fileName, L".pskel") ||
+                   HasExtension(fileName, L".panim");
 
         // UI, and every other included folder, ship unfiltered.
         return true;

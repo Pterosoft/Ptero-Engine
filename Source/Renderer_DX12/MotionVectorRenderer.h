@@ -32,6 +32,13 @@ public:
         mVirtualizedMask = mask;
     }
 
+    // Animated entities are drawn from EntityMeshRenderer's posed vertices, this frame's
+    // and last frame's, so a moving limb gets its own motion and not just the entity's.
+    void SetSkinnedVertexSource(const class EntityMeshRenderer* source)
+    {
+        mSkinnedVertexSource = source;
+    }
+
     void Render(
         ID3D12GraphicsCommandList* commandList,
         const std::unordered_map<std::size_t, DirectX::XMFLOAT4X4>& previousTransforms,
@@ -114,6 +121,7 @@ private:
     std::map<const Mesh*, GpuMesh> mGpuMeshes;
     std::vector<Entity>* mEntities = nullptr;
     const std::vector<std::uint8_t>* mVirtualizedMask = nullptr;
+    const class EntityMeshRenderer* mSkinnedVertexSource = nullptr;
 
     UINT mWidth = 0;
     UINT mHeight = 0;

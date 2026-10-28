@@ -12,8 +12,11 @@
 #include "RadianceProbeCommon.hlsli"
 #include "VirtualShadowMap.hlsli"
 
-// Matches DeferredLightingPass::kMaxPointLights, which is the engine-wide cap:
-// with a slot per scene light the fog can never run out and silently drop one.
+// Every scene light and its clustered lists (b0, t0..t3 in space 7). The injection
+// lights from these; gPointLights below only keeps the constant buffer's layout.
+#include "LightClusters.hlsli"
+
+// Matches DeferredLightingPass::kMaxPointLights.
 #define PTERO_FOG_MAX_LIGHTS 16
 
 // Matches DeferredLightingPass::kMaxShadowCastingPointLights * 6.
@@ -60,7 +63,7 @@ cbuffer FogConstants : register(b0)
     float    _FogPad4;
 
     uint     gNumPointLights;
-    uint     _FogProbePad0;
+    uint     gScreenGiEnabled;   // 1: indirect light from gScreenGi (t5) rather than the probe grid
     uint     _FogProbePad1;
     uint     _FogProbePad2;
 
@@ -80,7 +83,46 @@ cbuffer FogConstants : register(b0)
     // The virtual shadow map; when LocalEnabled, local lights' shadows come from it
     // instead of the cubemap atlas.
     PteroVsmConstants gFogVsm;
+
+    // The world-space GI volume (VolumetricFogGiVolume.hlsl).
+    int4     gGiVolumeOrigin;      // xyz: world cell at the window's min corner; w: 1 = in use this frame
+    int4     gGiVolumePrevOrigin;  // xyz: last frame's; w: 1 = last frame's volume is valid history
+    float    gGiVolumeCellSize;    // metres
+    float    gGiVolumeInvCellSize;
+    uint     gGiVolumeFrame;
+    uint     gGiVolumeSplatStride; // screen pixels between splats, per axis
 };
+
+// ─── World-space GI volume ───────────────────────────────────────────────────
+// A camera-centred grid of cells, each holding the indirect radiance in the air
+// there. Addressed toroidally - world cell c lives at texel c mod dims - so the
+// window scrolls with the camera without moving any data, and a wrapping sampler
+// interpolates across the seam between neighbours that are neighbours in the world.
+// Must match kGiVolumeDims in VolumetricFogRenderer.cpp.
+#define PTERO_FOG_GI_DIM_X 128
+#define PTERO_FOG_GI_DIM_Y 128
+#define PTERO_FOG_GI_DIM_Z 48
+
+int3 GiVolumeDims()
+{
+    return int3(PTERO_FOG_GI_DIM_X, PTERO_FOG_GI_DIM_Y, PTERO_FOG_GI_DIM_Z);
+}
+
+uint3 GiVolumeTexel(int3 worldCell)
+{
+    const int3 dims = GiVolumeDims();
+    return uint3(((worldCell % dims) + dims) % dims);
+}
+
+uint GiVolumeLinearIndex(uint3 texel)
+{
+    return texel.x + PTERO_FOG_GI_DIM_X * (texel.y + PTERO_FOG_GI_DIM_Y * texel.z);
+}
+
+bool GiVolumeContains(int3 windowOrigin, int3 worldCell)
+{
+    return all(worldCell >= windowOrigin) && all(worldCell < windowOrigin + GiVolumeDims());
+}
 
 float3 ReconstructWorldPosition(float2 uv, float depth)
 {

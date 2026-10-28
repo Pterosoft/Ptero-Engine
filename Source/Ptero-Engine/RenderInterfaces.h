@@ -13,7 +13,8 @@ enum class ShaderStage
     Hull,
     Domain,
     // Appended, never inserted: the value is part of every shader cache key.
-    Mesh
+    Mesh,
+    Geometry
 };
 
 struct ShaderCompileRequest

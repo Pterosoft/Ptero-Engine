@@ -1,0 +1,92 @@
+// BloomDownsample.hlsl
+// Physical mip-chain bloom – downsample pass.
+// Pass 0 (MipLevel == 0) applies a threshold prefilter (quadratic soft-knee).
+// All other passes are a simple 13-tap Kawase downsample filter.
+
+cbuffer BloomConstants : register(b0)
+{
+    float   g_Threshold;
+    float   g_Knee;
+    float   g_Intensity;
+    float   g_Radius;
+    uint    g_SrcWidth;
+    uint    g_SrcHeight;
+    uint    g_DstWidth;
+    uint    g_DstHeight;
+    int     g_MipLevel;
+    int     g_MaxMips;
+    float   g_Pad0;
+    float   g_Pad1;
+};
+
+Texture2D<float4>   g_SrcTexture : register(t0);
+RWTexture2D<float4> g_DstTexture : register(u0);
+SamplerState        g_LinearClamp : register(s0);
+
+// Quadratic soft-knee threshold.
+float3 QuadraticThreshold(float3 color, float threshold, float knee)
+{
+    float brightness = max(color.r, max(color.g, color.b));
+    float rq = clamp(brightness - threshold + knee, 0.0f, 2.0f * knee);
+    rq = (rq * rq) / (4.0f * knee + 0.00001f);
+    float weight = max(rq, brightness - threshold) / max(brightness, 0.00001f);
+    return color * weight;
+}
+
+// 13-tap Kawase downsample (as in Call of Duty: Advanced Warfare presentation).
+float3 KawaseDownsample(Texture2D<float4> src, SamplerState smp, float2 uv, float2 texelSize)
+{
+    float3 a = src.SampleLevel(smp, uv + float2(-2.0f, -2.0f) * texelSize, 0).rgb;
+    float3 b = src.SampleLevel(smp, uv + float2( 0.0f, -2.0f) * texelSize, 0).rgb;
+    float3 c = src.SampleLevel(smp, uv + float2( 2.0f, -2.0f) * texelSize, 0).rgb;
+
+    float3 d = src.SampleLevel(smp, uv + float2(-1.0f, -1.0f) * texelSize, 0).rgb;
+    float3 e = src.SampleLevel(smp, uv + float2( 1.0f, -1.0f) * texelSize, 0).rgb;
+
+    float3 f = src.SampleLevel(smp, uv + float2(-2.0f,  0.0f) * texelSize, 0).rgb;
+    float3 g2= src.SampleLevel(smp, uv + float2( 0.0f,  0.0f) * texelSize, 0).rgb;
+    float3 h = src.SampleLevel(smp, uv + float2( 2.0f,  0.0f) * texelSize, 0).rgb;
+
+    float3 i = src.SampleLevel(smp, uv + float2(-1.0f,  1.0f) * texelSize, 0).rgb;
+    float3 j = src.SampleLevel(smp, uv + float2( 1.0f,  1.0f) * texelSize, 0).rgb;
+
+    float3 k = src.SampleLevel(smp, uv + float2(-2.0f,  2.0f) * texelSize, 0).rgb;
+    float3 l = src.SampleLevel(smp, uv + float2( 0.0f,  2.0f) * texelSize, 0).rgb;
+    float3 m = src.SampleLevel(smp, uv + float2( 2.0f,  2.0f) * texelSize, 0).rgb;
+
+    // Weighted sum: inner 2x2 quads get weight 0.5/4, outer corners get 0.125/4.
+    float3 result =
+        (d + e + i + j) * 0.5f
+        + (a + b + g2 + f) * 0.125f
+        + (b + c + e + g2) * 0.125f
+        + (f + g2 + i + k) * 0.125f
+        + (g2 + h + j + l) * 0.125f;
+    result *= 0.25f;
+    return result;
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= g_DstWidth || dispatchId.y >= g_DstHeight)
+        return;
+
+    float2 uv = (float2(dispatchId.xy) + 0.5f) / float2(g_DstWidth, g_DstHeight);
+    float2 srcTexelSize = 1.0f / float2(g_SrcWidth, g_SrcHeight);
+
+    float3 color = KawaseDownsample(g_SrcTexture, g_LinearClamp, uv, srcTexelSize);
+
+    // Prefilter threshold on the first mip level.
+    if (g_MipLevel == 0)
+    {
+        // The renderer's lighting pipeline currently keeps sun and local-light
+        // contributions in a relatively compressed HDR range. Evaluate bloom
+        // extraction in a pre-exposed space so both sunlight and point lights
+        // can trigger bloom without forcing the entire scene above 1.0.
+        const float bloomPrefilterExposure = 8.0f;
+        color = QuadraticThreshold(color * bloomPrefilterExposure, g_Threshold, max(g_Knee, 0.0001f))
+              / bloomPrefilterExposure;
+    }
+
+    g_DstTexture[dispatchId.xy] = float4(color, 1.0f);
+}

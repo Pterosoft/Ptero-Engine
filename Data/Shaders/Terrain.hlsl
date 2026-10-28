@@ -26,6 +26,7 @@
 #include "SurfaceSpecular.hlsli"
 #include "Tessellation.hlsli"
 #include "TangentFrame.hlsli"
+#include "AnalyticEdge.hlsli"
 
 static const int kTerrainLayers = 4;
 
@@ -35,6 +36,15 @@ cbuffer TerrainConstants : register(b0)
     float4x4 gModel;  // pre-transposed model-to-world
     float3   gCameraPositionWS;
     float    gTessPixelScale;   // (viewport height / 2) / tan(fovY / 2)
+    // Shadow pages only (HSMainShadow): how big a page texel is, so a cached page's
+    // tessellation does not depend on where the camera was. Orthographic pages give
+    // gShadowTexelWorld; perspective ones (a local light's cube face) give 0 there
+    // and a texel angle seen from gShadowLodOrigin instead.
+    float3   gShadowLodOrigin;
+    float    gShadowTexelWorld;
+    float    gShadowTexelAngle;
+    float    gShadowCullSlack;   // clip-space margin for gMaxDisplacement on this page
+    float2   _ShadowPad;
 };
 
 struct TerrainLayer
@@ -145,6 +155,10 @@ struct PSOutput
     float4 Albedo   : SV_Target0;
     float4 Normal   : SV_Target1;
     float4 Material : SV_Target2;
+    uint4  Edge     : SV_Target3;   // AnalyticEdge.hlsli
+    // Disney principled parameters (PrincipledBrdf.hlsli); terrain has none, so zero.
+    float4 Principled0 : SV_Target4;
+    float4 Principled1 : SV_Target5;
 };
 
 float2 OctWrap(float2 v)
@@ -438,6 +452,35 @@ float LayerHeightLevel(int layer, float2 localXY, float subEdgeMeters)
     return SampleLayerHeightLevel(layer, LayerUv(layer, localXY), mip);
 }
 
+// The tessellated point moved along the normal by the layers' blended height. UVs
+// come from the undisplaced position, so textures do not slide sideways as the
+// surface moves along its normal. Shared by the G-Buffer and the shadow pages, so
+// a shadow is cast by exactly the surface that is drawn.
+float3 DisplaceLocalPosition(float3 localPosition, float3 localNormal, float4 color, float subEdgeMeters)
+{
+    if (gUseTessellation == 0)
+        return localPosition;
+
+    const float2 localXY = localPosition.xy;
+    float4 heights = 0.5f;
+    [unroll]
+    for (int layer = 0; layer < kTerrainLayers; ++layer)
+    {
+        if (layer < gLayerCount && gLayers[layer].HasHeightMap != 0)
+            heights[layer] = LayerHeightLevel(layer, localXY, subEdgeMeters);
+    }
+    // Same weights the pixel shader shades with, so geometry and shading agree.
+    const float4 w = ApplyHeightBlend(BaseLayerWeights(color), heights);
+
+    float displacement = 0.0f;
+    [unroll]
+    for (int i = 0; i < kTerrainLayers; ++i)
+        displacement += w[i] * (heights[i] - gLayers[i].DisplacementMidLevel) * gLayers[i].DisplacementScale;
+
+    const float worldPerLocal = max(length(mul(float4(localNormal, 0.0f), gModel).xyz), 1e-6f);
+    return localPosition + localNormal * (displacement / worldPerLocal);
+}
+
 [domain("tri")]
 PSInput DSMain(
     TerrainPatchConstants patchConstants,
@@ -454,30 +497,8 @@ PSInput DSMain(
                        + patch[1].Color * barycentrics.y
                        + patch[2].Color * barycentrics.z;
 
-    // UVs come from the undisplaced position, so textures do not slide
-    // sideways as the surface moves along its normal.
     const float2 localXY = localPosition.xy;
-
-    if (gUseTessellation != 0)
-    {
-        float4 heights = 0.5f;
-        [unroll]
-        for (int layer = 0; layer < kTerrainLayers; ++layer)
-        {
-            if (layer < gLayerCount && gLayers[layer].HasHeightMap != 0)
-                heights[layer] = LayerHeightLevel(layer, localXY, patchConstants.SubEdgeMeters);
-        }
-        // Same weights the pixel shader shades with, so geometry and shading agree.
-        const float4 w = ApplyHeightBlend(BaseLayerWeights(color), heights);
-
-        float displacement = 0.0f;
-        [unroll]
-        for (int i = 0; i < kTerrainLayers; ++i)
-            displacement += w[i] * (heights[i] - gLayers[i].DisplacementMidLevel) * gLayers[i].DisplacementScale;
-
-        const float worldPerLocal = max(length(mul(float4(localNormal, 0.0f), gModel).xyz), 1e-6f);
-        localPosition += localNormal * (displacement / worldPerLocal);
-    }
+    localPosition = DisplaceLocalPosition(localPosition, localNormal, color, patchConstants.SubEdgeMeters);
 
     PSInput output;
     output.Position      = mul(float4(localPosition, 1.0f), gMVP);
@@ -489,12 +510,92 @@ PSInput DSMain(
 }
 
 // ---------------------------------------------------------------------------
+// Shadow pages (VSMainTess -> HSMainShadow -> DSMainShadow, depth only)
+// ---------------------------------------------------------------------------
+// The same displaced surface into a virtual shadow map page, so dunes and the
+// ripples on them cast shadows. Tessellated to the page's texel size rather than
+// to the camera: a page stays cached while the camera moves, and must not hold a
+// surface that only suited where the camera was when it was drawn.
+
+float ShadowEdgeFactor(float3 a, float3 b)
+{
+    const float texel = gShadowTexelWorld > 0.0f
+        ? gShadowTexelWorld
+        : max(distance(0.5f * (a + b), gShadowLodOrigin) * gShadowTexelAngle, 1e-4f);
+    const float factor = distance(a, b) / (texel * max(gTessTargetPixels, 0.5f));
+    return clamp(factor, 1.0f, clamp(gTessMaxFactor, 1.0f, kPteroMaxTessFactor));
+}
+
+TerrainPatchConstants HSConstantsShadow(InputPatch<TessControlPoint, 3> patch)
+{
+    TerrainPatchConstants output;
+    // The page's sides only: the pages are pancaked (no depth clip), so terrain in
+    // front of the near plane still casts and must not be culled for it.
+    const float4 c0 = patch[0].ClipPosition, c1 = patch[1].ClipPosition, c2 = patch[2].ClipPosition;
+    const float3 x = float3(c0.x, c1.x, c2.x);
+    const float3 y = float3(c0.y, c1.y, c2.y);
+    const float3 w = float3(c0.w, c1.w, c2.w) + gShadowCullSlack;
+    if (all(x < -w) || all(x > w) || all(y < -w) || all(y > w))
+    {
+        output.Edges[0] = output.Edges[1] = output.Edges[2] = 0.0f;
+        output.Inside = 0.0f;
+        output.SubEdgeMeters = 1.0f;
+        return output;
+    }
+
+    float longestEdge = 0.0f;
+    [unroll]
+    for (int edge = 0; edge < 3; ++edge)
+    {
+        const float3 a = patch[(edge + 1) % 3].WorldPosition;
+        const float3 b = patch[(edge + 2) % 3].WorldPosition;
+        output.Edges[edge] = gUseTessellation != 0 ? ShadowEdgeFactor(a, b) : 1.0f;
+        longestEdge = max(longestEdge, distance(a, b));
+    }
+    output.Inside = max(output.Edges[0], max(output.Edges[1], output.Edges[2]));
+    output.SubEdgeMeters = longestEdge / output.Inside;
+    return output;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HSConstantsShadow")]
+[maxtessfactor(64.0)]
+TessControlPoint HSMainShadow(InputPatch<TessControlPoint, 3> patch, uint pointId : SV_OutputControlPointID)
+{
+    return patch[pointId];
+}
+
+[domain("tri")]
+float4 DSMainShadow(
+    TerrainPatchConstants patchConstants,
+    float3 barycentrics : SV_DomainLocation,
+    const OutputPatch<TessControlPoint, 3> patch) : SV_Position
+{
+    const float3 localPosition = patch[0].LocalPosition * barycentrics.x
+                               + patch[1].LocalPosition * barycentrics.y
+                               + patch[2].LocalPosition * barycentrics.z;
+    const float3 localNormal = normalize(patch[0].LocalNormal * barycentrics.x
+                                       + patch[1].LocalNormal * barycentrics.y
+                                       + patch[2].LocalNormal * barycentrics.z);
+    const float4 color = patch[0].Color * barycentrics.x
+                       + patch[1].Color * barycentrics.y
+                       + patch[2].Color * barycentrics.z;
+    return mul(float4(DisplaceLocalPosition(localPosition, localNormal, color, patchConstants.SubEdgeMeters), 1.0f), gMVP);
+}
+
+// ---------------------------------------------------------------------------
 // Pixel shader (both pipelines)
 // ---------------------------------------------------------------------------
 
-PSOutput PSMain(PSInput input)
+PSOutput PSMain(PSInput input PTERO_EDGE_PS_INPUT)
 {
     PSOutput output;
+    output.Edge = PTERO_EDGE_VALUE;
+    output.Principled0 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    output.Principled1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     const float3 geometricNormal = normalize(input.WorldNormal);
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
+#include <string>
 #include <type_traits>
 
 // Version history:
@@ -51,6 +53,35 @@ struct PteroCollisionHullEntry
     std::uint32_t vertexCount = 0;
     std::uint32_t indexCount = 0;
 };
+
+// Skin weights live in a sidecar next to the cooked mesh, "<name>.fbx.pskin" beside
+// "<name>.fbx.ptero", rather than in the .ptero itself: adding them there would bump
+// kPteroMeshVersion and re-cook (and regenerate the collision hulls of) every mesh in Data,
+// and the LOD and collision tools that rewrite a .ptero in place would have to carry them.
+// LOD 0's vertex order never changes after cooking, which is all the sidecar relies on.
+//
+// Layout: PteroSkinHeader, then JointCount names (u32 byte length + UTF-8 bytes), then
+// VertexCount MeshSkinVertex records (24 bytes: four u16 joints, four float weights).
+struct PteroSkinHeader
+{
+    char magic[4] = { 'P', 'S', 'K', 'N' };
+    std::uint32_t version = 1;
+    std::uint32_t vertexCount = 0; // must equal the .ptero's LOD 0 vertex count
+    std::uint32_t jointCount = 0;
+};
+static_assert(sizeof(PteroSkinHeader) == 16);
+
+// "<name>.fbx.ptero" -> "<name>.fbx.pskin"
+inline std::string PteroSkinPathFor(const std::string& pteroPath)
+{
+    const std::string extension = ".ptero";
+    if (pteroPath.size() >= extension.size() &&
+        _stricmp(pteroPath.c_str() + pteroPath.size() - extension.size(), extension.c_str()) == 0)
+    {
+        return pteroPath.substr(0, pteroPath.size() - extension.size()) + ".pskin";
+    }
+    return pteroPath + ".pskin";
+}
 
 static_assert(std::is_trivially_copyable_v<PteroSubMeshEntry>, "PteroSubMeshEntry must stay trivially copyable for binary serialization.");
 static_assert(std::is_standard_layout_v<PteroSubMeshEntry>, "PteroSubMeshEntry must stay standard layout for binary serialization.");

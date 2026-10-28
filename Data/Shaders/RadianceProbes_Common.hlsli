@@ -14,6 +14,9 @@
 // where a spot cone ends.
 #include "LightShapes.hlsli"
 #include "ShaderSafeMath.hlsli"
+#include "SkyModel.hlsli"
+// PteroVsmConstants, for next-event visibility from the shadow map (RtGI_Vsm.hlsli).
+#include "VirtualShadowMap.hlsli"
 
 // ─── Constant buffer (matches RadianceProbeConstants in RadianceProbeRenderer.h) ──
 cbuffer RadianceProbeConstants : register(b0)
@@ -69,6 +72,15 @@ cbuffer RadianceProbeConstants : register(b0)
     uint   g_CascadeCount;
     uint   g_ProbesPerCascade;
     uint2  g_Pad5;
+
+    PteroSkyModel g_Sky;        // the sky escaped rays see, pre-exposed (SkyModel.hlsli)
+
+    // Next-event estimation at bounce hits, as RTGI does it (RtGISettings).
+    float  g_VsmMaxTexelSize;   // coarsest shadow-map texel (metres) trusted at a hit
+    int    g_VsmVisibility;     // 1 = ask the shadow map before tracing a shadow ray
+    int    g_LightSamples;      // > 0: hits test this many stochastically picked lights
+    float  g_Pad7;
+    PteroVsmConstants g_Vsm;    // g_Vsm.Active == 0 when the map is not bound
 }
 
 // ─── L1 Spherical Harmonics coefficients per probe ───────────────────────────

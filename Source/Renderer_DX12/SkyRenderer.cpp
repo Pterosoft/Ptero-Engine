@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "SkyRenderer.h"
+#include "GpuSkyModel.h"
 
 #include "d3dx12.h"
 #include "System/DataFiles.h"
@@ -20,15 +21,9 @@ extern "C"
     ID3D12DescriptorHeap* __stdcall DX12Context_GetSrvDescriptorHeap();
 }
 
-// Solar angular radius ≈ 0.265° → half-angle cos ≈ cos(0.00463 rad).
-// We double it for a slightly more visible disc in the editor viewport.
-static constexpr float kSunDiscHalfAngleDeg = 0.8f;
-static constexpr float kSunDiscHalfAngleRad = kSunDiscHalfAngleDeg * (3.14159265f / 180.0f);
+// The sun is drawn at its true size (kSunAngularRadiusRad) and true radiance;
+// the bloom's glare is what makes it look big, as it does to an eye or a camera.
 
-// The moon is drawn at about the same inflated size as the sun, scaled by
-// TimeOfDaySettings::MoonSize.
-static constexpr float kMoonDiscHalfAngleDeg = 0.9f;
-static constexpr float kMoonDiscHalfAngleRad = kMoonDiscHalfAngleDeg * (3.14159265f / 180.0f);
 
 void SkyRenderer::LoadTextures()
 {
@@ -235,22 +230,12 @@ void SkyRenderer::Render(
     if (!mTexturesRequested)
         LoadTextures();
 
-    // The ambient is already lux-scaled and already blends day into night, so the
-    // zenith is simply that. The horizon keeps the old daylight treatment - a
-    // warmer, slightly desaturated zenith - and turns a slightly paler blue as
-    // the daylight goes.
+    // The daylight sky is the Hosek-Wilkie model, evaluated per pixel from the
+    // coefficients below. Underneath it, the night part of the ambient as a
+    // gradient whose horizon is a slightly paler blue.
     const float skyScale = (std::max)(settings.SkyIntensityLux, 0.0f) / kTimeOfDayRefSkyLux;
-    const float daylight = hosekResult.DaylightWeight;
-    const XMFLOAT3 zenith(hosekResult.AmbientR, hosekResult.AmbientG, hosekResult.AmbientB);
-    const XMFLOAT3 dayHorizon(
-        zenith.x * 1.2f + 0.05f * skyScale * daylight,
-        zenith.y * 1.1f + 0.03f * skyScale * daylight,
-        zenith.z * 0.8f + 0.02f * skyScale * daylight);
-    const XMFLOAT3 nightHorizon(zenith.x * 1.15f, zenith.y * 1.15f, zenith.z * 1.05f);
-    const XMFLOAT3 horizon(
-        nightHorizon.x + (dayHorizon.x - nightHorizon.x) * daylight,
-        nightHorizon.y + (dayHorizon.y - nightHorizon.y) * daylight,
-        nightHorizon.z + (dayHorizon.z - nightHorizon.z) * daylight);
+    const XMFLOAT3 zenith(hosekResult.NightSkyR, hosekResult.NightSkyG, hosekResult.NightSkyB);
+    const XMFLOAT3 horizon = NightSkyHorizon(zenith);
 
     // An orange band low on the horizon around the sun while it is within a few
     // degrees of setting, peaking just after it has gone under.
@@ -286,16 +271,21 @@ void SkyRenderer::Render(
     cb.SkyHorizonColor      = horizon;
     cb.TimeSeconds          = mTimeSeconds;
     cb.SunDirection         = { -hosekResult.SolarDirX, -hosekResult.SolarDirY, -hosekResult.SolarDirZ };
-    cb.SunDiscHalfAngleCos  = std::cos(kSunDiscHalfAngleRad);
+    cb.SunDiscRadius        = kSunAngularRadiusRad;
     cb.SunColor             = { hosekResult.SunDiscR, hosekResult.SunDiscG, hosekResult.SunDiscB };
-    cb.MoonDiscSin          = std::sin(kMoonDiscHalfAngleRad * std::clamp(settings.MoonSize, 0.1f, 10.0f));
+    cb.MoonDiscSin          = std::sin(hosekResult.MoonDiscRadius);
     cb.MoonDirection        = { -hosekResult.MoonDirX, -hosekResult.MoonDirY, -hosekResult.MoonDirZ };
     cb.StarVisibility       = hosekResult.StarVisibility;
     cb.MoonColor            = { hosekResult.MoonDiscR, hosekResult.MoonDiscG, hosekResult.MoonDiscB };
     cb.StarRadiance         = hosekResult.StarRadiance;
     cb.TwilightGlowColor    = { 1.0f * glow, 0.42f * glow, 0.15f * glow };
-    // A faint glow around the moon, as much as its lit face and the dark allow.
-    cb.MoonHalo             = hosekResult.MoonIllumination * (1.0f - daylight) * 0.02f;
+    cb.GroundRadiance       = { hosekResult.GroundRadiance[0], hosekResult.GroundRadiance[1], hosekResult.GroundRadiance[2] };
+    for (int k = 0; k < 9; ++k)
+        cb.SkyModel[k] = XMFLOAT4(hosekResult.SkyModel[k][0], hosekResult.SkyModel[k][1], hosekResult.SkyModel[k][2], 0.0f);
+    cb.DaySkyScale = XMFLOAT4(hosekResult.DaySkyScale[0], hosekResult.DaySkyScale[1], hosekResult.DaySkyScale[2], 0.0f);
+    for (int k = 0; k < 9; ++k)
+        cb.MoonSkyModel[k] = XMFLOAT4(hosekResult.MoonSkyModel[k][0], hosekResult.MoonSkyModel[k][1], hosekResult.MoonSkyModel[k][2], 0.0f);
+    cb.MoonSkyScale = XMFLOAT4(hosekResult.MoonSkyScale[0], hosekResult.MoonSkyScale[1], hosekResult.MoonSkyScale[2], 0.0f);
     for (int row = 0; row < 3; ++row)
     {
         cb.StarRotation[row] = XMFLOAT4(

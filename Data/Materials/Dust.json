@@ -1,0 +1,51 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "baseColorTint": [
+        0.86,
+        0.8,
+        0.7,
+        1.0
+    ],
+    "doubleSided": false,
+    "emissiveColor": [
+        1.0,
+        0.93,
+        0.8
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.35,
+    "glassIor": 1.5,
+    "glassThickness": 0.08,
+    "heightScale": 0.05,
+    "isDecalMaterial": false,
+    "isParticleMaterial": true,
+    "metallicFactor": 0.0,
+    "name": "Dust",
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 1,
+    "particleCameraFadeDistance": 0.4,
+    "particleEmissiveIntensity": 0.08,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 1.0,
+    "particleSphericalNormal": 1.0,
+    "roughnessFactor": 0.9,
+    "textures": {
+        "ambientOcclusion": "",
+        "baseColor": "",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "",
+        "opacity": "",
+        "roughness": ""
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false
+}

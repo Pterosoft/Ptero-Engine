@@ -101,6 +101,21 @@ namespace
         { "B", "B", NodeParamKind::Number, "0", nullptr }
     };
 
+    constexpr Pin kSelectIn[] = { { "Condition", Bool }, { "True", Any }, { "False", Any } };
+    constexpr Pin kSelectOut[] = { { "Result", Any } };
+    constexpr Param kSelectParams[] = {
+        { "Condition", "Condition", NodeParamKind::Bool, "true", nullptr },
+        { "True", "True", NodeParamKind::String, "", nullptr },
+        { "False", "False", NodeParamKind::String, "", nullptr }
+    };
+
+    constexpr Pin kTextPairIn[] = { { "A", Str }, { "B", Str } };
+    constexpr Param kTextEqualsParams[] = {
+        { "A", "A", NodeParamKind::String, "", nullptr },
+        { "B", "B", NodeParamKind::String, "", nullptr },
+        { "Ignore Case", "Ignore case", NodeParamKind::Bool, "false", nullptr }
+    };
+
     // ---- Math -------------------------------------------------------------------
 
     constexpr Pin kNumPairIn[] = { { "A", Num }, { "B", Num } };
@@ -152,6 +167,22 @@ namespace
         { "Alpha", "Alpha", NodeParamKind::Number, "0.5", nullptr }
     };
 
+    constexpr Pin kBitTestIn[] = { { "Value", Num }, { "Bit", Num } };
+    constexpr Param kBitTestParams[] = {
+        { "Value", "Value", NodeParamKind::Number, "0", nullptr },
+        { "Bit", "Bit", NodeParamKind::Number, "0", nullptr }
+    };
+    constexpr Pin kSetBitIn[] = { { "Value", Num }, { "Bit", Num }, { "On", Bool } };
+    constexpr Param kSetBitParams[] = {
+        { "Value", "Value", NodeParamKind::Number, "0", nullptr },
+        { "Bit", "Bit", NodeParamKind::Number, "0", nullptr },
+        { "On", "On", NodeParamKind::Bool, "true", nullptr }
+    };
+    constexpr Param kPowerParams[] = {
+        { "A", "Base", NodeParamKind::Number, "2", nullptr },
+        { "B", "Exponent", NodeParamKind::Number, "2", nullptr }
+    };
+
     // ---- Values -----------------------------------------------------------------
 
     constexpr Pin kNumberLiteralOut[] = { { "Value", Num } };
@@ -176,6 +207,76 @@ namespace
         { "Value", "Value", NodeParamKind::Number, "0", nullptr },
         { "Decimals", "Decimals", NodeParamKind::Number, "0", nullptr },
         { "Grouping", "1,000s", NodeParamKind::Bool, "true", nullptr }
+    };
+
+    constexpr Pin kFormatTextIn[] = { { "Format", Str }, { "{0}", Any }, { "{1}", Any }, { "{2}", Any }, { "{3}", Any } };
+    constexpr Param kFormatTextParams[] = {
+        { "Format", "Format", NodeParamKind::String, "{0}", nullptr },
+        { "{0}", "{0}", NodeParamKind::String, "", nullptr },
+        { "{1}", "{1}", NodeParamKind::String, "", nullptr },
+        { "{2}", "{2}", NodeParamKind::String, "", nullptr },
+        { "{3}", "{3}", NodeParamKind::String, "", nullptr }
+    };
+
+    // ---- Lists ------------------------------------------------------------------
+
+    // A list is plain text - its items joined by the Separator - so it lives in an ordinary
+    // String variable, reads naturally in the Variables dock and needs no new pin type.
+    // Indexes start at 0. Every list node has the Separator on its body; a list built with
+    // one separator has to be read with the same one.
+    constexpr Param kSeparatorParam = { "Separator", "Separator", NodeParamKind::String, ",", nullptr };
+    constexpr Param kListParam = { "List", "List", NodeParamKind::String, "", nullptr };
+
+    constexpr Pin kListIn[] = { { "List", Str } };
+    constexpr Pin kListOut[] = { { "List", Str } };
+    constexpr Pin kCountOut[] = { { "Count", Num } };
+    constexpr Param kListLengthParams[] = { kListParam, kSeparatorParam };
+
+    constexpr Pin kListGetIn[] = { { "List", Str }, { "Index", Num } };
+    constexpr Pin kListGetOut[] = { { "Value", Any }, { "Valid", Bool } };
+    constexpr Param kListGetParams[] = {
+        kListParam,
+        { "Index", "Index", NodeParamKind::Number, "0", nullptr },
+        kSeparatorParam
+    };
+
+    constexpr Pin kListSetIn[] = { { "List", Str }, { "Index", Num }, { "Value", Any } };
+    constexpr Param kListSetParams[] = {
+        kListParam,
+        { "Index", "Index", NodeParamKind::Number, "0", nullptr },
+        { "Value", "Value", NodeParamKind::String, "", nullptr },
+        kSeparatorParam
+    };
+
+    constexpr Pin kListValueIn[] = { { "List", Str }, { "Value", Any } };
+    constexpr Param kListValueParams[] = {
+        kListParam,
+        { "Value", "Value", NodeParamKind::String, "", nullptr },
+        kSeparatorParam
+    };
+
+    constexpr Pin kListFillIn[] = { { "Count", Num }, { "Value", Any } };
+    constexpr Param kListFillParams[] = {
+        { "Count", "Count", NodeParamKind::Number, "6", nullptr },
+        { "Value", "Value", NodeParamKind::String, "0", nullptr },
+        kSeparatorParam
+    };
+
+    constexpr Pin kListLastIn[] = { { "List", Str }, { "Count", Num } };
+    constexpr Param kListLastParams[] = {
+        kListParam,
+        { "Count", "Count", NodeParamKind::Number, "5", nullptr },
+        kSeparatorParam
+    };
+
+    constexpr Pin kListJoinIn[] = { { "List", Str }, { "Before", Str }, { "After", Str }, { "Between", Str } };
+    constexpr Pin kListJoinOut[] = { { "Text", Str } };
+    constexpr Param kListJoinParams[] = {
+        kListParam,
+        { "Before", "Before each", NodeParamKind::String, "", nullptr },
+        { "After", "After each", NodeParamKind::String, "", nullptr },
+        { "Between", "Between", NodeParamKind::String, ", ", nullptr },
+        kSeparatorParam
     };
 
     // ---- Variables --------------------------------------------------------------
@@ -243,6 +344,12 @@ namespace
         { "Visible", "Visible", NodeParamKind::Bool, "true", nullptr }
     };
 
+    constexpr Pin kSetElementEnabledIn[] = { { "In", Exec }, { "Element Id", Str }, { "Enabled", Bool } };
+    constexpr Param kSetElementEnabledParams[] = {
+        { "Element Id", "Element", NodeParamKind::String, "", nullptr },
+        { "Enabled", "Enabled", NodeParamKind::Bool, "true", nullptr }
+    };
+
     // ---- Video ------------------------------------------------------------------
 
     constexpr Pin kPlayVideoIn[] = { { "In", Exec }, { "Video", Str }, { "Loop", Bool } };
@@ -302,6 +409,49 @@ namespace
         { "Z", "Z", NodeParamKind::Number, "1", nullptr }
     };
 
+    // ---- Physics ----------------------------------------------------------------
+
+    // Physics nodes reuse the entity vector layout (In, Entity, X, Y, Z), so a kick is
+    // wired exactly like a Move Entity By.
+    constexpr Param kPhysicsVectorParams[] = {
+        kEntityParam,
+        { "X", "X", NodeParamKind::Number, "0", nullptr },
+        { "Y", "Y", NodeParamKind::Number, "0", nullptr },
+        { "Z", "Z", NodeParamKind::Number, "0", nullptr }
+    };
+    constexpr Pin kVelocityOut[] = { { "X", Num }, { "Y", Num }, { "Z", Num }, { "Speed", Num } };
+
+    // Shared by both raycasts after their inputs: what was hit and where.
+    constexpr Pin kRaycastOut[] = {
+        { "Then", Exec }, { "Hit", Bool }, { "Hit Entity", Ent }, { "Distance", Num },
+        { "Hit X", Num }, { "Hit Y", Num }, { "Hit Z", Num },
+        { "Normal X", Num }, { "Normal Y", Num }, { "Normal Z", Num }
+    };
+    constexpr Pin kRaycastIn[] = {
+        { "In", Exec }, { "Start X", Num }, { "Start Y", Num }, { "Start Z", Num },
+        { "Direction X", Num }, { "Direction Y", Num }, { "Direction Z", Num }, { "Distance", Num }
+    };
+    constexpr Param kRaycastParams[] = {
+        { "Start X", "Start X", NodeParamKind::Number, "0", nullptr },
+        { "Start Y", "Start Y", NodeParamKind::Number, "0", nullptr },
+        { "Start Z", "Start Z", NodeParamKind::Number, "0", nullptr },
+        { "Direction X", "Direction X", NodeParamKind::Number, "0", nullptr },
+        { "Direction Y", "Direction Y", NodeParamKind::Number, "0", nullptr },
+        { "Direction Z", "Direction Z", NodeParamKind::Number, "-1", nullptr },
+        { "Distance", "Distance", NodeParamKind::Number, "100", nullptr }
+    };
+    constexpr Pin kCameraRaycastIn[] = { { "In", Exec }, { "Distance", Num } };
+    constexpr Param kCameraRaycastParams[] = { { "Distance", "Distance", NodeParamKind::Number, "100", nullptr } };
+
+    constexpr Pin kRigidBodyHitOut[] = {
+        { "Then", Exec }, { "Entity", Ent }, { "Other Entity", Ent }, { "Hit Player", Bool },
+        { "Impact Speed", Num }, { "Hit X", Num }, { "Hit Y", Num }, { "Hit Z", Num }
+    };
+    constexpr Param kRigidBodyHitParams[] = {
+        kEntityParam,
+        { "Min Impact Speed", "Min impact speed", NodeParamKind::Number, "1", nullptr }
+    };
+
     constexpr Pin kMoveEntityToIn[] = {
         { "In", Exec }, { "Entity", Ent }, { "X", Num }, { "Y", Num }, { "Z", Num }, { "Duration", Num }
     };
@@ -314,6 +464,18 @@ namespace
         { "Duration", "Seconds", NodeParamKind::Number, "1", nullptr },
         { "Easing", "Easing", NodeParamKind::Enum, "Smoother", kEasingItems },
         { "Arc Height", "Arc height", NodeParamKind::Number, "0", nullptr }
+    };
+
+    constexpr Param kRotateEntityToParams[] = {
+        kEntityParam,
+        { "X", "X", NodeParamKind::Number, "0", nullptr },
+        { "Y", "Y", NodeParamKind::Number, "0", nullptr },
+        { "Z", "Z", NodeParamKind::Number, "0", nullptr },
+        { "Duration", "Seconds", NodeParamKind::Number, "1", nullptr },
+        { "Easing", "Easing", NodeParamKind::Enum, "Smoother", kEasingItems },
+        { "Turns X", "Extra turns X", NodeParamKind::Number, "0", nullptr },
+        { "Turns Y", "Extra turns Y", NodeParamKind::Number, "0", nullptr },
+        { "Turns Z", "Extra turns Z", NodeParamKind::Number, "0", nullptr }
     };
 
     constexpr Pin kGetEntityPropertyOut[] = { { "Value", Num }, { "Success", Bool } };
@@ -492,9 +654,47 @@ namespace
 
     constexpr Pin kMusicPlayingOut[] = { { "Playing", Bool } };
 
+    // ---- Achievements -----------------------------------------------------------
+    // Names are the API names set up on Steamworks, typed as they appear there.
+
+    constexpr Pin kAchievementIn[] = { { "In", Exec }, { "Achievement", Str } };
+    constexpr Param kAchievementParams[] = { { "Achievement", "Achievement", NodeParamKind::String, "ACH_", nullptr } };
+
+    constexpr Pin kAchievementQueryIn[] = { { "Achievement", Str } };
+    constexpr Pin kAchievementUnlockedOut[] = { { "Unlocked", Bool } };
+
+    constexpr Pin kAchievementProgressIn[] = { { "In", Exec }, { "Achievement", Str }, { "Progress", Num }, { "Maximum", Num } };
+    constexpr Param kAchievementProgressParams[] = {
+        { "Achievement", "Achievement", NodeParamKind::String, "ACH_", nullptr },
+        { "Progress", "Progress", NodeParamKind::Number, "1", nullptr },
+        { "Maximum", "Maximum", NodeParamKind::Number, "10", nullptr }
+    };
+
+    constexpr Pin kSetStatIn[] = { { "In", Exec }, { "Stat", Str }, { "Value", Num } };
+    constexpr Param kSetStatParams[] = {
+        { "Stat", "Stat", NodeParamKind::String, "STAT_", nullptr },
+        { "Value", "Value", NodeParamKind::Number, "0", nullptr }
+    };
+    constexpr Pin kAddStatIn[] = { { "In", Exec }, { "Stat", Str }, { "Amount", Num } };
+    constexpr Param kAddStatParams[] = {
+        { "Stat", "Stat", NodeParamKind::String, "STAT_", nullptr },
+        { "Amount", "Amount", NodeParamKind::Number, "1", nullptr }
+    };
+    constexpr Pin kAddStatOut[] = { { "Then", Exec }, { "Success", Bool }, { "New Value", Num } };
+
+    constexpr Pin kStatQueryIn[] = { { "Stat", Str } };
+    constexpr Param kStatQueryParams[] = { { "Stat", "Stat", NodeParamKind::String, "STAT_", nullptr } };
+    constexpr Pin kGetStatOut[] = { { "Value", Num }, { "Found", Bool } };
+
+    constexpr Pin kSteamRunningOut[] = { { "Running", Bool } };
+
     // ---- Game -------------------------------------------------------------------
 
     constexpr Pin kStandaloneOut[] = { { "Standalone", Bool } };
+
+    constexpr Pin kGameSettingIn[] = { { "Key", Str } };
+    constexpr Pin kGameSettingOut[] = { { "Value", Any }, { "Found", Bool } };
+    constexpr Param kGameSettingParams[] = { { "Key", "Key", NodeParamKind::String, "max-score", nullptr } };
 
     constexpr Pin kPrintIn[] = { { "In", Exec }, { "Text", Str } };
     constexpr Param kPrintParams[] = { { "Text", "Text", NodeParamKind::String, "Hello", nullptr } };
@@ -543,6 +743,11 @@ namespace
         { "Event.CharacterJumped", "On Jumped", "Events",
           "Fires when the player character leaves the ground in a jump.",
           nullptr, 0, kEventOut, Count(kEventOut), nullptr, 0 },
+        { "Event.RigidBodyHit", "On Rigid Body Hit", "Events",
+          "Fires when something starts touching the chosen entity - or, with no entity chosen, for every "
+          "collision of a rigid body. Other Entity is what it hit (none for the player: Hit Player). Hits "
+          "slower than Min Impact Speed (m/s) are ignored, which leaves out bodies merely settling.",
+          nullptr, 0, kRigidBodyHitOut, Count(kRigidBodyHitOut), kRigidBodyHitParams, Count(kRigidBodyHitParams) },
 
         { "Flow.Branch", "Branch", "Flow",
           "Takes the True or the False path depending on Condition.",
@@ -585,6 +790,14 @@ namespace
         { "Logic.Compare", "Compare", "Logic", "Compares two numbers.",
           kComparePairIn, Count(kComparePairIn), kBoolOut, Count(kBoolOut),
           kCompareParams, Count(kCompareParams) },
+        { "Logic.Select", "Select", "Logic",
+          "True when Condition is true, False otherwise - a value-level Branch, for picking one of two "
+          "numbers, texts or entities without splitting the execution.",
+          kSelectIn, Count(kSelectIn), kSelectOut, Count(kSelectOut), kSelectParams, Count(kSelectParams) },
+        { "Logic.TextEquals", "Text Equals", "Logic",
+          "True when A and B are the same text - e.g. to tell apart the Element Id of a catch-all On UI "
+          "Button Clicked.",
+          kTextPairIn, Count(kTextPairIn), kBoolOut, Count(kBoolOut), kTextEqualsParams, Count(kTextEqualsParams) },
 
         { "Math.Add", "Add", "Math", "A + B",
           kNumPairIn, Count(kNumPairIn), kNumOut, Count(kNumOut), kNumPairParams, Count(kNumPairParams) },
@@ -629,6 +842,30 @@ namespace
         { "Math.LerpAngle", "Lerp Angle", "Math",
           "Blends between two angles in degrees the short way round, so 350 to 10 passes through 0, not 180.",
           kLerpIn, Count(kLerpIn), kNumOut, Count(kNumOut), kLerpAngleParams, Count(kLerpAngleParams) },
+        { "Math.Power", "Power", "Math",
+          "Base raised to Exponent: 2 to the 3 is 8. An exponent of 0.5 is a square root.",
+          kNumPairIn, Count(kNumPairIn), kNumOut, Count(kNumOut), kPowerParams, Count(kPowerParams) },
+
+        // Whole numbers as rows of on/off flags - bit 0 is worth 1, bit 1 is 2, bit 2 is 4 -
+        // so one Int variable can say which of several things (dice, doors, keys) are picked.
+        { "Math.BitAnd", "Bitwise And", "Math",
+          "The bits that are set in both A and B: which flags two sets have in common.",
+          kNumPairIn, Count(kNumPairIn), kNumOut, Count(kNumOut), kNumPairParams, Count(kNumPairParams) },
+        { "Math.BitOr", "Bitwise Or", "Math",
+          "The bits that are set in A, in B or in both: two sets of flags merged.",
+          kNumPairIn, Count(kNumPairIn), kNumOut, Count(kNumOut), kNumPairParams, Count(kNumPairParams) },
+        { "Math.BitXor", "Bitwise Xor", "Math",
+          "The bits set in exactly one of A and B: XOR with a flag toggles it.",
+          kNumPairIn, Count(kNumPairIn), kNumOut, Count(kNumOut), kNumPairParams, Count(kNumPairParams) },
+        { "Math.BitTest", "Is Bit Set", "Math",
+          "True when bit number Bit (0 = the 1s bit) of Value is set.",
+          kBitTestIn, Count(kBitTestIn), kBoolOut, Count(kBoolOut), kBitTestParams, Count(kBitTestParams) },
+        { "Math.SetBit", "Set Bit", "Math",
+          "Value with bit number Bit turned on or off.",
+          kSetBitIn, Count(kSetBitIn), kNumOut, Count(kNumOut), kSetBitParams, Count(kSetBitParams) },
+        { "Math.CountBits", "Count Bits", "Math",
+          "How many bits of Value are set: how many flags are on.",
+          kNumIn, Count(kNumIn), kNumOut, Count(kNumOut), kNumParams, Count(kNumParams) },
 
         { "Value.Number", "Number", "Values", "A number literal.",
           nullptr, 0, kNumberLiteralOut, Count(kNumberLiteralOut),
@@ -646,6 +883,38 @@ namespace
         { "Value.FormatNumber", "Format Number", "Values",
           "Number as display text: a fixed count of decimals, and thousands separated with commas (3,000).",
           kNumIn, Count(kNumIn), kStringOut, Count(kStringOut), kFormatNumberParams, Count(kFormatNumberParams) },
+        { "Value.FormatText", "Format Text", "Values",
+          "Fills {0}..{3} in Format with the inputs: \"You banked {0}\". Each placeholder may appear any "
+          "number of times. Numbers come in as plain digits; use Format Number first for 3,000.",
+          kFormatTextIn, Count(kFormatTextIn), kStringOut, Count(kStringOut),
+          kFormatTextParams, Count(kFormatTextParams) },
+
+        { "List.Get", "Get Item", "Lists",
+          "The item at Index (0 is the first). Valid is false, and Value empty, past the end.",
+          kListGetIn, Count(kListGetIn), kListGetOut, Count(kListGetOut), kListGetParams, Count(kListGetParams) },
+        { "List.Set", "Set Item", "Lists",
+          "The list with the item at Index replaced. Past the end the list grows, with empty items in "
+          "between. Store the result back in the list's variable.",
+          kListSetIn, Count(kListSetIn), kListOut, Count(kListOut), kListSetParams, Count(kListSetParams) },
+        { "List.Add", "Add Item", "Lists",
+          "The list with Value appended at the end.",
+          kListValueIn, Count(kListValueIn), kListOut, Count(kListOut), kListValueParams, Count(kListValueParams) },
+        { "List.Length", "List Length", "Lists",
+          "How many items the list holds. An empty text is an empty list.",
+          kListIn, Count(kListIn), kCountOut, Count(kCountOut), kListLengthParams, Count(kListLengthParams) },
+        { "List.Count", "Count Item", "Lists",
+          "How many items equal Value - how many dice show a 5, how many cards are hearts.",
+          kListValueIn, Count(kListValueIn), kCountOut, Count(kCountOut), kListValueParams, Count(kListValueParams) },
+        { "List.Fill", "Make List", "Lists",
+          "A list of Count items that are all Value: \"0,0,0,0,0,0\" for six counters.",
+          kListFillIn, Count(kListFillIn), kListOut, Count(kListOut), kListFillParams, Count(kListFillParams) },
+        { "List.Last", "Last Items", "Lists",
+          "The last Count items of the list, dropping the oldest - for a log that keeps only recent lines.",
+          kListLastIn, Count(kListLastIn), kListOut, Count(kListOut), kListLastParams, Count(kListLastParams) },
+        { "List.Join", "Join List", "Lists",
+          "The items as one text: each wrapped in Before and After, with Between in between. Builds "
+          "UI markup from a list, e.g. Before <div class=\"row\"> and After </div>.",
+          kListJoinIn, Count(kListJoinIn), kListJoinOut, Count(kListJoinOut), kListJoinParams, Count(kListJoinParams) },
 
         { "Variable.Get", "Get Variable", "Variables", "Reads one of the graph's variables.",
           nullptr, 0, kGetVariableOut, Count(kGetVariableOut), kVariableParams, Count(kVariableParams) },
@@ -693,6 +962,11 @@ namespace
         { "UI.SetElementVisible", "Set UI Element Visible", "UI", "Shows or hides a single element.",
           kSetElementVisibleIn, Count(kSetElementVisibleIn), kExecSuccessOut, Count(kExecSuccessOut),
           kSetElementVisibleParams, Count(kSetElementVisibleParams) },
+        { "UI.SetElementEnabled", "Set UI Element Enabled", "UI",
+          "Enables or disables a button or form control: a disabled one is drawn as such and its "
+          "clicks never reach On UI Button Clicked.",
+          kSetElementEnabledIn, Count(kSetElementEnabledIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kSetElementEnabledParams, Count(kSetElementEnabledParams) },
 
         { "Video.Play", "Play Video", "Video",
           "Plays a .webm from Data over the whole screen, under the game UI. Video is the path inside Data "
@@ -785,9 +1059,18 @@ namespace
           kSetEntityScaleParams, Count(kSetEntityScaleParams) },
         { "Entity.MoveTo", "Move Entity To", "Entity",
           "Glides the entity to a position over Duration seconds. Then fires at once, Completed on arrival. "
-          "Arc Height lifts it along the way, for a throw or a hop. Firing In again restarts from where it is.",
+          "Arc Height lifts it along the way, for a throw or a hop. Firing In again for the same entity "
+          "restarts from where it is; for another entity both move at once (e.g. from a For Loop), and "
+          "Completed fires for each.",
           kMoveEntityToIn, Count(kMoveEntityToIn), kLatentOut, Count(kLatentOut),
           kMoveEntityToParams, Count(kMoveEntityToParams) },
+        { "Entity.RotateTo", "Rotate Entity To", "Entity",
+          "Turns the entity to a rotation (degrees about X, Y, Z) over Duration seconds, the short way "
+          "round. Extra Turns adds whole revolutions on the way - a tumbling die, a spinning coin - and it "
+          "still comes to rest exactly at the rotation asked for. Like Move Entity To, several entities can "
+          "turn at once.",
+          kMoveEntityToIn, Count(kMoveEntityToIn), kLatentOut, Count(kLatentOut),
+          kRotateEntityToParams, Count(kRotateEntityToParams) },
         { "Entity.GetProperty", "Get Entity Property", "Entity",
           "Reads a component property. Success is false when the entity lacks that component. "
           "Booleans read as 1 or 0.",
@@ -805,6 +1088,37 @@ namespace
         { "Entity.StopAudio", "Stop Entity Audio", "Entity", "Stops the entity's Audio Emitter.",
           kEntityActionIn, Count(kEntityActionIn), kExecSuccessOut, Count(kExecSuccessOut),
           kEntityRefParams, Count(kEntityRefParams) },
+
+        { "Physics.AddImpulse", "Add Impulse", "Physics",
+          "Kicks a Dynamic rigid body: an instant push in N*s (kg*m/s), e.g. to throw or knock it over. "
+          "The change in speed is the impulse divided by the mass. Success is false without a Dynamic Rigid Body.",
+          kSetEntityVectorIn, Count(kSetEntityVectorIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kPhysicsVectorParams, Count(kPhysicsVectorParams) },
+        { "Physics.AddForce", "Add Force", "Physics",
+          "Pushes a Dynamic rigid body with a force in newtons for one frame - run it on Tick for a steady push, "
+          "like wind or a thruster. Gravity alone is 9.81 N per kilogram.",
+          kSetEntityVectorIn, Count(kSetEntityVectorIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kPhysicsVectorParams, Count(kPhysicsVectorParams) },
+        { "Physics.SetVelocity", "Set Velocity", "Physics",
+          "Sets how fast a Dynamic rigid body moves, in m/s, whatever it was doing - a launch pad, a hard stop.",
+          kSetEntityVectorIn, Count(kSetEntityVectorIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kPhysicsVectorParams, Count(kPhysicsVectorParams) },
+        { "Physics.SetAngularVelocity", "Set Spin", "Physics",
+          "Sets how fast a Dynamic rigid body turns about the world X, Y and Z axes, in degrees per second.",
+          kSetEntityVectorIn, Count(kSetEntityVectorIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kPhysicsVectorParams, Count(kPhysicsVectorParams) },
+        { "Physics.GetVelocity", "Get Velocity", "Physics",
+          "How fast a Dynamic or Kinematic rigid body is moving, in m/s. Zero for anything else.",
+          kEntityIn, Count(kEntityIn), kVelocityOut, Count(kVelocityOut), kEntityRefParams, Count(kEntityRefParams) },
+        { "Physics.Raycast", "Raycast", "Physics",
+          "Traces a line from Start along Direction for Distance metres and reports the first thing solid it "
+          "meets - level geometry, terrain or a rigid body, never the player. Direction need not be normalised.",
+          kRaycastIn, Count(kRaycastIn), kRaycastOut, Count(kRaycastOut), kRaycastParams, Count(kRaycastParams) },
+        { "Physics.RaycastFromCamera", "Raycast From Camera", "Physics",
+          "Raycast from the game camera straight ahead: what the player is looking at, for shooting, "
+          "picking things up or pushing them.",
+          kCameraRaycastIn, Count(kCameraRaycastIn), kRaycastOut, Count(kRaycastOut),
+          kCameraRaycastParams, Count(kCameraRaycastParams) },
 
         { "Camera.Get", "Get Camera", "Camera",
           "Where the game camera is, in metres, and where it looks: Pitch and Yaw in degrees.",
@@ -917,6 +1231,39 @@ namespace
         { "Audio.IsMusicPlaying", "Is Music Playing", "Audio", "True while the music channel has a track.",
           nullptr, 0, kMusicPlayingOut, Count(kMusicPlayingOut), nullptr, 0 },
 
+        { "Achievements.Unlock", "Unlock Achievement", "Achievements",
+          "Unlocks a Steam achievement by its API name (ACH_...). Success is true once it is unlocked, including "
+          "when it already was. Without Steam (playing from the editor) it is kept for this session only.",
+          kAchievementIn, Count(kAchievementIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kAchievementParams, Count(kAchievementParams) },
+        { "Achievements.IsUnlocked", "Is Achievement Unlocked", "Achievements",
+          "True when the player has the achievement.",
+          kAchievementQueryIn, Count(kAchievementQueryIn), kAchievementUnlockedOut, Count(kAchievementUnlockedOut),
+          kAchievementParams, Count(kAchievementParams) },
+        { "Achievements.ShowProgress", "Show Achievement Progress", "Achievements",
+          "Shows Steam's progress notification (Progress / Maximum) for an achievement. It unlocks nothing; "
+          "Progress must be below Maximum.",
+          kAchievementProgressIn, Count(kAchievementProgressIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kAchievementProgressParams, Count(kAchievementProgressParams) },
+        { "Achievements.Clear", "Clear Achievement", "Achievements",
+          "Locks an achievement again, for testing. Never leave this in a shipped graph: it takes the "
+          "achievement away from players.",
+          kAchievementIn, Count(kAchievementIn), kExecSuccessOut, Count(kExecSuccessOut),
+          kAchievementParams, Count(kAchievementParams) },
+        { "Achievements.SetStat", "Set Stat", "Achievements",
+          "Sets a Steam INT stat (STAT_...). Fails for a stat Steamworks does not define, or an increment-only "
+          "stat that would go down. An achievement using the stat as its progress stat unlocks on its own at its maximum.",
+          kSetStatIn, Count(kSetStatIn), kExecSuccessOut, Count(kExecSuccessOut), kSetStatParams, Count(kSetStatParams) },
+        { "Achievements.AddStat", "Add to Stat", "Achievements",
+          "Adds Amount to a Steam INT stat and reports the new value.",
+          kAddStatIn, Count(kAddStatIn), kAddStatOut, Count(kAddStatOut), kAddStatParams, Count(kAddStatParams) },
+        { "Achievements.GetStat", "Get Stat", "Achievements",
+          "Reads a Steam INT stat. Found is false for a stat Steamworks does not define.",
+          kStatQueryIn, Count(kStatQueryIn), kGetStatOut, Count(kGetStatOut), kStatQueryParams, Count(kStatQueryParams) },
+        { "Achievements.IsSteamRunning", "Is Steam Running", "Achievements",
+          "True in a Steam build started through Steam. False in the editor, where achievements last one session.",
+          nullptr, 0, kSteamRunningOut, Count(kSteamRunningOut), nullptr, 0 },
+
         { "Game.Stop", "Stop Game", "Game", "Leaves play mode, as Escape does.",
           kExecIn, Count(kExecIn), nullptr, 0, nullptr, 0 },
         { "Game.ToggleFullscreen", "Toggle Fullscreen", "Game", "Switches the game window in or out of fullscreen.",
@@ -924,6 +1271,11 @@ namespace
         { "Game.IsStandalone", "Is Standalone", "Game",
           "True in the packaged game, false when playing from the editor - for editor-only debug UI.",
           nullptr, 0, kStandaloneOut, Count(kStandaloneOut), nullptr, 0 },
+        { "Game.GetSetting", "Get Game Setting", "Game",
+          "A value the player saved in the game's settings menus, by the id of its control (max-score, "
+          "music-volume...). Found is false for a key the menus do not have.",
+          kGameSettingIn, Count(kGameSettingIn), kGameSettingOut, Count(kGameSettingOut),
+          kGameSettingParams, Count(kGameSettingParams) },
         { "Game.GetPlayTime", "Get Play Time", "Game", "Seconds since the play session started.",
           nullptr, 0, kPlayTimeOut, Count(kPlayTimeOut), nullptr, 0 },
         { "Debug.Print", "Print String", "Game", "Writes a line to the debug output and the editor log.",

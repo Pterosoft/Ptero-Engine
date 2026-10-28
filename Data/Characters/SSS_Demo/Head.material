@@ -1,0 +1,110 @@
+{
+    "alphaCutoff": 0.5,
+    "ambientOcclusionStrength": 1.0,
+    "anisotropic": 0.0,
+    "baseColorTint": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "clearcoat": 0.20000000298023224,
+    "clearcoatGloss": 0.75,
+    "displacementMidLevel": 0.5,
+    "displacementScale": 0.05000000074505806,
+    "doubleSided": false,
+    "emissiveColor": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "glassCausticStrength": 0.0,
+    "glassDispersion": 0.3499999940395355,
+    "glassIor": 1.5,
+    "glassThickness": 0.07999999821186066,
+    "heightReference": 1.0,
+    "heightScale": 0.05000000074505806,
+    "irisCenter": [
+        0.5,
+        0.5
+    ],
+    "irisOffset": [
+        0.0,
+        0.0
+    ],
+    "irisRadius": 0.11999999731779099,
+    "irisScale": 1.0,
+    "irisWarpRadius": 0.2800000011920929,
+    "isDecalMaterial": false,
+    "isParticleMaterial": false,
+    "metallicFactor": 0.0,
+    "name": "Head",
+    "normalFlipGreen": true,
+    "normalScale": 1.0,
+    "opacity": 1.0,
+    "parallaxFadeDistance": 30.0,
+    "parallaxMaxSteps": 32,
+    "parallaxMinSteps": 8,
+    "particleAlphaFromLuminance": false,
+    "particleBlendMode": 0,
+    "particleCameraFadeDistance": 0.6000000238418579,
+    "particleEmissiveIntensity": 1.0,
+    "particleFlipbookColumns": 1,
+    "particleFlipbookRows": 1,
+    "particleLightingInfluence": 0.0,
+    "particleSphericalNormal": 0.6000000238418579,
+    "pupilRadius": 0.03999999910593033,
+    "pupilScale": 1.0,
+    "roughnessFactor": 1.0,
+    "sheen": 0.20000000298023224,
+    "sheenTint": 0.5,
+    "specularFactor": 0.3499999940395355,
+    "specularTint": 0.0,
+    "subsurfaceColor": [
+        0.47999998927116394,
+        0.4099999964237213,
+        0.2800000011920929
+    ],
+    "subsurfaceFalloff": [
+        1.0,
+        0.3700000047683716,
+        0.30000001192092896
+    ],
+    "subsurfaceFlatten": 0.0,
+    "subsurfaceRadiusMm": 3.0,
+    "subsurfaceTranslucency": 0.800000011920929,
+    "tessellationFadeDistance": 60.0,
+    "tessellationMaxFactor": 16.0,
+    "tessellationTargetPixels": 8.0,
+    "textures": {
+        "ambientOcclusion": "",
+        "anisotropyDirection": "",
+        "baseColor": "Characters/SSS_Demo/Textures/Face/Face_Albedo.dds",
+        "emissive": "",
+        "height": "",
+        "metallic": "",
+        "metallicRoughness": "",
+        "normal": "Characters/SSS_Demo/Textures/Face/Face_Normal.dds",
+        "opacity": "",
+        "orm": "",
+        "principledMask": "",
+        "roughness": "Characters/SSS_Demo/Textures/Face/Face_Roughness.dds"
+    },
+    "useAlphaCutout": false,
+    "useGlassRendering": false,
+    "useIrisAdjust": false,
+    "useParallaxOcclusion": false,
+    "useSubsurfaceScattering": true,
+    "useTessellation": false,
+    "useThinGlass": true,
+    "useTransparentBlend": false,
+    "uvOffset": [
+        0.0,
+        0.0
+    ],
+    "uvRotationDegrees": 0.0,
+    "uvTiling": [
+        1.0,
+        1.0
+    ]
+}

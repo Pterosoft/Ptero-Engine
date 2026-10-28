@@ -21,7 +21,13 @@ enum class MaterialTextureSlot
     // Unreal-style packed map: R = ambient occlusion, G = roughness, B = metallic.
     // The engine's own packed slot (MetallicRoughness) is R = roughness, G = metallic,
     // B = AO; this one is read with the channels swapped so ORM exports load unchanged.
-    OcclusionRoughnessMetallic
+    OcclusionRoughnessMetallic,
+    // Disney principled mask: R clearcoat, G sheen, B anisotropic, A flatten. Each channel
+    // scales its slider (MaterialDefinition::Clearcoat and friends).
+    PrincipledMask,
+    // Anisotropy direction: RG = the highlight's direction in the UV frame (R along U,
+    // G along V, 0.5 = zero), in the normal map's green convention.
+    AnisotropyDirection
 };
 
 // How a particle sprite is composited into the scene colour target.
@@ -46,6 +52,8 @@ struct MaterialTextureSet
     std::string HeightTexturePath;
     std::string OpacityTexturePath;
     std::string OcclusionRoughnessMetallicTexturePath;
+    std::string PrincipledMaskTexturePath;
+    std::string AnisotropyDirectionTexturePath;
 
     std::string& GetTexturePath(MaterialTextureSlot textureSlot);
     const std::string& GetTexturePath(MaterialTextureSlot textureSlot) const;
@@ -135,6 +143,42 @@ struct MaterialDefinition
     // How readily light passes all the way through thin parts (ears, fingers,
     // leaves) and lights the far side. 0 disables transmission.
     float SubsurfaceTranslucency = 0.8f;
+
+    // --- Iris adjust (eye materials) ----------------------------------------
+    // Moves, scales and dilates the iris in texture space so an eye can look somewhere,
+    // or be resized, without rotating its mesh. All values are in texture UV units (after
+    // the UV transform above). Only the disc of IrisWarpRadius around IrisCenter is
+    // touched: the iris moves rigidly and the sclera between it and the disc's rim
+    // stretches to fill in, so the rest of the texture stays where it was.
+    bool UseIrisAdjust = false;
+    std::array<float, 2> IrisCenter{ 0.5f, 0.5f };   // where the iris is in the texture
+    float IrisRadius = 0.12f;                        // the iris's radius in the texture
+    std::array<float, 2> IrisOffset{ 0.0f, 0.0f };   // how far to move it
+    float IrisScale = 1.0f;                          // its new size relative to the authored one
+    float PupilRadius = 0.04f;                       // the pupil's radius in the texture
+    float PupilScale = 1.0f;                         // dilation: >1 widens the pupil
+    float IrisWarpRadius = 0.28f;                    // edge of the region that may be warped
+
+    // --- Disney principled BRDF (Burley 2012, "Physically-Based Shading at Disney") ---
+    // The extra lobes of the principled model, all in [0, 1]. Every one of them defaults
+    // to "off", so a material that never touches them shades exactly as the base model
+    // does. They only take effect while the renderer's Disney BRDF setting is on.
+    // Disney's "subsurface": flattens the diffuse response towards a Hanrahan-Krueger
+    // approximation of thin subsurface scattering. It is a shape change of the diffuse
+    // lobe, not the light transport UseSubsurfaceScattering performs; the two combine.
+    float SubsurfaceFlatten = 0.0f;
+    // Tints the dielectric specular towards the base colour's hue.
+    float SpecularTint = 0.0f;
+    // Stretches the specular highlight along the surface tangent (the texture's U axis).
+    float Anisotropic = 0.0f;
+    // Extra grazing-angle reflection for cloth.
+    float Sheen = 0.0f;
+    // Tints the sheen towards the base colour's hue.
+    float SheenTint = 0.5f;
+    // A second, fixed-IOR (1.5), black-and-white specular lobe: car paint, lacquer.
+    float Clearcoat = 0.0f;
+    // Clearcoat glossiness; 0 is satin, 1 is gloss.
+    float ClearcoatGloss = 1.0f;
 
     bool IsDoubleSided = false;
     bool UseAlphaCutout = false;

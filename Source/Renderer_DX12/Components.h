@@ -255,6 +255,48 @@ struct PointLightComponent
     std::string CustomStylePattern = "mmnmmommommnonmmonqnmmo";
 };
 
+// A camera placed in the level: what cinematics cut between, and what the viewport can
+// be locked to or piloted as.
+//
+// A camera looks along its entity's local +Y - the PlayerStart convention - with +Z up,
+// so with only Rotation.x (tilt) and Rotation.z (heading) set it maps exactly onto the
+// engine's pitch/yaw view: pitch = Rotation.x, yaw = -Rotation.z. Roll (Rotation.y) is
+// carried by the data but the renderer's view has no roll yet, so it does not show.
+//
+// The lens is physical: focal length over a sensor gives the field of view, so a shot
+// matched to a real lens frames the same. Field of view stays an editable property of
+// its own, derived from and written back through the focal length.
+//
+// Depth-of-field settings (aperture, focus distance) are deliberately absent until the
+// renderer has a depth-of-field pass to consume them.
+struct CameraComponent
+{
+    float FocalLengthMm = 35.0f;
+    // Full-frame 35 mm by default.
+    float SensorWidthMm = 36.0f;
+    float SensorHeightMm = 24.0f;
+    float NearClip = 0.1f;
+
+    // Procedural handheld shake: angular amplitude in degrees and how many wobbles per
+    // second. Driven by sequence time when a sequence owns the camera, so a rendered
+    // frame shakes identically every time.
+    float ShakeAmplitudeDegrees = 0.0f;
+    float ShakeFrequency = 1.5f;
+
+    // Vertical, which is what the renderer's projection takes.
+    float VerticalFovDegrees() const
+    {
+        const float focal = (std::max)(FocalLengthMm, 0.1f);
+        return 2.0f * std::atan(SensorHeightMm * 0.5f / focal) * 57.29577951308232f;
+    }
+
+    void SetVerticalFovDegrees(float degrees)
+    {
+        const float clamped = std::clamp(degrees, 1.0f, 170.0f);
+        FocalLengthMm = SensorHeightMm * 0.5f / std::tan(clamped * 0.5f * 0.017453292519943295f);
+    }
+};
+
 struct AudioEmitterComponent
 {
     std::string EventPath;
@@ -276,6 +318,73 @@ struct DecalComponent
     float SizeX = 1.0f;
     float SizeY = 1.0f;
     float SizeZ = 1.0f;
+};
+
+// RigidBodyComponent: puts the entity in the Jolt simulation (Physics.dll) during play.
+//
+// Every mesh entity already collides as static level geometry without one; this component
+// is for what should move (Dynamic, Kinematic) or for a static collider that needs a
+// simpler or different shape than its mesh. The simulation only runs while playing, and
+// the entities are restored when the session ends, so nothing it moves is ever saved.
+enum class RigidBodyMotion : int
+{
+    Static    = 0,  // never moves; collides with what does
+    Dynamic   = 1,  // driven by gravity, contacts and forces
+    Kinematic = 2,  // moved by the game (Set Transform); pushes dynamic bodies, is never pushed
+};
+
+enum class RigidBodyShape : int
+{
+    // Convex decomposition hulls when the mesh has them (Tools > Generate Collisions),
+    // otherwise the convex hull of the mesh for a dynamic body, or the exact triangles
+    // for a static or kinematic one.
+    Auto         = 0,
+    Box          = 1,  // fitted to the mesh bounds
+    Sphere       = 2,  // fitted to the mesh bounds
+    Capsule      = 3,  // fitted to the mesh bounds, along local Z
+    ConvexHull   = 4,  // hull of the finest LOD
+    TriangleMesh = 5,  // exact triangles of the finest LOD; never dynamic (falls back to the hull)
+};
+
+struct RigidBodyComponent
+{
+    RigidBodyMotion Motion = RigidBodyMotion::Dynamic;
+    RigidBodyShape  Shape  = RigidBodyShape::Auto;
+
+    // Kilograms. 0 derives the mass from the shape's volume at the density of water.
+    float Mass           = 10.0f;
+    float Friction       = 0.5f;
+    float Restitution    = 0.1f;   // bounciness, 0..1
+    float LinearDamping  = 0.05f;
+    float AngularDamping = 0.05f;
+    float GravityScale   = 1.0f;
+
+    // Continuous collision detection, for small fast bodies that would tunnel through walls.
+    bool ContinuousCollision = false;
+    bool StartAsleep         = false;
+};
+
+// AnimatorComponent: plays skeletal animation on a skinned mesh entity (Animations.dll).
+// The mesh's skin (its .pskin sidecar) names the joints each vertex follows; the skeleton
+// supplies those joints and the clips move them. SceneAnimation evaluates the pose every
+// frame and EntityMeshRenderer skins the mesh on the GPU. The playback state itself lives in
+// SceneAnimation, not here: this is only what the level saves.
+struct AnimatorComponent
+{
+    // Paths relative to Data/: one .pskel, and the .panim clips built against it.
+    std::string SkeletonPath;
+    std::vector<std::string> ClipPaths;
+
+    // The clip playing when the level starts (and the one previewed in the editor).
+    int DefaultClip = 0;
+    bool Loop = true;
+    float Speed = 1.0f;
+    // Cross-fade, in seconds, when the game switches clips.
+    float BlendSeconds = 0.2f;
+    bool PlayOnStart = true;
+
+    // Animate in the editor viewport too, not only while playing.
+    bool PreviewInEditor = true;
 };
 
 // RainComponent: places a camera-relative rain particle simulation at this entity's location.
@@ -529,7 +638,7 @@ struct ParticleSystemComponent
 
 // Hard ceiling on particles across all systems in a level, so a mistyped rate
 // on one emitter cannot exhaust VRAM.
-inline constexpr int kParticleMaxPerSystem = 65536;
+inline constexpr int kParticleMaxPerSystem = 131072; // 64 bytes each: 8 MB per system at most
 inline constexpr int kParticleMaxSystems   = 16;
 
 // TerrainComponent: a heightmap-driven patch of ground that lives at the
@@ -908,8 +1017,11 @@ struct Entity
     TransformComponent Transform;
     std::optional<MeshComponent> Mesh;
     std::optional<PointLightComponent> PointLight;
+    std::optional<CameraComponent> Camera;
     std::optional<AudioEmitterComponent> AudioEmitter;
     std::optional<DecalComponent> Decal;
+    std::optional<RigidBodyComponent> RigidBody;
+    std::optional<AnimatorComponent> Animator;
     std::optional<RainComponent> Rain;
     std::optional<ParticleSystemComponent> ParticleSystem;
     std::optional<TerrainComponent> Terrain;
@@ -1199,6 +1311,29 @@ inline void from_json(const nlohmann::json& j, PointLightComponent& pl)
     if (pl.GiContribution < 0.0f) pl.GiContribution = 0.0f;
 }
 
+inline void to_json(nlohmann::json& j, const CameraComponent& camera)
+{
+    j = nlohmann::json{
+        { "FocalLengthMm", camera.FocalLengthMm },
+        { "SensorWidthMm", camera.SensorWidthMm },
+        { "SensorHeightMm", camera.SensorHeightMm },
+        { "NearClip", camera.NearClip },
+        { "ShakeAmplitudeDegrees", camera.ShakeAmplitudeDegrees },
+        { "ShakeFrequency", camera.ShakeFrequency }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, CameraComponent& camera)
+{
+    const CameraComponent defaults;
+    camera.FocalLengthMm = (std::max)(j.value("FocalLengthMm", defaults.FocalLengthMm), 1.0f);
+    camera.SensorWidthMm = (std::max)(j.value("SensorWidthMm", defaults.SensorWidthMm), 1.0f);
+    camera.SensorHeightMm = (std::max)(j.value("SensorHeightMm", defaults.SensorHeightMm), 1.0f);
+    camera.NearClip = (std::max)(j.value("NearClip", defaults.NearClip), 0.001f);
+    camera.ShakeAmplitudeDegrees = (std::max)(j.value("ShakeAmplitudeDegrees", defaults.ShakeAmplitudeDegrees), 0.0f);
+    camera.ShakeFrequency = (std::max)(j.value("ShakeFrequency", defaults.ShakeFrequency), 0.0f);
+}
+
 inline void to_json(nlohmann::json& j, const AudioEmitterComponent& ae)
 {
     j = nlohmann::json{
@@ -1229,6 +1364,64 @@ inline void from_json(const nlohmann::json& j, DecalComponent& dc)
     dc.SizeX        = j.value("SizeX",        1.0f);
     dc.SizeY        = j.value("SizeY",        1.0f);
     dc.SizeZ        = j.value("SizeZ",        1.0f);
+}
+
+inline void to_json(nlohmann::json& j, const RigidBodyComponent& rb)
+{
+    j = nlohmann::json{
+        { "Motion",              static_cast<int>(rb.Motion) },
+        { "Shape",               static_cast<int>(rb.Shape)  },
+        { "Mass",                rb.Mass                     },
+        { "Friction",            rb.Friction                 },
+        { "Restitution",         rb.Restitution              },
+        { "LinearDamping",       rb.LinearDamping            },
+        { "AngularDamping",      rb.AngularDamping           },
+        { "GravityScale",        rb.GravityScale             },
+        { "ContinuousCollision", rb.ContinuousCollision      },
+        { "StartAsleep",         rb.StartAsleep              }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, RigidBodyComponent& rb)
+{
+    const RigidBodyComponent defaults;
+    rb.Motion = static_cast<RigidBodyMotion>(std::clamp(j.value("Motion", static_cast<int>(defaults.Motion)), 0, 2));
+    rb.Shape  = static_cast<RigidBodyShape>(std::clamp(j.value("Shape", static_cast<int>(defaults.Shape)), 0, 5));
+    rb.Mass                = j.value("Mass",                defaults.Mass);
+    rb.Friction            = j.value("Friction",            defaults.Friction);
+    rb.Restitution         = j.value("Restitution",         defaults.Restitution);
+    rb.LinearDamping       = j.value("LinearDamping",       defaults.LinearDamping);
+    rb.AngularDamping      = j.value("AngularDamping",      defaults.AngularDamping);
+    rb.GravityScale        = j.value("GravityScale",        defaults.GravityScale);
+    rb.ContinuousCollision = j.value("ContinuousCollision", defaults.ContinuousCollision);
+    rb.StartAsleep         = j.value("StartAsleep",         defaults.StartAsleep);
+}
+
+inline void to_json(nlohmann::json& j, const AnimatorComponent& ac)
+{
+    j = nlohmann::json{
+        { "SkeletonPath",    ac.SkeletonPath    },
+        { "ClipPaths",       ac.ClipPaths       },
+        { "DefaultClip",     ac.DefaultClip     },
+        { "Loop",            ac.Loop            },
+        { "Speed",           ac.Speed           },
+        { "BlendSeconds",    ac.BlendSeconds    },
+        { "PlayOnStart",     ac.PlayOnStart     },
+        { "PreviewInEditor", ac.PreviewInEditor }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, AnimatorComponent& ac)
+{
+    const AnimatorComponent defaults;
+    ac.SkeletonPath    = j.value("SkeletonPath",    defaults.SkeletonPath);
+    ac.ClipPaths       = j.value("ClipPaths",       defaults.ClipPaths);
+    ac.DefaultClip     = j.value("DefaultClip",     defaults.DefaultClip);
+    ac.Loop            = j.value("Loop",            defaults.Loop);
+    ac.Speed           = j.value("Speed",           defaults.Speed);
+    ac.BlendSeconds    = j.value("BlendSeconds",    defaults.BlendSeconds);
+    ac.PlayOnStart     = j.value("PlayOnStart",     defaults.PlayOnStart);
+    ac.PreviewInEditor = j.value("PreviewInEditor", defaults.PreviewInEditor);
 }
 
 inline void to_json(nlohmann::json& j, const RainComponent& rc)

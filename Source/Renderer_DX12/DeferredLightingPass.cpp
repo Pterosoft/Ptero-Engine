@@ -1,13 +1,17 @@
 #include "pch.h"
 #include "DeferredLightingPass.h"
+#include "LightClusterRenderer.h"
 #include "System/PteroLog.h"
 
 #include "VolumetricFogSettings.h"
+#include "AnalyticEdgeAARenderer.h"
 
 #include "d3dx12.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 // Extern C helpers shared across the renderer.
 extern "C"
@@ -45,13 +49,37 @@ using namespace DirectX;
 //
 // The deferred lighting resolve was immune because it samples the real D32
 // depth buffer instead, which is why the fault looked like an RTGI-only bug.
-static constexpr DXGI_FORMAT kGBufferFormats[3] =
+static constexpr DXGI_FORMAT kGBufferFormats[] =
 {
     DXGI_FORMAT_R8G8B8A8_UNORM,     // albedo
     DXGI_FORMAT_R32G32B32A32_FLOAT, // normal + depth
     DXGI_FORMAT_R8G8B8A8_UNORM,     // material
+    AnalyticEdge::kGBufferFormat,   // triangle edges for Analytic Edge AA
+    PrincipledGBuffer::kFormat,     // Disney: subsurface, specular tint, sheen, sheen tint
+    PrincipledGBuffer::kFormat,     // Disney: clearcoat, clearcoat gloss, anisotropic, tangent
 };
-static constexpr UINT kGBufferCount = 3;
+static constexpr UINT kGBufferCount = DeferredLightingPass::kGBufferTargetCount;
+static_assert(std::size(kGBufferFormats) == kGBufferCount);
+
+// Clear colours, which are also the targets' optimised clear values. The normal target
+// clears depth to 1.0 so untouched sky pixels can be rejected; the edge target clears
+// to "no edge" (kPteroNoEdge in AnalyticEdge.hlsli) - it is an integer format, and a
+// float clear colour is converted to its integer value.
+// The principled targets clear to zero, which is every extra lobe off.
+static constexpr float kGBufferClearColors[kGBufferCount][4] =
+{
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 0.5f, 0.5f, 1.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 255.0f, 255.0f, 255.0f, 255.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 0.0f },
+};
+
+// Whether ResolveSubresource can average a target under MSAA. The edge target is an
+// integer format, which cannot be resolved - and an average of several triangles' edges
+// would mean nothing anyway, which is why Analytic Edge AA and AAR do not run under MSAA.
+static constexpr bool kGBufferResolvable[kGBufferCount] = { true, true, true, false, true, true };
 
 // ---------------------------------------------------------------------------
 // Public
@@ -111,7 +139,7 @@ void DeferredLightingPass::BeginGeometryPass(
     const auto* resources = mMsaaSettings.Enabled ? mMsaaGBufferResources : mGBufferResources;
     const auto* rtvHandles = mMsaaSettings.Enabled ? mMsaaRtvHandles : mRtvHandles;
 
-    // Transition all three G-Buffer RTs from SRV/RESOLVE_SOURCE -> RTV.
+    // Transition all G-Buffer RTs from SRV/RESOLVE_SOURCE -> RTV.
     D3D12_RESOURCE_BARRIER barriers[kGBufferCount];
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
@@ -123,16 +151,13 @@ void DeferredLightingPass::BeginGeometryPass(
     }
     commandList->ResourceBarrier(kGBufferCount, barriers);
 
-    // Clear all three G-Buffer RTs to zero/identity.
-    const float clearBlack[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    // The normal RT stores oct-encoded normal XY plus copied scene depth in Z.
-    // Clear depth to 1.0 for untouched sky pixels so RTGI can reject them safely.
-    const float clearNormal[] = { 0.5f, 0.5f, 1.0f, 0.0f };
-    commandList->ClearRenderTargetView(rtvHandles[0], clearBlack,  0, nullptr);
-    commandList->ClearRenderTargetView(rtvHandles[1], clearNormal, 0, nullptr);
-    commandList->ClearRenderTargetView(rtvHandles[2], clearBlack,  0, nullptr);
+    // Clear all G-Buffer RTs to zero/identity. The normal RT stores oct-encoded normal
+    // XY plus copied scene depth in Z; depth clears to 1.0 for untouched sky pixels so
+    // RTGI can reject them safely. The edge RT clears to "no edge".
+    for (UINT i = 0; i < kGBufferCount; ++i)
+        commandList->ClearRenderTargetView(rtvHandles[i], kGBufferClearColors[i], 0, nullptr);
 
-    // Bind all three MRT outputs together with the shared depth buffer.
+    // Bind all MRT outputs together with the shared depth buffer.
     commandList->OMSetRenderTargets(kGBufferCount, rtvHandles, FALSE, &sceneDsvHandle);
 
     // Set viewport / scissor to the current scene dimensions.
@@ -195,18 +220,21 @@ void DeferredLightingPass::ResolveGBuffer(ID3D12GraphicsCommandList* commandList
 
     // Transition single-sample buffers to RESOLVE_DEST
     D3D12_RESOURCE_BARRIER preResolveBarriers[kGBufferCount];
+    UINT resolveCount = 0;
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
-        preResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+        if (!kGBufferResolvable[i]) continue;
+        preResolveBarriers[resolveCount++] = CD3DX12_RESOURCE_BARRIER::Transition(
             mGBufferResources[i].Get(),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RESOLVE_DEST);
     }
-    commandList->ResourceBarrier(kGBufferCount, preResolveBarriers);
+    commandList->ResourceBarrier(resolveCount, preResolveBarriers);
 
     // Resolve each MSAA G-Buffer RT to its single-sample counterpart
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
+        if (!kGBufferResolvable[i]) continue;
         commandList->ResolveSubresource(
             mGBufferResources[i].Get(),      // Dest (single-sample)
             0,                                // DestSubresource
@@ -217,14 +245,16 @@ void DeferredLightingPass::ResolveGBuffer(ID3D12GraphicsCommandList* commandList
 
     // Transition single-sample buffers to PSR for lighting pass
     D3D12_RESOURCE_BARRIER postResolveBarriers[kGBufferCount];
+    resolveCount = 0;
     for (UINT i = 0; i < kGBufferCount; ++i)
     {
-        postResolveBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+        if (!kGBufferResolvable[i]) continue;
+        postResolveBarriers[resolveCount++] = CD3DX12_RESOURCE_BARRIER::Transition(
             mGBufferResources[i].Get(),
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
-    commandList->ResourceBarrier(kGBufferCount, postResolveBarriers);
+    commandList->ResourceBarrier(resolveCount, postResolveBarriers);
 }
 
 void DeferredLightingPass::SetSceneLighting(
@@ -382,6 +412,17 @@ void DeferredLightingPass::SetRtgiDebugView(int debugView)
     }
 }
 
+void DeferredLightingPass::SetDisneyBrdf(bool enabled)
+{
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.DisneyBrdf = enabled ? 1 : 0;
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
 void DeferredLightingPass::SetSpecularSrv(
     D3D12_GPU_DESCRIPTOR_HANDLE specularSrvHandle,
     float                       intensity)
@@ -412,6 +453,36 @@ void DeferredLightingPass::SetVolumetricFogSrv(
         lc.FogStartDistance = settings != nullptr ? settings->StartDistance : 0.1f;
         lc.FogMaxDistance = settings != nullptr ? settings->MaxDistance : 100.0f;
         lc.FogDebugView = settings != nullptr ? settings->DebugView : 0;
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
+void DeferredLightingPass::SetAoDirectOcclusion(float amount)
+{
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.AoDirectOcclusion = std::clamp(amount, 0.0f, 1.0f);
+        std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
+    }
+}
+
+void DeferredLightingPass::SetRtShadows(
+    D3D12_GPU_DESCRIPTOR_HANDLE sunVisibilitySrv,
+    D3D12_GPU_DESCRIPTOR_HANDLE localVisibilitySrv,
+    int debugView)
+{
+    mRtSunShadowSrv = sunVisibilitySrv;
+    mRtLocalShadowSrv = localVisibilitySrv;
+
+    if (mMappedLightingCB)
+    {
+        LightingConstants lc{};
+        std::memcpy(&lc, mMappedLightingCB, sizeof(lc));
+        lc.RtSunShadow = sunVisibilitySrv.ptr != 0 ? 1 : 0;
+        lc.RtLocalShadows = localVisibilitySrv.ptr != 0 ? 1 : 0;
+        lc.RtShadowDebugView = (sunVisibilitySrv.ptr != 0 || localVisibilitySrv.ptr != 0) ? debugView : 0;
         std::memcpy(mMappedLightingCB, &lc, sizeof(lc));
     }
 }
@@ -599,6 +670,25 @@ void DeferredLightingPass::ResolveLight(
     commandList->SetGraphicsRootShaderResourceView(14,
         mVsmPageTable != 0 ? mVsmPageTable : mShadowCB->GetGPUVirtualAddress());
 
+    //  15 – SRV table: principled G-Buffer targets (t12, t13)
+    if (mSrvs.Principled0.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(15, mSrvs.Principled0);
+
+    //  21, 22 – ray-traced sun visibility (t14) and local light pairs (t15)
+    if (mRtSunShadowSrv.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(kRtShadowRootIndex, mRtSunShadowSrv);
+    if (mRtLocalShadowSrv.ptr != 0)
+        commandList->SetGraphicsRootDescriptorTable(kRtShadowRootIndex + 1, mRtLocalShadowSrv);
+
+    //  16..20 – the scene's lights and their clustered lists (b0, t0..t3 in space 7).
+    //           Without them the shader would loop over whatever memory it was handed,
+    //           so nothing is drawn rather than that.
+    if (mLightClusterAddresses[0] == 0)
+        return;
+    commandList->SetGraphicsRootConstantBufferView(kLightClusterRootIndex, mLightClusterAddresses[0]);
+    for (UINT i = 1; i < 5; ++i)
+        commandList->SetGraphicsRootShaderResourceView(kLightClusterRootIndex + i, mLightClusterAddresses[i]);
+
     // Draw a fullscreen triangle (3 vertices, no vertex buffer needed).
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 0, nullptr);
@@ -709,10 +799,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             texDesc.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
             texDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
-            float clearColor[4] = {};
-            if (i == 1) { clearColor[0] = clearColor[1] = clearColor[2] = 0.5f; }
             D3D12_CLEAR_VALUE clearVal{ kGBufferFormats[i], {} };
-            std::memcpy(clearVal.Color, clearColor, sizeof(clearColor));
+            std::memcpy(clearVal.Color, kGBufferClearColors[i], sizeof(clearVal.Color));
 
             if (FAILED(device->CreateCommittedResource(
                 &defaultHeap, D3D12_HEAP_FLAG_NONE,
@@ -723,7 +811,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
                 return false;
             }
 
-            const wchar_t* names[] = { L"GBuffer_MSAA_Albedo", L"GBuffer_MSAA_Normal", L"GBuffer_MSAA_Material" };
+            const wchar_t* names[] = { L"GBuffer_MSAA_Albedo", L"GBuffer_MSAA_Normal", L"GBuffer_MSAA_Material", L"GBuffer_MSAA_Edge",
+                                       L"GBuffer_MSAA_Principled0", L"GBuffer_MSAA_Principled1" };
             mMsaaGBufferResources[i]->SetName(names[i]);
 
             // Create MSAA RTV
@@ -771,10 +860,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
         texDesc.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
         // Clear value must match the clear colour in BeginGeometryPass.
-        float clearColor[4] = {};
-        if (i == 1) { clearColor[0] = clearColor[1] = clearColor[2] = 0.5f; } // normal
         D3D12_CLEAR_VALUE clearVal{ kGBufferFormats[i], {} };
-        std::memcpy(clearVal.Color, clearColor, sizeof(clearColor));
+        std::memcpy(clearVal.Color, kGBufferClearColors[i], sizeof(clearVal.Color));
 
         if (FAILED(device->CreateCommittedResource(
             &defaultHeap, D3D12_HEAP_FLAG_NONE,
@@ -785,7 +872,8 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             return false;
         }
 
-        const wchar_t* names[] = { L"GBuffer_Albedo", L"GBuffer_Normal", L"GBuffer_Material" };
+        const wchar_t* names[] = { L"GBuffer_Albedo", L"GBuffer_Normal", L"GBuffer_Material", L"GBuffer_Edge",
+                                   L"GBuffer_Principled0", L"GBuffer_Principled1" };
         mGBufferResources[i]->SetName(names[i]);
 
         // RTV.
@@ -810,6 +898,9 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             if (i == 0) mSrvs.Albedo   = gpuSrv;
             if (i == 1) mSrvs.Normal   = gpuSrv;
             if (i == 2) mSrvs.Material = gpuSrv;
+            if (i == 3) mSrvs.Edge     = gpuSrv;
+            if (i == 4) mSrvs.Principled0 = gpuSrv;
+            if (i == 5) mSrvs.Principled1 = gpuSrv;
         }
 
         // The shaders' view carries every channel as stored. It used to force alpha to 1
@@ -844,6 +935,9 @@ bool DeferredLightingPass::CreateGBufferResources(UINT width, UINT height)
             if (i == 0) mDebugSrvs.Albedo   = gpuSrv;
             if (i == 1) mDebugSrvs.Normal   = gpuSrv;
             if (i == 2) mDebugSrvs.Material = gpuSrv;
+            if (i == 3) mDebugSrvs.Edge     = gpuSrv;
+            if (i == 4) mDebugSrvs.Principled0 = gpuSrv;
+            if (i == 5) mDebugSrvs.Principled1 = gpuSrv;
         }
 
         D3D12_SHADER_RESOURCE_VIEW_DESC debugSrvDesc{};
@@ -956,7 +1050,11 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     //  slot 12 – Descriptor table: radiance probes t10
     //  slot 13 – CBV (b4) subsurface constants  (subsurface variant only)
     //  slot 14 – SRV (t11) virtual shadow map page table (root descriptor)
-    D3D12_ROOT_PARAMETER rootParams[15]{};
+    //  slot 15 – Descriptor table: principled G-Buffer SRVs t12,t13
+    //  slots 16..20 – light clusters (space 7)
+    //  slot 21 – Descriptor table: ray-traced sun visibility t14
+    //  slot 22 – Descriptor table: ray-traced local light visibility t15
+    D3D12_ROOT_PARAMETER rootParams[kRtShadowRootIndex + 2]{};
 
     rootParams[14].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
     rootParams[14].Descriptor.ShaderRegister = 11; // t11
@@ -1086,6 +1184,39 @@ bool DeferredLightingPass::CreateLightingPipeline(DXGI_FORMAT sceneColorFormat)
     rootParams[13].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[13].Descriptor.ShaderRegister = 4; // b4
     rootParams[13].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Disney principled parameters: t12, t13 - allocated in the same loop, so contiguous.
+    D3D12_DESCRIPTOR_RANGE principledRange{};
+    principledRange.RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    principledRange.NumDescriptors                    = PrincipledGBuffer::kTargetCount;
+    principledRange.BaseShaderRegister                = 12; // t12
+    principledRange.OffsetInDescriptorsFromTableStart = 0;
+
+    rootParams[15].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[15].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[15].DescriptorTable.pDescriptorRanges   = &principledRange;
+    rootParams[15].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // 16..20: the scene's lights and their clustered lists (LightClusters.hlsli).
+    LightClusterRenderer::FillRootParameters(&rootParams[kLightClusterRootIndex], D3D12_SHADER_VISIBILITY_PIXEL);
+    static_assert(kRtShadowRootIndex == kLightClusterRootIndex + LightClusterRenderer::kRootParameterCount,
+                  "the ray-traced shadow tables follow the light clusters");
+
+    // Ray-traced shadows: t14 sun visibility, t15 local light pairs - separate tables,
+    // only read while the lighting constants say they are bound.
+    D3D12_DESCRIPTOR_RANGE rtSunShadowRange{};
+    rtSunShadowRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    rtSunShadowRange.NumDescriptors     = 1;
+    rtSunShadowRange.BaseShaderRegister = 14; // t14
+    D3D12_DESCRIPTOR_RANGE rtLocalShadowRange = rtSunShadowRange;
+    rtLocalShadowRange.BaseShaderRegister = 15; // t15
+
+    rootParams[kRtShadowRootIndex].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[kRtShadowRootIndex].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[kRtShadowRootIndex].DescriptorTable.pDescriptorRanges   = &rtSunShadowRange;
+    rootParams[kRtShadowRootIndex].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootParams[kRtShadowRootIndex + 1] = rootParams[kRtShadowRootIndex];
+    rootParams[kRtShadowRootIndex + 1].DescriptorTable.pDescriptorRanges = &rtLocalShadowRange;
 
     // Static samplers.
     D3D12_STATIC_SAMPLER_DESC pointSampler{};

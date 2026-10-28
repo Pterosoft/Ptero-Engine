@@ -40,8 +40,10 @@ static const float2 kDiscOffsets[8] =
 [numthreads(8, 8, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID)
 {
+    // A trace pixel; the G-Buffer is read at the frame pixel each one stands for.
     const uint2 pixel = DTid.xy;
-    if (pixel.x >= g_FrameWidth || pixel.y >= g_FrameHeight)
+    const uint2 traceSize = TraceSize();
+    if (any(pixel >= traceSize))
         return;
 
     const uint curIdx  = PixelIndex(pixel);
@@ -54,7 +56,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
     }
 
     // Read current pixel's normal + depth for similarity tests.
-    float4 nd0           = t_NormalDepth.Load(int3(pixel, 0));
+    float4 nd0           = t_NormalDepth.Load(int3(TraceToFramePixel(pixel), 0));
     float  curDepth      = nd0.z;
     float2 curOctN       = nd0.xy * 2.0f - 1.0f;
     float  curOctZ       = 1.0f - abs(curOctN.x) - abs(curOctN.y);
@@ -82,18 +84,19 @@ void CSMain(uint3 DTid : SV_DispatchThreadID)
         float2 rotOffset   = float2(
             baseOffset.x * cosA - baseOffset.y * sinA,
             baseOffset.x * sinA + baseOffset.y * cosA);
-        int2 offset       = int2(rotOffset * g_SpatialRadius);
+        // The radius is in frame pixels; the neighbours are trace pixels.
+        int2 offset       = int2(rotOffset * (g_SpatialRadius / float(g_TraceScale)));
 
         int2 neighborPixel = int2(pixel) + offset;
 
         // Bounds check.
         if (any(neighborPixel < 0) ||
-            neighborPixel.x >= int(g_FrameWidth) ||
-            neighborPixel.y >= int(g_FrameHeight))
+            neighborPixel.x >= int(traceSize.x) ||
+            neighborPixel.y >= int(traceSize.y))
             continue;
 
         // ── Surface similarity test ──────────────────────────────────────
-        float4 ndN     = t_NormalDepth.Load(int3(neighborPixel, 0));
+        float4 ndN     = t_NormalDepth.Load(int3(TraceToFramePixel(uint2(neighborPixel)), 0));
         float  nDepth  = ndN.z;
 
         float depthDiff = abs(curDepth - nDepth) / max(curDepth, 0.001f);

@@ -33,6 +33,8 @@
 #include <unordered_set>
 #include <vector>
 
+class SceneAnimation;
+
 extern "C"
 {
     ID3D12Device* __stdcall DX12Context_GetDevice();
@@ -46,9 +48,18 @@ extern "C"
 class EntityMeshRenderer
 {
 public:
+    // Material texture slots t0-t9, bound to root tables 3..12 one each. Public because
+    // the virtualized-geometry pass binds materials through this renderer and has to lay
+    // out its own root signature to match.
+    static constexpr unsigned int kMaterialTextureSlotCount = 10;
+
     // Call once after the DX12 device is ready.  commandList is used to record
     // the initial pipeline creation (no geometry upload happens here yet).
     bool Initialize(ID3D12GraphicsCommandList* commandList);
+
+    // The material texture cache, shared with the ray tracer so a texture both
+    // draw and trace use is only in VRAM once.
+    TextureManager& GetTextureManager() { return mTextureManager; }
 
     // Called every frame before Render().  Gives the renderer the current entity
     // list so it can upload new meshes and retire stale GPU buffers.
@@ -101,6 +112,21 @@ public:
         const DirectX::XMFLOAT4X4& lightViewProjection,
         const DirectX::XMFLOAT3&   lightPosition,
         float                      farPlane);
+
+    // Draws every mesh entity whose bounds touch the box [regionMin, regionMax]
+    // for voxelization (VoxelGIRenderer). The caller has bound its root
+    // signature, pipeline, descriptor heap, viewport and outputs; the root
+    // signature must take the model matrix (pre-transposed, as gModel) as 16
+    // root constants in parameter 0, and keep the G-Buffer pass's parameters
+    // 1 and 3-10, which each sub-material is bound to exactly as for the
+    // G-Buffer. Virtualized entities are drawn here too, from their mesh LODs.
+    // `lodIndex` is clamped to each mesh's coarsest LOD. Returns the draw count.
+    std::uint32_t RenderVoxelization(
+        ID3D12GraphicsCommandList* commandList,
+        const DirectX::XMFLOAT3&   regionMin,
+        const DirectX::XMFLOAT3&   regionMax,
+        std::size_t                lodIndex,
+        const DirectX::XMFLOAT3&   cameraPosition);
 
     void Shutdown();
 
@@ -186,6 +212,22 @@ public:
         return mLastError.empty() ? nullptr : mLastError.c_str();
     }
 
+    // ---- Skinning (SceneAnimation, EntityMeshSkinning.cpp) ------------------
+    // Skins the LOD 0 of every entity SceneAnimation has a palette for into a vertex
+    // buffer of the entity's own (SkinVertices.hlsl), which every pass of this renderer
+    // then draws instead of the asset's - G-Buffer, all shadow passes and voxelization - so
+    // an animated entity always draws LOD 0. Call once a frame after BeginFrame, before
+    // any pass records.
+    void UpdateSkinning(ID3D12GraphicsCommandList* commandList, const SceneAnimation& animation);
+
+    // This frame's and last frame's skinned vertices of an entity skinned this frame, for
+    // passes outside this renderer (motion vectors). Both views are LOD 0 vertices; on the
+    // first skinned frame they are the same buffer.
+    bool GetSkinnedVertexViews(const Entity& entity,
+                               D3D12_VERTEX_BUFFER_VIEW& current,
+                               D3D12_VERTEX_BUFFER_VIEW& previous) const;
+    bool IsSkinnedThisFrame(const Entity& entity) const;
+
     // ---- Virtualized geometry (VirtualGeometryRenderer) ---------------------
     // Mask bits; VirtualGeometryRenderer::kDrawnInGBuffer / kDrawnInShadows.
     static constexpr std::uint8_t kVirtualizedInGBuffer = 1u << 0;
@@ -262,6 +304,9 @@ private:
         D3D12_INDEX_BUFFER_VIEW  IndexBufferView{};
         UINT                     IndexCount = 0;
         std::size_t              LodIndex = 0;
+        // Object-space bounds of this LOD's vertices, for region culling.
+        DirectX::XMFLOAT3        BoundsMin{};
+        DirectX::XMFLOAT3        BoundsMax{};
         // The MeshAsset pointer used when these buffers were built; used to
         // detect when the mesh has been replaced and buffers must be rebuilt.
         const Mesh*              SourceMesh = nullptr;
@@ -352,7 +397,11 @@ private:
         int    UseTransparentBlend = 0;
         // 1 = negate the normal map's green channel (OpenGL-convention map).
         int    FlipNormalGreen  = 0;
-        float  _Pad2[2]         = {};
+        // Iris adjust (GBuffer.hlsl ApplyIrisAdjust): halves packed two to a word into
+        // what used to be padding. The warp radius (IrisRadiiPacked's high half) at 0
+        // turns it off, which is what the zero defaults give.
+        std::uint32_t IrisCenterPacked = 0;   // half2 centre UV
+        std::uint32_t IrisOffsetPacked = 0;   // half2 offset UV
         // UV transform: rotate about (0.5, 0.5), then scale by tiling, then offset.
         // The rotation is pre-resolved to sin/cos so the shader does no trigonometry.
         DirectX::XMFLOAT2 UvTiling = { 1.f, 1.f };
@@ -378,10 +427,26 @@ private:
         float  DisplacementScale    = 0.05f;
         float  DisplacementMidLevel = 0.5f;
         float  TessPixelScale       = 1000.f;
-        float  _Pad3                = 0.f;
-        std::byte Padding[48]{};
+        std::uint32_t IrisRadiiPacked = 0;    // half2 iris radius, warp radius
+        // Disney principled BRDF lobes (PrincipledBrdf.hlsli); all off at 0.
+        float  PrincipledSubsurface     = 0.f;
+        float  PrincipledSpecularTint   = 0.f;
+        float  PrincipledSheen          = 0.f;
+        float  PrincipledSheenTint      = 0.5f;
+        float  PrincipledClearcoat      = 0.f;
+        float  PrincipledClearcoatGloss = 1.f;
+        float  PrincipledAnisotropic    = 0.f;
+        // t8: R clearcoat, G sheen, B anisotropic, A flatten - each scales its slider.
+        int    HasPrincipledMap         = 0;
+        // t9: the anisotropy direction in the UV frame (RG, 0.5 = zero).
+        int    HasAnisotropyDirectionMap = 0;
+        std::uint32_t IrisScalesPacked  = 0;  // half2 iris scale, pupil scale
+        std::uint32_t PupilRadiusPacked = 0;  // half pupil radius
+        float  _Pad5                    = 0.f;
     };
     static_assert(sizeof(MaterialConstants) == 256);
+    static_assert(offsetof(MaterialConstants, PrincipledSubsurface) % 16 == 0,
+        "The principled block must start a cbuffer row, as it does in GBuffer.hlsl.");
 
     struct alignas(256) RainSurfaceConstants
     {
@@ -408,6 +473,10 @@ private:
         std::string emissive;
         std::string opacity;
         std::string height;
+        // Disney principled mask (R clearcoat, G sheen, B anisotropic, A flatten) and the
+        // anisotropy direction map (RG flow in the UV frame).
+        std::string principledMask;
+        std::string anisotropyDirection;
         // Set when any path above is a UDIM set: the path keeps the <UDIM> token and the
         // geometry pass draws each tile of the sub-mesh with the token replaced (see Udim.h).
         // udimFirstTile is the lowest tile found on disk, for consumers that need one texture.
@@ -457,6 +526,25 @@ private:
         float subsurfaceFalloffB = 0.3f;
         float subsurfaceRadiusMm = 3.0f;
         float subsurfaceTranslucency = 0.8f;
+        // Iris adjust (MaterialDefinition::UseIrisAdjust and friends).
+        bool  useIrisAdjust   = false;
+        float irisCenterU     = 0.5f;
+        float irisCenterV     = 0.5f;
+        float irisRadius      = 0.12f;
+        float irisOffsetU     = 0.0f;
+        float irisOffsetV     = 0.0f;
+        float irisScale       = 1.0f;
+        float pupilRadius     = 0.04f;
+        float pupilScale      = 1.0f;
+        float irisWarpRadius  = 0.28f;
+        // Disney principled BRDF (MaterialDefinition::SubsurfaceFlatten and friends).
+        float principledSubsurface     = 0.0f;
+        float principledSpecularTint   = 0.0f;
+        float principledAnisotropic    = 0.0f;
+        float principledSheen          = 0.0f;
+        float principledSheenTint      = 0.5f;
+        float principledClearcoat      = 0.0f;
+        float principledClearcoatGloss = 1.0f;
     };
 
     bool CreatePipeline(DXGI_FORMAT albedoFormat, DXGI_FORMAT normalFormat,
@@ -475,9 +563,10 @@ private:
     bool EnsurePointShadowFaceConstantBuffer();
     bool EnsureRainSurfaceConstantBuffer();
 
-    // Texture slots t0-t7: baseColor, normal, metallic, roughness, ao, emissive,
-    // opacity, height, and how each is decoded.
-    static constexpr std::size_t kTextureSlotCount = 8;
+    // Texture slots t0-t9: baseColor, normal, metallic, roughness, ao, emissive,
+    // opacity, height, the Disney principled mask and the anisotropy direction map, and
+    // how each is decoded.
+    static constexpr std::size_t kTextureSlotCount = kMaterialTextureSlotCount;
     static constexpr TextureSemantic kTextureSlotSemantics[kTextureSlotCount] = {
         TextureSemantic::Color,
         TextureSemantic::Normal,
@@ -485,6 +574,8 @@ private:
         TextureSemantic::MaterialMask,
         TextureSemantic::MaterialMask,
         TextureSemantic::Color,
+        TextureSemantic::MaterialMask,
+        TextureSemantic::MaterialMask,
         TextureSemantic::MaterialMask,
         TextureSemantic::MaterialMask,
     };
@@ -723,6 +814,61 @@ private:
     }
 
     std::uint64_t mFrameCounter = 0;
+
+    // ---- Skinning state (EntityMeshSkinning.cpp) ----------------------------
+    // Bind-pose vertices and joint influences of one skinned asset, uploaded once and
+    // shared by every entity placed from it. Read-only after the upload, so they are left
+    // to implicit promotion from COMMON every frame (buffers decay back to COMMON).
+    struct SkinSource
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> BindVertices;
+        Microsoft::WRL::ComPtr<ID3D12Resource> Influences;
+        UINT VertexCount = 0;
+        // Holds the asset alive for as long as it is a key (see mGpuMeshes).
+        std::shared_ptr<const Mesh> Owner;
+        std::uint64_t LastUsedFrame = 0;
+    };
+    std::map<const Mesh*, SkinSource> mSkinSources;
+
+    // One animated entity's posed vertices. Two buffers alternate: the one written this
+    // frame is drawn, and the other still holds last frame's pose for motion vectors. The
+    // GPU runs frames in order on one queue, so the buffer a frame writes is never one an
+    // earlier in-flight frame is still drawing from once that frame's draws precede it.
+    struct SkinnedInstance
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> Output[2];
+        D3D12_VERTEX_BUFFER_VIEW Views[2]{};
+        const Mesh* SourceMesh = nullptr;
+        UINT VertexCount = 0;
+        int Current = 0;
+        bool HasPrevious = false;
+        std::uint64_t SkinnedFrame = 0;
+    };
+    std::unordered_map<std::uint64_t, SkinnedInstance> mSkinnedInstances; // by Entity::Id
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mSkinRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mSkinPipeline;
+    bool mSkinPipelineFailed = false;
+
+    // Palettes, written by the CPU every frame: an UPLOAD buffer holding kFramesInFlight
+    // copies, like the constant buffers above, so a frame never overwrites one an earlier
+    // in-flight frame is still reading.
+    Microsoft::WRL::ComPtr<ID3D12Resource> mPaletteUpload;
+    std::byte* mPaletteMapped = nullptr;
+    std::size_t mPaletteSlotBytes = 0;
+
+    bool EnsureSkinPipeline();
+    bool EnsureSkinSource(ID3D12GraphicsCommandList* commandList, const std::shared_ptr<Mesh>& mesh, SkinSource*& outSource);
+    bool EnsurePaletteCapacity(std::size_t bytesPerFrame);
+    void ReleaseSkinnedInstance(SkinnedInstance& instance);
+    // The vertex view a draw of `entity` with `gpuMesh` binds: its skinned vertices when it
+    // was skinned this frame and the buffers are LOD 0's, else the asset's own.
+    const D3D12_VERTEX_BUFFER_VIEW& VertexViewFor(const Entity& entity, const EntityGpuMesh& gpuMesh) const;
+    // The LOD a draw of `entity` must use: 0 while it is skinned, `lod` otherwise.
+    std::size_t DrawLodFor(const Entity& entity, std::size_t lod) const
+    {
+        return IsSkinnedThisFrame(entity) ? 0 : lod;
+    }
 
     Microsoft::WRL::ComPtr<ID3D12Resource>      mConstantBuffer;
     EntityConstants*                             mMappedCB      = nullptr;

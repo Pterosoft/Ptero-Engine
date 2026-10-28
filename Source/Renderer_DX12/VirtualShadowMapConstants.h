@@ -31,5 +31,15 @@ struct VsmGpuConstants
     float         LocalNear = 0.05f;
     DirectX::XMFLOAT4 LocalLights[16]{};      // xyz position, w radius (0 = slot unused)
     DirectX::XMFLOAT4 LocalDirections[16]{};  // xyz emission axis, w cosine below which it emits nothing
+    // x shadow strength (1 = full, less while the shadow budget fades it in or out),
+    // y mip bias added to LocalLodBias, z camera distance beyond which the cheap 2x2
+    // filter replaces the 4x4 one (0 = always), w emitter radius in metres for the
+    // soft shadow (0 = hard).
+    DirectX::XMFLOAT4 LocalParams[16]{};
+
+    // --- Soft shadows ---
+    // x tangent of the sun's angular radius (0 = hard), y widest penumbra radius kept,
+    // in metres, z unused, w frame number for the sample rotation.
+    DirectX::XMFLOAT4 SoftShadow{};
 };
-static_assert(sizeof(VsmGpuConstants) == 880, "Must match PteroVsmConstants");
+static_assert(sizeof(VsmGpuConstants) == 1152, "Must match PteroVsmConstants");

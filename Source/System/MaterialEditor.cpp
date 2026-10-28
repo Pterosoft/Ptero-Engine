@@ -52,6 +52,10 @@ namespace
             return "Opacity";
         case MaterialTextureSlot::OcclusionRoughnessMetallic:
             return "ORM";
+        case MaterialTextureSlot::PrincipledMask:
+            return "PrincipledMask";
+        case MaterialTextureSlot::AnisotropyDirection:
+            return "AnisotropyDirection";
         default:
             return "Unknown";
         }
@@ -95,6 +99,21 @@ namespace
             { "subsurfaceFalloff", materialDefinition.SubsurfaceFalloff },
             { "subsurfaceRadiusMm", materialDefinition.SubsurfaceRadiusMm },
             { "subsurfaceTranslucency", materialDefinition.SubsurfaceTranslucency },
+            { "useIrisAdjust", materialDefinition.UseIrisAdjust },
+            { "irisCenter", materialDefinition.IrisCenter },
+            { "irisRadius", materialDefinition.IrisRadius },
+            { "irisOffset", materialDefinition.IrisOffset },
+            { "irisScale", materialDefinition.IrisScale },
+            { "pupilRadius", materialDefinition.PupilRadius },
+            { "pupilScale", materialDefinition.PupilScale },
+            { "irisWarpRadius", materialDefinition.IrisWarpRadius },
+            { "subsurfaceFlatten", materialDefinition.SubsurfaceFlatten },
+            { "specularTint", materialDefinition.SpecularTint },
+            { "anisotropic", materialDefinition.Anisotropic },
+            { "sheen", materialDefinition.Sheen },
+            { "sheenTint", materialDefinition.SheenTint },
+            { "clearcoat", materialDefinition.Clearcoat },
+            { "clearcoatGloss", materialDefinition.ClearcoatGloss },
             { "doubleSided", materialDefinition.IsDoubleSided },
             { "useAlphaCutout", materialDefinition.UseAlphaCutout },
             { "useTransparentBlend", materialDefinition.UseTransparentBlend },
@@ -123,6 +142,8 @@ namespace
                     { "height", materialDefinition.Textures.HeightTexturePath },
                     { "opacity", materialDefinition.Textures.OpacityTexturePath },
                     { "orm", materialDefinition.Textures.OcclusionRoughnessMetallicTexturePath },
+                    { "principledMask", materialDefinition.Textures.PrincipledMaskTexturePath },
+                    { "anisotropyDirection", materialDefinition.Textures.AnisotropyDirectionTexturePath },
                 }
             }
         };
@@ -263,6 +284,29 @@ namespace
             }
             outMaterialDefinition.SubsurfaceRadiusMm = sourceJson.value("subsurfaceRadiusMm", outMaterialDefinition.SubsurfaceRadiusMm);
             outMaterialDefinition.SubsurfaceTranslucency = sourceJson.value("subsurfaceTranslucency", outMaterialDefinition.SubsurfaceTranslucency);
+            outMaterialDefinition.UseIrisAdjust = sourceJson.value("useIrisAdjust", outMaterialDefinition.UseIrisAdjust);
+            if (!TryReadOptionalFloatArray2(sourceJson, "irisCenter", outMaterialDefinition.IrisCenter))
+            {
+                outErrorMessage = "irisCenter must be an array with 2 float values.";
+                return false;
+            }
+            if (!TryReadOptionalFloatArray2(sourceJson, "irisOffset", outMaterialDefinition.IrisOffset))
+            {
+                outErrorMessage = "irisOffset must be an array with 2 float values.";
+                return false;
+            }
+            outMaterialDefinition.IrisRadius = sourceJson.value("irisRadius", outMaterialDefinition.IrisRadius);
+            outMaterialDefinition.IrisScale = sourceJson.value("irisScale", outMaterialDefinition.IrisScale);
+            outMaterialDefinition.PupilRadius = sourceJson.value("pupilRadius", outMaterialDefinition.PupilRadius);
+            outMaterialDefinition.PupilScale = sourceJson.value("pupilScale", outMaterialDefinition.PupilScale);
+            outMaterialDefinition.IrisWarpRadius = sourceJson.value("irisWarpRadius", outMaterialDefinition.IrisWarpRadius);
+            outMaterialDefinition.SubsurfaceFlatten = sourceJson.value("subsurfaceFlatten", outMaterialDefinition.SubsurfaceFlatten);
+            outMaterialDefinition.SpecularTint = sourceJson.value("specularTint", outMaterialDefinition.SpecularTint);
+            outMaterialDefinition.Anisotropic = sourceJson.value("anisotropic", outMaterialDefinition.Anisotropic);
+            outMaterialDefinition.Sheen = sourceJson.value("sheen", outMaterialDefinition.Sheen);
+            outMaterialDefinition.SheenTint = sourceJson.value("sheenTint", outMaterialDefinition.SheenTint);
+            outMaterialDefinition.Clearcoat = sourceJson.value("clearcoat", outMaterialDefinition.Clearcoat);
+            outMaterialDefinition.ClearcoatGloss = sourceJson.value("clearcoatGloss", outMaterialDefinition.ClearcoatGloss);
             outMaterialDefinition.IsDoubleSided = sourceJson.value("doubleSided", outMaterialDefinition.IsDoubleSided);
             outMaterialDefinition.UseAlphaCutout = sourceJson.value("useAlphaCutout", outMaterialDefinition.UseAlphaCutout);
             outMaterialDefinition.UseTransparentBlend = sourceJson.value("useTransparentBlend", outMaterialDefinition.UseTransparentBlend);
@@ -308,6 +352,8 @@ namespace
                 outMaterialDefinition.Textures.HeightTexturePath = texturesJson.value("height", outMaterialDefinition.Textures.HeightTexturePath);
                 outMaterialDefinition.Textures.OpacityTexturePath = texturesJson.value("opacity", outMaterialDefinition.Textures.OpacityTexturePath);
                 outMaterialDefinition.Textures.OcclusionRoughnessMetallicTexturePath = texturesJson.value("orm", outMaterialDefinition.Textures.OcclusionRoughnessMetallicTexturePath);
+                outMaterialDefinition.Textures.PrincipledMaskTexturePath = texturesJson.value("principledMask", outMaterialDefinition.Textures.PrincipledMaskTexturePath);
+                outMaterialDefinition.Textures.AnisotropyDirectionTexturePath = texturesJson.value("anisotropyDirection", outMaterialDefinition.Textures.AnisotropyDirectionTexturePath);
             }
 
             return true;
@@ -503,6 +549,10 @@ std::string& MaterialTextureSet::GetTexturePath(const MaterialTextureSlot textur
         return HeightTexturePath;
     case MaterialTextureSlot::OcclusionRoughnessMetallic:
         return OcclusionRoughnessMetallicTexturePath;
+    case MaterialTextureSlot::PrincipledMask:
+        return PrincipledMaskTexturePath;
+    case MaterialTextureSlot::AnisotropyDirection:
+        return AnisotropyDirectionTexturePath;
     case MaterialTextureSlot::Opacity:
     default:
         return OpacityTexturePath;
@@ -531,6 +581,10 @@ const std::string& MaterialTextureSet::GetTexturePath(const MaterialTextureSlot 
         return HeightTexturePath;
     case MaterialTextureSlot::OcclusionRoughnessMetallic:
         return OcclusionRoughnessMetallicTexturePath;
+    case MaterialTextureSlot::PrincipledMask:
+        return PrincipledMaskTexturePath;
+    case MaterialTextureSlot::AnisotropyDirection:
+        return AnisotropyDirectionTexturePath;
     case MaterialTextureSlot::Opacity:
     default:
         return OpacityTexturePath;

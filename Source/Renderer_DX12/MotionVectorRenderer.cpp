@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "MotionVectorRenderer.h"
+#include "EntityMeshRenderer.h"
 
 #include <algorithm>
 #include <cstring>
@@ -170,7 +171,20 @@ void MotionVectorRenderer::Render(
             0,
             mConstantBuffer->GetGPUVirtualAddress() + static_cast<UINT64>(cbSlot) * sizeof(MotionVectorConstants));
 
-        commandList->IASetVertexBuffers(0, 1, &gpuMeshIt->second.VertexView);
+        // Stream 1 is where each vertex was last frame. A rigid mesh's vertices do not move
+        // relative to it, so it is the same buffer; an animated one's are last frame's pose.
+        D3D12_VERTEX_BUFFER_VIEW streams[2] = { gpuMeshIt->second.VertexView, gpuMeshIt->second.VertexView };
+        if (mSkinnedVertexSource != nullptr)
+        {
+            D3D12_VERTEX_BUFFER_VIEW current{};
+            D3D12_VERTEX_BUFFER_VIEW previous{};
+            if (mSkinnedVertexSource->GetSkinnedVertexViews(entity, current, previous))
+            {
+                streams[0] = current;
+                streams[1] = resetHistory ? current : previous;
+            }
+        }
+        commandList->IASetVertexBuffers(0, 2, streams);
         commandList->IASetIndexBuffer(&gpuMeshIt->second.IndexView);
         commandList->DrawIndexedInstanced(gpuMeshIt->second.IndexCount, 1, 0, 0, 0);
         ++cbSlot;
@@ -299,7 +313,9 @@ bool MotionVectorRenderer::CreatePipeline()
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        // Last frame's position, from a second stream of the same Vertex layout.
+        { "POSITION", 1, DXGI_FORMAT_R32G32B32_FLOAT,    1, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};

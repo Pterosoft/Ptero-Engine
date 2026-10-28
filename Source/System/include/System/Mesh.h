@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -43,6 +45,24 @@ struct SubMesh
     // Filled at load (Mesh::BuildUdimTiles) when every triangle lies inside the UDIM range; empty
     // otherwise. Only used when the material's texture paths contain <UDIM>.
     std::vector<SubMeshUdimTile> udimTiles;
+};
+
+// Up to four joints moving one vertex. Joints index MeshSkin::JointNames; weights sum to 1,
+// or are all 0 for a vertex no joint moves (it stays in its bind pose).
+struct MeshSkinVertex
+{
+    std::uint16_t Joints[4]{};
+    float Weights[4]{};
+};
+static_assert(sizeof(MeshSkinVertex) == 24, "MeshSkinVertex is written to disk and uploaded as-is.");
+
+// How a skinned mesh's LOD 0 vertices are bound to a skeleton. Joints are named rather than
+// numbered so one mesh works with any skeleton that has those joints (AnimatorComponent maps
+// the names to skeleton joints). Only LOD 0 is skinned: an animated entity always draws it.
+struct MeshSkin
+{
+    std::vector<std::string> JointNames;
+    std::vector<MeshSkinVertex> Vertices; // one per LOD 0 vertex
 };
 
 struct MeshLod
@@ -155,9 +175,20 @@ public:
         return mIsUploadedToGpu;
     }
 
+    // Skin weights from the cooked mesh's .pskin sidecar, or null for a rigid mesh.
+    const std::shared_ptr<const MeshSkin>& GetSkin() const { return mSkin; }
+    bool HasSkin() const { return mSkin != nullptr; }
+    void SetSkin(std::shared_ptr<const MeshSkin> skin)
+    {
+        if (skin && skin->Vertices.size() != GetVertices().size())
+            skin.reset();
+        mSkin = std::move(skin);
+    }
+
 private:
     std::vector<MeshLod> mLods;
     std::vector<CollisionHull> mCollisionHulls;
+    std::shared_ptr<const MeshSkin> mSkin;
     bool mIsUploadedToGpu = false;
 
     // Groups every sub-mesh's triangles by UDIM tile so a <UDIM> material can bind one tile's

@@ -26,7 +26,11 @@ cbuffer SsrConstants : register(b0)
     float    gStepGrowth;    float gThickness;
     float    gMaxRoughness;  int   gRefineSteps;
     float    gMaxDistance;   float gEdgeFadeStart;
-    int      gDebugView;     float _SsrPad0;
+    int      gDebugView;
+    // Scale of the reflection the deferred resolve already added from gFallbackSpecular
+    // (voxel GI); 0 when there is none. Where a ray hits, that much of it is taken
+    // back out, so the screen-space reflection replaces it rather than adding to it.
+    float    gFallbackScale;
 };
 
 Texture2D gSceneColor : register(t0);
@@ -34,6 +38,7 @@ Texture2D gDepth      : register(t1);  // R32_FLOAT, non-linear [0,1]
 Texture2D gNormal     : register(t2);  // .xy = oct-encoded world normal
 Texture2D gMaterial   : register(t3);  // .r roughness, .g metallic, .b ao
 Texture2D gAlbedo     : register(t4);
+Texture2D gFallbackSpecular : register(t5);  // weighted voxel GI reflection, when gFallbackScale > 0
 
 RWTexture2D<float4> gOutput : register(u0);
 
@@ -115,6 +120,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     float3 reflection = 0.0f.xxx;
     float  weight     = 0.0f;
+    float  confidence = 0.0f;   // how much of the fallback reflection this one replaces
 
     // Sky, glass, and anything too rough to carry a coherent reflection are left alone.
     if (rawDepth < 1.0f && !isGlass && roughness <= gMaxRoughness)
@@ -206,12 +212,15 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             // Long rays accumulate the most error, so trust them least.
             const float distanceFade = 1.0f - saturate(travelled / max(gMaxDistance, 1.0e-3f));
 
-            weight = edgeFade * roughFade * distanceFade * gIntensity;
+            confidence = edgeFade * roughFade * distanceFade;
+            weight = confidence * gIntensity;
             reflection *= fresnel;
         }
     }
 
     float3 result = sceneColor + reflection * weight;
+    if (gFallbackScale > 0.0f && confidence > 0.0f)
+        result = max(result - gFallbackSpecular.Load(int3(pixel, 0)).rgb * (gFallbackScale * confidence), 0.0f.xxx);
     if (gDebugView == 1)
         result = reflection * weight;      // reflection contribution alone
     else if (gDebugView == 2)

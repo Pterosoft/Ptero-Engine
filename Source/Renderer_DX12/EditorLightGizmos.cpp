@@ -411,3 +411,78 @@ void Editor::DrawLightShapeGizmos(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Camera frustums.
+//
+// A camera entity has no mesh, so without this it is an invisible point. The
+// outline is the camera's real framing - its field of view and sensor aspect,
+// drawn a metre out from the lens - so a shot can be lined up from outside the
+// camera as well as by piloting it. A small triangle on the top edge marks up,
+// which a frustum alone cannot tell apart from down.
+// ---------------------------------------------------------------------------
+
+void Editor::DrawCameraFrustums(
+    const UiVec2& viewportOrigin,
+    const UiVec2& viewportSize,
+    const EditorCamera& camera) const
+{
+    if (!mShowViewportPlacementIcons)
+        return;
+
+    UiDrawList* drawList = QtUi::GetWindowDrawList();
+    const XMMATRIX viewProjection = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+    const auto line = [&](const XMVECTOR& a, const XMVECTOR& b, UiU32 color, float thickness)
+    {
+        XMFLOAT3 fa{};
+        XMFLOAT3 fb{};
+        XMStoreFloat3(&fa, a);
+        XMStoreFloat3(&fb, b);
+        UiVec2 sa{};
+        UiVec2 sb{};
+        if (ProjectClippedSegment(viewProjection, viewportOrigin, viewportSize, fa, fb, sa, sb))
+            drawList->AddLine(sa, sb, color, thickness);
+    };
+
+    for (std::size_t i = 0; i < mEntities.size(); ++i)
+    {
+        const Entity& entity = mEntities[i];
+        if (!entity.Camera)
+            continue;
+        // The camera being flown is the viewpoint itself; its outline would only frame
+        // the screen edge.
+        if (entity.Id != 0 && entity.Id == mPilotedCameraId)
+            continue;
+
+        const bool selected = IsEntitySelected(static_cast<int>(i));
+        const UiU32 color = selected ? UI_COL32(255, 228, 120, 255) : UI_COL32(170, 200, 235, 200);
+        const float thickness = selected ? 2.0f : 1.25f;
+
+        // The camera looks along local +Y with local +Z up (see CameraComponent).
+        const XMMATRIX rotation = PteroTransform::ComposeRotation(entity.Transform.Rotation);
+        const XMVECTOR right = XMVector3TransformNormal(g_XMIdentityR0, rotation);
+        const XMVECTOR forward = XMVector3TransformNormal(g_XMIdentityR1, rotation);
+        const XMVECTOR up = XMVector3TransformNormal(g_XMIdentityR2, rotation);
+        const XMVECTOR apex = XMLoadFloat3(&entity.Transform.Position);
+
+        const CameraComponent& lens = *entity.Camera;
+        constexpr float kDistance = 1.0f;
+        const float halfHeight = kDistance * std::tan(lens.VerticalFovDegrees() * 0.5f * XM_PI / 180.0f);
+        const float halfWidth = halfHeight * (lens.SensorWidthMm / (std::max)(lens.SensorHeightMm, 0.1f));
+        const XMVECTOR center = apex + forward * kDistance;
+        const XMVECTOR corners[4] = {
+            center - right * halfWidth + up * halfHeight,
+            center + right * halfWidth + up * halfHeight,
+            center + right * halfWidth - up * halfHeight,
+            center - right * halfWidth - up * halfHeight,
+        };
+        for (int c = 0; c < 4; ++c)
+        {
+            line(apex, corners[c], color, thickness);
+            line(corners[c], corners[(c + 1) % 4], color, thickness);
+        }
+        const XMVECTOR upTip = center + up * (halfHeight * 1.35f);
+        line(corners[0] + right * (halfWidth * 0.6f), upTip, color, thickness);
+        line(corners[1] - right * (halfWidth * 0.6f), upTip, color, thickness);
+    }
+}

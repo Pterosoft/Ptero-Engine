@@ -16,9 +16,34 @@
 
 // Bump this whenever the structures or the exported entry points change so the host can
 // refuse a stale Game.dll instead of reading garbage out of it.
-inline constexpr std::uint32_t GameApiVersion = 7;
+inline constexpr std::uint32_t GameApiVersion = 8;
+// The oldest module the host still loads. Version 8 only appended the physics calls to
+// GameServices, which an older module simply never reads.
+inline constexpr std::uint32_t GameMinimumApiVersion = 7;
 
 struct GameTransform { float Position[3]{}; float Rotation[3]{}; float Scale[3]{1,1,1}; };
+
+// Nearest surface along a GameServices::Raycast. Entity is an index as FindEntity returns
+// it, -1 when the surface belongs to no entity.
+struct GameRayHit
+{
+    float Distance = 0.0f;
+    float Position[3]{};
+    float Normal[3]{ 0.0f, 0.0f, 1.0f };
+    int Entity = -1;
+};
+
+// A collision that began in the latest physics step. The player is not an entity: a hit
+// on the player has HitPlayer set and -1 in its place.
+struct GameHit
+{
+    int Entity = -1;
+    int OtherEntity = -1;
+    bool HitPlayer = false;
+    float Position[3]{};
+    float Normal[3]{ 0.0f, 0.0f, 1.0f }; // from Entity towards OtherEntity
+    float ImpactSpeed = 0.0f;            // closing speed, m/s; ~0 for a body settling
+};
 // UTF-8 strings are borrowed during the call. No STL or engine objects cross DLLs.
 struct GameServices {
     void* User = nullptr;
@@ -54,6 +79,26 @@ struct GameServices {
     // player controller: the host then
     // runs the player itself and the game module must leave the camera alone.
     bool NativePlayerController = true;
+
+    // ---- Physics (API 8) --------------------------------------------------------
+    // Rigid bodies simulated by Physics.dll. Forces, impulses and velocities act on an
+    // entity with a Dynamic Rigid Body (Properties > Physics) and return false for anything
+    // else, or when the host runs no physics. World space, Z up: impulses in N*s (the change
+    // in velocity is impulse / mass), forces in N for the coming frame only, velocities in
+    // m/s, spin in radians per second. Moving a rigid body with SetTransform teleports it.
+    bool (*AddImpulse)(void*, int entity, const float impulse[3]) = nullptr;
+    bool (*AddForce)(void*, int entity, const float force[3]) = nullptr;
+    bool (*SetVelocity)(void*, int entity, const float velocity[3]) = nullptr;
+    bool (*GetVelocity)(void*, int entity, float velocity[3]) = nullptr;
+    bool (*SetAngularVelocity)(void*, int entity, const float velocity[3]) = nullptr;
+    // Level geometry, terrain and rigid bodies - never the player's own body, so a ray from
+    // the camera does not hit the one looking. `direction` need not be normalised.
+    bool (*Raycast)(void*, const float origin[3], const float direction[3], float maxDistance,
+                    GameRayHit* hit) = nullptr;
+    // The collisions that began in the latest physics step. The host steps physics after
+    // Game_Update, so this frame's call returns the previous frame's hits, each exactly once.
+    // Copies up to maxCount and returns how many there are; hits may be null to count.
+    int (*GetHits)(void*, GameHit* hits, int maxCount) = nullptr;
 };
 // Host-side button and key mapping, polled through PollAction. Only Fullscreen (F11) and
 // ExitGame mean anything to the character game; the rest are kept so the host's UI

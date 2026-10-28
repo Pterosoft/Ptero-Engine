@@ -179,6 +179,13 @@
     <ClInclude Include="include\System\NodeGraphEditor.h" />
     <ClInclude Include="include\System\NodeGraphRuntime.h" />
     <ClInclude Include="include\System\NodeGraphTemplates.h" />
+    <ClInclude Include="include\System\SteamAchievements.h" />
+    <ClInclude Include="include\System\Guid.h" />
+    <ClInclude Include="include\System\PropertyRegistry.h" />
+    <ClInclude Include="include\System\Cinematics\CinematicCurve.h" />
+    <ClInclude Include="include\System\Cinematics\SequenceTrack.h" />
+    <ClInclude Include="include\System\Cinematics\CinematicSequence.h" />
+    <ClInclude Include="include\System\Cinematics\SequencePlayer.h" />
     <ClInclude Include="include\System\CharacterMovement.h" />
     <ClInclude Include="include\System\PteroLog.h" />
     <ClInclude Include="include\System\PteroMeshFormat.h" />
@@ -239,6 +246,18 @@
     <ClCompile Include="src\NodeGraphTemplates.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <!-- Steam achievements and stats behind the Node Graph's Achievements nodes. -->
+    <ClCompile Include="src\SteamAchievements.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- Property reflection and the cinematic runtime (Ptero Sequencer). Engine-free, like
+         the node graph runtime; the renderer compiles them too. -->
+    <ClCompile Include="src\Guid.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\PropertyRegistry.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Cinematics\CinematicCurve.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Cinematics\SequenceTrack.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Cinematics\CinematicSequence.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="src\Cinematics\SequencePlayer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\SystemAssetApi.cpp" />
     <ClCompile Include="src\TextureImporter.cpp" />
     <ClCompile Include="src\UnrealAssetImporter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

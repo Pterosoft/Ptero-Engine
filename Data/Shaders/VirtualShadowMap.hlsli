@@ -68,6 +68,15 @@ struct PteroVsmConstants
     float  LocalNear;
     float4 LocalLights[PTERO_VSM_MAX_LOCAL];      // slot: xyz position, w radius (0 = unused)
     float4 LocalDirections[PTERO_VSM_MAX_LOCAL];  // slot: xyz emission axis, w cosine below which it emits nothing
+    // slot: x shadow strength (1 = full; the shadow budget fades it), y mip bias on top
+    // of LocalLodBias, z camera distance beyond which the 2x2 filter replaces the 4x4
+    // (0 = always), w emitter radius in metres for its soft shadow (0 = hard).
+    float4 LocalParams[PTERO_VSM_MAX_LOCAL];
+
+    // --- Soft shadows (PteroVsmVisibilitySoft, PteroVsmLocalVisibilitySoft) ---
+    // x tangent of the sun's angular radius (0 = hard), y widest penumbra radius kept,
+    // in metres, z unused, w frame number for the sample rotation.
+    float4 SoftShadow;
 };
 
 // ---------------------------------------------------------------------------
@@ -316,13 +325,13 @@ float PteroVsmLoadLocalTexel(PteroVsmConstants vsm, StructuredBuffer<uint> pageT
 }
 
 // The mip whose texels are about a screen pixel (times footprintScale) where the
-// point is.
-uint PteroVsmLocalDesiredMip(PteroVsmConstants vsm, float distanceToCamera, float depthFromLight, float footprintScale)
+// point is, shifted by the slot's own bias (coarser for a less important light).
+uint PteroVsmLocalDesiredMip(PteroVsmConstants vsm, uint slot, float distanceToCamera, float depthFromLight, float footprintScale)
 {
     const float footprint = max(distanceToCamera * vsm.PixelFootprint * footprintScale, 1e-6f);
     // Face texels at mip 0 span 2 / resolution of the unit-distance face plane.
     const float texelsWanted = footprint / max(depthFromLight, 1e-4f) * (PTERO_VSM_LOCAL_RESOLUTION * 0.5f);
-    const float mip = floor(log2(texelsWanted) + vsm.LocalLodBias);
+    const float mip = floor(log2(texelsWanted) + vsm.LocalLodBias + vsm.LocalParams[slot].y);
     return (uint)clamp((int)mip, 0, PTERO_VSM_LOCAL_MIPS - 1);
 }
 
@@ -363,7 +372,7 @@ PteroVsmLocalLocation PteroVsmLocalLocate(PteroVsmConstants vsm, StructuredBuffe
     if (depth0 <= 1e-4f)
         return location;
 
-    uint mip = PteroVsmLocalDesiredMip(vsm, distance(worldPos, cameraPos), depth0, footprintScale);
+    uint mip = PteroVsmLocalDesiredMip(vsm, slot, distance(worldPos, cameraPos), depth0, footprintScale);
     [loop]
     for (; mip < PTERO_VSM_LOCAL_MIPS; ++mip)
     {
@@ -392,8 +401,8 @@ PteroVsmLocalLocation PteroVsmLocalLocate(PteroVsmConstants vsm, StructuredBuffe
 // Visibility of a point from a local light's slot, 1 = lit, filtered as the sun is.
 // normal may be zero (a point in a medium); footprintScale widens the pixel footprint
 // the mip is chosen for (1 for surfaces).
-float PteroVsmLocalVisibility(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
-                              uint slot, float3 worldPos, float3 normal, float3 cameraPos, float footprintScale)
+float PteroVsmLocalVisibilityUnfaded(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                                     uint slot, float3 worldPos, float3 normal, float3 cameraPos, float footprintScale)
 {
     const PteroVsmLocalLocation location = PteroVsmLocalLocate(vsm, pageTable, pool, slot, worldPos, normal, cameraPos,
                                                                vsm.NormalOffset, footprintScale);
@@ -413,6 +422,64 @@ float PteroVsmLocalVisibility(PteroVsmConstants vsm, StructuredBuffer<uint> page
     const float2 shifted = location.Texel - 0.5f;
     const int2 base = int2(floor(shifted));
     const float2 texelFrac = shifted - floor(shifted);
+    const int resolution = PTERO_VSM_LOCAL_RESOLUTION >> location.Mip;
+
+    // Past the slot's cheap-filter distance (and everywhere for a light outside the
+    // budget's full-quality few), a 2x2 bilinear PCF instead of the 4x4: a quarter of
+    // the taps, a slightly harder and noisier edge that far away. Same page-table
+    // shortcut as below.
+    [branch]
+    if (distance(worldPos, cameraPos) >= vsm.LocalParams[slot].z)
+    {
+        const float cheapWeightsX[2] = { 1.0f - texelFrac.x, texelFrac.x };
+        const float cheapWeightsY[2] = { 1.0f - texelFrac.y, texelFrac.y };
+        [branch]
+        if (all(base >= 0) && all(base + 1 < resolution) && all((base >> 7) == ((base + 1) >> 7)))
+        {
+            const uint entry = pageTable[vsm.LocalPageTableBase
+                + PteroVsmLocalPageIndex(slot, location.FaceInfo.Face, (uint)location.Mip, uint2(base) >> 7)];
+            if ((entry & PTERO_VSM_VALID_BIT) != 0u)
+            {
+                const uint tile = entry & 0xFFFFu;
+                const int2 origin = int2(tile % vsm.PoolPagesX, tile / vsm.PoolPagesX) * PTERO_VSM_PAGE_TEXELS
+                                  + (base & (PTERO_VSM_PAGE_TEXELS - 1));
+                float litCheap = 0.0f;
+                [unroll]
+                for (int y = 0; y < 2; ++y)
+                {
+                    [unroll]
+                    for (int x = 0; x < 2; ++x)
+                    {
+                        const float stored = pool.Load(int3(origin + int2(x, y), 0)).r;
+                        litCheap += cheapWeightsX[x] * cheapWeightsY[y] * (stored >= receiverStored ? 1.0f : 0.0f);
+                    }
+                }
+                return litCheap;
+            }
+        }
+
+        float lit = 0.0f;
+        float total = 0.0f;
+        [unroll]
+        for (int y = 0; y < 2; ++y)
+        {
+            [unroll]
+            for (int x = 0; x < 2; ++x)
+            {
+                bool valid;
+                const float stored = PteroVsmLoadLocalTexel(vsm, pageTable, pool, slot, location.FaceInfo.Face,
+                                                            (uint)location.Mip, base + int2(x, y), valid);
+                const float weight = cheapWeightsX[x] * cheapWeightsY[y];
+                if (valid)
+                {
+                    lit += weight * (stored >= receiverStored ? 1.0f : 0.0f);
+                    total += weight;
+                }
+            }
+        }
+        return total > 0.0f ? lit / total : 1.0f;
+    }
+
     const float weightsX[4] = { 1.0f - texelFrac.x, 1.0f, 1.0f, texelFrac.x };
     const float weightsY[4] = { 1.0f - texelFrac.y, 1.0f, 1.0f, texelFrac.y };
 
@@ -421,7 +488,6 @@ float PteroVsmLocalVisibility(PteroVsmConstants vsm, StructuredBuffer<uint> page
     // sixteen taps. Per-tap lookups made this the costliest thing a pixel lit by many
     // shadowed local lights did: an interior full of candles paid ~34 dependent loads
     // per light per pixel.
-    const int resolution = PTERO_VSM_LOCAL_RESOLUTION >> location.Mip;
     const int2 footprintMin = base - 1;
     const int2 footprintMax = base + 2;
     [branch]
@@ -474,6 +540,29 @@ float PteroVsmLocalVisibility(PteroVsmConstants vsm, StructuredBuffer<uint> page
     return total > 0.0f ? lit / total : 1.0f;
 }
 
+// What the light's shadow lets through once the shadow budget's fade is applied: a
+// light fading out of the budget lets ever more light through its shadow until it
+// has none, rather than losing it in one frame.
+float PteroVsmLocalShadowStrength(PteroVsmConstants vsm, uint slot)
+{
+    // Not a ternary: both of its sides are evaluated, and this one indexes the array.
+    if (slot >= PTERO_VSM_MAX_LOCAL)
+        return 0.0f;
+    return saturate(vsm.LocalParams[slot].x);
+}
+
+float PteroVsmLocalVisibility(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                              uint slot, float3 worldPos, float3 normal, float3 cameraPos, float footprintScale)
+{
+    const float strength = PteroVsmLocalShadowStrength(vsm, slot);
+    [branch]
+    if (strength <= 0.0f)
+        return 1.0f;
+    const float visibility = PteroVsmLocalVisibilityUnfaded(vsm, pageTable, pool, slot, worldPos, normal,
+                                                            cameraPos, footprintScale);
+    return 1.0f - strength * (1.0f - visibility);
+}
+
 // Metres between the first surface the light reaches along the ray to this point and
 // the point itself, or -1 where the map has nothing to say.
 float PteroVsmLocalOccluderDistance(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
@@ -493,6 +582,442 @@ float PteroVsmLocalOccluderDistance(PteroVsmConstants vsm, StructuredBuffer<uint
     // Depths are along the face axis; scale the gap to distance along the ray.
     const float rayLength = length(shrunk - vsm.LocalLights[slot].xyz);
     return max(location.Depth - occluderDepth, 0.0f) / max(location.Depth, 1e-4f) * rayLength;
+}
+
+// ---------------------------------------------------------------------------
+// Soft shadows
+// ---------------------------------------------------------------------------
+// Percentage-closer soft shadows: a blocker search averages the depth of whatever
+// lies between the receiver and the light, the penumbra follows from it and the
+// light's size - the sun's angle, a local light's emitter radius - and a disk PCF
+// that wide gives the visibility. A shadow widens with its distance from the caster,
+// as it does under a real sun or lamp, while contact shadows stay sharp.
+//
+// The search and the filter each read the clipmap level (cube mip) at which their
+// kernel spans at most PTERO_VSM_SOFT_MAX_RADIUS texels, so a fixed handful of taps
+// covers any penumbra without turning to noise. VirtualShadowMapMark.hlsl requests
+// those coarser pages for every pixel that may need them (PteroVsmSoftLevelSteps).
+// Where none is resident yet the ordinary 4x4 filter answers instead: a hard edge
+// for a frame or two rather than a speckled one. Penumbrae narrower than
+// PTERO_VSM_SOFT_MIN_RADIUS texels use that filter too, so hard shadows look and
+// cost what they did.
+//
+// Every tap compares against the receiver's plane rather than its centre depth, and
+// the bias grows with that plane's slope and with the texel size of the level read:
+// a wide kernel on a coarse level, on a surface the light grazes, otherwise shadows
+// the surface with itself.
+//
+// For surfaces only. The fog and the ray-traced passes keep the plain filters.
+
+#define PTERO_VSM_SOFT_BLOCKER_TAPS        12
+#define PTERO_VSM_SOFT_FILTER_TAPS         16
+#define PTERO_VSM_SOFT_LOCAL_BLOCKER_TAPS  12
+#define PTERO_VSM_SOFT_LOCAL_FILTER_TAPS   24
+#define PTERO_VSM_SOFT_MIN_RADIUS          1.5f
+#define PTERO_VSM_SOFT_MAX_RADIUS          8.0f
+#define PTERO_VSM_SOFT_MAX_STEPS           6
+
+// How many levels (mips) coarser than one with texels texelSize across a kernel
+// radiusMetres wide has to be read, to span at most PTERO_VSM_SOFT_MAX_RADIUS texels.
+int PteroVsmSoftLevelSteps(float radiusMetres, float texelSize)
+{
+    const float ratio = radiusMetres / max(PTERO_VSM_SOFT_MAX_RADIUS * texelSize, 1e-9f);
+    return ratio <= 1.0f ? 0 : min((int)ceil(log2(ratio)), PTERO_VSM_SOFT_MAX_STEPS);
+}
+
+// Widest kernel radius, in metres, a local light's coarsest cube mip can filter at a
+// receiver `depth` along the face axis.
+float PteroVsmLocalSoftMaxRadius(float depth)
+{
+    return PTERO_VSM_SOFT_MAX_RADIUS * depth * 2.0f / (float)(PTERO_VSM_LOCAL_RESOLUTION >> (PTERO_VSM_LOCAL_MIPS - 1));
+}
+
+// Tap i of count on a Vogel (golden-angle) disk of radius 1.
+float2 PteroVsmVogelTap(uint i, uint count, float rotation)
+{
+    const float r = sqrt(((float)i + 0.5f) / (float)count);
+    const float theta = (float)i * 2.39996323f + rotation;
+    return float2(cos(theta), sin(theta)) * r;
+}
+
+// Filter weight of that tap: falls from 1 at the centre to 0.25 at the rim (linear in
+// r^2, which is what tap i's radius squared is). A flat disk let the outermost taps -
+// the ones that flip between lit and shadowed across the penumbra - count as much as
+// the rest, and their flipping showed as a stippled fringe that temporal AA could not
+// fully settle.
+float PteroVsmSoftKernelWeight(uint i, uint count)
+{
+    return 1.0f - 0.75f * ((float)i + 0.5f) / (float)count;
+}
+
+// Per-texel rotation of the disk (interleaved gradient noise), moved on every frame
+// so temporal AA averages the rotations into a smooth penumbra.
+float PteroVsmSoftRotation(PteroVsmConstants vsm, float2 texel)
+{
+    const float2 p = floor(texel) + vsm.SoftShadow.w * float2(47.0f, 17.0f);
+    return 6.2831853f * frac(52.9829189f * frac(dot(p, float2(0.06711056f, 0.00583715f))));
+}
+
+// Depth change, per metre across the map's two axes, of the plane through the
+// receiver with normal (nx, ny, nz) in the map's frame (z along the light). A
+// grazing plane is clamped so its slope cannot run away.
+float2 PteroVsmReceiverSlope(float3 n)
+{
+    const float nz = (n.z < 0.0f ? -1.0f : 1.0f) * max(abs(n.z), 0.3f);
+    return -n.xy / nz;
+}
+
+// The receiver's depth bias at a level with texels `texel` across: the map's own
+// constant bias plus a texel's worth of the receiver plane's slope, which is how far
+// a stored texel's depth can sit from the plane under the tap.
+float PteroVsmSoftBias(PteroVsmConstants vsm, float2 slope, float texel)
+{
+    return (vsm.ConstantBias + abs(slope.x) + abs(slope.y)) * texel;
+}
+
+// The sun level for a kernel radiusMetres wide around a located receiver: the one
+// PteroVsmSoftLevelSteps asks for, or a resident one up to two coarser. False when
+// none of them is resident.
+bool PteroVsmSoftLevel(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                       PteroVsmLocation location, float radiusMetres,
+                       out int level, out float texel, out float2 centre)
+{
+    // Never past the coarsest level: a kernel wider than even that can hold is read
+    // there (the callers cap the penumbra to what it can), not given up on.
+    const int last = (int)vsm.LevelCount - 1;
+    const int first = min(location.Level + PteroVsmSoftLevelSteps(radiusMetres, location.TexelSize), last);
+    level = location.Level;
+    texel = location.TexelSize;
+    centre = location.VirtualTexel;
+    [loop]
+    for (int candidate = first; candidate <= last && candidate <= first + 2; ++candidate)
+    {
+        const float scale = exp2((float)(candidate - location.Level));
+        const float2 candidateCentre = location.VirtualTexel / scale;
+        bool valid;
+        PteroVsmLoadTexel(vsm, pageTable, pool, candidate, int2(floor(candidateCentre)), valid);
+        if (valid)
+        {
+            level = candidate;
+            texel = location.TexelSize * scale;
+            centre = candidateCentre;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether a 2x2 footprint whose top-left texel is `base` lies inside one page. It
+// does for all but the last texel row and column of a page, and the soft filters'
+// taps then read the page table once instead of once per texel - the table read is
+// a dependent load in front of every depth load, and those taps run per light per
+// pixel in the lighting resolve.
+bool PteroVsmFootprintInOnePage(int2 base)
+{
+    return all((base & (PTERO_VSM_PAGE_TEXELS - 1)) != (PTERO_VSM_PAGE_TEXELS - 1));
+}
+
+// The four depths of a 2x2 footprint inside one tile (PteroVsmFootprintInOnePage), in
+// corner order x + 2y. False when the page is not resident, which is what each of
+// the four per-texel reads would have said.
+bool PteroVsmLoadFootprint(PteroVsmConstants vsm, Texture2D pool, uint entry, int2 base, out float4 stored)
+{
+    stored = 1.0f.xxxx;
+    if ((entry & PTERO_VSM_VALID_BIT) == 0u)
+        return false;
+    const uint tile = entry & 0xFFFFu;
+    const int2 origin = int2(tile % vsm.PoolPagesX, tile / vsm.PoolPagesX) * PTERO_VSM_PAGE_TEXELS
+                      + (base & (PTERO_VSM_PAGE_TEXELS - 1));
+    stored.x = pool.Load(int3(origin, 0)).r;
+    stored.y = pool.Load(int3(origin + int2(1, 0), 0)).r;
+    stored.z = pool.Load(int3(origin + int2(0, 1), 0)).r;
+    stored.w = pool.Load(int3(origin + int2(1, 1), 0)).r;
+    return true;
+}
+
+// One bilinear 2x2 compare at continuous virtual texel p; adds to lit and weight.
+void PteroVsmSoftTap(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                     int level, float2 p, float receiverDepth, float kernelWeight, inout float lit, inout float weight)
+{
+    const float2 shifted = p - 0.5f;
+    const int2 base = int2(floor(shifted));
+    const float2 f = shifted - floor(shifted);
+    [branch]
+    if (PteroVsmFootprintInOnePage(base))
+    {
+        float4 stored;
+        if (!PteroVsmLoadFootprint(vsm, pool, PteroVsmPageEntry(vsm, pageTable, level, base >> 7), base, stored))
+            return;
+        const float4 w = kernelWeight * float4((1.0f - f.x) * (1.0f - f.y), f.x * (1.0f - f.y),
+                                               (1.0f - f.x) * f.y,          f.x * f.y);
+        lit += dot(w, float4(receiverDepth.xxxx <= stored));
+        weight += dot(w, 1.0f.xxxx);
+        return;
+    }
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        const int2 corner = int2(i & 1, i >> 1);
+        const float w = kernelWeight * (corner.x != 0 ? f.x : 1.0f - f.x) * (corner.y != 0 ? f.y : 1.0f - f.y);
+        bool valid;
+        const float stored = PteroVsmLoadTexel(vsm, pageTable, pool, level, base + corner, valid);
+        if (valid)
+        {
+            lit += w * (receiverDepth <= stored ? 1.0f : 0.0f);
+            weight += w;
+        }
+    }
+}
+
+// Sun visibility with a penumbra from the sun's angular size, 1 = lit. Hard (the 4x4
+// filter of PteroVsmVisibility) while the sun has no size.
+float PteroVsmVisibilitySoft(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                             float3 worldPos, float3 normal, float3 cameraPos, out int usedLevel)
+{
+    const float tanRadius = vsm.SoftShadow.x;
+    [branch]
+    if (tanRadius <= 0.0f)
+        return PteroVsmVisibility(vsm, pageTable, pool, worldPos, normal, cameraPos, usedLevel);
+
+    const PteroVsmLocation location = PteroVsmLocate(vsm, pageTable, pool, worldPos, normal, cameraPos, vsm.NormalOffset);
+    usedLevel = location.Level;
+    if (location.Level < 0)
+        return 1.0f;
+
+    // No wider than the coarsest level can filter within its kernel.
+    const float maxRadius = min(max(vsm.SoftShadow.y, 0.0f),
+                                PTERO_VSM_SOFT_MAX_RADIUS * PteroVsmTexelSize(vsm, (int)vsm.LevelCount - 1));
+    const float2 slope = PteroVsmReceiverSlope(float3(dot(normal, vsm.AxisX), dot(normal, vsm.AxisY), dot(normal, vsm.AxisZ)));
+    const float rotation = PteroVsmSoftRotation(vsm, location.VirtualTexel);
+    const float depthToMetres = 1.0f / max(vsm.DepthRangeInv, 1e-12f);
+
+    // Blocker search, over the widest penumbra kept. A tap offset (x, y) texels moves
+    // (x, -y) texels in light space; the receiver plane's depth there is its own.
+    int searchLevel;
+    float searchTexel;
+    float2 searchCentre;
+    [branch]
+    if (!PteroVsmSoftLevel(vsm, pageTable, pool, location, maxRadius, searchLevel, searchTexel, searchCentre))
+        return PteroVsmVisibility(vsm, pageTable, pool, worldPos, normal, cameraPos, usedLevel);
+    const float searchRadius = clamp(maxRadius / searchTexel, 1.0f, PTERO_VSM_SOFT_MAX_RADIUS);
+    const float searchReceiver = location.LightZ - PteroVsmSoftBias(vsm, slope, searchTexel);
+
+    float blockerSum = 0.0f;
+    float blockerCount = 0.0f;
+    [loop]
+    for (uint i = 0; i < PTERO_VSM_SOFT_BLOCKER_TAPS; ++i)
+    {
+        const float2 offset = PteroVsmVogelTap(i, PTERO_VSM_SOFT_BLOCKER_TAPS, rotation) * searchRadius;
+        bool valid;
+        const float stored = PteroVsmLoadTexel(vsm, pageTable, pool, searchLevel, int2(floor(searchCentre + offset)), valid);
+        if (!valid)
+            continue;
+        const float tapReceiver = searchReceiver + searchTexel * (slope.x * offset.x - slope.y * offset.y);
+        const float storedZ = vsm.DepthNear + stored * depthToMetres;
+        if (storedZ < tapReceiver)
+        {
+            blockerSum += storedZ;
+            blockerCount += 1.0f;
+        }
+    }
+    // Nothing between this point and the sun: fully lit, and no filter to pay for.
+    if (blockerCount <= 0.0f)
+        return 1.0f;
+
+    const float blockerZ = blockerSum / blockerCount;
+    const float penumbra = min(max(location.LightZ - blockerZ, 0.0f) * tanRadius, maxRadius);
+
+    int level;
+    float texel;
+    float2 centre;
+    [branch]
+    if (penumbra < PTERO_VSM_SOFT_MIN_RADIUS * location.TexelSize
+        || !PteroVsmSoftLevel(vsm, pageTable, pool, location, penumbra, level, texel, centre))
+        return PteroVsmVisibility(vsm, pageTable, pool, worldPos, normal, cameraPos, usedLevel);
+
+    usedLevel = level;
+    const float radius = max(penumbra / texel, 1.0f);
+    const float receiver = location.LightZ - PteroVsmSoftBias(vsm, slope, texel);
+    float lit = 0.0f;
+    float weight = 0.0f;
+    [loop]
+    for (uint j = 0; j < PTERO_VSM_SOFT_FILTER_TAPS; ++j)
+    {
+        const float2 offset = PteroVsmVogelTap(j, PTERO_VSM_SOFT_FILTER_TAPS, rotation) * radius;
+        const float tapReceiver = receiver + texel * (slope.x * offset.x - slope.y * offset.y);
+        const float tapDepth = min((tapReceiver - vsm.DepthNear) * vsm.DepthRangeInv, 1.0f);
+        PteroVsmSoftTap(vsm, pageTable, pool, level, centre + offset, tapDepth,
+                        PteroVsmSoftKernelWeight(j, PTERO_VSM_SOFT_FILTER_TAPS), lit, weight);
+    }
+    return weight > 0.0f ? lit / weight : 1.0f;
+}
+
+// A local light's slot, located receiver, and its kernel level - as for the sun.
+bool PteroVsmSoftMip(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                     uint slot, PteroVsmLocalLocation location, float radiusMetres,
+                     out int mip, out float texelWorld, out float2 centre)
+{
+    const int last = PTERO_VSM_LOCAL_MIPS - 1;
+    const int first = min(location.Mip + PteroVsmSoftLevelSteps(radiusMetres, location.TexelWorld), last);
+    mip = location.Mip;
+    texelWorld = location.TexelWorld;
+    centre = location.Texel;
+    [loop]
+    for (int candidate = first; candidate <= last && candidate <= first + 2; ++candidate)
+    {
+        const float scale = exp2((float)(candidate - location.Mip));
+        const float2 candidateCentre = location.Texel / scale;
+        bool valid;
+        PteroVsmLoadLocalTexel(vsm, pageTable, pool, slot, location.FaceInfo.Face, (uint)candidate,
+                               int2(floor(candidateCentre)), valid);
+        if (valid)
+        {
+            mip = candidate;
+            texelWorld = location.TexelWorld * scale;
+            centre = candidateCentre;
+            return true;
+        }
+    }
+    return false;
+}
+
+void PteroVsmSoftLocalTap(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                          uint slot, uint face, int mip, float2 p, float receiverStored,
+                          float kernelWeight, inout float lit, inout float weight)
+{
+    const float2 shifted = p - 0.5f;
+    const int2 base = int2(floor(shifted));
+    const float2 f = shifted - floor(shifted);
+    const int resolution = PTERO_VSM_LOCAL_RESOLUTION >> mip;
+    [branch]
+    if (PteroVsmFootprintInOnePage(base) && all(base >= 0) && all(base + 1 < resolution))
+    {
+        const uint entry = pageTable[vsm.LocalPageTableBase
+                                     + PteroVsmLocalPageIndex(slot, face, (uint)mip, uint2(base) >> 7)];
+        float4 stored;
+        if (!PteroVsmLoadFootprint(vsm, pool, entry, base, stored))
+            return;
+        const float4 w = kernelWeight * float4((1.0f - f.x) * (1.0f - f.y), f.x * (1.0f - f.y),
+                                               (1.0f - f.x) * f.y,          f.x * f.y);
+        lit += dot(w, float4(stored >= receiverStored.xxxx));
+        weight += dot(w, 1.0f.xxxx);
+        return;
+    }
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        const int2 corner = int2(i & 1, i >> 1);
+        const float w = kernelWeight * (corner.x != 0 ? f.x : 1.0f - f.x) * (corner.y != 0 ? f.y : 1.0f - f.y);
+        bool valid;
+        const float stored = PteroVsmLoadLocalTexel(vsm, pageTable, pool, slot, face, (uint)mip, base + corner, valid);
+        if (valid)
+        {
+            lit += w * (stored >= receiverStored ? 1.0f : 0.0f);
+            weight += w;
+        }
+    }
+}
+
+// Visibility from a local light with a penumbra from its emitter radius
+// (LocalParams.w), 1 = lit, before the shadow budget's fade. Hard while the light has
+// no size, and past the slot's cheap-filter distance.
+float PteroVsmLocalVisibilitySoftUnfaded(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                                         uint slot, float3 worldPos, float3 normal, float3 cameraPos)
+{
+    const float lightSize = vsm.LocalParams[slot].w;
+    [branch]
+    if (lightSize <= 0.0f || distance(worldPos, cameraPos) >= vsm.LocalParams[slot].z)
+        return PteroVsmLocalVisibilityUnfaded(vsm, pageTable, pool, slot, worldPos, normal, cameraPos, 1.0f);
+
+    const PteroVsmLocalLocation location = PteroVsmLocalLocate(vsm, pageTable, pool, slot, worldPos, normal, cameraPos,
+                                                               vsm.NormalOffset, 1.0f);
+    if (location.Mip < 0)
+        return 1.0f;
+
+    const PteroVsmCubeFace face = location.FaceInfo;
+    // No wider than the coarsest mip can filter within its kernel here. A light a
+    // finger's width above its caster - a flame over a candle - asks for a penumbra
+    // as wide as the whole face; without this cap the kernel ran off every mip and
+    // the shadow fell back to hard.
+    const float maxRadius = min(max(vsm.SoftShadow.y, 0.0f), PteroVsmLocalSoftMaxRadius(location.Depth));
+    const float n = vsm.LocalNear;
+    const float f = max(vsm.LocalLights[slot].w, n * 2.0f);
+    // Texel x runs along Right, texel y down Up; depth is along Forward.
+    const float2 slope = PteroVsmReceiverSlope(float3(dot(normal, face.Right), dot(normal, face.Up), dot(normal, face.Forward)));
+    const float rotation = PteroVsmSoftRotation(vsm, location.Texel);
+
+    // Blocker search. A blocker at depth d casts a penumbra lightSize * (receiver - d) / d
+    // wide; searching out to twice the light's size finds every blocker in the nearer
+    // two thirds of the way, and the cap bounds the rest.
+    const float searchMetres = min(maxRadius, 2.0f * lightSize);
+    int searchMip;
+    float searchTexelWorld;
+    float2 searchCentre;
+    [branch]
+    if (!PteroVsmSoftMip(vsm, pageTable, pool, slot, location, searchMetres, searchMip, searchTexelWorld, searchCentre))
+        return PteroVsmLocalVisibilityUnfaded(vsm, pageTable, pool, slot, worldPos, normal, cameraPos, 1.0f);
+    const float searchRadius = clamp(searchMetres / searchTexelWorld, 1.0f, PTERO_VSM_SOFT_MAX_RADIUS);
+    const float searchReceiver = location.Depth - PteroVsmSoftBias(vsm, slope, searchTexelWorld);
+
+    float blockerSum = 0.0f;
+    float blockerCount = 0.0f;
+    [loop]
+    for (uint i = 0; i < PTERO_VSM_SOFT_LOCAL_BLOCKER_TAPS; ++i)
+    {
+        const float2 offset = PteroVsmVogelTap(i, PTERO_VSM_SOFT_LOCAL_BLOCKER_TAPS, rotation) * searchRadius;
+        bool valid;
+        const float stored = PteroVsmLoadLocalTexel(vsm, pageTable, pool, slot, face.Face, (uint)searchMip,
+                                                    int2(floor(searchCentre + offset)), valid);
+        if (!valid || stored >= 1.0f)
+            continue;
+        const float tapReceiver = searchReceiver + searchTexelWorld * (slope.x * offset.x - slope.y * offset.y);
+        const float storedDepth = PteroVsmLocalLinearDepth(vsm, stored, f);
+        if (storedDepth < tapReceiver)
+        {
+            blockerSum += storedDepth;
+            blockerCount += 1.0f;
+        }
+    }
+    if (blockerCount <= 0.0f)
+        return 1.0f;
+
+    const float blockerDepth = max(blockerSum / blockerCount, n);
+    const float penumbra = min(lightSize * max(location.Depth - blockerDepth, 0.0f) / blockerDepth, maxRadius);
+
+    int mip;
+    float texelWorld;
+    float2 centre;
+    [branch]
+    if (penumbra < PTERO_VSM_SOFT_MIN_RADIUS * location.TexelWorld
+        || !PteroVsmSoftMip(vsm, pageTable, pool, slot, location, penumbra, mip, texelWorld, centre))
+        return PteroVsmLocalVisibilityUnfaded(vsm, pageTable, pool, slot, worldPos, normal, cameraPos, 1.0f);
+
+    const float radius = max(penumbra / texelWorld, 1.0f);
+    const float receiver = location.Depth - PteroVsmSoftBias(vsm, slope, texelWorld);
+    float lit = 0.0f;
+    float weight = 0.0f;
+    [loop]
+    for (uint j = 0; j < PTERO_VSM_SOFT_LOCAL_FILTER_TAPS; ++j)
+    {
+        const float2 offset = PteroVsmVogelTap(j, PTERO_VSM_SOFT_LOCAL_FILTER_TAPS, rotation) * radius;
+        const float tapReceiver = max(receiver + texelWorld * (slope.x * offset.x - slope.y * offset.y), n);
+        // Into stored-depth units, as PteroVsmLocalVisibilityUnfaded compares.
+        const float tapStored = (f - n * f / tapReceiver) / (f - n);
+        PteroVsmSoftLocalTap(vsm, pageTable, pool, slot, face.Face, mip, centre + offset, tapStored,
+                             PteroVsmSoftKernelWeight(j, PTERO_VSM_SOFT_LOCAL_FILTER_TAPS), lit, weight);
+    }
+    return weight > 0.0f ? lit / weight : 1.0f;
+}
+
+float PteroVsmLocalVisibilitySoft(PteroVsmConstants vsm, StructuredBuffer<uint> pageTable, Texture2D pool,
+                                  uint slot, float3 worldPos, float3 normal, float3 cameraPos)
+{
+    const float strength = PteroVsmLocalShadowStrength(vsm, slot);
+    [branch]
+    if (strength <= 0.0f)
+        return 1.0f;
+    const float visibility = PteroVsmLocalVisibilitySoftUnfaded(vsm, pageTable, pool, slot, worldPos, normal, cameraPos);
+    return 1.0f - strength * (1.0f - visibility);
 }
 
 // Tint for the level debug view.

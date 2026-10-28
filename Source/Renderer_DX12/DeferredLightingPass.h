@@ -1,7 +1,8 @@
 #pragma once
 
 // DeferredLightingPass
-// Owns the three G-Buffer render targets (albedo, normal, material) and the
+// Owns the G-Buffer render targets (albedo, normal, material, edge, and the two
+// Disney principled targets) and the
 // fullscreen lighting-resolve pipeline.  The flow each frame is:
 //
 //   1. BeginGeometryPass()  – transition G-Buffer RTs to RenderTarget state,
@@ -18,6 +19,7 @@
 #include "RadianceProbeSettings.h"
 #include "MsaaSettings.h"
 #include "VirtualShadowMapConstants.h"
+#include "PrincipledGBuffer.h"
 
 #include <DirectXMath.h>
 #include <d3d12.h>
@@ -38,6 +40,11 @@ struct GBufferSrvs
     D3D12_GPU_DESCRIPTOR_HANDLE Albedo{};
     D3D12_GPU_DESCRIPTOR_HANDLE Normal{};
     D3D12_GPU_DESCRIPTOR_HANDLE Material{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Edge{};      // Analytic Edge AA triangle edges
+    // Disney principled parameters (PrincipledBrdf.hlsli). Allocated together, so
+    // Principled1 directly follows Principled0 and the two bind as one table.
+    D3D12_GPU_DESCRIPTOR_HANDLE Principled0{};
+    D3D12_GPU_DESCRIPTOR_HANDLE Principled1{};
 };
 
 class DeferredLightingPass
@@ -80,9 +87,15 @@ public:
         "PointLightGpu must match PointLightData in DeferredLighting.hlsl and "
         "RtgiPointLightData in RtGI_Common.hlsli.");
 
-    // Maximum point lights the lighting shader supports.
-    // Must match MAX_POINT_LIGHTS in DeferredLighting.hlsl.
+    // Lights in the fixed-size constant-buffer arrays (MAX_POINT_LIGHTS in
+    // DeferredLighting.hlsl and its mirrors): what the passes without clustered light
+    // lists see - the radiance probes and cascades, voxel GI, the path tracer, the
+    // ray-traced subsurface pass and particle lighting. The scene renderer hands them
+    // the kMaxPointLights most important of the scene's lights.
     static constexpr int kMaxPointLights = 16;
+    // Lights a scene can have. The deferred resolve, the fog and RTGI read all of them
+    // through LightClusterRenderer's structured buffer and clustered lists.
+    static constexpr int kMaxSceneLights = 256;
     static constexpr int kMaxShadowCastingPointLights = 4;
     static constexpr int kPointShadowFacesPerLight = 6;
 
@@ -178,15 +191,42 @@ public:
     // Forward the RTGI debug mode so deferred lighting can show specular-only output.
     void SetRtgiDebugView(int debugView);
 
+    // Shade with the Disney principled BRDF (true) or the original Lambert diffuse and
+    // Cook-Torrance specular (false).
+    void SetDisneyBrdf(bool enabled);
+
     // Supply the RTAO output texture SRV and an intensity multiplier.
     // Call with handle={} and intensity=0.0f to disable RTAO contribution.
     void SetAoSrv(D3D12_GPU_DESCRIPTOR_HANDLE aoSrvHandle, float intensity, int debugView = 0);
+
+    // How strongly the bound AO also darkens point, spot and rect lights' direct light
+    // (0 = ambient and GI only, 1 = fully). Without it AO is invisible wherever local
+    // lights rather than the sky light a space.
+    void SetAoDirectOcclusion(float amount);
+
+    // Ray-traced shadows (RtShadows). A null handle keeps that light's shadow maps.
+    void SetRtShadows(D3D12_GPU_DESCRIPTOR_HANDLE sunVisibilitySrv,
+                      D3D12_GPU_DESCRIPTOR_HANDLE localVisibilitySrv,
+                      int debugView);
 
     // Supply the accumulated volumetric fog 3D texture SRV.
     void SetVolumetricFogSrv(D3D12_GPU_DESCRIPTOR_HANDLE fogSrvHandle, const VolumetricFogSettings* settings);
     void SetPointShadowSrv(D3D12_GPU_DESCRIPTOR_HANDLE pointShadowSrvHandle, int activeShadowLightCount, float shadowMapSize, float shadowBias);
     void SetPointShadowMatrices(const DirectX::XMFLOAT4X4* faceViewProjections, int activeShadowLightCount);
     void SetPointShadowDebug(int debugView, int filterRadius, float seamBlendDistance, float normalOffset);
+
+    // The scene's lights and their clustered lists (LightClusterRenderer::GetBindings),
+    // which the resolve shades with. Must be set before ResolveLight.
+    void SetLightClusters(D3D12_GPU_VIRTUAL_ADDRESS constants, D3D12_GPU_VIRTUAL_ADDRESS lights,
+                          D3D12_GPU_VIRTUAL_ADDRESS extras, D3D12_GPU_VIRTUAL_ADDRESS viewMasks,
+                          D3D12_GPU_VIRTUAL_ADDRESS gridMasks)
+    {
+        mLightClusterAddresses[0] = constants;
+        mLightClusterAddresses[1] = lights;
+        mLightClusterAddresses[2] = extras;
+        mLightClusterAddresses[3] = viewMasks;
+        mLightClusterAddresses[4] = gridMasks;
+    }
 
     // Subsurface scattering for the next ResolveLight(). With a constants address, the
     // resolve switches to the pipeline variant that also writes each subsurface pixel's
@@ -244,6 +284,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetAlbedoRtv()   const { return mRtvHandles[0]; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetNormalRtv()   const { return mRtvHandles[1]; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetMaterialRtv() const { return mRtvHandles[2]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetEdgeRtv()     const { return mRtvHandles[3]; }
 
     // G-Buffer SRV GPU handles for binding in the lighting shader.
     const GBufferSrvs& GetSrvs() const { return mSrvs; }
@@ -251,16 +292,17 @@ public:
     const GBufferSrvs& GetDebugSrvs() const { return mDebugSrvs; }
 
     // Raw G-Buffer resource pointers for resource-barrier transitions (e.g. before DXR).
-    // Index: 0 = albedo, 1 = normal, 2 = material.
+    // Index: 0 = albedo, 1 = normal, 2 = material, 3 = edge, 4-5 = principled.
+    static constexpr UINT kGBufferTargetCount = PrincipledGBuffer::kGeometryPassTargetCount;
     ID3D12Resource* GetGBufferResource(UINT index) const
     {
-        return (index < 3u) ? mGBufferResources[index].Get() : nullptr;
+        return (index < kGBufferTargetCount) ? mGBufferResources[index].Get() : nullptr;
     }
 
     // Get MSAA G-Buffer resource (source for resolve). Returns nullptr if MSAA disabled.
     ID3D12Resource* GetMsaaGBufferResource(UINT index) const
     {
-        return (index < 3u) ? mMsaaGBufferResources[index].Get() : nullptr;
+        return (index < kGBufferTargetCount) ? mMsaaGBufferResources[index].Get() : nullptr;
     }
 
     bool IsMsaaEnabled() const { return mMsaaSettings.Enabled; }
@@ -310,6 +352,16 @@ private:
         int               PointShadowFilterRadius = 1;
         float             PointShadowSeamBlendDistance = 0.05f;
         float             PointShadowNormalOffset = 1.0f;
+        // 1 = Disney principled BRDF (PrincipledBrdf.hlsli), 0 = the original Lambert +
+        // Cook-Torrance model.
+        int               DisneyBrdf = 1;
+        // Ray-traced shadows (RtShadows): 1 = the sun / the listed local lights read
+        // their visibility from t14 / t15 instead of the shadow maps.
+        int               RtSunShadow = 0;
+        int               RtLocalShadows = 0;
+        // How much the ambient occlusion darkens local lights' direct light (0..1).
+        float             AoDirectOcclusion = 0.0f;
+        int               RtShadowDebugView = 0;
     };
     // LightingConstants is ~576 bytes; CB is allocated rounded up to 256 alignment.
 
@@ -336,24 +388,24 @@ private:
     bool CreateConstantBuffers();
 
     // MSAA G-Buffer resources (source for resolve, only created if MSAA enabled).
-    Microsoft::WRL::ComPtr<ID3D12Resource> mMsaaGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12Resource> mMsaaGBufferResources[kGBufferTargetCount];
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mMsaaRtvHeap;
-    D3D12_CPU_DESCRIPTOR_HANDLE            mMsaaRtvHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mMsaaRtvHandles[kGBufferTargetCount]{};
 
-    // Single-sample G-Buffer resources (albedo, normal, material).
+    // Single-sample G-Buffer resources (albedo, normal, material, edge, principled x2).
     // These are always created and used for lighting (resolve targets if MSAA enabled).
-    Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[3];
+    Microsoft::WRL::ComPtr<ID3D12Resource> mGBufferResources[kGBufferTargetCount];
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap;
-    D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE            mRtvHandles[kGBufferTargetCount]{};
     GBufferSrvs                            mSrvs{};
 
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> mRetiredGBufferResources;
     std::vector<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>> mRetiredGBufferDescriptorHeaps;
 
     // CPU handles matching the SRV allocations (kept for re-creating SRVs on resize).
-    D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mSrvCpuHandles[kGBufferTargetCount]{};
     GBufferSrvs                 mDebugSrvs{};
-    D3D12_CPU_DESCRIPTOR_HANDLE mDebugSrvCpuHandles[3]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE mDebugSrvCpuHandles[kGBufferTargetCount]{};
 
     // Current MSAA configuration.
     MsaaSettings mMsaaSettings{};
@@ -374,6 +426,15 @@ private:
 
     D3D12_GPU_VIRTUAL_ADDRESS   mSubsurfaceConstants = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE mSubsurfaceDiffuseRtv{};
+
+    // Root parameters 16..20: b0, t0..t3 in space 7 (LightClusters.hlsli).
+    static constexpr UINT       kLightClusterRootIndex = 16;
+    D3D12_GPU_VIRTUAL_ADDRESS   mLightClusterAddresses[5]{};
+
+    // Root parameters 21, 22: ray-traced sun visibility (t14), local light pairs (t15).
+    static constexpr UINT       kRtShadowRootIndex = kLightClusterRootIndex + 5;
+    D3D12_GPU_DESCRIPTOR_HANDLE mRtSunShadowSrv{};
+    D3D12_GPU_DESCRIPTOR_HANDLE mRtLocalShadowSrv{};
 
     DirectX::XMFLOAT3 mCpuSunDirection{ 0.0f, 0.0f, -1.0f };
     DirectX::XMFLOAT3 mCpuSunColor{ 0.0f, 0.0f, 0.0f };

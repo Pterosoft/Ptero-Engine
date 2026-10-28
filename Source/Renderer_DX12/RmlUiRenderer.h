@@ -74,6 +74,7 @@ public:
     bool SetElementProperty(const std::string& elementId, const std::string& property, const std::string& value);
     bool SetElementClass(const std::string& elementId, const std::string& className, bool enabled);
     bool SetElementVisible(const std::string& elementId, bool visible);
+    bool SetElementEnabled(const std::string& elementId, bool enabled);
 
     const std::string& GetLoadedDocumentName() const { return mLoadedDocumentName; }
 

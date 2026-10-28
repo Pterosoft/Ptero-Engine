@@ -201,14 +201,19 @@ void ApplySavedGameDisplayMode()
 void DX12SceneRenderer::BeginGameSettings(bool standalone)
 {
     auto& baseline = mGameSettingsBaseline;
-    baseline.Taa = mTaaSettings; baseline.Smaa = mSmaaSettings; baseline.Msaa = mMsaaSettings;
-    baseline.Dlss = mDlssSettings; baseline.Fsr = mFsrSettings;
+    baseline.Taa = mTaaSettings; baseline.Smaa = mSmaaSettings; baseline.Msaa = mMsaaSettings; baseline.AnalyticEdgeAa = mAnalyticEdgeAaSettings; baseline.Aar = mAarSettings;
+    baseline.Dlss = mDlssSettings; baseline.Fsr = mFsrSettings; baseline.Xess = mXessSettings;
     baseline.GiMode = mGlobalIlluminationMode; baseline.Rtgi = mRtgiSettings;
-    baseline.Cascades = mRadianceCascadesSettings; baseline.Fog = mVolumetricFogSettings;
+    baseline.Cascades = mRadianceCascadesSettings; baseline.Voxel = mVoxelGiSettings; baseline.Probes = mProbeSettings; baseline.Fog = mVolumetricFogSettings;
     baseline.PointShadows = mPointShadowSettings;
     baseline.VirtualShadows = mVirtualShadowMapSettings;
+    baseline.RtShadows = mRtShadowSettings;
     baseline.Gtao = mGtaoSettings; baseline.Rtao = mRtaoSettings;
     baseline.ChromaticAberration = mChromaticAberrationSettings;
+    baseline.PathTracer = mPathTracerSettings;
+    baseline.VirtualGeometry = mVirtualGeometryRenderer.GetSettings();
+    baseline.Ssr = mSsrSettings; baseline.Subsurface = mSubsurfaceSettings;
+    baseline.Bloom = mBloomSettings; baseline.LensFlare = mLensFlareSettings;
     mGameSettingsActive = true;
     mGameSettingsApplied = false;
 
@@ -224,10 +229,31 @@ void DX12SceneRenderer::BeginGameSettings(bool standalone)
         FarkleMenuController::Choices upscalers{{"none", "None"}};
         if (mDlssRenderer.IsAvailable()) upscalers.push_back({"dlss", "DLSS"});
         if (mFsrRenderer.IsAvailable()) upscalers.push_back({"fsr", "FSR"});
+        if (mXessRenderer.IsAvailable()) upscalers.push_back({"xess", "XeSS"});
+        if (mTaaRenderer.IsInitialized()) upscalers.push_back({"taau", "TAA Upsampling"});
+        if (AnalyticEdge::IsSupported()) upscalers.push_back({"aar", "AAR"});
         menus.Options["upscaler"] = std::move(upscalers);
+        // The key predates XeSS; "on" still means FSR so saved files keep working.
         FarkleMenuController::Choices frameGeneration{{"off", "Off"}};
-        if (mFrameGeneration.IsApiAvailable()) frameGeneration.push_back({"on", "On"});
+        if (mFrameGeneration.IsApiAvailable()) frameGeneration.push_back({"on", "FSR"});
+        if (mXessFrameGeneration.IsApiAvailable()) frameGeneration.push_back({"xess", "XeSS"});
         menus.Options["fsr-frame-generation"] = std::move(frameGeneration);
+        FarkleMenuController::Choices pathTracing{{"off", "Off"}};
+        if (IsRayTracingSupported() && !mPathTracer.HasInitFailed())
+        {
+            pathTracing.push_back({"realtime", "Real Time"});
+            pathTracing.push_back({"reference", "Reference"});
+        }
+        menus.Options["path-tracing"] = std::move(pathTracing);
+        // RTGI and the probes trace rays; voxel GI runs on any GPU.
+        FarkleMenuController::Choices giMethods{{"level", "Level Default"}};
+        if (IsRayTracingSupported())
+        {
+            giMethods.push_back({"rtgi", "RTGI"});
+            if (!mProbeRenderer.HasInitFailed()) giMethods.push_back({"probes", "Probe GI"});
+        }
+        if (!mVoxelGiRenderer.HasInitFailed()) giMethods.push_back({"voxel", "Voxel GI"});
+        menus.Options["gi-method"] = std::move(giMethods);
     }
     menus.Apply = [this](Values& values) { return ApplyGameSettings(values, true); };
 }
@@ -256,21 +282,37 @@ void DX12SceneRenderer::EndGameSettings()
     if (!std::exchange(mGameSettingsApplied, false)) return;
 
     const auto& baseline = mGameSettingsBaseline;
-    mTaaSettings = baseline.Taa; mSmaaSettings = baseline.Smaa; mMsaaSettings = baseline.Msaa;
-    mDlssSettings = baseline.Dlss; mFsrSettings = baseline.Fsr;
+    mTaaSettings = baseline.Taa; mSmaaSettings = baseline.Smaa; mMsaaSettings = baseline.Msaa; mAnalyticEdgeAaSettings = baseline.AnalyticEdgeAa; mAarSettings = baseline.Aar;
+    mDlssSettings = baseline.Dlss; mFsrSettings = baseline.Fsr; mXessSettings = baseline.Xess;
     mGlobalIlluminationMode = baseline.GiMode; mRtgiSettings = baseline.Rtgi;
-    mRadianceCascadesSettings = baseline.Cascades; mVolumetricFogSettings = baseline.Fog;
+    mRadianceCascadesSettings = baseline.Cascades; mVoxelGiSettings = baseline.Voxel; mProbeSettings = baseline.Probes; mVolumetricFogSettings = baseline.Fog;
     mPointShadowSettings = baseline.PointShadows;
     mVirtualShadowMapSettings = baseline.VirtualShadows;
+    mRtShadowSettings = baseline.RtShadows;
     mGtaoSettings = baseline.Gtao; mRtaoSettings = baseline.Rtao;
     mChromaticAberrationSettings = baseline.ChromaticAberration;
+    mPathTracerSettings = baseline.PathTracer;
+    mPathTracerSettings.ResetAccumulation = true;
+    mVirtualGeometryRenderer.GetSettings() = baseline.VirtualGeometry;
+    mSsrSettings = baseline.Ssr; mSubsurfaceSettings = baseline.Subsurface;
+    mBloomSettings = baseline.Bloom; mLensFlareSettings = baseline.LensFlare;
     mShadowsEnabled = true;
     mUpscalerSharpness = -1.0f;
     mShowStatisticsOverlay = false;
     mTaaSettings.ResetHistory = true; mDlssSettings.ResetHistory = true; mFsrSettings.ResetHistory = true;
+    mXessSettings.ResetHistory = true;
     mTextureQualityMipBias = 0.0f;
     mEntityMeshRenderer.SetLodDistanceScale(1.0f);
     if (mAudioManager) mAudioManager->SetVolumes(1.0f, 1.0f, 1.0f);
+}
+
+bool DX12SceneRenderer::GetGameSetting(const std::string& key, std::string& value)
+{
+    // Saved() is what Apply last left in effect, corrections included.
+    const Values& saved = mRmlUiRenderer.GetFarkleMenus().Saved();
+    const auto it = saved.find(key);
+    value = it == saved.end() ? std::string() : it->second;
+    return it != saved.end();
 }
 
 std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool persist)
@@ -285,29 +327,57 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     std::string upscaler = values["upscaler"];
     if (upscaler == "dlss" && !mDlssRenderer.IsAvailable()) { upscaler = "none"; notes.push_back("DLSS is not available on this system."); }
     if (upscaler == "fsr" && !mFsrRenderer.IsAvailable()) { upscaler = "none"; notes.push_back("FSR is not available on this system."); }
-    if (upscaler != "dlss" && upscaler != "fsr") upscaler = "none";
+    if (upscaler == "xess" && !mXessRenderer.IsAvailable()) { upscaler = "none"; notes.push_back("XeSS is not available on this system."); }
+    if (upscaler == "taau" && !mTaaRenderer.IsInitialized()) { upscaler = "none"; notes.push_back("TAA upsampling is not available."); }
+    if (upscaler == "aar" && !AnalyticEdge::IsSupported()) { upscaler = "none"; notes.push_back("AAR needs Shader Model 6.1 barycentrics, which this GPU lacks."); }
+    if (upscaler != "dlss" && upscaler != "fsr" && upscaler != "xess" && upscaler != "taau" && upscaler != "aar") upscaler = "none";
     values["upscaler"] = upscaler;
 
     const std::string antiAliasing = values["anti-aliasing"];
-    mTaaSettings = baseline.Taa; mSmaaSettings = baseline.Smaa; mMsaaSettings = baseline.Msaa;
-    // DLSS and FSR are temporal themselves; TAA on top re-jitters an already resolved image
-    // and makes it shimmer, so it is off whenever an upscaler is.
-    mTaaSettings.Enabled = antiAliasing == "taa" && upscaler == "none";
+    mTaaSettings = baseline.Taa; mSmaaSettings = baseline.Smaa; mMsaaSettings = baseline.Msaa; mAnalyticEdgeAaSettings = baseline.AnalyticEdgeAa; mAarSettings = baseline.Aar;
+    // DLSS, FSR and XeSS are temporal themselves; TAA on top re-jitters an already resolved
+    // image and makes it shimmer, so it is off whenever one of them is. TAA upsampling is
+    // TAA itself, so it switches TAA on whatever the anti-aliasing choice.
+    const bool taau = upscaler == "taau";
+    mTaaSettings.Enabled = (antiAliasing == "taa" && upscaler == "none") || taau;
+    mTaaSettings.Upscaling = taau;
     mSmaaSettings.Enabled = antiAliasing == "smaa";
     // MSAA multisamples the G-Buffer, which an upscaler would only discard.
     mMsaaSettings.Enabled = antiAliasing == "msaa" && upscaler == "none";
     mTaaSettings.ResetHistory = true;
 
-    // Upscaler quality: the same five steps for both, in each one's own mode numbering
-    // (DlssSettings.h / FsrSettings.h). Native renders at full size and keeps only the AA.
+    // Upscaler quality: the same five steps for all, in each one's own mode numbering
+    // (DlssSettings.h / FsrSettings.h / XessSettings.h), matched by render scale.
+    // Native renders at full size and keeps only the AA.
     std::string& quality = values["upscaler-quality"];
     static const char* const kQualities[] = { "native", "quality", "balanced", "performance", "ultra-performance" };
     static constexpr int kDlssModes[] = { 6, 3, 2, 1, 4 };
     static constexpr int kFsrModes[] = { 0, 1, 2, 3, 4 };
+    // XeSS: Native AA 1.0x, Ultra Quality 1.5x, Quality 1.7x, Balanced 2.0x, Ultra Performance 3.0x.
+    static constexpr int kXessModes[] = { 0, 2, 3, 4, 6 };
+    // TAAU screen percentages at the same render scales.
+    static constexpr float kTaauScreenPercentages[] = { 100.0f, 67.0f, 59.0f, 50.0f, 33.0f };
     int qualityIndex = 1;
     for (int i = 0; i < 5; ++i)
         if (quality == kQualities[i]) qualityIndex = i;
     quality = kQualities[qualityIndex];
+    if (taau)
+        mTaaSettings.ScreenPercentage = kTaauScreenPercentages[qualityIndex];
+
+    // AAR is spatial and stops at Balanced (66.7 %): below that the render samples are too
+    // sparse for its per-surface reconstruction, so the lower steps use Balanced too.
+    static constexpr int kAarModes[] = { AarSettings::Native, AarSettings::Quality, AarSettings::Balanced,
+                                         AarSettings::Balanced, AarSettings::Balanced };
+    mAarSettings.Enabled = upscaler == "aar";
+    mAarSettings.Mode = kAarModes[qualityIndex];
+    mAarSettings.DebugView = 0;
+    if (upscaler == "aar" && qualityIndex > 2)
+        notes.push_back("AAR's lowest setting is Balanced (66.7 %); using that.");
+
+    mXessSettings = baseline.Xess;
+    mXessSettings.Enabled = upscaler == "xess";
+    mXessSettings.Mode = kXessModes[qualityIndex];
+    mXessSettings.ResetHistory = true;
 
     mDlssSettings = baseline.Dlss;
     mDlssSettings.Enabled = upscaler == "dlss";
@@ -326,6 +396,16 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     }
     mFsrSettings.ResetHistory = true;
 
+    mXessSettings.FrameGeneration = values["fsr-frame-generation"] == "xess";
+    if (mXessSettings.FrameGeneration && !mXessFrameGeneration.IsApiAvailable())
+    {
+        mXessSettings.FrameGeneration = false;
+        values["fsr-frame-generation"] = "off";
+        notes.push_back("XeSS frame generation is not available on this system.");
+    }
+    if (values["fsr-frame-generation"] != "on" && values["fsr-frame-generation"] != "xess")
+        values["fsr-frame-generation"] = "off";
+
     // Upscaler sharpening. FSR sharpens with its own RCAS; DLSS has none of its own any
     // more, so after DLSS the engine's image sharpen pass carries the same amount (see
     // DX12SceneRenderer's image sharpen pass). No effect without an upscaler.
@@ -341,26 +421,161 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     mGlobalIlluminationMode = gi < 0 ? GlobalIlluminationMode::Disabled : baseline.GiMode;
     mRtgiSettings = baseline.Rtgi;
     mRadianceCascadesSettings = baseline.Cascades;
+    mVoxelGiSettings = baseline.Voxel;
     auto& rtgi = mRtgiSettings;
     auto& cascades = mRadianceCascadesSettings;
+    auto& voxel = mVoxelGiSettings;
+    auto& probes = mProbeSettings;
+    probes = baseline.Probes;
+    probes.DebugShowProbes = false;
+
+    // ---- GI method. The renderer runs voxel GI over the probes over RTGI, by their
+    // own switches (DX12SceneRenderer's GI selection; GlobalIlluminationMode is only
+    // the editor's label), so a method is chosen by switching the other two off.
+    // Level Default leaves all three as authored.
+    std::string giMethod = values["gi-method"];
+    if (giMethod != "rtgi" && giMethod != "probes" && giMethod != "voxel") giMethod = "level";
+    if ((giMethod == "rtgi" || giMethod == "probes") && !IsRayTracingSupported())
+    {
+        notes.push_back(std::string(giMethod == "rtgi" ? "RTGI" : "Probe GI") + " needs a GPU with DirectX Raytracing; using the level's GI.");
+        giMethod = "level";
+    }
+    if ((giMethod == "probes" && mProbeRenderer.HasInitFailed()) || (giMethod == "voxel" && mVoxelGiRenderer.HasInitFailed()))
+    {
+        notes.push_back(std::string(giMethod == "voxel" ? "Voxel GI" : "Probe GI") + " failed to start on this system; using the level's GI.");
+        giMethod = "level";
+    }
+    values["gi-method"] = giMethod;
+    if (giMethod != "level")
+    {
+        rtgi.Enabled = giMethod == "rtgi";
+        probes.Enabled = giMethod == "probes";
+        voxel.Enabled = giMethod == "voxel";
+    }
+
+    // Off has to reach every method, including the voxel fallback that would stand in
+    // for RTGI or the probes on a GPU that cannot ray trace.
+    if (gi < 0)
+    {
+        rtgi.Enabled = false;
+        probes.Enabled = false;
+        voxel.Enabled = false;
+        voxel.FallbackWithoutRayTracing = false;
+    }
     const unsigned rays = baseline.Cascades.RaysPerProbe, spacing = baseline.Cascades.ProbeSpacingBase;
+    // Probe GI: rays per probe, within the probe renderer's 32..256.
+    static constexpr float kProbeRayScale[] = {0.5f, 0.75f, 1.0f, 2.0f};
+    if (gi >= 0)
+        probes.RaysPerProbe = std::clamp(static_cast<int>(baseline.Probes.RaysPerProbe * kProbeRayScale[gi]), 32, 256);
     switch (gi)
     {
     case 0:
         rtgi.RaysPerPixel = 1; rtgi.MaxBounces = 1; rtgi.SpecularEnabled = false;
         cascades.RaysPerProbe = (std::max)(2u, rays / 4); cascades.ProbeSpacingBase = spacing * 2;
+        voxel.Resolution = (std::max)(32, baseline.Voxel.Resolution / 2); voxel.DiffuseCones = 1;
+        voxel.HalfResolution = true; voxel.SpecularEnabled = false;
         break;
     case 1:
         rtgi.RaysPerPixel = (std::max)(1, baseline.Rtgi.RaysPerPixel / 2); rtgi.MaxBounces = (std::max)(1, baseline.Rtgi.MaxBounces - 1);
         cascades.RaysPerProbe = (std::max)(2u, rays / 2); cascades.ProbeSpacingBase = spacing * 3 / 2;
+        voxel.Resolution = (std::max)(32, baseline.Voxel.Resolution * 3 / 4); voxel.HalfResolution = true;
         break;
     case 3:
         rtgi.RaysPerPixel = (std::min)(8, baseline.Rtgi.RaysPerPixel * 2); rtgi.MaxBounces = (std::min)(4, baseline.Rtgi.MaxBounces + 1);
         cascades.RaysPerProbe = (std::min)(16u, rays * 2); cascades.ProbeSpacingBase = (std::max)(4u, spacing * 3 / 4);
+        voxel.DiffuseCones = 9; voxel.HalfResolution = false;
         break;
     default:
         break;
     }
+
+    // ---- GI and reflection resolution. Level Default keeps what the level authored;
+    // otherwise the divisor RTGI traces and denoises its diffuse GI at, which is also the
+    // share of probes Probe GI traces each frame, and the one RTGI's reflections (and
+    // the probes') trace at - full or half only, since reflections carry sharp detail.
+    std::string giResolution = values["gi-resolution"];
+    if (giResolution != "full" && giResolution != "half" && giResolution != "quarter") giResolution = "level";
+    values["gi-resolution"] = giResolution;
+    if (giResolution != "level")
+    {
+        const int divisor = giResolution == "quarter" ? 4 : giResolution == "half" ? 2 : 1;
+        rtgi.DiffuseResolution = divisor;
+        probes.TraceResolution = divisor;
+    }
+    std::string reflectionResolution = values["reflection-resolution"];
+    if (reflectionResolution != "full" && reflectionResolution != "half") reflectionResolution = "level";
+    values["reflection-resolution"] = reflectionResolution;
+    if (reflectionResolution != "level")
+        rtgi.SpecularResolution = reflectionResolution == "half" ? 2 : 1;
+
+    // ---- Path tracing. Real Time replaces the GI with NRD-denoised paths and keeps up
+    // with motion; Reference accumulates the whole lit scene and is only clean while the
+    // camera holds still. Either needs DXR 1.1 and a path tracer that initialized.
+    std::string pathTracing = values["path-tracing"];
+    if (pathTracing != "realtime" && pathTracing != "reference") pathTracing = "off";
+    if (pathTracing != "off" && (!IsRayTracingSupported() || mPathTracer.HasInitFailed()))
+    {
+        pathTracing = "off";
+        notes.push_back(IsRayTracingSupported() ? "The path tracer failed to start on this system."
+                                                : "Path tracing needs a GPU with DirectX Raytracing 1.1.");
+    }
+    values["path-tracing"] = pathTracing;
+    mPathTracerSettings = baseline.PathTracer;
+    mPathTracerSettings.Enabled = pathTracing != "off";
+    mPathTracerSettings.Mode = pathTracing == "reference" ? PathTracerMode::Reference : PathTracerMode::RealTime;
+    mPathTracerSettings.DebugView = 0;
+    mPathTracerSettings.ResetAccumulation = true;
+
+    // ---- Screen-space reflections: the trace budget of whichever technique the level
+    // uses (ray march or FidelityFX SSSR). Off removes them; a level authored without
+    // them stays without.
+    const int reflections = Tier(values, "reflection-quality");
+    auto& ssr = mSsrSettings;
+    ssr = baseline.Ssr;
+    ssr.Enabled = reflections >= 0 && baseline.Ssr.Enabled;
+    ssr.DebugView = 0;
+    switch (reflections)
+    {
+    case 0: ssr.MaxSteps = (std::max)(12, baseline.Ssr.MaxSteps / 2); ssr.RefineSteps = (std::min)(baseline.Ssr.RefineSteps, 3);
+            ssr.SssrMaxTraversalIntersections = (std::max)(32, baseline.Ssr.SssrMaxTraversalIntersections / 2);
+            ssr.SssrMostDetailedMip = baseline.Ssr.SssrMostDetailedMip + 1; break;
+    case 1: ssr.MaxSteps = (std::max)(16, baseline.Ssr.MaxSteps * 3 / 4);
+            ssr.SssrMaxTraversalIntersections = (std::max)(48, baseline.Ssr.SssrMaxTraversalIntersections * 3 / 4); break;
+    case 3: ssr.MaxSteps = (std::min)(128, baseline.Ssr.MaxSteps * 3 / 2); ssr.RefineSteps = (std::max)(baseline.Ssr.RefineSteps, 8);
+            ssr.SssrMaxTraversalIntersections = (std::min)(256, baseline.Ssr.SssrMaxTraversalIntersections * 2);
+            ssr.SssrSamplesPerQuad = (std::max)(baseline.Ssr.SssrSamplesPerQuad, 2); break;
+    default: break;
+    }
+
+    // ---- Subsurface scattering. Off renders skin and wax as plain diffuse. Low and
+    // Medium use the screen-space blur (a ray-traced level drops to it); Ultra spends
+    // more of whichever the level uses. The mode is never raised to ray tracing, which
+    // stays the level author's call.
+    const int subsurface = Tier(values, "subsurface-quality");
+    auto& sss = mSubsurfaceSettings;
+    sss = baseline.Subsurface;
+    sss.Enabled = subsurface >= 0 && baseline.Subsurface.Enabled;
+    sss.DebugView = 0;
+    switch (subsurface)
+    {
+    case 0: sss.Mode = 0; sss.Quality = 0; break;
+    case 1: sss.Mode = 0; sss.Quality = baseline.Subsurface.Mode == 0 ? (std::min)(baseline.Subsurface.Quality, 1) : 2; break;
+    case 3: sss.Quality = 2; sss.RtSamples = (std::max)(baseline.Subsurface.RtSamples, 16); break;
+    default: break;
+    }
+
+    // ---- Virtualized geometry. Off draws the virtualized meshes with their authored
+    // LODs (which Model Quality then scales); On keeps the level's settings, with Model
+    // Quality setting how much on-screen error the clusters may show. The editor's
+    // viewing aids never carry into play.
+    auto& vg = mVirtualGeometryRenderer.GetSettings();
+    vg = baseline.VirtualGeometry;
+    vg.Enabled = values["virtual-geometry"] != "off" && baseline.VirtualGeometry.Enabled;
+    vg.VirtualizeAllMeshes = false;
+    vg.DebugView = 0;
+    vg.FreezeCulling = false;
+    static constexpr float kClusterErrorScale[] = {4.0f, 2.0f, 1.0f, 0.5f};
+    vg.ErrorThresholdPixels = baseline.VirtualGeometry.ErrorThresholdPixels * kClusterErrorScale[std::clamp(Tier(values, "model-quality"), 0, 3)];
 
     // ---- Volumetric fog: froxel resolution only. Whether the level has fog at all,
     // and what it looks like, stays the level's.
@@ -382,6 +597,38 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     // ---- Chromatic aberration: on is the level's own look, off removes it.
     mChromaticAberrationSettings = baseline.ChromaticAberration;
     mChromaticAberrationSettings.Enabled = values["chromatic-aberration"] != "off";
+
+    // ---- Bloom. Off removes it; the tiers set the cost of whichever method the level
+    // uses, with High the level's own. Low swaps the FFT convolution for the mip chain,
+    // which keeps the glow but loses the glare shape. A level without bloom stays without.
+    const int bloom = Tier(values, "bloom-quality");
+    auto& bloomSettings = mBloomSettings;
+    bloomSettings = baseline.Bloom;
+    bloomSettings.Enabled = bloom >= 0 && baseline.Bloom.Enabled;
+    const bool fftBloom = baseline.Bloom.Method == BloomMethod::FftConvolution;
+    switch (bloom)
+    {
+    case 0: bloomSettings.Method = BloomMethod::MipChain; bloomSettings.MipLevels = (std::min)(baseline.Bloom.MipLevels, 4); break;
+    case 1: if (fftBloom) bloomSettings.FftResolution = (std::min)(baseline.Bloom.FftResolution, 256); break;
+    case 3: if (fftBloom) bloomSettings.FftResolution = 1024; else bloomSettings.MipLevels = (std::min)(baseline.Bloom.MipLevels + 1, 8); break;
+    default: break;
+    }
+
+    // ---- Lens flares: how many ghosts are traced, how finely and in how many
+    // wavelengths. Off removes them; a level authored without flares stays without.
+    const int flares = Tier(values, "lens-flare-quality");
+    auto& flareSettings = mLensFlareSettings;
+    flareSettings = baseline.LensFlare;
+    flareSettings.Enabled = flares >= 0 && baseline.LensFlare.Enabled;
+    switch (flares)
+    {
+    case 0: flareSettings.MaxGhosts = (std::max)(8, baseline.LensFlare.MaxGhosts / 4); flareSettings.RayGridSize = (std::min)(baseline.LensFlare.RayGridSize, 16);
+            flareSettings.Wavelengths = 1; flareSettings.MaxLights = (std::min)(baseline.LensFlare.MaxLights, 1); break;
+    case 1: flareSettings.MaxGhosts = (std::max)(8, baseline.LensFlare.MaxGhosts / 2); flareSettings.RayGridSize = (std::min)(baseline.LensFlare.RayGridSize, 24);
+            flareSettings.MaxLights = (std::min)(baseline.LensFlare.MaxLights, 2); break;
+    case 3: flareSettings.RayGridSize = (std::min)(64, baseline.LensFlare.RayGridSize * 3 / 2); flareSettings.Wavelengths = (std::max)(baseline.LensFlare.Wavelengths, 6); break;
+    default: break;
+    }
 
     // ---- Statistics overlay.
     mShowStatisticsOverlay = values["show-statistics"] == "on";
@@ -413,6 +660,12 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     }
     // The sun's virtual shadow map: a coarser level choice needs a quarter of the pages
     // per step, so the pool shrinks with it.
+    // Ray-traced shadows stay as the level set them, except that the lowest shadow
+    // quality turns them off for the shadow maps.
+    mRtShadowSettings = baseline.RtShadows;
+    mRtShadowSettings.DebugView = 0;
+    if (Tier(values, "shadow-quality") == 0)
+        mRtShadowSettings.Enabled = false;
     auto& sunShadows = mVirtualShadowMapSettings;
     sunShadows = baseline.VirtualShadows;
     switch (Tier(values, "shadow-quality"))
@@ -422,6 +675,15 @@ std::string DX12SceneRenderer::ApplyGameSettings(GameSettingValues& values, bool
     case 1: sunShadows.ResolutionLodBias = baseline.VirtualShadows.ResolutionLodBias + 0.5f; break;
     case 3: sunShadows.ResolutionLodBias = baseline.VirtualShadows.ResolutionLodBias - 0.5f;
             sunShadows.PhysicalPages = (std::max)(baseline.VirtualShadows.PhysicalPages, 4096); break;
+    default: break;
+    }
+    // ...and how many lights the shadow budget lets cast at once (only when the level
+    // leaves the budget on; a level that turned it off keeps every shadow).
+    switch (Tier(values, "shadow-quality"))
+    {
+    case 0: sunShadows.MaxShadowedLights = (std::min)(baseline.VirtualShadows.MaxShadowedLights, 4); break;
+    case 1: sunShadows.MaxShadowedLights = (std::min)(baseline.VirtualShadows.MaxShadowedLights, 6); break;
+    case 3: sunShadows.MaxShadowedLights = (std::min)(baseline.VirtualShadows.MaxShadowedLights + 4, 16); break;
     default: break;
     }
 

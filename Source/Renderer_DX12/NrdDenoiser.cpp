@@ -1,5 +1,5 @@
 // NrdDenoiser.cpp
-// Pure D3D12 integration for NVIDIA NRD RELAX_DIFFUSE.
+// Pure D3D12 integration for NVIDIA NRD RELAX_DIFFUSE / RELAX_DIFFUSE_SPECULAR.
 // Manages pipelines built from DXIL bytecode embedded in NRD.lib,
 // pool textures, descriptor heaps, and per-frame dispatch execution.
 //
@@ -145,6 +145,7 @@ bool NrdDenoiser::Initialize(UINT width, UINT height, const NrdInitTextures& tex
     mWidth  = width;
     mHeight = height;
     mInitTextures = textures;
+    mSpecular = textures.HasSpecular();
 
     // ── Determine normal/roughness format from the NRD library descriptor ───
     const nrd::LibraryDesc* libDesc = nrd::GetLibraryDesc();
@@ -155,10 +156,10 @@ bool NrdDenoiser::Initialize(UINT width, UINT height, const NrdInitTextures& tex
     }
     mNormalRoughnessFormat = NormalEncodingToDxgi(libDesc->normalEncoding);
 
-    // ── Create the NRD instance with RELAX_DIFFUSE ───────────────────────────
+    // ── Create the NRD instance: RELAX_DIFFUSE, or DIFFUSE_SPECULAR ───────────
     nrd::DenoiserDesc denoiserDesc{};
     denoiserDesc.identifier = kDenoiserId;
-    denoiserDesc.denoiser   = nrd::Denoiser::RELAX_DIFFUSE;
+    denoiserDesc.denoiser   = mSpecular ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR : nrd::Denoiser::RELAX_DIFFUSE;
 
     nrd::InstanceCreationDesc instDesc{};
     instDesc.denoisers    = &denoiserDesc;
@@ -229,6 +230,13 @@ bool NrdDenoiser::Initialize(UINT width, UINT height, const NrdInitTextures& tex
             extBase + kExtViewZ,  extBase + kExtCount + kExtViewZ);
     FillTex(textures.outDiffRadiance, textures.outDiffRadianceFmt,
             extBase + kExtOutDiff,extBase + kExtCount + kExtOutDiff);
+    if (mSpecular)
+    {
+        FillTex(textures.specRadianceHitDist, textures.specRadianceHitDistFmt,
+                extBase + kExtSpecRadiance, extBase + kExtCount + kExtSpecRadiance);
+        FillTex(textures.outSpecRadiance, textures.outSpecRadianceFmt,
+                extBase + kExtOutSpec, extBase + kExtCount + kExtOutSpec);
+    }
 
     // ── Allocate constant buffer ring buffer ─────────────────────────────────
     // Each NRD dispatch can have its own constant data up to desc.constantBufferMaxDataSize.
@@ -237,8 +245,9 @@ bool NrdDenoiser::Initialize(UINT width, UINT height, const NrdInitTextures& tex
 
     // We need one slot per dispatch, all dispatches from one GetComputeDispatches() call.
     // Upper bound: max pipelinesNum dispatches (usually < 30 for RELAX).
+    // That many per frame in flight; Denoise() writes only its own frame's region.
     mCbSlotCount = std::max(desc.pipelinesNum * 2u, 64u);  // generous upper bound
-    mCbRingSize  = mCbSlotCount * mCbSlotSize;
+    mCbRingSize  = mCbSlotCount * mCbSlotSize * kFramesInFlight;
 
     {
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -501,9 +510,11 @@ bool NrdDenoiser::CreateShaderVisibleDescriptorHeap()
 
     // Shader-visible heap: accommodate totalTexturesNum + totalStorageTexturesNum
     // for all dispatches simultaneously (worst case per-frame copy).
-    mSrvHeapCapacity = desc.descriptorPoolDesc.totalTexturesNum
-                     + desc.descriptorPoolDesc.totalStorageTexturesNum;
-    if (mSrvHeapCapacity == 0) mSrvHeapCapacity = 256; // safety
+    mSrvHeapCapacityPerFrame = desc.descriptorPoolDesc.totalTexturesNum
+                             + desc.descriptorPoolDesc.totalStorageTexturesNum;
+    if (mSrvHeapCapacityPerFrame == 0) mSrvHeapCapacityPerFrame = 256; // safety
+    // One region per frame in flight (see mFrameSlot).
+    mSrvHeapCapacity = mSrvHeapCapacityPerFrame * kFramesInFlight;
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -581,21 +592,44 @@ UINT NrdDenoiser::GetCpuSlot(const nrd::ResourceDesc& r, bool wantSrv) const
 
     // External resources — map by ResourceType.
     const UINT extBase = 2u * mPermCount + 2u * mTransCount;
-    UINT extIdx = 0;
-    switch (r.type)
+    UINT extIdx = ExternalIndex(r.type);
+    if (extIdx >= kExtCount)
     {
-    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: extIdx = kExtDiffRadiance;    break;
-    case nrd::ResourceType::IN_MV:                    extIdx = kExtMotionVec;       break;
-    case nrd::ResourceType::IN_NORMAL_ROUGHNESS:      extIdx = kExtNormalRoughness; break;
-    case nrd::ResourceType::IN_VIEWZ:                 extIdx = kExtViewZ;           break;
-    case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST:extIdx = kExtOutDiff;         break;
-    default:
         // Unrecognised external resource; use slot 0 (will likely produce wrong results
         // but avoids a crash).
         extIdx = 0;
-        break;
     }
     return wantSrv ? (extBase + extIdx) : (extBase + kExtCount + extIdx);
+}
+
+UINT NrdDenoiser::ExternalIndex(nrd::ResourceType type)
+{
+    switch (type)
+    {
+    case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST:  return kExtDiffRadiance;
+    case nrd::ResourceType::IN_MV:                     return kExtMotionVec;
+    case nrd::ResourceType::IN_NORMAL_ROUGHNESS:       return kExtNormalRoughness;
+    case nrd::ResourceType::IN_VIEWZ:                  return kExtViewZ;
+    case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return kExtOutDiff;
+    case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST:  return kExtSpecRadiance;
+    case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return kExtOutSpec;
+    default:                                           return kExtCount;
+    }
+}
+
+ID3D12Resource* NrdDenoiser::ExternalResource(UINT extIdx) const
+{
+    switch (extIdx)
+    {
+    case kExtDiffRadiance:    return mInitTextures.diffRadianceHitDist;
+    case kExtMotionVec:       return mInitTextures.motionVectors;
+    case kExtNormalRoughness: return mInitTextures.normalRoughness;
+    case kExtViewZ:           return mInitTextures.viewZ;
+    case kExtOutDiff:         return mInitTextures.outDiffRadiance;
+    case kExtSpecRadiance:    return mInitTextures.specRadianceHitDist;
+    case kExtOutSpec:         return mInitTextures.outSpecRadiance;
+    default:                  return nullptr;
+    }
 }
 
 // ─── Denoise ──────────────────────────────────────────────────────────────────
@@ -616,16 +650,19 @@ void NrdDenoiser::Denoise(
 
     // External textures arrive from NrdPrepare in UAV state.
     // NRD will transition them as needed; we seed our state tracker accordingly.
-    mExtStates[kExtDiffRadiance]    = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    mExtStates[kExtMotionVec]       = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    mExtStates[kExtNormalRoughness] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    mExtStates[kExtViewZ]           = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    mExtStates[kExtOutDiff]         = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    for (UINT i = 0; i < kExtCount; ++i)
+        mExtStates[i] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     // ── Apply RELAX denoiser settings ────────────────────────────────────────
+    if (mHasCustomRelax)
+    {
+        nrd::SetDenoiserSettings(*mNrdInstance, kDenoiserId, &mCustomRelax);
+    }
+    else
     {
         nrd::RelaxSettings relaxSettings{};
-        float maxFrames = std::max(1.0f, mMaxAccumTime * mFps);
+        // Within RELAX's limit: the time can be scaled up for a reduced trace grid.
+        float maxFrames = std::clamp(mMaxAccumTime * mFps, 1.0f, static_cast<float>(nrd::RELAX_MAX_HISTORY_FRAME_NUM));
         relaxSettings.diffuseMaxAccumulatedFrameNum     = static_cast<uint32_t>(maxFrames);
         relaxSettings.specularMaxAccumulatedFrameNum    = static_cast<uint32_t>(maxFrames);
         // Fast history is what the slow history gets clamped to (fastHistoryClampingSigmaScale),
@@ -648,7 +685,11 @@ void NrdDenoiser::Denoise(
         relaxSettings.lobeAngleFraction                 = 0.08f;
         relaxSettings.roughnessFraction                 = 0.10f;
         relaxSettings.diffuseMinLuminanceWeight         = 0.05f;
-        relaxSettings.depthThreshold                    = mDisocclusionThreshold;
+        // The spatial passes' own depth test, not the temporal disocclusion one. It used to
+        // share the disocclusion threshold (0.2, a 20% plane-distance gap), so the prepass
+        // and a-trous blurs ran straight across silhouettes and smeared the brighter
+        // background GI over the edge of every object - a glow around all geometry.
+        relaxSettings.depthThreshold                    = 0.003f; // NRD default
         relaxSettings.fastHistoryClampingSigmaScale     = 2.0f;   // NRD default; 1.2 clamped history to the noise
         relaxSettings.spatialVarianceEstimationHistoryThreshold = 1;
         relaxSettings.minHitDistanceWeight              = 0.2f;
@@ -729,11 +770,32 @@ void NrdDenoiser::Denoise(
     }
 
     // ── Execute all dispatches ────────────────────────────────────────────────
-    // Reset the shader-visible heap offset so each frame starts from the beginning.
+    // This frame's region of the shader-visible heap and of the constant ring.
+    mFrameSlot = (mFrameSlot + 1u) % kFramesInFlight;
     mFrameHeapOffset = 0;
     mCbDispatchIndex = 0;
     for (uint32_t di = 0; di < dispatchNum; ++di)
         ExecuteDispatch(cmdList, dispatches[di]);
+
+    // Hand every external texture back in UNORDERED_ACCESS, the state the next
+    // Denoise() assumes and the state callers write the inputs in. The inputs end
+    // NRD's passes as shader resources, and nothing used to move them back: the
+    // next frame's prepare pass then wrote them as UAVs while they were still in
+    // NON_PIXEL_SHADER_RESOURCE.
+    D3D12_RESOURCE_BARRIER restore[kExtCount];
+    UINT restoreCount = 0;
+    for (UINT i = 0; i < kExtCount; ++i)
+    {
+        ID3D12Resource* res = ExternalResource(i);
+        if (res && mExtStates[i] != D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+        {
+            restore[restoreCount++] = CD3DX12_RESOURCE_BARRIER::Transition(
+                res, mExtStates[i], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            mExtStates[i] = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        }
+    }
+    if (restoreCount > 0)
+        cmdList->ResourceBarrier(restoreCount, restore);
 }
 
 // ─── Helper: get the D3D12 resource and current tracked state for an NRD resource ───
@@ -792,26 +854,10 @@ void NrdDenoiser::ExecuteDispatch(
             else
             {
                 // External textures: map ResourceType to our kExt* index.
-                UINT extIdx = 0;
-                switch (r.type)
-                {
-                case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: extIdx = kExtDiffRadiance;    break;
-                case nrd::ResourceType::IN_MV:                    extIdx = kExtMotionVec;       break;
-                case nrd::ResourceType::IN_NORMAL_ROUGHNESS:      extIdx = kExtNormalRoughness; break;
-                case nrd::ResourceType::IN_VIEWZ:                 extIdx = kExtViewZ;           break;
-                case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST:extIdx = kExtOutDiff;         break;
-                default: continue;
-                }
-                // Resolve the actual resource pointer from the init textures.
-                ID3D12Resource* extRes = nullptr;
-                switch (extIdx)
-                {
-                case kExtDiffRadiance:    extRes = mInitTextures.diffRadianceHitDist; break;
-                case kExtMotionVec:       extRes = mInitTextures.motionVectors;       break;
-                case kExtNormalRoughness: extRes = mInitTextures.normalRoughness;     break;
-                case kExtViewZ:           extRes = mInitTextures.viewZ;               break;
-                case kExtOutDiff:         extRes = mInitTextures.outDiffRadiance; break;
-                }
+                const UINT extIdx = ExternalIndex(r.type);
+                if (extIdx >= kExtCount)
+                    continue;
+                ID3D12Resource* extRes = ExternalResource(extIdx);
                 if (extRes)
                     TryTransition(extRes, mExtStates[extIdx], wantedState);
             }
@@ -832,11 +878,13 @@ void NrdDenoiser::ExecuteDispatch(
     }
 
     // ── Copy descriptors into the shader-visible heap ─────────────────────────
-    if (mFrameHeapOffset + srvCount + uavCount > mSrvHeapCapacity)
+    // Within this frame's region only; the others may still be in use.
+    if (mFrameHeapOffset + srvCount + uavCount > mSrvHeapCapacityPerFrame)
         mFrameHeapOffset = 0; // wrap-around safety
 
-    const UINT srvBaseInSrvHeap = mFrameHeapOffset;
-    const UINT uavBaseInSrvHeap = mFrameHeapOffset + srvCount;
+    const UINT frameHeapBase    = mFrameSlot * mSrvHeapCapacityPerFrame;
+    const UINT srvBaseInSrvHeap = frameHeapBase + mFrameHeapOffset;
+    const UINT uavBaseInSrvHeap = frameHeapBase + mFrameHeapOffset + srvCount;
     mFrameHeapOffset += srvCount + uavCount;
 
     auto cpuSrvHeapBase = mSrvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -874,7 +922,7 @@ void NrdDenoiser::ExecuteDispatch(
     D3D12_GPU_VIRTUAL_ADDRESS cbGpuVA = 0;
     if (npl.hasConstantData && dispatch.constantBufferDataSize > 0 && dispatch.constantBufferData)
     {
-        UINT slot   = mCbDispatchIndex % mCbSlotCount;
+        UINT slot   = mFrameSlot * mCbSlotCount + (mCbDispatchIndex % mCbSlotCount);
         UINT offset = slot * mCbSlotSize;
         std::memcpy(mCbMapped + offset, dispatch.constantBufferData,
                     std::min(static_cast<UINT>(dispatch.constantBufferDataSize), mCbSlotSize));
@@ -940,6 +988,7 @@ void NrdDenoiser::Shutdown()
     }
 
     mIsInitialized = false;
+    mSpecular      = false;
     mPermCount     = 0;
     mTransCount    = 0;
     mWidth         = 0;

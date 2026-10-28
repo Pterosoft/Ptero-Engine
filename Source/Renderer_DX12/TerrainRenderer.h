@@ -11,6 +11,7 @@
 #include "Components.h"
 #include "DX12Helper.h"
 #include "DX12ShaderCompiler.h"
+#include "ShadowPageView.h"
 #include "TerrainGeometry.h"
 #include "TextureManager.h"
 
@@ -170,6 +171,72 @@ public:
     // thread, so the scatter takes a snapshot rather than reading them live.
     void ExportPatches(std::vector<PatchData>& outPatches) const;
 
+    // One paint layer reduced to what a ray-traced bounce can use: no tiling,
+    // no maps beyond the base colour's average.
+    struct RayTracingLayer
+    {
+        std::string       BaseColorPath;               // empty: the tint alone
+        DirectX::XMFLOAT3 Tint{ 1.0f, 1.0f, 1.0f };    // layer tint x material tint
+        float             Roughness = 0.9f;
+        float             Metallic  = 0.0f;
+        float             Specular  = 0.5f;
+
+        // Displacement, as Terrain.hlsl's DisplaceLocalPosition applies it, so a
+        // path tracer can march the displaced surface for shadows (empty / 0: none).
+        std::string       HeightPath;
+        float             TileSize = 4.0f;              // metres per repeat
+        DirectX::XMFLOAT2 UvTiling{ 1.0f, 1.0f };
+        DirectX::XMFLOAT2 UvOffset{ 0.0f, 0.0f };
+        float             UvRotationDegrees = 0.0f;
+        float             DisplacementScale = 0.0f;     // metres
+        float             DisplacementMidLevel = 0.5f;
+    };
+
+    // A built terrain as the ray tracing scene needs it: the very vertices the
+    // raster pass draws (patch-local, Z up, splat weights in Color), its model
+    // matrix, and its layers. `Vertices` points at the renderer's own copy and
+    // stays valid until the next Render or brush edit; read it within the frame.
+    struct RayTracingPatch
+    {
+        std::size_t         EntityIndex = 0;
+        DirectX::XMFLOAT4X4 World{};             // XMMATRIX layout (row vectors)
+        int                 MeshWidth  = 0;
+        int                 MeshHeight = 0;
+        const std::vector<TerrainVertex>* Vertices = nullptr;
+        std::uint64_t       MeshRevision = 0;    // changes whenever Vertices do
+        bool                UseSplat = false;    // Color holds layer weights
+        // How far tessellation can move the drawn surface off these vertices, in
+        // world units (the layers' largest displacement x the vertical scale).
+        float               DisplacementReach = 0.0f;
+        float               WorldSize = 0.0f;           // patch edge, local units
+        bool                BreakUpTiling = false;      // as TerrainMaterial's flags
+        bool                HeightBlend = false;
+        float               HeightBlendSharpness = 0.6f;
+        std::vector<RayTracingLayer> Layers;     // at least one
+        std::uint64_t       MaterialHash = 0;    // changes whenever Layers do
+    };
+
+    // Every terrain with a built mesh.
+    void CollectRayTracingPatches(std::vector<RayTracingPatch>& outPatches);
+
+    // Draws every terrain - tessellated and displaced as the G-Buffer pass draws it -
+    // into each virtual shadow map page, into whatever depth target is bound. Uses
+    // each terrain's material as the last Render left it, so a terrain casts from the
+    // frame after it is first drawn.
+    void RenderShadowDepthPages(
+        ID3D12GraphicsCommandList*         commandList,
+        const std::vector<ShadowPageView>& pages,
+        DXGI_FORMAT                        depthFormat,
+        float                              slopeScaledDepthBias);
+
+    // Changes whenever a terrain's shadow would: its mesh, transform or material.
+    std::uint64_t GetShadowCasterSignature() const;
+
+    // VirtualShadowMapSettings::TerrainShadows / TerrainDisplacementShadows: whether
+    // RenderShadowDepthPages draws at all, and whether tessellated and displaced or
+    // as the plain mesh (a vertex shader and nothing else - far cheaper per page).
+    void SetShadowCasting(bool enabled, bool displaced) { mShadowCastEnabled = enabled; mShadowDisplaced = displaced; }
+
     // Force-rebuild the GPU mesh for the given terrain entity index on the
     // next sync (used by the editor when WorldSize/HeightScale/HeightOffset
     // change).
@@ -212,6 +279,10 @@ public:
     }
 
 private:
+    // Every texture slot the terrain root signature binds (six maps x four layers);
+    // the .cpp checks it against kTerrainTextureCount.
+    static constexpr int kTerrainShadowTextureSlots = 24;
+
     // Per-entity GPU/CPU state for one terrain patch.
     struct TerrainGpuState
     {
@@ -240,6 +311,14 @@ private:
         std::vector<TerrainVertex> MeshVertices;
         int    MeshWidth  = 0;
         int    MeshHeight = 0;
+        // Bumped whenever MeshVertices change, for the ray tracing copy.
+        std::uint64_t MeshRevision = 0;
+
+        // What the last Render bound for this terrain, for the shadow pages.
+        bool HasDrawMaterial = false;
+        std::uint64_t DrawMaterialHash = 0;
+        DirectX::XMFLOAT4X4 DrawModel{};   // XMMATRIX layout
+        D3D12_GPU_DESCRIPTOR_HANDLE DrawTextures[kTerrainShadowTextureSlots]{};
         // Heightmap samples edited since the last upload.
         TerrainGeometry::GridRect DirtySamples;
         // Edits not yet written to disk; flushed by EndBrushStroke.
@@ -259,7 +338,13 @@ private:
         DirectX::XMFLOAT4X4 Model;
         DirectX::XMFLOAT3   CameraPositionWS = { 0.f, 0.f, 0.f };
         float               TessPixelScale   = 1000.f;
-        std::byte Padding[112]{};
+        // Shadow pages only; see HSMainShadow in Terrain.hlsl.
+        DirectX::XMFLOAT3   ShadowLodOrigin  = { 0.f, 0.f, 0.f };
+        float               ShadowTexelWorld = 0.0f;
+        float               ShadowTexelAngle = 0.0f;
+        float               ShadowCullSlack  = 0.0f;
+        float               ShadowPad[2]{};
+        std::byte Padding[80]{};
     };
     static_assert(sizeof(TerrainConstants) == 256);
 
@@ -313,6 +398,33 @@ private:
     };
     static_assert(offsetof(TerrainMaterial, Layers) == 64);
     static_assert(sizeof(TerrainMaterial) == 768);
+
+    // The material constants each terrain was last drawn with (by entity index),
+    // for the shadow pages; see TerrainGpuState::HasDrawMaterial.
+    std::unordered_map<std::size_t, TerrainMaterial> mDrawMaterials;
+
+    // ---- Shadow pages ----
+    bool CreateShadowPipeline(DXGI_FORMAT depthFormat, float slopeScaledDepthBias);
+    DX12Shader mShadowHullShader;
+    DX12Shader mShadowDomainShader;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mShadowPipelineState;       // tessellated, displaced
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mShadowFlatPipelineState;   // the plain mesh
+    bool        mShadowCastEnabled = true;
+    bool        mShadowDisplaced = false;
+    DXGI_FORMAT mShadowDepthFormat = DXGI_FORMAT_UNKNOWN;
+    float       mShadowSlopeBias   = -1.0f;
+    bool        mShadowPipelineFailed = false;
+    // The root signature it was built against; CreatePipeline makes a new one.
+    ID3D12RootSignature* mShadowPipelineRootSignature = nullptr;
+    // Per frame in flight: one TerrainConstants per (page, terrain) and one
+    // TerrainMaterial per terrain.
+    static constexpr std::size_t kMaxShadowPages = 256;
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShadowConstantBuffer;
+    TerrainConstants* mMappedShadowCB = nullptr;
+    std::size_t       mShadowCBTerrains = 0;   // capacity, in terrains
+    Microsoft::WRL::ComPtr<ID3D12Resource> mShadowMaterialBuffer;
+    TerrainMaterial*  mMappedShadowMaterials = nullptr;
+    std::size_t       mShadowFrame = 0;
 
     // Everything the terrain uses from its material JSON (same keys as meshes).
     struct TerrainMaterialInfo
@@ -457,4 +569,7 @@ private:
 
     // Bumped by every brush stroke and every rebuild; see GetTerrainRevision.
     std::uint64_t mTerrainRevision = 0;
+    // Source of TerrainGpuState::MeshRevision: one counter for every state, so
+    // a state recreated for a reused entity index never repeats an old value.
+    std::uint64_t mMeshRevisionCounter = 0;
 };

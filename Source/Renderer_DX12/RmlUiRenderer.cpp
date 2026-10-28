@@ -652,9 +652,13 @@ void RmlUiRenderer::Render(ID3D12GraphicsCommandList* commandList)
         return;
 
     // Navigation is deferred until DOM event dispatch has finished.
+    // The page is named relative to the document that asked for it, so a menu works from
+    // whichever folder its game keeps it in.
     if (mFarkleMenus) {
         const auto page = mFarkleMenus->TakePage();
-        if (!page.empty()) LoadDocument(page);
+        if (!page.empty())
+            LoadDocument(WideToUtf8((std::filesystem::u8path(mLoadedDocumentName).parent_path() /
+                                     std::filesystem::u8path(page)).generic_wstring()));
     }
     if (mContext != nullptr)
         mContext->Update();
@@ -693,7 +697,11 @@ bool RmlUiRenderer::LoadDocument(const std::string& fileName)
     CloseDocument();
 
     const std::filesystem::path relativePath = std::filesystem::u8path(fileName).lexically_normal();
-    const std::filesystem::path documentPath = FindDataDirectory() / L"UI" / relativePath;
+    std::filesystem::path documentPath = FindDataDirectory() / L"UI" / relativePath;
+    // A game that keeps its UI beside the rest of its content (Data/Farkle/UI/...) names it
+    // relative to Data instead; Data/UI is tried first so existing paths never change meaning.
+    if (!DataFiles::IsFile(documentPath))
+        documentPath = FindDataDirectory() / relativePath;
     if (!DataFiles::IsFile(documentPath))
     {
         mLastError = "RmlUiRenderer: document not found: " + fileName;
@@ -876,6 +884,22 @@ bool RmlUiRenderer::SetElementVisible(const std::string& elementId, bool visible
         element->RemoveProperty("display");
     else
         element->SetProperty("display", "none");
+
+    return true;
+}
+
+bool RmlUiRenderer::SetElementEnabled(const std::string& elementId, bool enabled)
+{
+    Rml::Element* element = FindElement(mDocument, elementId);
+    if (element == nullptr)
+        return false;
+
+    // The attribute, not a class: ActionListener and the stylesheets already treat
+    // `disabled` as "not clickable", and an element that has it never reports a click.
+    if (enabled)
+        element->RemoveAttribute("disabled");
+    else if (!element->HasAttribute("disabled"))
+        element->SetAttribute("disabled", Rml::String());
 
     return true;
 }

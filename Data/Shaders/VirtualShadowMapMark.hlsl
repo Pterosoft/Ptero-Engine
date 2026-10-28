@@ -84,6 +84,28 @@ void RequestLocalPage(uint slot, uint face, uint mip, int2 page)
     RequestBit(gVsm.LocalPageTableBase + PteroVsmLocalPageIndex(slot, face, mip, uint2(page)));
 }
 
+// Every page a kernel `reach` texels around `texel` touches (at most 2 x 2 while
+// reach stays under half a page).
+void RequestFootprint(int level, float2 vt, float reach)
+{
+    const int2 low = int2(floor(vt - reach)) >> 7;
+    const int2 high = int2(floor(vt + reach)) >> 7;
+    RequestPage(level, low);
+    if (high.x != low.x) RequestPage(level, int2(high.x, low.y));
+    if (high.y != low.y) RequestPage(level, int2(low.x, high.y));
+    if (high.x != low.x && high.y != low.y) RequestPage(level, high);
+}
+
+void RequestLocalFootprint(uint slot, uint face, uint mip, float2 texel, float reach)
+{
+    const int2 low = int2(floor(texel - reach)) >> 7;
+    const int2 high = int2(floor(texel + reach)) >> 7;
+    RequestLocalPage(slot, face, mip, low);
+    if (high.x != low.x) RequestLocalPage(slot, face, mip, int2(high.x, low.y));
+    if (high.y != low.y) RequestLocalPage(slot, face, mip, int2(low.x, high.y));
+    if (high.x != low.x && high.y != low.y) RequestLocalPage(slot, face, mip, high);
+}
+
 // The pages of each shadowed local light this pixel will read.
 void RequestLocalPages(float3 worldPos, float3 normal)
 {
@@ -106,7 +128,7 @@ void RequestLocalPages(float3 worldPos, float3 normal)
 
         const PteroVsmCubeFace face0 = PteroVsmSelectFace(v0);
         const float depth0 = dot(v0, face0.Forward);
-        const uint mip = PteroVsmLocalDesiredMip(gVsm, cameraDistance, depth0, 1.0f);
+        const uint mip = PteroVsmLocalDesiredMip(gVsm, slot, cameraDistance, depth0, 1.0f);
         const float texelWorld = depth0 * 2.0f / (float)(PTERO_VSM_LOCAL_RESOLUTION >> mip);
         const float3 v = worldPos + normal * (gVsm.NormalOffset * texelWorld) - light.xyz;
         const PteroVsmCubeFace face = PteroVsmSelectFace(v);
@@ -123,6 +145,20 @@ void RequestLocalPages(float3 worldPos, float3 normal)
         const uint coarse = min(mip + 2u, PTERO_VSM_LOCAL_MIPS - 1u);
         if (coarse != mip)
             RequestLocalPage(slot, face.Face, coarse, int2(floor(PteroVsmLocalTexel(face, v, coarse))) >> 7);
+
+        // The coarser mips the soft shadow's blocker search and filter read
+        // (PteroVsmLocalVisibilitySoftUnfaded), out to its widest kernel.
+        const float lightSize = gVsm.LocalParams[slot].w;
+        if (lightSize > 0.0f && cameraDistance < gVsm.LocalParams[slot].z)
+        {
+            const float searchMetres = min(min(max(gVsm.SoftShadow.y, 0.0f), PteroVsmLocalSoftMaxRadius(depth0)),
+                                           2.0f * lightSize);
+            const uint steps = (uint)PteroVsmSoftLevelSteps(searchMetres, texelWorld);
+            [loop]
+            for (uint softMip = mip + 1u; softMip <= min(mip + steps, PTERO_VSM_LOCAL_MIPS - 1u); ++softMip)
+                RequestLocalFootprint(slot, face.Face, softMip, PteroVsmLocalTexel(face, v, softMip),
+                                      PTERO_VSM_SOFT_MAX_RADIUS + 1.0f);
+        }
     }
 }
 
@@ -152,12 +188,17 @@ void PSMain(VSOutput input)
     const float texel = PteroVsmTexelSize(gVsm, level);
     const float3 ls = PteroVsmToLightSpace(gVsm, worldPos + normal * (gVsm.NormalOffset * texel));
     const float2 vt = PteroVsmVirtualTexel(ls, texel);
-    const int2 low = int2(floor(vt - 2.0f)) >> 7;
-    const int2 high = int2(floor(vt + 2.0f)) >> 7;
-    RequestPage(level, low);
-    if (high.x != low.x) RequestPage(level, int2(high.x, low.y));
-    if (high.y != low.y) RequestPage(level, int2(low.x, high.y));
-    if (high.x != low.x && high.y != low.y) RequestPage(level, high);
+    RequestFootprint(level, vt, 2.0f);
+
+    // The coarser levels the soft shadow's blocker search and filter read
+    // (PteroVsmVisibilitySoft), out to its widest kernel.
+    if (gVsm.SoftShadow.x > 0.0f)
+    {
+        const int steps = PteroVsmSoftLevelSteps(max(gVsm.SoftShadow.y, 0.0f), texel);
+        [loop]
+        for (int softLevel = level + 1; softLevel <= min(level + steps, (int)gVsm.LevelCount - 1); ++softLevel)
+            RequestFootprint(softLevel, vt * exp2((float)(level - softLevel)), PTERO_VSM_SOFT_MAX_RADIUS + 1.0f);
+    }
 
     // Coarse fallback.
     const int coarse = min(level + 2, (int)gVsm.LevelCount - 1);

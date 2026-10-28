@@ -289,6 +289,64 @@ namespace
 
         return ReadCollisionPayload(inputStream, legacyHeader.version, outData.CollisionHulls, errorMessage);
     }
+
+    // The .pskin sidecar FbxCompiler writes beside a skinned mesh (see PteroMeshFormat.h).
+    // Null when there is none, or when it no longer matches the mesh: a stale sidecar would
+    // bind vertices to the wrong joints, which is worse than drawing the mesh rigid.
+    std::shared_ptr<const MeshSkin> ReadSkinSidecar(const std::string& pteroPath, std::size_t vertexCount)
+    {
+        const std::string skinPath = PteroSkinPathFor(pteroPath);
+        std::vector<std::uint8_t> bytes;
+        if (!DataFiles::Exists(skinPath) || !DataFiles::ReadBytes(skinPath, bytes) || bytes.size() < sizeof(PteroSkinHeader))
+            return nullptr;
+
+        PteroSkinHeader header{};
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        if (std::memcmp(header.magic, "PSKN", 4) != 0 || header.version != 1 || header.vertexCount != vertexCount)
+        {
+            LogAssetManagerDiagnostic("Ignoring skin sidecar '" + skinPath + "': it does not match the cooked mesh.");
+            return nullptr;
+        }
+
+        auto skin = std::make_shared<MeshSkin>();
+        std::size_t offset = sizeof(header);
+        skin->JointNames.reserve(header.jointCount);
+        for (std::uint32_t i = 0; i < header.jointCount; ++i)
+        {
+            std::uint32_t length = 0;
+            if (offset + sizeof(length) > bytes.size())
+                return nullptr;
+            std::memcpy(&length, bytes.data() + offset, sizeof(length));
+            offset += sizeof(length);
+            if (offset + length > bytes.size())
+                return nullptr;
+            skin->JointNames.emplace_back(reinterpret_cast<const char*>(bytes.data() + offset), length);
+            offset += length;
+        }
+
+        const std::size_t vertexBytes = static_cast<std::size_t>(header.vertexCount) * sizeof(MeshSkinVertex);
+        if (offset + vertexBytes > bytes.size())
+            return nullptr;
+        skin->Vertices.resize(header.vertexCount);
+        std::memcpy(skin->Vertices.data(), bytes.data() + offset, vertexBytes);
+        for (const MeshSkinVertex& vertex : skin->Vertices)
+        {
+            for (int k = 0; k < 4; ++k)
+            {
+                if (vertex.Weights[k] > 0.0f && vertex.Joints[k] >= header.jointCount)
+                    return nullptr;
+            }
+        }
+        return skin;
+    }
+}
+
+void AssetManager::ForgetMesh(const std::string& meshPath)
+{
+    mMeshCache.erase(meshPath);
+    const std::string resolved = ResolveAssetPathFromDataDirectory(meshPath).string();
+    if (!resolved.empty())
+        mMeshCache.erase(resolved);
 }
 
 bool AssetManager::ImportTextureToDataDirectory(
@@ -732,6 +790,7 @@ std::shared_ptr<Mesh> AssetManager::GetMesh(const std::string& fbxFilePath)
     }
 
     auto mesh = std::make_shared<Mesh>(std::move(fileData.Lods), std::move(fileData.CollisionHulls));
+    mesh->SetSkin(ReadSkinSidecar(pteroPath, mesh->GetVertices().size()));
     if (!mesh->UploadToGpu())
     {
         mLastErrorMessage = "The mesh data loaded, but the GPU upload step failed.";

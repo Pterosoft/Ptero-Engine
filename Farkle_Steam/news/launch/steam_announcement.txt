@@ -1,0 +1,51 @@
+TITLE:
+Farkle: Tavern Dice is Out Now – 15% Off Launch Discount!
+
+SUBTITLE (event summary):
+The tavern doors are open. Pull up a chair, grab a mug, and roll the dice – now 15% off for launch.
+
+BODY (paste into the Steam event editor):
+
+[h1]The tavern is open![/h1]
+
+Today is the day – [b]Farkle: Tavern Dice[/b] is officially out on Steam!
+
+Pull up a chair by the fire, grab a mug, and sit down for a game of dice in a candle-lit medieval tavern. To celebrate the launch, the game is [b]15% off[/b] for a limited time.
+
+[url=https://store.steampowered.com/app/5368450]Grab a seat at the table[/url]
+
+[hr][/hr]
+
+[h2]Roll. Risk it. Bank it.[/h2]
+
+Farkle is the classic push-your-luck dice game. Every turn begins with six dice:
+
+[list]
+[*]Roll and look for scoring combinations
+[*]Keep your scoring dice and reroll the rest
+[*]Bank your points and play it safe – or roll again for more
+[*]Roll nothing that scores and you [b]Farkle[/b], losing everything from that turn
+[/list]
+
+First to [b]3,000 points[/b] wins. The rules are simple. The decisions are not.
+
+[h2]A real tavern, not just a table[/h2]
+
+Every match takes place inside a detailed [b]3D medieval tavern[/b] – warm firelight, wooden beams, hanging garlic, physical dice and the crackle of the hearth. The soundtrack features [b]authentic medieval music from the period itself[/b], so the tavern sounds the way it might have centuries ago.
+
+[h2]Made in a homemade engine[/h2]
+
+Farkle: Tavern Dice is built entirely in [b]Ptero[/b], my own custom game engine – from the renderer and lighting to the audio and UI. Seeing it ship as a real game on Steam means a lot, and I hope you enjoy playing it as much as I enjoyed building it.
+
+[hr][/hr]
+
+[h2]Thank you![/h2]
+
+A huge thank you to everyone who wishlisted, followed along, and gave feedback during development. If you enjoy the game, a [b]Steam review[/b] helps more than you might think – especially for a small indie release like this one.
+
+Found a bug or have an idea? Let me know in the [url=https://steamcommunity.com/app/5368450/discussions/]Steam discussions[/url].
+
+See you at the table! 🎲
+
+[b]🔥 15% off launch discount – limited time[/b]
+[url=https://store.steampowered.com/app/5368450]Farkle: Tavern Dice on Steam[/url]

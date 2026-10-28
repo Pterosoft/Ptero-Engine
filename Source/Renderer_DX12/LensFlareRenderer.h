@@ -44,6 +44,9 @@ public:
         DirectX::XMFLOAT3 Direction{};   // world direction towards the light (sun)
         DirectX::XMFLOAT3 Illuminance{}; // light arriving at the camera, engine light units
         float SourceRadius = 0.0f;       // world size of the emitter (local lights)
+        // Sun only: the luminance the sky pass draws its disc with, which the
+        // cloud/fog test measures the visible disc against.
+        float DiscLuminance = 0.0f;
         std::uint32_t Key = 0;           // stable identity across frames
     };
 

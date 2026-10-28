@@ -8,6 +8,9 @@
 #include "SurfaceSpecular.hlsli"
 #include "Tessellation.hlsli"
 #include "TangentFrame.hlsli"
+#include "AnalyticEdge.hlsli"
+// The Disney principled parameters and their two G-Buffer targets.
+#include "PrincipledBrdf.hlsli"
 
 cbuffer EntityConstants : register(b0)
 {
@@ -48,7 +51,10 @@ cbuffer MaterialConstants : register(b1)
     // 1 = negate the normal map's green channel: an OpenGL-convention map (green up)
     // read in the engine's DirectX convention (green down the texture).
     int    gFlipNormalGreen;
-    float2 _MatPad2;
+    // Iris adjust (ApplyIrisAdjust). Every value is a half, packed two to a word, so the
+    // block fits the padding the buffer already had. Off while the warp radius is 0.
+    uint   gIrisCenterPacked;   // half2: UV of the iris centre in the authored texture
+    uint   gIrisOffsetPacked;   // half2: UV the iris is moved by
     // UV transform: rotate the source UVs about (0.5, 0.5), scale by tiling, then offset.
     // The rotation arrives pre-resolved as sin/cos so the shader does no trigonometry.
     float2 gUvTiling;
@@ -76,7 +82,20 @@ cbuffer MaterialConstants : register(b1)
     float  gDisplacementScale;      // metres between black and white
     float  gDisplacementMidLevel;   // height value that stays on the surface
     float  gTessPixelScale;         // (viewport height / 2) / tan(fovY / 2)
-    float  _MatPad3;
+    uint   gIrisRadiiPacked;        // half2: iris radius, warp radius (UV; 0 = iris adjust off)
+    // Disney principled BRDF lobes (PrincipledBrdf.hlsli), all 0..1 and all off at 0.
+    float  gPrincipledSubsurface;
+    float  gPrincipledSpecularTint;
+    float  gPrincipledSheen;
+    float  gPrincipledSheenTint;
+    float  gPrincipledClearcoat;
+    float  gPrincipledClearcoatGloss;
+    float  gPrincipledAnisotropic;
+    int    gHasPrincipledMap;           // t8 bound
+    int    gHasAnisotropyDirectionMap;  // t9 bound
+    uint   gIrisScalesPacked;           // half2: iris scale, pupil scale
+    uint   gPupilRadiusPacked;          // half: pupil radius (UV)
+    float  _MatPad5;
 };
 
 cbuffer RainSurfaceConstants : register(b2)
@@ -95,6 +114,13 @@ Texture2D    gAoTexture         : register(t4);  // ambient occlusion (R channel
 Texture2D    gEmissiveTexture   : register(t5);  // emissive (RGB)
 Texture2D    gOpacityTexture    : register(t6);  // opacity (R)
 Texture2D    gHeightTexture     : register(t7);  // height / displacement (R, white = high)
+// Disney principled mask: R clearcoat, G sheen, B anisotropic, A flatten (subsurface). Each
+// channel scales its material slider, the way the packed maps scale theirs; a source
+// without alpha loads A = 1 and leaves the flatten slider as it is.
+Texture2D    gPrincipledTexture : register(t8);
+// Anisotropy direction: RG is the highlight's direction in the UV frame (R along U, G
+// along V, 0.5 = zero), read in the same green convention as the normal map.
+Texture2D    gAnisotropyDirectionTexture : register(t9);
 SamplerState gLinearSampler     : register(s0);
 
 struct VSInput
@@ -118,11 +144,16 @@ struct PSInput
 //   SV_Target0 – Albedo  (RGB = base colour, A = unused)
 //   SV_Target1 – Normal  (RGB = world-space normal encoded to [0,1])
 //   SV_Target2 – Material (R = roughness, G = metallic, B = AO, A = unused)
+//   SV_Target3 – Edge     (the triangle's nearest edges, AnalyticEdge.hlsli)
+//   SV_Target4/5 – Disney principled parameters (PrincipledBrdf.hlsli)
 struct PSOutput
 {
-    float4 Albedo   : SV_Target0;
-    float4 Normal   : SV_Target1;
-    float4 Material : SV_Target2;
+    float4 Albedo      : SV_Target0;
+    float4 Normal      : SV_Target1;
+    float4 Material    : SV_Target2;
+    uint4  Edge        : SV_Target3;
+    float4 Principled0 : SV_Target4;
+    float4 Principled1 : SV_Target5;
 };
 
 float ComputeRainWetnessMask(float3 worldNormal)
@@ -146,6 +177,82 @@ float2 EncodeOctNormal(float3 n)
 // The step budget is fixed, so this is what bounds how far a grazing ray may sweep.
 static const float kParallaxMaxTexelsPerStep = 4.0f;
 
+float2 UnpackHalf2(uint packed)
+{
+    return float2(f16tof32(packed), f16tof32(packed >> 16));
+}
+
+// The iris is copied undistorted out to this multiple of its radius, so the limbus ring
+// and a little sclera travel with it.
+static const float kIrisLimbusMargin = 1.2f;
+
+// Eye material helper: moves, scales and dilates the iris in texture space so an eye can
+// look somewhere without rotating its mesh. Inside the disc of warp radius around the
+// authored iris centre, the iris (out to kIrisLimbusMargin) is drawn rigidly at its new
+// place and size, and the sclera between it and the disc's rim is stretched along rays
+// from the new centre to the rim; outside the disc the texture is untouched. That keeps
+// the map continuous, so neither a seam nor a second copy of the iris can appear.
+float2 ApplyIrisAdjust(float2 uv)
+{
+    const float2 radii = UnpackHalf2(gIrisRadiiPacked);
+    const float  warpRadius = radii.y;
+    if (warpRadius <= 0.0f)
+        return uv;
+
+    const float2 center = UnpackHalf2(gIrisCenterPacked);
+    const float2 q = uv - center;
+    if (dot(q, q) >= warpRadius * warpRadius)
+        return uv;
+
+    const float2 scales      = UnpackHalf2(gIrisScalesPacked);
+    const float  irisRadius  = max(radii.x, 1e-4f);
+    const float  srcInner    = irisRadius * kIrisLimbusMargin;
+    const float  dstInner    = min(srcInner * max(scales.x, 0.05f), warpRadius * 0.9f);
+    const float  scale       = dstInner / srcInner;
+
+    // The moved iris must stay inside the disc, with some sclera left at its far side.
+    float2 offset = UnpackHalf2(gIrisOffsetPacked);
+    const float maxShift = max(warpRadius * 0.97f - dstInner, 0.0f);
+    const float shift = length(offset);
+    if (shift > maxShift)
+        offset *= maxShift / shift;
+
+    // Everything from here is relative to the authored iris centre.
+    const float2 d = q - offset;          // relative to the moved iris centre
+    const float  r = length(d);
+    float2 src;
+    if (r <= dstInner)
+    {
+        src = d / scale;
+    }
+    else
+    {
+        const float2 dir = d / r;
+        // Where the ray from the moved centre leaves the disc.
+        const float b = dot(offset, dir);
+        const float tExit = -b + sqrt(max(b * b - (dot(offset, offset) - warpRadius * warpRadius), 0.0f));
+        const float f = saturate((r - dstInner) / max(tExit - dstInner, 1e-6f));
+        src = lerp(dir * srcInner, offset + dir * tExit, f);
+    }
+
+    // Pupil dilation: a radial remap inside the iris that resizes the pupil while the
+    // iris's outer edge stays put.
+    const float pupilRadius = f16tof32(gPupilRadiusPacked);
+    const float srcRadius = length(src);
+    if (pupilRadius > 0.0f && srcRadius < irisRadius)
+    {
+        const float a  = clamp(pupilRadius / irisRadius, 0.01f, 0.95f);
+        const float a2 = clamp(a * max(scales.y, 0.0f), 0.01f, 0.95f);
+        const float rho = srcRadius / irisRadius;
+        const float rhoSrc = rho < a2
+            ? rho * (a / a2)
+            : a + (rho - a2) * (1.0f - a) / (1.0f - a2);
+        src *= rhoSrc / max(rho, 1e-6f);
+    }
+
+    return center + src;
+}
+
 // Applies the material's UV transform to the mesh's authored texture coordinates.
 float2 TransformUv(float2 uv)
 {
@@ -153,7 +260,7 @@ float2 TransformUv(float2 uv)
     const float2 rotated = float2(
         centered.x * gUvRotationCos - centered.y * gUvRotationSin,
         centered.x * gUvRotationSin + centered.y * gUvRotationCos) + 0.5f;
-    return rotated * gUvTiling + gUvOffset;
+    return ApplyIrisAdjust(rotated * gUvTiling + gUvOffset);
 }
 
 // Depth below the reference plane, so a height at or above the reference sits flush
@@ -327,9 +434,15 @@ PSInput DSMain(
     return output;
 }
 
-PSOutput PSMain(PSInput input)
+PSOutput PSMain(PSInput input PTERO_EDGE_PS_INPUT)
 {
     PSOutput output;
+
+    // Before the alpha test discards anything, as it takes derivatives. A cut-out
+    // material's silhouette is drawn by its opacity map, not by its triangles, so it
+    // gets no edges: that is texture-frequency detail the analytic resolve cannot see.
+    const uint4 triangleEdges = PTERO_EDGE_VALUE;
+    output.Edge = gUseAlphaCutout ? kPteroNoEdge : triangleEdges;
 
     float3 N = normalize(input.WorldNormal);
 
@@ -475,6 +588,37 @@ PSOutput PSMain(PSInput input)
     output.Albedo = float4(baseAlbedo, useTransparentBlend ? saturate(opacity) : 1.0f);
 
     output.Material = float4(roughness, metallic, ao, 0.0f);
+
+    PteroPrincipled principled;
+    principled.subsurface     = gPrincipledSubsurface;
+    principled.specularTint   = gPrincipledSpecularTint;
+    principled.sheen          = gPrincipledSheen;
+    principled.sheenTint      = gPrincipledSheenTint;
+    principled.clearcoat      = gPrincipledClearcoat;
+    principled.clearcoatGloss = gPrincipledClearcoatGloss;
+    principled.anisotropic    = gPrincipledAnisotropic;
+    if (gHasPrincipledMap)
+    {
+        const float4 mask = gPrincipledTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy);
+        principled.clearcoat   *= mask.r;
+        principled.sheen       *= mask.g;
+        principled.anisotropic *= mask.b;
+        principled.subsurface  *= mask.a;
+    }
+
+    // Anisotropy stretches the highlight along the texture's U axis - the same
+    // UV-aligned frame the normal map was applied in - or along the direction map.
+    principled.tangent = T;
+    if (gHasAnisotropyDirectionMap && principled.anisotropic > 0.0f)
+    {
+        float2 direction = gAnisotropyDirectionTexture.SampleGrad(gLinearSampler, uv, uvDdx, uvDdy).rg * 2.0f - 1.0f;
+        if (gFlipNormalGreen != 0)
+            direction.y = -direction.y;
+        // A texel near the middle has no direction to give; U is as good as any.
+        if (dot(direction, direction) > 1e-4f)
+            principled.tangent = T * direction.x + B * direction.y;
+    }
+    PteroEncodePrincipled(principled, N, output.Principled0, output.Principled1);
 
     return output;
 }

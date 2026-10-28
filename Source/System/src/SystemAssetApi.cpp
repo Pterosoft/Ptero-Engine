@@ -250,3 +250,44 @@ extern "C" SYSTEM_ASSET_API bool __stdcall System_GenerateCollisions(
     WriteStatusMessage(statusMessage, statusMessageCapacity, std::string("Generated collision hulls for: ") + fbxOrPteroPath);
     return true;
 }
+
+extern "C" SYSTEM_ASSET_API bool __stdcall System_RecookMesh(
+    const char* fbxPath,
+    bool regenerateCollisions,
+    bool* skinned,
+    char* statusMessage,
+    int statusMessageCapacity)
+{
+    if (skinned != nullptr)
+    {
+        *skinned = false;
+    }
+    if (fbxPath == nullptr || fbxPath[0] == '\0')
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "No FBX to re-cook.");
+        return false;
+    }
+
+    const std::string pteroPath = std::string(fbxPath) + ".ptero";
+    if (!FbxCompiler::CompileFbxToPtero(fbxPath, pteroPath))
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, std::string("Failed to re-cook: ") + fbxPath);
+        return false;
+    }
+    if (regenerateCollisions && !CollisionGenerator::GenerateCollisions(pteroPath))
+    {
+        WriteStatusMessage(statusMessage, statusMessageCapacity, "Re-cooked, but regenerating the collision hulls failed.");
+        return false;
+    }
+
+    std::error_code error;
+    const bool hasSkin = std::filesystem::exists(PteroSkinPathFor(pteroPath), error);
+    if (skinned != nullptr)
+    {
+        *skinned = hasSkin;
+    }
+    WriteStatusMessage(statusMessage, statusMessageCapacity, hasSkin
+        ? "Re-cooked with skin weights."
+        : "Re-cooked, but the FBX has no skinned mesh, so there are no skin weights.");
+    return true;
+}
